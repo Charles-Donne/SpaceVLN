@@ -57,6 +57,18 @@ class VLMNavigationController(InteractiveNavigationController):
         "Right (270°)"     # 步骤9: 右方（或左转270°）
     ]
     
+    # 全景图配置：每个方向3张图像拼接成90°视角
+    # step-12 + step-0 + step-1 = 360° + 0° + 30° = 前方90°
+    # step-2 + step-3 + step-4 = 60° + 90° + 120° = 左侧90°
+    # step-5 + step-6 + step-7 = 150° + 180° + 210° = 后方90°
+    # step-8 + step-9 + step-10 = 240° + 270° + 300° = 右侧90°
+    PANORAMA_CONFIG = [
+        {"name": "Front (0°)", "steps": [11, 0, 1]},
+        {"name": "Left (90°)", "steps": [2, 3, 4]},
+        {"name": "Back (180°)", "steps": [5, 6, 7]},
+        {"name": "Right (270°)", "steps": [8, 9, 10]}
+    ]
+    
     # 动作映射（与interactive_navigation一致）
     ACTION_MAPPING = {
         "STOP": 0,
