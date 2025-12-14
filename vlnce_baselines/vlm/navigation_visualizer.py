@@ -1,9 +1,9 @@
 """
-观察收集模块
+导航可视化模块
 =============
-负责收集4方向观察图像、保存RGB+俯视图拼接可视化、生成GIF
+负责保存RGB+俯视图拼接可视化、生成GIF动画
 
-与Sub-VLM-VLN的ObservationCollector类似，但适配4方向观察
+参考Sub-VLM-VLN的实现细节，确保俯视图正确显示
 """
 import os
 import cv2
@@ -19,30 +19,23 @@ except ImportError:
     print("⚠️  imageio not installed, GIF generation disabled")
 
 
-class ObservationCollector:
+class NavigationVisualizer:
     """
-    观察收集器
+    导航可视化器
     
     负责:
-    - 4方向图像采集和保存
     - RGB + 俯视图拼接可视化
+    - 文本信息叠加
     - GIF动画生成
     """
     
-    # 4个方向的名称
-    DIRECTION_NAMES = [
-        "Front (0°)",
-        "Right (90°)",
-        "Back (180°)",
-        "Left (270°)"
-    ]
     
     def __init__(self, output_dir: str):
         """
-        初始化收集器
+        初始化可视化器
         
         Args:
-            output_dir: 输出目录（用于保存4方向观察图像）
+            output_dir: 输出目录
         """
         self.output_dir = output_dir
         self.maps_dir = None
@@ -60,28 +53,6 @@ class ObservationCollector:
         os.makedirs(self.maps_dir, exist_ok=True)
         self.video_frames = []
     
-    def save_direction_image(self, rgb: np.ndarray, direction_idx: int, 
-                             prefix: str = "observe") -> str:
-        """
-        保存单个方向的观察图像
-        
-        Args:
-            rgb: RGB图像 (H, W, 3)，RGB格式
-            direction_idx: 方向索引 (0-3)
-            prefix: 文件名前缀
-            
-        Returns:
-            保存的图像路径
-        """
-        direction_name = self.DIRECTION_NAMES[direction_idx].split()[0].lower()
-        filename = f"{prefix}_dir{direction_idx}_{direction_name}.jpg"
-        filepath = os.path.join(self.output_dir, filename)
-        
-        # RGB转BGR后保存
-        cv2.imwrite(filepath, cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
-        
-        return filepath
-    
     def save_step_visualization(self,
                                 observations: Dict,
                                 info: Dict,
@@ -92,6 +63,8 @@ class ObservationCollector:
                                 action: str = "") -> Optional[str]:
         """
         保存单步可视化：左边第一人称视角 + 右边俯视图 + 文本信息
+        
+        参考Sub-VLM-VLN的实现，确保俯视图正确显示
         
         Args:
             observations: 环境观测字典（需包含"rgb"键）
@@ -111,38 +84,14 @@ class ObservationCollector:
         # 获取第一人称RGB
         rgb = observations["rgb"]
         
-        # 获取俯视图（环境提供）- 修复黑屏问题
-        if "top_down_map_vlnce" in info and info["top_down_map_vlnce"] is not None:
-            try:
-                # 检查地图是否有效
-                tdm = info["top_down_map_vlnce"]
-                if isinstance(tdm, dict) and "map" in tdm:
-                    # 使用habitat的colorize函数
-                    top_down_map = maps.colorize_draw_agent_and_fit_to_height(
-                        tdm, rgb.shape[0]
-                    )
-                elif isinstance(tdm, np.ndarray) and tdm.size > 0:
-                    # 直接使用numpy数组
-                    if len(tdm.shape) == 2:  # 灰度图
-                        tdm = cv2.cvtColor(tdm, cv2.COLOR_GRAY2RGB)
-                    # 调整大小以匹配RGB高度
-                    h_ratio = rgb.shape[0] / tdm.shape[0]
-                    new_w = int(tdm.shape[1] * h_ratio)
-                    top_down_map = cv2.resize(tdm, (new_w, rgb.shape[0]))
-                else:
-                    print(f"⚠️  [Step {step}] top_down_map_vlnce格式无效，使用空白占位")
-                    top_down_map = np.zeros_like(rgb)
-            except Exception as e:
-                print(f"⚠️  [Step {step}] 处理俯视图时出错: {e}")
-                top_down_map = np.zeros_like(rgb)
+        # 获取俯视图（完全按照Sub-VLM-VLN的实现）
+        if "top_down_map_vlnce" in info:
+            top_down_map = maps.colorize_draw_agent_and_fit_to_height(
+                info["top_down_map_vlnce"], rgb.shape[0]
+            )
         else:
-            # 如果没有地图，创建灰色占位（而不是黑色）
-            print(f"⚠️  [Step {step}] 无top_down_map_vlnce，使用占位图")
-            top_down_map = np.full_like(rgb, 128)  # 灰色占位
-            # 添加文字提示
-            cv2.putText(top_down_map, "No Map Available", 
-                       (10, rgb.shape[0]//2), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+            # 如果没有地图，创建空白占位
+            top_down_map = np.zeros_like(rgb)
         
         # 拼接：左边RGB + 右边俯视图
         combined = np.concatenate((rgb, top_down_map), axis=1)
@@ -175,7 +124,7 @@ class ObservationCollector:
                           distance: float,
                           action: str = "") -> np.ndarray:
         """
-        在图像底部添加文本信息
+        在图像底部添加文本信息（完全按照Sub-VLM-VLN的实现）
         
         Args:
             image: 拼接后的RGB图像
@@ -191,62 +140,55 @@ class ObservationCollector:
         img = image.copy()
         h, w = img.shape[:2]
         
-        # 创建文本区域
-        text_height = 100
+        # 创建文本区域（深灰色背景）
+        text_height = 120
         text_area = np.zeros((text_height, w, 3), dtype=np.uint8)
+        text_area.fill(40)  # 深灰色背景
         
-        # 字体设置
         font = cv2.FONT_HERSHEY_SIMPLEX
         font_scale = 0.5
         thickness = 1
-        color = (255, 255, 255)  # RGB白色
+        color = (255, 255, 255)  # 白色
         
-        # 计算最大文本宽度
-        max_width = w - 20
+        y_offset = 25
         
-        # 第1行：Step + Distance + Action
-        line1 = f"Step: {step}  |  Distance: {distance:.2f}m  |  Action: {action}"
-        cv2.putText(text_area, line1, (10, 25), font, font_scale, color, thickness)
+        # 第1行：步数、距离、动作（青色高亮）
+        metrics_text = f"Step: {step} | Distance: {distance:.2f}m | Action: {action}"
+        cv2.putText(text_area, metrics_text, (10, y_offset), font, font_scale, (0, 255, 255), thickness)
+        y_offset += 30
         
-        # 第2行：Instruction（可能需要截断）
-        instr_text = f"Instruction: {instruction}"
-        if len(instr_text) > 100:
-            instr_text = instr_text[:100] + "..."
-        # 自动换行处理
-        lines = self._wrap_text(instr_text, font, font_scale, max_width)
-        y = 50
-        for line in lines[:2]:  # 最多显示2行
-            cv2.putText(text_area, line, (10, y), font, font_scale, color, thickness)
-            y += 20
+        # 第2-3行：全局指令（白色，最多2行）
+        instruction_lines = self._wrap_text(instruction, w - 20, font, font_scale)
+        for line in instruction_lines[:2]:
+            cv2.putText(text_area, line, (10, y_offset), font, font_scale, color, thickness)
+            y_offset += 25
         
-        # 第3行：Subtask（如果有）
+        # 第4行：当前子任务（绿色，最多1行）
         if current_subtask:
+            y_offset += 5
             subtask_text = f"Subtask: {current_subtask}"
-            if len(subtask_text) > 80:
-                subtask_text = subtask_text[:80] + "..."
-            cv2.putText(text_area, subtask_text, (10, y), font, font_scale * 0.9, 
-                       (200, 200, 200), thickness)
+            subtask_lines = self._wrap_text(subtask_text, w - 20, font, font_scale)
+            for line in subtask_lines[:1]:
+                cv2.putText(text_area, line, (10, y_offset), font, font_scale, (0, 255, 0), thickness)
         
-        # 拼接文本区域到图像底部
-        result = np.concatenate((img, text_area), axis=0)
-        
+        # 拼接文本区域到图像底部（使用vstack而不是concatenate）
+        result = np.vstack([img, text_area])
         return result
     
-    def _wrap_text(self, text: str, font, font_scale: float, 
-                   max_width: int) -> List[str]:
+    def _wrap_text(self, text: str, max_width: int, font, font_scale: float) -> List[str]:
         """
-        文本自动换行
+        文本自动换行（完全按照Sub-VLM-VLN的实现）
         
         Args:
             text: 要换行的文本
+            max_width: 最大宽度（像素）
             font: OpenCV字体
             font_scale: 字体缩放
-            max_width: 最大宽度（像素）
             
         Returns:
             换行后的文本列表
         """
-        words = text.split(' ')
+        words = text.split()
         lines = []
         current_line = ""
         

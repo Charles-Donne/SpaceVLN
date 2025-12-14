@@ -27,7 +27,7 @@ from habitat import Config
 from habitat.sims.habitat_simulator.actions import HabitatSimActions
 
 from vlnce_baselines.interactive_navigation_controller import InteractiveNavigationController
-from vlnce_baselines.vlm import LLMPlanner, ActionExecutor, SaveManager, WaypointManager
+from vlnce_baselines.vlm import LLMPlanner, ActionExecutor, SaveManager, WaypointManager, NavigationVisualizer
 from vlnce_baselines.vlm.navigation_config import (
     DIRECTION_STEPS, DIRECTION_NAMES, PANORAMA_CONFIG, ACTION_MAPPING
 )
@@ -107,8 +107,8 @@ class VLMNavigationController(InteractiveNavigationController):
         self.direction_images = {}  # {direction_name: image_path}
         self.latest_map_image = None
         
-        # ObservationCollector（用于RGB+俯视图拼接和GIF生成）
-        self.obs_collector = None
+        # NavigationVisualizer（用于RGB+俯视图拼接和GIF生成）
+        self.nav_visualizer = None
         
         print("[Init] VLM模块初始化完成\n")
     
@@ -134,11 +134,11 @@ class VLMNavigationController(InteractiveNavigationController):
         
         print(f"[Reset] Episode {self.current_episode_id} 重置完成")
         
-        # 初始化ObservationCollector（用于RGB+俯视图拼接）
-        # 不再使用vlm/observations目录，panoramas直接保存在episode目录下
+        # 初始化NavigationVisualizer（用于RGB+俯视图拼接和GIF生成）
         episode_dir = os.path.join(self.config.RESULTS_DIR, f'episode_{self.current_episode_id}')
-        self.obs_collector = ObservationCollector(os.path.join(episode_dir, 'panoramas'))
-        self.obs_collector.setup_maps_dir(episode_dir)
+        visualization_dir = os.path.join(episode_dir, 'visualization')
+        self.nav_visualizer = NavigationVisualizer(visualization_dir)
+        self.nav_visualizer.setup_maps_dir(episode_dir)
         
         # 初始化输出记录列表
         self.thinking_outputs = []  # 记录LLM(thinking)的所有输出
@@ -745,8 +745,8 @@ class VLMNavigationController(InteractiveNavigationController):
         self.latest_obs = result.get('obs', None)
         self.latest_info = result.get('info', None)
         
-        # 保存RGB+俯视图拼接可视化（使用环境提供的top_down_map_vlnce）
-        if save_vis and self.obs_collector and self.latest_obs is not None:
+        # 保存RGB+俯视图拼接可视化
+        if save_vis and self.nav_visualizer and self.latest_obs is not None:
             subtask_text = None
             if self.current_subtask:
                 subtask_text = self.current_subtask.get('subtask_instruction', '')
@@ -755,7 +755,7 @@ class VLMNavigationController(InteractiveNavigationController):
             if self.latest_info:
                 distance = self.latest_info.get('distance_to_goal', 0.0)
             
-            self.obs_collector.save_step_visualization(
+            self.nav_visualizer.save_step_visualization(
                 observations=self.latest_obs,
                 info=self.latest_info or {},
                 step=self.current_step,
@@ -856,10 +856,11 @@ class VLMNavigationController(InteractiveNavigationController):
                 _, _ = self.verify_and_replan()
                 subtask_steps = 0
         
-        # 4. 保存GIF动画
+        # 4. 生成GIF动画
         gif_path = None
-        if self.obs_collector:
-            gif_path = self.obs_collector.save_gif(fps=2)
+        if self.nav_visualizer:
+            gif_path = self.nav_visualizer.save_gif(fps=2)
+            print(f"\n🎬 GIF动画: {gif_path if gif_path else '未生成'}")
         
         # 5. 保存结果（供后续测评）
         final_result = self._save_navigation_result(navigation_complete, total_steps)
