@@ -16,6 +16,7 @@ from vlnce_baselines.vlm.api_client import APIConfig, BaseAPIClient
 from vlnce_baselines.vlm.thinking import LLMPlanner
 from vlnce_baselines.vlm.action import ActionExecutor
 from vlnce_baselines.vlm.observation_collector import ObservationCollector
+from vlnce_baselines.vlm.action_parser import ActionParser
 
 __all__ = [
     'APIConfig',
@@ -23,4 +24,5 @@ __all__ = [
     'LLMPlanner',
     'ActionExecutor',
     'ObservationCollector',
+    'ActionParser',
 ]

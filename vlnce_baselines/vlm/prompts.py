@@ -40,9 +40,6 @@ You are provided with 4 first-person RGB views and 2 bird's-eye view maps:
   - Objects within this blue region are currently visible in IMAGE 1 (Front View)
 - Better for planning nearby movements and obstacle avoidance
 
-# Spatial Memory (Waypoint History)
-{waypoint_summary}
-
 # Your Task
 
 1. **Analyze environment**: Use 4-directional views + semantic map to identify landmarks and obstacles
@@ -54,18 +51,50 @@ You are provided with 4 first-person RGB views and 2 bird's-eye view maps:
 # Output Format (JSON only)
 
 {{
-    "waypoint": "Brief location description: <Area Type> - <Key Landmarks> (e.g., 'Living Room - near sofa and TV', 'Kitchen - at entrance by counter')",
-    "waypoint_sequence": "A(Current) → B → C → ... → Goal",
-    "subtask_destination": "Next immediate waypoint",
-    "subtask_instruction": "Step-by-step actions from Front view",
-    "subtask_landmark": "Key landmark to note in the sub-instruction (e.g., 'cabinet', 'door', 'bed') for map marking",
+    "waypoint": "<Current Area Type> - <Key Surrounding Landmarks>",
+    "waypoint_sequence": "<Current Location> → <Next Waypoint> → ... → <Final Goal>",
+    "subtask_destination": "<Next immediate waypoint name>",
+    "subtask_instruction": "<Step-by-step navigation instructions starting from Front view>",
+    "subtask_landmark": "<Single landmark name for map marking>",
     "completion_criteria": {{
-        "landmark_detection": "What landmark should be detected at destination (e.g., 'cabinet visible and detected in any view')",
-        "destination_reached": "Whether arrived at specified location (e.g., 'reached kitchen entrance', 'arrived at cabinet area')",
-        "spatial_relationship": "Trajectory and orientation check (e.g., 'orange trajectory reaches target area', 'agent facing towards cabinet')"
+        "landmark_detection": "<What landmark should be detected in 4 views>",
+        "destination_reached": "<Distance/position requirement>",
+        "spatial_relationship": "<Trajectory and orientation check on map>"
+    }},
+    "is_final_subtask": <true if this is the final destination, false otherwise>,
+    "reasoning": "<Brief explanation of analysis, waypoint selection, and action plan>"
+}}
+
+## Example 1: Instruction "Walk to the kitchen and stop at the refrigerator"
+{{
+    "waypoint": "Bedroom(Current) - standing near bed and door",
+    "waypoint_sequence": "Bedroom(Current) → Doorway → Hallway → Kitchen Entrance → Refrigerator(Goal)",
+    "subtask_destination": "bedroom doorway",
+    "subtask_instruction": "Move forward through the bedroom doorway ahead",
+    "subtask_landmark": "door",
+    "completion_criteria": {{
+        "landmark_detection": "door visible in front view or side views",
+        "destination_reached": "reached doorway area, distance to door < 1.0m",
+        "spatial_relationship": "orange trajectory reaches doorway on map, agent facing towards door"
     }},
     "is_final_subtask": false,
-    "reasoning": "Logic: (1) Environment analysis, (2) Waypoint selection, (3) Action plan"
+    "reasoning": "(1) Agent starts in bedroom near bed and door (2) First waypoint: exit bedroom through doorway (3) Actions: move forward to reach doorway"
+}}
+
+## Example 2: Instruction "Walk to the living room and stop near the sofa"
+{{
+    "waypoint": "Hallway(Current) - near wall and opening to living room",
+    "waypoint_sequence": "Hallway(Current) → Living Room Entrance → Sofa Area(Goal)",
+    "subtask_destination": "living room entrance",
+    "subtask_instruction": "Move forward through the opening ahead into the living room",
+    "subtask_landmark": "sofa",
+    "completion_criteria": {{
+        "landmark_detection": "sofa visible in front view",
+        "destination_reached": "entered living room, distance to sofa < 2.0m",
+        "spatial_relationship": "orange trajectory reaches living room area on map"
+    }},
+    "is_final_subtask": false,
+    "reasoning": "(1) Currently in hallway with living room opening visible ahead (2) Next: enter living room (3) Then approach sofa"
 }}
 
 **Critical Requirements**:
@@ -120,6 +149,8 @@ The agent has performed a 360° scan. You are provided with 4 first-person RGB v
 # Spatial Memory (Waypoint History)
 {waypoint_summary}
 
+**Note**: Each waypoint shows ID and location description. Waypoint markers appear as **dark red circles with white numbers** on the Global Map, marking past observation positions.
+
 # Your Task
 
 1. **Verify completion**: Compare current observations with completion_criteria (landmark detection, destination arrival, trajectory/orientation)
@@ -133,20 +164,41 @@ The agent has performed a 360° scan. You are provided with 4 first-person RGB v
 # Output Format (JSON only)
 
 {{
-    "is_completed": true/false,
-    "waypoint": "Brief location description: <Area Type> - <Key Landmarks> (e.g., 'Hallway - near bedroom door', 'Bathroom - at sink area')",
-    "current_observation": "Brief spatial description (1-2 sentences: visible objects, layout)",
-    "waypoint_sequence": "A(✓) → B(Current) → C → Goal",
-    "subtask_destination": "Next waypoint or same if not completed",
-    "subtask_instruction": "Step-by-step actions from Front view",
-    "subtask_landmark": "Key landmark at destination (e.g., 'cabinet', 'door', 'bed') for map marking",
+    "is_completed": <true if previous subtask completed, false if not>,
+    "waypoint": "<Current Area Type> - <Key Surrounding Landmarks>",
+    "current_observation": "<1-2 sentences describing visible objects and spatial layout>",
+    "waypoint_sequence": "<Completed Waypoints(✓)> → <Current> → <Remaining> → <Goal>",
+    "subtask_destination": "<Next waypoint if completed, same waypoint if not>",
+    "subtask_instruction": "<Step-by-step navigation instructions from Front view>",
+    "subtask_landmark": "<Single landmark name for map marking>",
     "completion_criteria": {{
-        "landmark_detection": "What landmark should be detected at destination (e.g., 'cabinet visible and detected in any view')",
-        "destination_reached": "Whether arrived at specified location (e.g., 'reached kitchen entrance', 'arrived at cabinet area')",
-        "spatial_relationship": "Trajectory and orientation check (e.g., 'orange trajectory reaches target area', 'agent facing towards cabinet')"
+        "landmark_detection": "<What landmark should be detected in 4 views>",
+        "destination_reached": "<Distance/position requirement>",
+        "spatial_relationship": "<Trajectory and orientation check on map>"
     }},
-    "is_final_subtask": true/false,
-    "reasoning": "Logic: (1) Completion verification, (2) Progress analysis, (3) Next action plan"
+    "is_final_subtask": <true if next destination is final goal, false otherwise>,
+    "reasoning": "<Brief explanation of completion verification, progress, and next plan>"
+}}
+
+## Example: Instruction "Walk to the kitchen and stop at the refrigerator"
+**Previous Subtask**: Move to bedroom doorway
+**Current Observation**: Agent is at doorway, door detected, trajectory reaches doorway area
+
+{{
+    "is_completed": true,
+    "waypoint": "Doorway(Current) - between bedroom and hallway",
+    "current_observation": "Standing at bedroom doorway. Hallway visible ahead with walls on both sides.",
+    "waypoint_sequence": "Bedroom(✓) → Doorway(✓) → Hallway → Kitchen Entrance → Refrigerator(Goal)",
+    "subtask_destination": "hallway end",
+    "subtask_instruction": "Move forward through hallway towards kitchen entrance",
+    "subtask_landmark": "wall",
+    "completion_criteria": {{
+        "landmark_detection": "walls visible on both sides in front and side views",
+        "destination_reached": "reached hallway end, near kitchen entrance",
+        "spatial_relationship": "orange trajectory extends through hallway towards kitchen on map"
+    }},
+    "is_final_subtask": false,
+    "reasoning": "(1) Previous subtask completed: door detected in views, reached doorway area (2) Now at doorway, hallway ahead (3) Next: navigate through hallway to kitchen"
 }}
 
 **Critical Requirements**:
@@ -158,23 +210,20 @@ The agent has performed a 360° scan. You are provided with 4 first-person RGB v
 
 
 def get_initial_planning_prompt(instruction: str, 
-                               action_space: str,
-                               waypoint_summary: str = "No waypoints recorded yet (initial planning).") -> str:
+                               action_space: str) -> str:
     """
     获取初始规划提示词
     
     Args:
         instruction: 完整导航指令
         action_space: 动作空间描述
-        waypoint_summary: waypoint历史摘要
         
     Returns:
         格式化的提示词字符串
     """
     return INITIAL_PLANNING_PROMPT.format(
         instruction=instruction,
-        action_space=action_space,
-        waypoint_summary=waypoint_summary
+        action_space=action_space
     )
 
 def get_verification_replanning_prompt(instruction: str,
