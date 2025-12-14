@@ -556,7 +556,7 @@ class VLMNavigationController(InteractiveNavigationController):
         if not image_paths:
             print("✗ 环视建图失败")
             return False, None
-        从 vlm/observations/ 获取地图（已在 look_around_and_collect 中保存）
+        # 从 vlm/observations/ 获取地图（已在 look_around_and_collect 中保存）
         _, _, global_map, local_map = self.get_observations_and_maps(phase)
         
         # 验证地图文件存在
