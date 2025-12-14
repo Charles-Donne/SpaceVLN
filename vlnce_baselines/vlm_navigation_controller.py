@@ -117,6 +117,13 @@ class VLMNavigationController(InteractiveNavigationController):
         # 调用父类重置
         super().reset_episode(episode_id)
         
+        # reset后envs已经有了新的观察，通过执行一个STOP动作来获取
+        from habitat.sims.habitat_simulator.actions import HabitatSimActions
+        outputs = self.envs.step([{"action": HabitatSimActions.STOP}])
+        obs, _, _, _ = [list(x) for x in zip(*outputs)]
+        self.latest_obs = obs[0]
+        self.current_step = 0  # STOP不应该增加步数，重置回0
+        
         # 重置VLM状态
         self.current_subtask = None
         self.subtask_count = 0
@@ -152,20 +159,21 @@ class VLMNavigationController(InteractiveNavigationController):
         """
         360°环视建图 + 生成4方向全景图
         
-        先保存初始观察（step-0），然后执行12次×30°逆时针旋转（TURN_LEFT）建图，
+        执行12次×30°逆时针旋转（TURN_LEFT），每次转完后拍照并更新地图：
+        - step 1: 第1次左转30°后拍照
+        - step 2: 第2次左转60°后拍照
+        - ...
+        - step 12: 第12次左转360°后拍照（回到正前方）
+        
         合成4个方向的90°视角全景图：
-        - 前方：step-12 + step-0 + step-1 (360°+0°+30° = 90°视角)
-        - 左侧：step-2 + step-3 + step-4 (60°+90°+120° = 90°视角)
-        - 后方：step-5 + step-6 + step-7 (150°+180°+210° = 90°视角)
-        - 右侧：step-8 + step-9 + step-10 (240°+270°+300° = 90°视角)
+        - 前方：step-11(330°) + step-12(360°=0°) + step-1(30°) = 前方90°
+        - 左侧：step-2(60°) + step-3(90°) + step-4(120°) = 左侧90°
+        - 后方：step-5(150°) + step-6(180°) + step-7(210°) = 后方90°
+        - 右侧：step-8(240°) + step-9(270°) + step-10(300°) = 右侧90°
         
         所有图像和地图统一保存到 vlm/observations/ 目录
-        
-        流程：
-        - step-0: 初始观察（0°，无动作）
-        - step-1到12: 12次TURN_LEFT后的观察（30°到360°）
-        - 使用step-12的地图（最完整，完成360°扫描）
-        - 下一个导航动作将是step-13
+        使用柱面投影拼接生成连贯的全景图
+        环视过程不影响current_step和trajectory（环视后恢复）
         
         Args:
             phase: 阶段名称（用于文件命名，如 "initial", "verify_1"）
@@ -173,151 +181,82 @@ class VLMNavigationController(InteractiveNavigationController):
         Returns:
             (image_paths, direction_names) - 4个全景图路径和方向名称
         """
-        print("\n" + "="*60)
-        print(f"🔄 环视扫描 + 生成4方向全景图 (360°) - Phase: {phase}")
-        print("="*60)
+        print(f"\n[环视建图] {phase}...")
         
-        # 存储13张环视图像用于合成全景图（step-0到step-12）
+        # 存储12张环视图像用于合成全景图（step 1-12）
         lookaround_images = []
+        total_new_classes = 0
         
-        # 先保存初始观察（step-0，0°）
+        # 保存当前current_step和轨迹，环视结束后恢复
+        saved_current_step = self.current_step
+        saved_trajectory = self.mapper.trajectory_points.copy() if hasattr(self.mapper, 'trajectory_points') else []
+        
         from habitat.sims.habitat_simulator.actions import HabitatSimActions
-        print("  [0/13] 初始观察 (0°)")
         
-        # 获取当前观察：如果有缓存使用缓存，否则执行一次右转再左转回来
-        if self.latest_obs is not None:
-            obs = [self.latest_obs]
-        else:
-            # 执行右转再左转回来获取观察（保持原位）
-            actions = [{"action": HabitatSimActions.TURN_RIGHT}]
-            outputs = self.envs.step(actions)
-            _, _, _, _ = [list(x) for x in zip(*outputs)]
+        # 直接开始12次旋转（1-12），不保存初始观察
+        # step 12会回到正前方（360°）
+        for look_step in range(1, 13):  # 1, 2, 3, ..., 12
+            print(f"  [{look_step}/12] 第{look_step}次左转 (30°×{look_step}={look_step*30}°)", end="", flush=True)
             
-            actions = [{"action": HabitatSimActions.TURN_LEFT}]
-            outputs = self.envs.step(actions)
-            obs, _, dones, _ = [list(x) for x in zip(*outputs)]
-            
-            if dones[0]:
-                print("⚠️ Episode提前结束")
-                return [], []
-        
-        # 保存初始观察为 step-0
-        step = 0
-        prev_class_count = len(self.detected_classes)
-        batch_obs = self._batch_obs(obs, save_object_detection=True, step=step)
-        poses = torch.from_numpy(np.array([item['sensor_pose'] for item in obs])).float().to(self.device)
-        
-        map_state = self.mapper.update_map(
-            batch_obs, poses, step,
-            list(self.detected_classes), self.current_episode_id
-        )
-        
-        new_classes = len(self.detected_classes) - prev_class_count
-        
-        # 保存可视化
-        rgb_bgr = cv2.cvtColor(obs[0]['rgb'], cv2.COLOR_RGB2BGR)
-        _, landmarks = self.visualizer.save_step_visualization(
-            step=step,
-            episode_id=self.current_episode_id,
-            rgb=rgb_bgr,
-            full_map=map_state['full_map'],
-            trajectory_points=map_state['trajectory_points'],
-            detected_classes=list(self.detected_classes),
-            current_pose=map_state['full_pose'],
-            floor=map_state['floor'],
-            hfov=self.config.MAP.HFOV,
-            detections=self.latest_detections_full if hasattr(self, 'latest_detections_full') else None,
-            labels=self.latest_labels_full if hasattr(self, 'latest_labels_full') else None,
-            landmark_classes=self.landmark_classes,
-            mapping_classes=self.mapping_classes,
-            landmark_config={
-                'min_total_pixels': self.landmark_min_total_pixels,
-                'min_area_threshold': self.landmark_min_area_threshold
-            }
-        )
-        
-        # 保存初始图像
-        lookaround_images.append(rgb_bgr.copy())
-        if new_classes > 0:
-            print(f"    +{new_classes}类")
-        
-        self.latest_obs = obs[0]
-        
-        # 执行12次旋转 (step-1 到 step-12)
-        for step in range(1, 13):  # step = 1, 2, 3, ..., 12
             # 执行旋转
             actions = [{"action": HabitatSimActions.TURN_LEFT}]
             outputs = self.envs.step(actions)
             obs, _, dones, _ = [list(x) for x in zip(*outputs)]
             
             if dones[0]:
-                print("⚠️ Episode提前结束")
+                print(" - Episode提前结束")
                 break
             
-            # 更新检测和建图
+            # 更新检测和建图（不保存step文件）
             prev_class_count = len(self.detected_classes)
-            batch_obs = self._batch_obs(obs, save_object_detection=True, step=step)
+            batch_obs = self._batch_obs(obs, save_object_detection=False)
             poses = torch.from_numpy(np.array([item['sensor_pose'] for item in obs])).float().to(self.device)
             
             map_state = self.mapper.update_map(
-                batch_obs, poses, step,
+                batch_obs, poses, look_step,
                 list(self.detected_classes), self.current_episode_id
             )
             
             new_classes = len(self.detected_classes) - prev_class_count
-            
-            # 保存可视化
-            rgb_bgr = cv2.cvtColor(obs[0]['rgb'], cv2.COLOR_RGB2BGR)
-            _, landmarks = self.visualizer.save_step_visualization(
-                step=step,
-                episode_id=self.current_episode_id,
-                rgb=rgb_bgr,
-                full_map=map_state['full_map'],
-                trajectory_points=map_state['trajectory_points'],
-                detected_classes=list(self.detected_classes),
-                current_pose=map_state['full_pose'],
-                floor=map_state['floor'],
-                hfov=self.config.MAP.HFOV,
-                detections=self.latest_detections_full if hasattr(self, 'latest_detections_full') else None,
-                labels=self.latest_labels_full if hasattr(self, 'latest_labels_full') else None,
-                landmark_classes=self.landmark_classes,
-                mapping_classes=self.mapping_classes,
-                landmark_config={
-                    'min_total_pixels': self.landmark_min_total_pixels,
-                    'min_area_threshold': self.landmark_min_area_threshold
-                }
-            )
-            
-            # 保存所有13张环视图像（用于后续合成全景图）
-            lookaround_images.append(rgb_bgr.copy())
+            total_new_classes += new_classes
             
             if new_classes > 0:
-                print(f"  [{step}/13] 第{step}次左转 (30°×{step}={step*30}°) +{new_classes}类")
+                print(f" +{new_classes}类")
             else:
-                print(f"  [{step}/13] 第{step}次左转 (30°×{step}={step*30}°)")
+                print()
             
-            # 缓存最后一步的观察
-            self.latest_obs = obs[0]
+            # 保存所有12张环视图像（用于后续合成全景图）
+            rgb_bgr = cv2.cvtColor(obs[0]['rgb'], cv2.COLOR_RGB2BGR)
+            lookaround_images.append(rgb_bgr.copy())
         
-        # 完成12次旋转，保存了 step-0（初始）到 step-12（第12次左转后）共13张
-        # 设置 current_step = 13，表示12次旋转完成，下一步动作是 step-13
-        self.current_step = 13
+        # 环视建图完成，恢复current_step和轨迹
+        self.current_step = saved_current_step
+        self.mapper.trajectory_points = saved_trajectory
         
-        print("\n🖼️  合成4方向全景图（每个方向3张，90°视角）...")
+        # 缓存最后的观察（step 12，回到正前方）
+        self.latest_obs = obs[0]
         
-        # 合成4个方向的全景图
+        # 缓存最后的观察（最后一次旋转后）
+        self.latest_obs = obs[0]
+        
+        print(f"  扫描完成: +{total_new_classes}类 | 总计{len(self.detected_classes)}类")
+        
+        # 合成4个方向的全景图（使用真正的全景拼接）
         panorama_paths = []
         panorama_names = []
+        
+        # 获取相机参数
+        hfov = self.config.MAP.HFOV  # 水平视场角（度）
         
         for config in PANORAMA_CONFIG:
             direction_name = config["name"]
             steps = config["steps"]
             
-            # 获取3张图像
-            images_to_stitch = [lookaround_images[s] for s in steps]
+            # 获取3张图像（注意：steps是1-based索引，需要转换为0-based）
+            images_to_stitch = [lookaround_images[s-1] for s in steps]
             
-            # 水平拼接3张图像（简单拼接，不做复杂的全景拼接）
-            panorama = np.hstack(images_to_stitch)
+            # 使用柱面投影拼接全景图
+            panorama = self._stitch_panorama(images_to_stitch, hfov)
             
             # 保存全景图到 vlm/observations/
             panorama_filename = f"{phase}_panorama_{direction_name.split()[0].lower()}.jpg"
@@ -327,12 +266,8 @@ class VLMNavigationController(InteractiveNavigationController):
             panorama_paths.append(panorama_path)
             panorama_names.append(direction_name)
             self.direction_images[direction_name] = panorama_path
-            
-            print(f"  ✅ {direction_name}: step-{steps[0]}, {steps[1]}, {steps[2]} → {panorama_filename}")
         
         # 保存全局地图和局部地图到 vlm/observations/
-        print("\n📍 保存地图到 vlm/observations/...")
-        
         episode_dir = os.path.join(self.config.RESULTS_DIR, f'episode_{self.current_episode_id}')
         
         # 使用 step-12 的地图（第12次左转后，完成360°扫描，地图最完整）
@@ -347,7 +282,6 @@ class VLMNavigationController(InteractiveNavigationController):
             import shutil
             shutil.copy(global_map_src, global_map_dst)
             self.latest_map_image = global_map_dst
-            print(f"  ✅ Global Map: step-12 (完成360°) → {phase}_global_map.png")
         else:
             print(f"  ⚠️  Global Map not found: {global_map_src}")
             self.latest_map_image = None
@@ -355,14 +289,10 @@ class VLMNavigationController(InteractiveNavigationController):
         if os.path.exists(local_map_src):
             import shutil
             shutil.copy(local_map_src, local_map_dst)
-            print(f"  ✅ Local Map: step-12 (完成360°) → {phase}_local_map.png")
         else:
             print(f"  ⚠️  Local Map not found: {local_map_src}")
         
-        print("="*60)
-        print(f"✅ 环视完成 | {len(self.detected_classes)}类 | 4个全景图")
-        print(f"   保存: step-0(初始) 到 step-12(完成360°) 共13张")
-        print(f"   Current Step: {self.current_step}，下一步导航动作将是 step-{self.current_step}")
+        print(f"  4方向全景图已保存 | Step={self.current_step}")
         print("="*60 + "\n")
         
         return panorama_paths, panorama_names
@@ -394,8 +324,6 @@ class VLMNavigationController(InteractiveNavigationController):
         Returns:
             (panorama_paths, direction_names, global_map_path, local_map_path)
         """
-        print(f"\n📷 从 vlm/observations/ 加载图像和地图 ({phase})...")
-        
         panorama_paths = []
         direction_names = []
         
@@ -408,7 +336,6 @@ class VLMNavigationController(InteractiveNavigationController):
             if os.path.exists(panorama_path):
                 panorama_paths.append(panorama_path)
                 direction_names.append(direction_name)
-                print(f"  ✅ {direction_name}: {panorama_filename}")
             else:
                 print(f"  ⚠️  {direction_name} 未找到: {panorama_filename}")
         
@@ -416,15 +343,11 @@ class VLMNavigationController(InteractiveNavigationController):
         global_map_path = os.path.join(self.vlm_dir, 'observations', f'{phase}_global_map.png')
         local_map_path = os.path.join(self.vlm_dir, 'observations', f'{phase}_local_map.png')
         
-        if os.path.exists(global_map_path):
-            print(f"  ✅ Global Map: {phase}_global_map.png")
-        else:
+        if not os.path.exists(global_map_path):
             print(f"  ⚠️  Global Map 未找到")
             global_map_path = None
         
-        if os.path.exists(local_map_path):
-            print(f"  ✅ Local Map: {phase}_local_map.png")
-        else:
+        if not os.path.exists(local_map_path):
             print(f"  ⚠️  Local Map 未找到")
             local_map_path = None
         
@@ -440,9 +363,7 @@ class VLMNavigationController(InteractiveNavigationController):
             print("✗ LLM Planner未初始化")
             return None
         
-        print(f"\n{'*'*60}")
-        print("🤖 生成初始子任务")
-        print(f"{'*'*60}")
+        print(f"\n[LLM规划] 生成初始子任务...")
         
         # 从 vlm/observations/ 获取全景图和地图
         image_paths, direction_names, global_map, local_map = self.get_observations_and_maps("initial")
@@ -548,7 +469,7 @@ class VLMNavigationController(InteractiveNavigationController):
         
         # 重新执行环视建图并生成全景图
         phase = f"verify_{self.subtask_count}"
-        print(f"\n🔄 重新环视以验证子任务完成状态...")
+        print(f"\n[验证] 重新环视以验证子任务完成状态...")
         image_paths, direction_names = self.look_around_and_collect(phase)
         
         if not image_paths:
@@ -609,15 +530,15 @@ class VLMNavigationController(InteractiveNavigationController):
         self._save_thinking_output(thinking_record)
         
         if is_completed:
-            print(f"\n✅ 子任务 #{self.subtask_count} 完成!")
+            print(f"\n[子任务完成] #{self.subtask_count}")
             
             # 检查是否是最终子任务
             if response.get('is_final_subtask', False):
-                print("🎯 到达最终目的地!")
+                print("到达最终目的地")
                 return True, response
             
             # 清空上一个子任务的轨迹（每个子任务独立显示）
-            print("  🧹 清空上一子任务轨迹...")
+            print("  清空上一子任务轨迹")
             self.mapper.clear_trajectory()
             
             # 更新到新子任务
@@ -660,7 +581,7 @@ class VLMNavigationController(InteractiveNavigationController):
             self._save_subtask(response, f"subtask_{self.subtask_count}")
             self._print_subtask_info(response)
         else:
-            print(f"\n🔄 子任务 #{self.subtask_count} 未完成，继续...")
+            print(f"\n[子任务继续] #{self.subtask_count} 未完成")
             
             # 即使未完成也更新位置观察（用于记录轨迹）
             if 'current_observation' in response:
@@ -828,10 +749,10 @@ class VLMNavigationController(InteractiveNavigationController):
             导航结果字典
         """
         print("\n" + "="*60)
-        print("🚀 启动VLM自动导航")
+        print("启动VLM自动导航")
         print("="*60)
-        print(f"📝 指令: {self.current_instruction}")
-        print(f"⚙️  最大步数: {max_steps} | 子任务步数: {max_subtask_steps} | 验证间隔: {verify_interval}")
+        print(f"指令: {self.current_instruction}")
+        print(f"最大步数: {max_steps} | 子任务步数: {max_subtask_steps} | 验证间隔: {verify_interval}")
         print("="*60 + "\n")
         
         # 1. 环视建图 + 收集观察
@@ -861,7 +782,7 @@ class VLMNavigationController(InteractiveNavigationController):
             action_id, action_name, should_stop = self.execute_action_with_vlm()
             
             if action_id is None:
-                print("✗ VLM决策失败，尝试手动输入...")
+                print("VLM决策失败，尝试手动输入")
                 action_id = self.get_keyboard_action()
                 action_name = self._action_name(action_id)
                 should_stop = (action_id == 0)
@@ -871,7 +792,7 @@ class VLMNavigationController(InteractiveNavigationController):
                 is_completed, new_subtask = self.verify_and_replan()
                 
                 if is_completed and new_subtask and new_subtask.get('is_final_subtask', False):
-                    print("\n🎯 导航完成！")
+                    print("\n[导航完成]")
                     navigation_complete = True
                     break
                 
@@ -886,7 +807,7 @@ class VLMNavigationController(InteractiveNavigationController):
             print(f"[Step {total_steps}] {action_name} | 子任务步数: {subtask_steps}")
             
             if result['done']:
-                print("\n✅ Episode自动完成")
+                print("\nEpisode自动完成")
                 navigation_complete = True
                 break
             
@@ -898,7 +819,7 @@ class VLMNavigationController(InteractiveNavigationController):
             
             # 子任务超时
             if subtask_steps >= max_subtask_steps:
-                print(f"\n⚠️ 子任务超时 ({max_subtask_steps}步)，重新规划...")
+                print(f"\n[警告] 子任务超时 ({max_subtask_steps}步)，重新规划")
                 _, _ = self.verify_and_replan()
                 subtask_steps = 0
         
@@ -1052,17 +973,17 @@ class VLMNavigationController(InteractiveNavigationController):
     def _print_subtask_info(self, response: Dict, is_initial: bool = False):
         """打印子任务信息"""
         title = "初始子任务" if is_initial else f"子任务 #{self.subtask_count}"
-        print(f"\n✅ ===== {title} =====")
-        print(f"🌍 全局指令: {self.current_instruction}")
-        print(f"📍 Waypoint: {response.get('waypoint', 'N/A')}")
-        print(f"👁️  环境观察: {response.get('current_observation', 'N/A')}")
-        print(f"🎯 目的地: {response.get('subtask_destination', 'N/A')}")
-        print(f"🏷️  目标Landmark: {response.get('subtask_destination_landmark', 'N/A')}")
-        print(f"📋 子任务指令: {response.get('subtask_instruction', 'N/A')}")
-        print(f"💡 规划提示: {response.get('planning_hints', 'N/A')}")
-        print(f"✓ 完成条件: {response.get('completion_criteria', 'N/A')}")
-        print(f"🏁 是否最终: {response.get('is_final_subtask', False)}")
-        print(f"✅ {'='*50}\n")
+        print(f"\n===== {title} =====")
+        print(f"全局指令: {self.current_instruction}")
+        print(f"Waypoint: {response.get('waypoint', 'N/A')}")
+        print(f"环境观察: {response.get('current_observation', 'N/A')}")
+        print(f"目的地: {response.get('subtask_destination', 'N/A')}")
+        print(f"目标Landmark: {response.get('subtask_destination_landmark', 'N/A')}")
+        print(f"子任务指令: {response.get('subtask_instruction', 'N/A')}")
+        print(f"规划提示: {response.get('planning_hints', 'N/A')}")
+        print(f"完成条件: {response.get('completion_criteria', 'N/A')}")
+        print(f"是否最终: {response.get('is_final_subtask', False)}")
+        print(f"{'='*50}\n")
     def add_waypoint(self, waypoint_description: str, position: np.ndarray = None) -> int:
         """
         添加路径点到空间记忆
@@ -1192,3 +1113,102 @@ class VLMNavigationController(InteractiveNavigationController):
                 continue
         
         return annotated_map
+    
+    def _stitch_panorama(self, images: List[np.ndarray], hfov: float) -> np.ndarray:
+        """
+        使用柱面投影拼接全景图
+        
+        Args:
+            images: 3张图像列表（BGR格式）
+            hfov: 单张图像的水平视场角（度）
+            
+        Returns:
+            拼接后的全景图
+        """
+        if len(images) != 3:
+            # 如果不是3张图，简单拼接
+            return np.hstack(images)
+        
+        h, w = images[0].shape[:2]
+        
+        # 柱面投影参数
+        # 3张图×hfov = 90°总视场
+        total_fov = hfov * 3
+        focal_length = w / (2 * np.tan(np.radians(hfov / 2)))
+        
+        # 计算柱面全景图尺寸
+        cylinder_width = int(2 * focal_length * np.tan(np.radians(total_fov / 2)))
+        cylinder_height = h
+        
+        # 创建全景画布
+        panorama = np.zeros((cylinder_height, cylinder_width, 3), dtype=np.uint8)
+        
+        # 对每张图进行柱面投影并拼接
+        for idx, img in enumerate(images):
+            # 计算当前图像的角度偏移（中间图为0，左右分别为±hfov）
+            angle_offset = (idx - 1) * hfov  # -hfov, 0, +hfov
+            
+            # 柱面投影
+            projected = self._cylindrical_projection(img, focal_length, angle_offset)
+            
+            # 计算在全景图中的位置
+            start_x = int((cylinder_width / 2) + focal_length * np.tan(np.radians(angle_offset - hfov/2)))
+            end_x = int((cylinder_width / 2) + focal_length * np.tan(np.radians(angle_offset + hfov/2)))
+            
+            # 确保索引在范围内
+            start_x = max(0, start_x)
+            end_x = min(cylinder_width, end_x)
+            proj_w = projected.shape[1]
+            
+            # 拼接到全景图
+            if end_x - start_x > 0:
+                # 调整projected的宽度以匹配目标区域
+                scale = (end_x - start_x) / proj_w
+                resized = cv2.resize(projected, (end_x - start_x, cylinder_height))
+                panorama[:, start_x:end_x] = resized
+        
+        return panorama
+    
+    def _cylindrical_projection(self, img: np.ndarray, focal_length: float, angle_offset: float = 0) -> np.ndarray:
+        """
+        将平面图像投影到柱面
+        
+        Args:
+            img: 输入图像
+            focal_length: 焦距
+            angle_offset: 角度偏移（度）
+            
+        Returns:
+            柱面投影后的图像
+        """
+        h, w = img.shape[:2]
+        
+        # 创建输出图像
+        output = np.zeros_like(img)
+        
+        # 图像中心
+        cx, cy = w / 2, h / 2
+        
+        # 对每个像素进行反向投影
+        for y in range(h):
+            for x in range(w):
+                # 柱面坐标到球面坐标
+                theta = (x - cx) / focal_length
+                h_coord = (y - cy) / focal_length
+                
+                # 球面坐标到平面坐标（加上角度偏移）
+                theta_offset = theta + np.radians(angle_offset)
+                x_src = focal_length * np.tan(theta_offset) + cx
+                y_src = h_coord * focal_length / np.cos(theta) + cy
+                
+                # 双线性插值
+                if 0 <= x_src < w-1 and 0 <= y_src < h-1:
+                    x0, y0 = int(x_src), int(y_src)
+                    x1, y1 = x0 + 1, y0 + 1
+                    
+                    dx, dy = x_src - x0, y_src - y0
+                    
+                    output[y, x] = (1-dx)*(1-dy)*img[y0, x0] + dx*(1-dy)*img[y0, x1] + \
+                                   (1-dx)*dy*img[y1, x0] + dx*dy*img[y1, x1]
+        
+        return output

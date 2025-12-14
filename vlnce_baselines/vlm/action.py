@@ -102,7 +102,7 @@ class ActionExecutor(BaseAPIClient):
         updated_progress = response['progress_summary']
         
         # 打印推理过程
-        print(f"🤔 Reasoning: {response['reasoning']}")
-        print(f"🎯 Action: {action_name}")
+        print(f"Reasoning: {response['reasoning']}")
+        print(f"Action: {action_name}")
         
         return action_id, action_name, updated_progress, response
