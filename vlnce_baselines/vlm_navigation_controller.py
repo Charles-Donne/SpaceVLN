@@ -241,8 +241,8 @@ class VLMNavigationController(InteractiveNavigationController):
         panorama_paths = []
         panorama_names = []
         
-        # 获取相机参数
-        hfov = self.config.MAP.HFOV  # 水平视场角（度）
+        # 使用固定的水平视场角30°（每次TURN_LEFT旋转30°）
+        hfov = 30.0  # 每张图的水平视场角（度）
         
         for config in PANORAMA_CONFIG:
             direction_name = config["name"]
