@@ -183,13 +183,12 @@ class VLMNavigationController(InteractiveNavigationController):
         lookaround_images = []
         total_new_classes = 0
         
-        # 保存当前current_step和轨迹，环视结束后恢复
-        saved_current_step = self.current_step
+        # 保存轨迹，环视结束后恢复（但不恢复current_step，环视步骤计入总步数）
         saved_trajectory = self.mapper.trajectory_points.copy() if hasattr(self.mapper, 'trajectory_points') else []
         
         from habitat.sims.habitat_simulator.actions import HabitatSimActions
         
-        # 直接开始12次旋转（1-12），不保存初始观察
+        # 直接开始12次旋转（1-12），每一步保存rgb、detection、maps
         # step 12会回到正前方（360°）
         for look_step in range(1, 13):  # 1, 2, 3, ..., 12
             print(f"  [{look_step}/12] 第{look_step}次左转 (30°×{look_step}={look_step*30}°)", end="", flush=True)
@@ -203,14 +202,15 @@ class VLMNavigationController(InteractiveNavigationController):
                 print(" - Episode提前结束")
                 break
             
-            # 更新检测和建图（不保存step文件）
+            # 更新检测和建图（每一步都保存）
             prev_class_count = len(self.detected_classes)
-            batch_obs = self._batch_obs(obs, save_object_detection=False)
+            batch_obs = self._batch_obs(obs, save_object_detection=True)  # 保存检测结果
             poses = torch.from_numpy(np.array([item['sensor_pose'] for item in obs])).float().to(self.device)
             
             map_state = self.mapper.update_map(
                 batch_obs, poses, look_step,
-                list(self.detected_classes), self.current_episode_id
+                list(self.detected_classes), self.current_episode_id,
+                save_visualizations=True  # 每一步都保存地图
             )
             
             new_classes = len(self.detected_classes) - prev_class_count
@@ -225,9 +225,9 @@ class VLMNavigationController(InteractiveNavigationController):
             rgb_bgr = cv2.cvtColor(obs[0]['rgb'], cv2.COLOR_RGB2BGR)
             lookaround_images.append(rgb_bgr.copy())
         
-        # 环视建图完成，恢复current_step和轨迹
-        self.current_step = saved_current_step
+        # 环视建图完成，恢复轨迹（current_step保持为12，后续导航从13开始）
         self.mapper.trajectory_points = saved_trajectory
+        self.current_step = 12  # 环视完成后停在step-12
         
         # 缓存最后的观察（step 12，回到正前方）
         self.latest_obs = obs[0]
@@ -254,9 +254,11 @@ class VLMNavigationController(InteractiveNavigationController):
             # 使用柱面投影拼接全景图
             panorama = self._stitch_panorama(images_to_stitch, hfov)
             
-            # 保存全景图到 vlm/observations/
+            # 保存全景图到 panoramas/
+            panorama_dir = os.path.join(self.dump_dir, f"episode_{self.current_episode_id}", "panoramas")
+            os.makedirs(panorama_dir, exist_ok=True)
             panorama_filename = f"{phase}_panorama_{direction_name.split()[0].lower()}.jpg"
-            panorama_path = os.path.join(self.vlm_dir, 'observations', panorama_filename)
+            panorama_path = os.path.join(panorama_dir, panorama_filename)
             cv2.imwrite(panorama_path, panorama)
             
             panorama_paths.append(panorama_path)
@@ -391,14 +393,25 @@ class VLMNavigationController(InteractiveNavigationController):
             print("✗ LLM未返回有效响应")
             return None
         
-        # 记录thinking输出
+        # 记录thinking输出（包含输入图片和prompt）
         thinking_record = {
             "step": self.current_step,
             "phase": "initial_planning",
             "subtask_count": self.subtask_count + 1,
             "prompt_type": "initial",
             "response": response,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
+            # 保存输入图片路径
+            "input_images": {
+                "global_map.png": global_map_for_llm,
+                "local_map.png": local_map,
+                "front.jpg": image_paths[0] if len(image_paths) > 0 else None,
+                "left.jpg": image_paths[1] if len(image_paths) > 1 else None,
+                "back.jpg": image_paths[2] if len(image_paths) > 2 else None,
+                "right.jpg": image_paths[3] if len(image_paths) > 3 else None,
+            },
+            # 保存prompt（后续从planner获取）
+            "prompt": f"Instruction: {self.current_instruction}\nDirection Names: {direction_names}"
         }
         self.thinking_outputs.append(thinking_record)
         self._save_thinking_output(thinking_record)
@@ -512,15 +525,26 @@ class VLMNavigationController(InteractiveNavigationController):
             print("✗ LLM验证未返回有效响应")
             return False, None
         
-        # 记录thinking输出
+        # 记录thinking输出（包含输入图片和prompt）
         thinking_record = {
             "step": self.current_step,
             "phase": f"verify_subtask_{self.subtask_count}",
-            "subtask_count": self.subtask_count,
+            "subtask_count": self.subtask_count + (1 if is_completed and not response.get('is_final_subtask', False) else 0),
             "prompt_type": "verification",
             "is_completed": is_completed,
             "response": response,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
+            # 保存输入图片路径
+            "input_images": {
+                "global_map.png": global_map_for_llm,
+                "local_map.png": local_map if os.path.exists(local_map) else None,
+                "front.jpg": image_paths[0] if len(image_paths) > 0 else None,
+                "left.jpg": image_paths[1] if len(image_paths) > 1 else None,
+                "back.jpg": image_paths[2] if len(image_paths) > 2 else None,
+                "right.jpg": image_paths[3] if len(image_paths) > 3 else None,
+            },
+            # 保存prompt关键信息
+            "prompt": f"Instruction: {self.current_instruction}\nCurrent Subtask: {self.current_subtask.get('subtask_instruction', '')}\nDetected Landmarks: {detected_landmarks}\nWaypoint Summary: {waypoint_summary}"
         }
         self.thinking_outputs.append(thinking_record)
         self._save_thinking_output(thinking_record)
@@ -671,14 +695,23 @@ class VLMNavigationController(InteractiveNavigationController):
             print("✗ VLM决策失败")
             return None, None, True
         
-        # 记录action输出
+        # 记录action输出（包含输入图片和prompt）
         action_record = {
             "step": self.current_step,
             "subtask_count": self.subtask_count,
             "action_name": action_name,
             "action_id": action_id,
             "response": response,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
+            # 保存输入图片路径
+            "input_images": {
+                "rgb.jpg": fp_image,
+                "detection.jpg": detection_image,
+                "local_map.png": local_map,
+                "global_map.png": global_map if global_map and os.path.exists(global_map) else None,
+            },
+            # 保存prompt关键信息
+            "prompt": f"Subtask: {self.current_subtask.get('subtask_instruction', '')}\nProgress: {self.progress_summary}\nDetected: {detected_landmarks}"
         }
         self.action_outputs.append(action_record)
         self._save_action_output(action_record)
@@ -856,22 +889,106 @@ class VLMNavigationController(InteractiveNavigationController):
         self.current_subtask_file = filepath
     
     def _save_thinking_output(self, thinking_record: Dict):
-        """保存单次thinking(LLM)输出到文件"""
-        thinking_file = os.path.join(self.vlm_dir, 'thinking_outputs.jsonl')
+        """
+        保存LLM思考输出到子任务文件夹
+        结构: thinking/subtask_N/
+            - input_images/ (全局地图、局部地图、4个方向全景图)
+            - prompt.txt (输入的文字提示词)
+            - response.json (模型输出)
+        """
+        subtask_count = thinking_record.get('subtask_count', 1)
+        thinking_dir = os.path.join(self.dump_dir, f"episode_{self.current_episode_id}", 
+                                    "thinking", f"subtask_{subtask_count}")
+        os.makedirs(thinking_dir, exist_ok=True)
         
-        # 追加模式保存为JSONL格式（每行一个JSON）
-        with open(thinking_file, 'a', encoding='utf-8') as f:
-            json.dump(thinking_record, f, ensure_ascii=False)
-            f.write('\n')
+        # 保存输入图片（如果有）
+        if 'input_images' in thinking_record:
+            images_dir = os.path.join(thinking_dir, "input_images")
+            os.makedirs(images_dir, exist_ok=True)
+            for img_name, img_path in thinking_record['input_images'].items():
+                if os.path.exists(img_path):
+                    import shutil
+                    shutil.copy(img_path, os.path.join(images_dir, os.path.basename(img_path)))
+        
+        # 保存prompt
+        if 'prompt' in thinking_record:
+            prompt_file = os.path.join(thinking_dir, "prompt.txt")
+            with open(prompt_file, 'w', encoding='utf-8') as f:
+                f.write(thinking_record['prompt'])
+        
+        # 保存response
+        response_file = os.path.join(thinking_dir, "response.json")
+        with open(response_file, 'w', encoding='utf-8') as f:
+            json.dump(thinking_record['response'], f, ensure_ascii=False, indent=2)
+        
+        # 同时保存完整记录到thinking.json
+        episode_dir = os.path.join(self.dump_dir, f"episode_{self.current_episode_id}")
+        thinking_summary_file = os.path.join(episode_dir, "thinking.json")
+        
+        # 读取现有记录
+        if os.path.exists(thinking_summary_file):
+            with open(thinking_summary_file, 'r', encoding='utf-8') as f:
+                records = json.load(f)
+        else:
+            records = []
+        
+        # 移除图片路径和prompt（避免重复），只保留关键信息
+        summary_record = {k: v for k, v in thinking_record.items() if k not in ['input_images', 'prompt']}
+        records.append(summary_record)
+        
+        with open(thinking_summary_file, 'w', encoding='utf-8') as f:
+            json.dump(records, f, ensure_ascii=False, indent=2)
     
     def _save_action_output(self, action_record: Dict):
-        """保存单次action(VLM)输出到文件"""
-        action_file = os.path.join(self.vlm_dir, 'action_outputs.jsonl')
+        """
+        保存VLM动作输出到子任务/步骤文件夹
+        结构: action/subtask_N/step_X/
+            - input_images/ (rgb, detection, global_map, local_map)
+            - prompt.txt (输入的文字提示词)
+            - response.json (模型输出)
+        """
+        subtask_count = action_record.get('subtask_count', 1)
+        step = action_record.get('step', 0)
+        action_dir = os.path.join(self.dump_dir, f"episode_{self.current_episode_id}", 
+                                  "action", f"subtask_{subtask_count}", f"step_{step}")
+        os.makedirs(action_dir, exist_ok=True)
         
-        # 追加模式保存为JSONL格式（每行一个JSON）
-        with open(action_file, 'a', encoding='utf-8') as f:
-            json.dump(action_record, f, ensure_ascii=False)
-            f.write('\n')
+        # 保存输入图片（如果有）
+        if 'input_images' in action_record:
+            images_dir = os.path.join(action_dir, "input_images")
+            os.makedirs(images_dir, exist_ok=True)
+            for img_name, img_path in action_record['input_images'].items():
+                if os.path.exists(img_path):
+                    import shutil
+                    shutil.copy(img_path, os.path.join(images_dir, img_name))
+        
+        # 保存prompt
+        if 'prompt' in action_record:
+            prompt_file = os.path.join(action_dir, "prompt.txt")
+            with open(prompt_file, 'w', encoding='utf-8') as f:
+                f.write(action_record['prompt'])
+        
+        # 保存response
+        response_file = os.path.join(action_dir, "response.json")
+        with open(response_file, 'w', encoding='utf-8') as f:
+            json.dump(action_record.get('response', {}), f, ensure_ascii=False, indent=2)
+        
+        # 同时保存到子任务汇总文件
+        episode_dir = os.path.join(self.dump_dir, f"episode_{self.current_episode_id}")
+        subtask_file = os.path.join(episode_dir, f"subtask_{subtask_count}_actions.json")
+        
+        if os.path.exists(subtask_file):
+            with open(subtask_file, 'r', encoding='utf-8') as f:
+                records = json.load(f)
+        else:
+            records = []
+        
+        # 移除图片路径和prompt，只保留关键信息
+        summary_record = {k: v for k, v in action_record.items() if k not in ['input_images', 'prompt']}
+        records.append(summary_record)
+        
+        with open(subtask_file, 'w', encoding='utf-8') as f:
+            json.dump(records, f, ensure_ascii=False, indent=2)
     
     def _save_navigation_result(self, success: bool, total_steps: int) -> str:
         """
@@ -909,16 +1026,18 @@ class VLMNavigationController(InteractiveNavigationController):
             'timestamp': datetime.now().isoformat()
         }
         
-        # 保存到vlm目录
-        filepath = os.path.join(self.vlm_dir, 'result.json')
+        # 保存到episode目录
+        episode_dir = os.path.join(self.dump_dir, f"episode_{self.current_episode_id}")
+        os.makedirs(episode_dir, exist_ok=True)
+        filepath = os.path.join(episode_dir, 'result.json')
         with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(result, f, indent=2, ensure_ascii=False)
         
         print(f"\n{'='*60}")
         print(f"📁 结果已保存: {filepath}")
         print(f"   Steps: {total_steps} | Subtasks: {self.subtask_count}")
-        print(f"   Thinking(LLM) Calls: {len(self.thinking_outputs)} | Action(VLM) Calls: {len(self.action_outputs)}")
-        print(f"   Outputs: vlm/thinking_outputs.jsonl, vlm/action_outputs.jsonl")
+        print(f"   Detected Classes: {len(self.detected_classes)}")
+        print(f"   Thinking(LLM): {len(self.thinking_outputs)} | Action(VLM): {len(self.action_outputs)}")
         if metrics:
             print(f"   Success: {metrics.get('success', success)} | SPL: {metrics.get('spl', 0.0):.4f}")
         print(f"{'='*60}")
@@ -1029,8 +1148,10 @@ class VLMNavigationController(InteractiveNavigationController):
         return "\n".join(summary_lines)
     
     def _save_waypoint_memory(self):
-        """保存路径点记忆到JSON文件"""
-        waypoint_file = os.path.join(self.vlm_dir, 'waypoint_memory.json')
+        """保存路径点记忆到episode目录下的JSON文件"""
+        episode_dir = os.path.join(self.dump_dir, f"episode_{self.current_episode_id}")
+        os.makedirs(episode_dir, exist_ok=True)
+        waypoint_file = os.path.join(episode_dir, 'waypoint_memory.json')
         
         data = {
             "episode_id": self.current_episode_id,
@@ -1112,58 +1233,17 @@ class VLMNavigationController(InteractiveNavigationController):
     
     def _stitch_panorama(self, images: List[np.ndarray], hfov: float) -> np.ndarray:
         """
-        使用柱面投影拼接全景图
+        简单水平拼接3张图像生成90°全景图
         
         Args:
-            images: 3张图像列表（BGR格式）
-            hfov: 单张图像的水平视场角（度）
+            images: 3张连续的图像列表
+            hfov: 每张图的水平视场角（度，未使用）
             
         Returns:
             拼接后的全景图
         """
-        if len(images) != 3:
-            # 如果不是3张图，简单拼接
-            return np.hstack(images)
-        
-        h, w = images[0].shape[:2]
-        
-        # 柱面投影参数
-        # 3张图×hfov = 90°总视场
-        total_fov = hfov * 3
-        focal_length = w / (2 * np.tan(np.radians(hfov / 2)))
-        
-        # 计算柱面全景图尺寸
-        cylinder_width = int(2 * focal_length * np.tan(np.radians(total_fov / 2)))
-        cylinder_height = h
-        
-        # 创建全景画布
-        panorama = np.zeros((cylinder_height, cylinder_width, 3), dtype=np.uint8)
-        
-        # 对每张图进行柱面投影并拼接
-        for idx, img in enumerate(images):
-            # 计算当前图像的角度偏移（中间图为0，左右分别为±hfov）
-            angle_offset = (idx - 1) * hfov  # -hfov, 0, +hfov
-            
-            # 柱面投影
-            projected = self._cylindrical_projection(img, focal_length, angle_offset)
-            
-            # 计算在全景图中的位置
-            start_x = int((cylinder_width / 2) + focal_length * np.tan(np.radians(angle_offset - hfov/2)))
-            end_x = int((cylinder_width / 2) + focal_length * np.tan(np.radians(angle_offset + hfov/2)))
-            
-            # 确保索引在范围内
-            start_x = max(0, start_x)
-            end_x = min(cylinder_width, end_x)
-            proj_w = projected.shape[1]
-            
-            # 拼接到全景图
-            if end_x - start_x > 0:
-                # 调整projected的宽度以匹配目标区域
-                scale = (end_x - start_x) / proj_w
-                resized = cv2.resize(projected, (end_x - start_x, cylinder_height))
-                panorama[:, start_x:end_x] = resized
-        
-        return panorama
+        # 直接水平拼接3张图像
+        return np.hstack(images)
     
     def _cylindrical_projection(self, img: np.ndarray, focal_length: float, angle_offset: float = 0) -> np.ndarray:
         """
