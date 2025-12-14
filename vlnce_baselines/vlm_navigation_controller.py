@@ -117,12 +117,8 @@ class VLMNavigationController(InteractiveNavigationController):
         # 调用父类重置
         super().reset_episode(episode_id)
         
-        # reset后envs已经有了新的观察，通过执行一个STOP动作来获取
-        from habitat.sims.habitat_simulator.actions import HabitatSimActions
-        outputs = self.envs.step([{"action": HabitatSimActions.STOP}])
-        obs, _, _, _ = [list(x) for x in zip(*outputs)]
-        self.latest_obs = obs[0]
-        self.current_step = 0  # STOP不应该增加步数，重置回0
+        # 直接使用父类reset后的观察，不需要额外执行STOP动作
+        # 父类已经通过envs.reset()获取了初始观察并存储在self.latest_obs中
         
         # 重置VLM状态
         self.current_subtask = None
