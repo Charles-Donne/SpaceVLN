@@ -208,6 +208,28 @@ class VLMNavigationController(InteractiveNavigationController):
             new_classes = len(self.detected_classes) - prev_class_count
             total_new_classes += new_classes
             
+            # 调用visualizer保存所有数据（RGB、检测、全局地图、局部地图）
+            rgb_bgr = cv2.cvtColor(obs[0]['rgb'], cv2.COLOR_RGB2BGR)
+            paths, landmarks = self.visualizer.save_step_visualization(
+                step=look_step,
+                episode_id=self.current_episode_id,
+                rgb=rgb_bgr,
+                full_map=map_state['full_map'],
+                trajectory_points=map_state['trajectory_points'],
+                detected_classes=list(self.detected_classes),
+                current_pose=map_state['full_pose'],
+                floor=map_state['floor'],
+                hfov=self.config.MAP.HFOV,
+                detections=self.latest_detections_full if hasattr(self, 'latest_detections_full') else None,
+                labels=self.latest_labels_full if hasattr(self, 'latest_labels_full') else None,
+                landmark_classes=self.landmark_classes,
+                mapping_classes=self.mapping_classes,
+                landmark_config={
+                    'min_total_pixels': self.landmark_min_total_pixels,
+                    'min_area_threshold': self.landmark_min_area_threshold
+                }
+            )
+            
             if new_classes > 0:
                 print(f" +{new_classes}类")
             else:
