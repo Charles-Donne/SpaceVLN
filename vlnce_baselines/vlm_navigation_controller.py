@@ -570,7 +570,6 @@ class VLMNavigationController(InteractiveNavigationController):
             global_map_img = cv2.imread(global_map)
             global_map_img = self.visualize_waypoints_on_map(global_map_img)
             # 保存为单独的可视化版本
-            global_map_for_llm = os.path.join(self.vlm_dir, 'observations', f'{phase}_global_map
             global_map_for_llm = os.path.join(episode_dir, 'global_map', f'step-{last_saved_step}_with_waypoints.png')
             cv2.imwrite(global_map_for_llm, global_map_img)
         
