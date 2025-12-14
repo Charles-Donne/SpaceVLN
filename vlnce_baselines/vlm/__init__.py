@@ -10,6 +10,8 @@ VLM (Vision-Language Model) 模块
 - thinking: LLM规划器
 - action: VLM动作执行器
 - observation_collector: 观察收集和可视化
+- save_manager: 数据保存管理
+- waypoint_manager: 路径点管理
 """
 
 from vlnce_baselines.vlm.api_client import APIConfig, BaseAPIClient
@@ -17,6 +19,8 @@ from vlnce_baselines.vlm.thinking import LLMPlanner
 from vlnce_baselines.vlm.action import ActionExecutor
 from vlnce_baselines.vlm.observation_collector import ObservationCollector
 from vlnce_baselines.vlm.action_parser import ActionParser
+from vlnce_baselines.vlm.save_manager import SaveManager
+from vlnce_baselines.vlm.waypoint_manager import WaypointManager
 
 __all__ = [
     'APIConfig',
@@ -25,4 +29,6 @@ __all__ = [
     'ActionExecutor',
     'ObservationCollector',
     'ActionParser',
+    'SaveManager',
+    'WaypointManager',
 ]
