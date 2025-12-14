@@ -28,6 +28,9 @@ from habitat.sims.habitat_simulator.actions import HabitatSimActions
 
 from vlnce_baselines.interactive_navigation_controller import InteractiveNavigationController
 from vlnce_baselines.vlm import LLMPlanner, ActionExecutor, ObservationCollector
+from vlnce_baselines.vlm.navigation_config import (
+    DIRECTION_STEPS, DIRECTION_NAMES, PANORAMA_CONFIG, ACTION_MAPPING
+)
 
 
 class VLMNavigationController(InteractiveNavigationController):
@@ -46,36 +49,6 @@ class VLMNavigationController(InteractiveNavigationController):
     
     注意：每次验证重规划前都会执行360°环视，以更新语义地图和当前位置的4方向观察
     """
-    
-    # 4方向配置（从环视中提取）
-    # 环视是逆时针TURN_LEFT，12步×30°=360°
-    DIRECTION_STEPS = [0, 3, 6, 9]  # 对应12步中的祰0,3,6,9步
-    DIRECTION_NAMES = [
-        "Front (0°)",      # 步骤0: 初始朝向
-        "Left (90°)",      # 步骤3: 左转90°
-        "Back (180°)",     # 步骤6: 后方
-        "Right (270°)"     # 步骤9: 右方（或左转270°）
-    ]
-    
-    # 全景图配置：每个方向3张图像拼接成90°视角
-    # step-12 + step-0 + step-1 = 360° + 0° + 30° = 前方90°
-    # step-2 + step-3 + step-4 = 60° + 90° + 120° = 左侧90°
-    # step-5 + step-6 + step-7 = 150° + 180° + 210° = 后方90°
-    # step-8 + step-9 + step-10 = 240° + 270° + 300° = 右侧90°
-    PANORAMA_CONFIG = [
-        {"name": "Front (0°)", "steps": [11, 0, 1]},
-        {"name": "Left (90°)", "steps": [2, 3, 4]},
-        {"name": "Back (180°)", "steps": [5, 6, 7]},
-        {"name": "Right (270°)", "steps": [8, 9, 10]}
-    ]
-    
-    # 动作映射（与interactive_navigation一致）
-    ACTION_MAPPING = {
-        "STOP": 0,
-        "MOVE_FORWARD": 1, 
-        "TURN_LEFT": 2,
-        "TURN_RIGHT": 3
-    }
     
     def __init__(self, config: Config,
                  llm_config_path: str = "vlnce_baselines/vlm/llm_config.yaml",
@@ -336,7 +309,7 @@ class VLMNavigationController(InteractiveNavigationController):
         panorama_paths = []
         panorama_names = []
         
-        for config in self.PANORAMA_CONFIG:
+        for config in PANORAMA_CONFIG:
             direction_name = config["name"]
             steps = config["steps"]
             
@@ -427,7 +400,7 @@ class VLMNavigationController(InteractiveNavigationController):
         direction_names = []
         
         # 获取4个全景图
-        for config in self.PANORAMA_CONFIG:
+        for config in PANORAMA_CONFIG:
             direction_name = config["name"]
             panorama_filename = f"{phase}_panorama_{direction_name.split()[0].lower()}.jpg"
             panorama_path = os.path.join(self.vlm_dir, 'observations', panorama_filename)
@@ -770,7 +743,7 @@ class VLMNavigationController(InteractiveNavigationController):
             subtask_destination=self.current_subtask.get('subtask_destination', ''),
             subtask_instruction=self.current_subtask.get('subtask_instruction', ''),
             first_person_image=fp_image,
-            action_mapping=self.ACTION_MAPPING,
+            action_mapping=ACTION_MAPPING,
             progress_summary=self.progress_summary,
             detection_image=detection_image,
             local_map_image=local_map,
