@@ -842,8 +842,8 @@ class VLMNavigationController(InteractiveNavigationController):
         # 2. 生成初始子任务
         subtask = self.generate_initial_subtask()
         if not subtask:
-            print("✗生成全景图
-        self.look_around_and_collect(phase="initial"
+            print("✗ 初始子任务生成失败")
+            return {
                 'success': False,
                 'total_steps': self.current_step,
                 'subtask_count': 0,
