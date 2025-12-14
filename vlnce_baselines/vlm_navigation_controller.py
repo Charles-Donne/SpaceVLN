@@ -195,13 +195,26 @@ class VLMNavigationController(InteractiveNavigationController):
         # 存储13张环视图像用于合成全景图（step-0到step-12）
         lookaround_images = []
         
-        # 先保存初始观察（step-0，0°，无动作）
+        # 先保存初始观察（step-0，0°）
         from habitat.sims.habitat_simulator.actions import HabitatSimActions
         print("  [0/13] 初始观察 (0°)")
         
-        # 获取当前观察（无动作）
-        current_episodes = self.envs.current_episodes()
-        obs = self.envs.call(["get_observations"] * len(current_episodes))
+        # 获取当前观察：如果有缓存使用缓存，否则执行一次右转再左转回来
+        if self.latest_obs is not None:
+            obs = [self.latest_obs]
+        else:
+            # 执行右转再左转回来获取观察（保持原位）
+            actions = [{"action": HabitatSimActions.TURN_RIGHT}]
+            outputs = self.envs.step(actions)
+            _, _, _, _ = [list(x) for x in zip(*outputs)]
+            
+            actions = [{"action": HabitatSimActions.TURN_LEFT}]
+            outputs = self.envs.step(actions)
+            obs, _, dones, _ = [list(x) for x in zip(*outputs)]
+            
+            if dones[0]:
+                print("⚠️ Episode提前结束")
+                return [], []
         
         # 保存初始观察为 step-0
         step = 0
