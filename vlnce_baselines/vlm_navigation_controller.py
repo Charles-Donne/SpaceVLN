@@ -202,8 +202,7 @@ class VLMNavigationController(InteractiveNavigationController):
             
             map_state = self.mapper.update_map(
                 batch_obs, poses, look_step,
-                list(self.detected_classes), self.current_episode_id,
-                save_visualizations=True  # 每一步都保存地图
+                list(self.detected_classes), self.current_episode_id
             )
             
             new_classes = len(self.detected_classes) - prev_class_count
