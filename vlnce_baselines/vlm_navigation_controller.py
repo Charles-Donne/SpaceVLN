@@ -1017,97 +1017,102 @@ class VLMNavigationController(InteractiveNavigationController):
     
     def _create_full_panorama(self, images: List[np.ndarray], hfov: float) -> np.ndarray:
         """
-        将12张环视图像投影到完整的360°柱面全景图
-        使用与地图建图相同的相机参数确保正确性
+        简单拼接12张图像生成360°全景图
         
         Args:
-            images: 12张环视图像（逆时针，每张30°）
-            hfov: 单张图像的水平视场角（度）
+            images: 12张环视图像
+            hfov: 单张图像水平视场角（度）
             
         Returns:
-            360°完整柱面全景图
+            360°全景图
         """
         h, w = images[0].shape[:2]
         
-        # 使用与地图相同的相机模型
-        # 焦距计算：f = w / (2 * tan(hfov/2))
-        f_pixels = w / (2.0 * np.tan(np.radians(hfov / 2.0)))
+        # 计算焦距
+        f = w / (2.0 * np.tan(np.radians(hfov / 2.0)))
         
-        # 计算全景图宽度（360°柱面周长）
-        # 使用更精确的计算：panorama_width = 2 * f * π
-        panorama_width = int(2 * np.pi * f_pixels)
+        # 为每张图做柱面投影（矫正透视畸变）
+        warped_images = []
+        for img in images:
+            warped = self._warp_cylindrical(img, f)
+            warped_images.append(warped)
         
-        # 创建全景图和权重图（用于混合重叠区域）
-        panorama = np.zeros((h, panorama_width, 3), dtype=np.float64)
-        weight_map = np.zeros((h, panorama_width), dtype=np.float64)
+        # 简单水平拼接，重叠区域做渐变混合
+        # 每张图30°，12张正好360°，理论上无缝拼接
+        panorama = warped_images[0]
         
-        # 12张图像的旋转角度：30°, 60°, ..., 360°
-        rotation_angles = [30.0 * i for i in range(1, 13)]
+        for i in range(1, 12):
+            panorama = self._blend_horizontal(panorama, warped_images[i])
         
-        # 投影每张图像到柱面
-        for img, angle_deg in zip(images, rotation_angles):
-            angle_rad = np.radians(angle_deg)
+        return panorama
+    
+    def _warp_cylindrical(self, img: np.ndarray, f: float) -> np.ndarray:
+        """
+        柱面投影（矫正透视畸变）
+        
+        Args:
+            img: 输入图像
+            f: 焦距（像素）
             
-            # 遍历源图像的每个像素
-            for v in range(h):
-                for u in range(w):
-                    # 1. 源像素坐标转换到相机坐标系（归一化坐标）
-                    x_norm = (u - w / 2.0) / f_pixels
-                    y_norm = (v - h / 2.0) / f_pixels
-                    
-                    # 2. 计算该像素在柱面上的角度
-                    # theta = arctan(x_norm) + angle_offset
-                    theta = np.arctan(x_norm) + angle_rad
-                    
-                    # 归一化到[0, 2π)
-                    theta = theta % (2 * np.pi)
-                    
-                    # 3. 柱面坐标映射到全景图像素坐标
-                    x_pano = theta * f_pixels
-                    y_pano = y_norm * f_pixels + h / 2.0
-                    
-                    # 4. 双线性插值写入全景图
-                    x_pano_int = int(x_pano)
-                    y_pano_int = int(y_pano)
-                    
-                    if 0 <= x_pano_int < panorama_width - 1 and 0 <= y_pano_int < h - 1:
-                        # 计算插值权重
-                        dx = x_pano - x_pano_int
-                        dy = y_pano - y_pano_int
-                        
-                        # 中心像素权重高，边缘像素权重低（高斯权重）
-                        dist_from_center = abs(u - w / 2.0) / (w / 2.0)
-                        pixel_weight = np.exp(-2.0 * dist_from_center * dist_from_center)
-                        
-                        # 四个相邻像素的双线性插值
-                        for dy_offset in [0, 1]:
-                            for dx_offset in [0, 1]:
-                                px = x_pano_int + dx_offset
-                                py = y_pano_int + dy_offset
-                                
-                                if 0 <= px < panorama_width and 0 <= py < h:
-                                    # 双线性插值权重
-                                    w_interp = (1 - abs(dx_offset - dx)) * (1 - abs(dy_offset - dy))
-                                    total_weight = pixel_weight * w_interp
-                                    
-                                    # 累加像素值和权重
-                                    panorama[py, px] += img[v, u].astype(np.float64) * total_weight
-                                    weight_map[py, px] += total_weight
+        Returns:
+            投影后的图像
+        """
+        h, w = img.shape[:2]
         
-        # 归一化：除以累积权重
-        mask = weight_map > 0
-        for c in range(3):
-            panorama[mask, c] /= weight_map[mask]
+        # 创建映射坐标
+        y_coords, x_coords = np.mgrid[0:h, 0:w].astype(np.float32)
         
-        # 处理未填充区域（使用最近邻填充）
-        unfilled = weight_map == 0
-        if np.any(unfilled):
-            from scipy.ndimage import distance_transform_edt
-            indices = distance_transform_edt(unfilled, return_distances=False, return_indices=True)
-            for c in range(3):
-                panorama[unfilled, c] = panorama[tuple(indices[:, unfilled]), c]
+        # 中心坐标
+        cx, cy = w / 2.0, h / 2.0
         
-        return np.clip(panorama, 0, 255).astype(np.uint8)
+        # 柱面投影公式
+        theta = (x_coords - cx) / f
+        h_cyl = (y_coords - cy) / f
+        
+        # 映射回原始坐标
+        x_src = f * np.tan(theta) + cx
+        y_src = f * h_cyl + cy
+        
+        # 重映射
+        warped = cv2.remap(img, x_src, y_src, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
+        
+        return warped
+    
+    def _blend_horizontal(self, img1: np.ndarray, img2: np.ndarray, overlap: int = 30) -> np.ndarray:
+        """
+        水平拼接两张图，重叠区域渐变混合
+        
+        Args:
+            img1: 左图
+            img2: 右图
+            overlap: 重叠宽度（像素）
+            
+        Returns:
+            拼接后的图像
+        """
+        h = img1.shape[0]
+        w1, w2 = img1.shape[1], img2.shape[1]
+        
+        # 计算重叠区域
+        if w1 < overlap:
+            overlap = w1 // 2
+        
+        # 创建输出图像
+        result = np.zeros((h, w1 + w2 - overlap, 3), dtype=img1.dtype)
+        
+        # 复制左图的非重叠部分
+        result[:, :w1-overlap] = img1[:, :w1-overlap]
+        
+        # 混合重叠区域
+        for i in range(overlap):
+            alpha = i / float(overlap)  # 从0到1
+            x_res = w1 - overlap + i
+            result[:, x_res] = (1 - alpha) * img1[:, w1-overlap+i] + alpha * img2[:, i]
+        
+        # 复制右图的非重叠部分
+        result[:, w1:] = img2[:, overlap:]
+        
+        return result
     
     
     def _crop_panorama_view(self, full_panorama: np.ndarray, center_angle: float, 
