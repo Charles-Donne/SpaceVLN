@@ -1017,102 +1017,18 @@ class VLMNavigationController(InteractiveNavigationController):
     
     def _create_full_panorama(self, images: List[np.ndarray], hfov: float) -> np.ndarray:
         """
-        简单拼接12张图像生成360°全景图
+        使用OpenCV Stitcher拼接12张图像生成360°全景图
         
         Args:
             images: 12张环视图像
-            hfov: 单张图像水平视场角（度）
+            hfov: 单张图像水平视场角（度，未使用但保留接口兼容性）
             
         Returns:
             360°全景图
         """
-        h, w = images[0].shape[:2]
-        
-        # 计算焦距
-        f = w / (2.0 * np.tan(np.radians(hfov / 2.0)))
-        
-        # 为每张图做柱面投影（矫正透视畸变）
-        warped_images = []
-        for img in images:
-            warped = self._warp_cylindrical(img, f)
-            warped_images.append(warped)
-        
-        # 简单水平拼接，重叠区域做渐变混合
-        # 每张图30°，12张正好360°，理论上无缝拼接
-        panorama = warped_images[0]
-        
-        for i in range(1, 12):
-            panorama = self._blend_horizontal(panorama, warped_images[i])
-        
+        stitcher = cv2.Stitcher_create(cv2.Stitcher_PANORAMA)
+        status, panorama = stitcher.stitch(images)
         return panorama
-    
-    def _warp_cylindrical(self, img: np.ndarray, f: float) -> np.ndarray:
-        """
-        柱面投影（矫正透视畸变）
-        
-        Args:
-            img: 输入图像
-            f: 焦距（像素）
-            
-        Returns:
-            投影后的图像
-        """
-        h, w = img.shape[:2]
-        
-        # 创建映射坐标
-        y_coords, x_coords = np.mgrid[0:h, 0:w].astype(np.float32)
-        
-        # 中心坐标
-        cx, cy = w / 2.0, h / 2.0
-        
-        # 柱面投影公式
-        theta = (x_coords - cx) / f
-        h_cyl = (y_coords - cy) / f
-        
-        # 映射回原始坐标
-        x_src = f * np.tan(theta) + cx
-        y_src = f * h_cyl + cy
-        
-        # 重映射
-        warped = cv2.remap(img, x_src, y_src, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
-        
-        return warped
-    
-    def _blend_horizontal(self, img1: np.ndarray, img2: np.ndarray, overlap: int = 30) -> np.ndarray:
-        """
-        水平拼接两张图，重叠区域渐变混合
-        
-        Args:
-            img1: 左图
-            img2: 右图
-            overlap: 重叠宽度（像素）
-            
-        Returns:
-            拼接后的图像
-        """
-        h = img1.shape[0]
-        w1, w2 = img1.shape[1], img2.shape[1]
-        
-        # 计算重叠区域
-        if w1 < overlap:
-            overlap = w1 // 2
-        
-        # 创建输出图像
-        result = np.zeros((h, w1 + w2 - overlap, 3), dtype=img1.dtype)
-        
-        # 复制左图的非重叠部分
-        result[:, :w1-overlap] = img1[:, :w1-overlap]
-        
-        # 混合重叠区域
-        for i in range(overlap):
-            alpha = i / float(overlap)  # 从0到1
-            x_res = w1 - overlap + i
-            result[:, x_res] = (1 - alpha) * img1[:, w1-overlap+i] + alpha * img2[:, i]
-        
-        # 复制右图的非重叠部分
-        result[:, w1:] = img2[:, overlap:]
-        
-        return result
     
     
     def _crop_panorama_view(self, full_panorama: np.ndarray, center_angle: float, 
