@@ -25,10 +25,10 @@ DIRECTION_NAMES = [
 # 后方(180°): step-7(210°,左) + step-6(180°,中) + step-5(150°,右) = 后方90°
 # 右侧(270°): step-10(300°,左) + step-9(270°,中) + step-8(240°,右) = 右侧90°
 PANORAMA_CONFIG = [
-    {"name": "Front (0°)", "steps": [1, 12, 11]},    # 左-中-右
-    {"name": "Left (90°)", "steps": [4, 3, 2]},     # 左-中-右
-    {"name": "Back (180°)", "steps": [7, 6, 5]},    # 左-中-右
-    {"name": "Right (270°)", "steps": [10, 9, 8]}   # 左-中-右
+    {"name": "Front (0°)", "steps": [1, 12, 11], "center_angle": 0},      # 左-中-右
+    {"name": "Left (90°)", "steps": [4, 3, 2], "center_angle": 90},       # 左-中-右
+    {"name": "Back (180°)", "steps": [7, 6, 5], "center_angle": 180},     # 左-中-右
+    {"name": "Right (270°)", "steps": [10, 9, 8], "center_angle": 270}    # 左-中-右
 ]
 
 # 动作映射

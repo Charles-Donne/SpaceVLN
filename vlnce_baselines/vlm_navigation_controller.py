@@ -251,26 +251,26 @@ class VLMNavigationController(InteractiveNavigationController):
         
         print(f"  扫描完成: +{total_new_classes}类 | 总计{len(self.detected_classes)}类")
         
-        # 合成4个方向的全景图（使用真正的全景拼接）
-        panorama_paths = []
-        panorama_names = []
-        
         # 使用固定的水平视场角30°（每次TURN_LEFT旋转30°）
         hfov = 30.0  # 每张图的水平视场角（度）
         
+        # 步骤1: 将12张图像投影到完整的360°柱面全景图
+        full_panorama = self._create_full_panorama(lookaround_images, hfov)
+        
+        # 步骤2: 从完整全景图中裁剪出4个方向的90°视图
+        panorama_paths = []
+        panorama_names = []
+        panorama_dir = os.path.join(self.config.RESULTS_DIR, f"episode_{self.current_episode_id}", "panoramas")
+        os.makedirs(panorama_dir, exist_ok=True)
+        
         for config in PANORAMA_CONFIG:
             direction_name = config["name"]
-            steps = config["steps"]
+            center_angle = config.get("center_angle", 0)  # 方向中心角度
             
-            # 获取3张图像（注意：steps是1-based索引，需要转换为0-based）
-            images_to_stitch = [lookaround_images[s-1] for s in steps]
+            # 从完整全景图中裁剪90°视图
+            panorama = self._crop_panorama_view(full_panorama, center_angle, 90.0, hfov)
             
-            # 使用柱面投影拼接全景图
-            panorama = self._stitch_panorama(images_to_stitch, hfov)
-            
-            # 保存全景图到 panoramas/
-            panorama_dir = os.path.join(self.config.RESULTS_DIR, f"episode_{self.current_episode_id}", "panoramas")
-            os.makedirs(panorama_dir, exist_ok=True)
+            # 保存全景图
             panorama_filename = f"{phase}_panorama_{direction_name.split()[0].lower()}.jpg"
             panorama_path = os.path.join(panorama_dir, panorama_filename)
             cv2.imwrite(panorama_path, panorama)
@@ -1013,9 +1013,141 @@ class VLMNavigationController(InteractiveNavigationController):
             self.mapper.trajectory_points if hasattr(self.mapper, 'trajectory_points') else []
         )
     
+    def _create_full_panorama(self, images: List[np.ndarray], hfov: float) -> np.ndarray:
+        """
+        将12张环视图像投影到完整的360°柱面全景图
+        
+        Args:
+            images: 12张环视图像（逆时针，每张30°）
+            hfov: 单张图像的水平视场角（度）
+            
+        Returns:
+            360°完整柱面全景图
+        """
+        h, w = images[0].shape[:2]
+        
+        # 计算焦距（像素单位）
+        f = w / (2 * np.tan(np.radians(hfov / 2)))
+        
+        # 计算全景图宽度（360°）
+        panorama_width = int(2 * np.pi * f)  # 柱面周长
+        
+        # 创建全景图和权重图
+        panorama = np.zeros((h, panorama_width, 3), dtype=np.float32)
+        weights = np.zeros((h, panorama_width), dtype=np.float32)
+        
+        # 12张图像的旋转角度（从step-1到step-12）
+        # step-1=30°, step-2=60°, ..., step-12=360°(0°)
+        rotation_angles = [30 * i for i in range(1, 13)]
+        
+        # 将每张图像投影到全景图
+        for img, angle in zip(images, rotation_angles):
+            self._add_image_to_full_panorama(img, angle, f, hfov, panorama, weights)
+        
+        # 归一化（处理重叠区域）
+        mask = weights > 0
+        panorama[mask] = panorama[mask] / weights[mask, np.newaxis]
+        
+        return panorama.astype(np.uint8)
+    
+    def _add_image_to_full_panorama(self, img: np.ndarray, rotation_angle: float, f: float,
+                                     hfov: float, panorama: np.ndarray, weights: np.ndarray):
+        """
+        将单张图像通过柱面投影添加到360°全景图
+        
+        Args:
+            img: 输入图像
+            rotation_angle: 相机旋转角度（度，0°为初始朝向）
+            f: 焦距（像素）
+            hfov: 单张图像水平视场角（度）
+            panorama: 全景图（累加）
+            weights: 权重图（累加）
+        """
+        h, w = img.shape[:2]
+        cy, cx = h / 2, w / 2
+        pano_h, pano_w = panorama.shape[:2]
+        
+        # 旋转角度转弧度
+        theta_offset = np.radians(rotation_angle)
+        
+        # 遍历输入图像的每个像素
+        for y in range(h):
+            for x in range(w):
+                # 源图像坐标转换到相机坐标系
+                x_cam = (x - cx) / f
+                y_cam = (y - cy) / f
+                
+                # 计算该像素在柱面上的角度
+                theta = np.arctan(x_cam) + theta_offset
+                
+                # 归一化到[0, 2π)
+                theta = theta % (2 * np.pi)
+                
+                # 柱面坐标映射到全景图坐标
+                x_pano = theta * f
+                y_pano = f * y_cam + cy
+                
+                # 检查是否在全景图范围内
+                if 0 <= x_pano < pano_w and 0 <= y_pano < pano_h:
+                    x_p = int(round(x_pano))
+                    y_p = int(round(y_pano))
+                    
+                    if 0 <= x_p < pano_w and 0 <= y_p < pano_h:
+                        # 使用线性权重（中心权重高，边缘权重低）
+                        weight = 1.0 - abs(x - cx) / (w / 2) * 0.5
+                        
+                        # 累加像素值和权重
+                        panorama[y_p, x_p] += img[y, x].astype(np.float32) * weight
+                        weights[y_p, x_p] += weight
+    
+    def _crop_panorama_view(self, full_panorama: np.ndarray, center_angle: float, 
+                            fov: float, hfov_per_image: float) -> np.ndarray:
+        """
+        从360°全景图中裁剪指定方向的视图
+        
+        Args:
+            full_panorama: 360°完整全景图
+            center_angle: 视图中心角度（度，0°=前方，90°=左侧）
+            fov: 视图的水平视场角（度，通常90°）
+            hfov_per_image: 单张原始图像的视场角（用于计算焦距）
+            
+        Returns:
+            裁剪后的视图
+        """
+        h, pano_w = full_panorama.shape[:2]
+        
+        # 计算焦距
+        w_original = pano_w / 12  # 假设原始图像宽度
+        f = w_original / (2 * np.tan(np.radians(hfov_per_image / 2)))
+        
+        # 计算裁剪区域
+        center_theta = np.radians(center_angle)
+        half_fov = np.radians(fov / 2)
+        
+        # 起始和结束角度
+        theta_start = center_theta - half_fov
+        theta_end = center_theta + half_fov
+        
+        # 映射到像素坐标
+        x_start = int((theta_start % (2 * np.pi)) * f)
+        x_end = int((theta_end % (2 * np.pi)) * f)
+        
+        # 处理跨越0°的情况
+        if x_end < x_start:
+            # 需要环绕拼接
+            part1 = full_panorama[:, x_start:]
+            part2 = full_panorama[:, :x_end]
+            view = np.hstack([part1, part2])
+        else:
+            view = full_panorama[:, x_start:x_end]
+        
+        return view
+    
     def _stitch_panorama(self, images: List[np.ndarray], hfov: float) -> np.ndarray:
         """
-        柱面投影拼接3张图像生成90°全景图
+        [已废弃] 柱面投影拼接3张图像生成90°全景图
+        现在使用 _create_full_panorama + _crop_panorama_view 替代
+        保留此方法以防向后兼容
         
         Args:
             images: 3张连续的图像列表（左-中-右）
@@ -1024,114 +1156,6 @@ class VLMNavigationController(InteractiveNavigationController):
         Returns:
             拼接后的全景图
         """
-        if len(images) != 3:
-            return np.hstack(images)
-        
-        h, w = images[0].shape[:2]
-        
-        # 计算焦距（像素单位）
-        f = w / (2 * np.tan(np.radians(hfov / 2)))
-        
-        # 相机之间的旋转角度（度）
-        rotation_angles = [-30, 0, 30]  # 左中右：-30°, 0°, 30°
-        
-        # 投影所有图像到柱面
-        cylindrical_images = []
-        for img, angle in zip(images, rotation_angles):
-            cyl_img = self._project_to_cylinder(img, f, angle)
-            cylindrical_images.append(cyl_img)
-        
-        # 在柱面上拼接图像
-        panorama = self._merge_cylindrical_images(cylindrical_images, f, hfov)
-        
-        return panorama
-    
-    def _project_to_cylinder(self, img: np.ndarray, f: float, rotation_angle: float) -> np.ndarray:
-        """
-        将平面图像投影到柱面
-        
-        Args:
-            img: 输入图像
-            f: 焦距（像素）
-            rotation_angle: 相机旋转角度（度）
-            
-        Returns:
-            柱面投影后的图像
-        """
-        h, w = img.shape[:2]
-        cy, cx = h / 2, w / 2
-        
-        # 创建输出图像
-        output = np.zeros_like(img)
-        
-        # 旋转角度转弧度
-        theta_offset = np.radians(rotation_angle)
-        
-        # 对每个输出像素进行逆映射
-        for y in range(h):
-            for x in range(w):
-                # 柱面坐标
-                theta = (x - cx) / f + theta_offset
-                h_cyl = (y - cy) / f
-                
-                # 映射回平面坐标
-                x_src = f * np.tan(theta - theta_offset) + cx
-                y_src = f * h_cyl + cy
-                
-                # 双线性插值
-                if 0 <= x_src < w - 1 and 0 <= y_src < h - 1:
-                    x0, y0 = int(x_src), int(y_src)
-                    x1, y1 = x0 + 1, y0 + 1
-                    
-                    dx, dy = x_src - x0, y_src - y0
-                    
-                    output[y, x] = (1 - dx) * (1 - dy) * img[y0, x0] + \
-                                   dx * (1 - dy) * img[y0, x1] + \
-                                   (1 - dx) * dy * img[y1, x0] + \
-                                   dx * dy * img[y1, x1]
-        
-        return output
-    
-    def _merge_cylindrical_images(self, images: List[np.ndarray], f: float, hfov: float) -> np.ndarray:
-        """
-        合并柱面投影的图像
-        
-        Args:
-            images: 柱面投影后的图像列表
-            f: 焦距（像素）
-            hfov: 单张图像的水平视场角（度）
-            
-        Returns:
-            拼接后的全景图
-        """
-        h = images[0].shape[0]
-        
-        # 计算全景图总宽度（90°视场角）
-        total_fov = 90.0  # 3张30°图像覆盖90°
-        panorama_width = int(2 * f * np.tan(np.radians(total_fov / 2)))
-        
-        # 创建全景图
-        panorama = np.zeros((h, panorama_width, 3), dtype=np.uint8)
-        
-        # 计算每张图像在全景图中的位置
-        angles = [-30, 0, 30]  # 左中右
-        
-        for img, angle in zip(images, angles):
-            # 计算该图像在全景图中的中心位置
-            theta_center = np.radians(angle)
-            x_center = int(f * np.tan(theta_center) + panorama_width / 2)
-            
-            # 图像宽度的一半
-            half_w = img.shape[1] // 2
-            
-            # 计算拷贝范围
-            x_start = max(0, x_center - half_w)
-            x_end = min(panorama_width, x_center + half_w)
-            img_start = max(0, half_w - x_center)
-            img_end = img_start + (x_end - x_start)
-            
-            # 拷贝图像到全景图
-            panorama[:, x_start:x_end] = img[:, img_start:img_end]
-        
-        return panorama
+        # 简单水平拼接作为降级方案
+        return np.hstack(images)
 
