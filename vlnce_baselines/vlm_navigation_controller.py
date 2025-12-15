@@ -449,25 +449,29 @@ class VLMNavigationController(InteractiveNavigationController):
             self.current_step
         )
         
-        # 记录并动态更新目标landmark
+        # 记录并动态更新目标landmark（从instruction中提取所有相关landmark）
+        subtask_instruction = response.get('subtask_instruction', '')
         subtask_landmark = response.get('subtask_landmark', None)
-        if subtask_landmark:
-            # 验证：只要在mapping_classes中（能被GroundedSAM检测）就可以作为landmark
-            if subtask_landmark in self.mapping_classes:
-                # 动态更新landmark_classes（只标注当前子任务的目标）
-                self.landmark_classes = [subtask_landmark]
-                self.target_landmark = subtask_landmark
-                print(f"  🎯 目标Landmark已设定: {self.target_landmark}")
-                print(f"  📍 已动态更新landmark_classes: {self.landmark_classes}")
-            else:
-                print(f"  ⚠️  警告: '{subtask_landmark}' 不在mapping_classes中，GroundedSAM无法检测")
-                print(f"  💡 可检测类别: {', '.join(self.mapping_classes)}")
-                self.target_landmark = None
-                self.landmark_classes = []  # 重置为空
+        
+        # 从instruction中提取所有mapping_classes中的类别作为landmark
+        landmarks_in_instruction = []
+        for cls in self.mapping_classes:
+            if cls.lower() in subtask_instruction.lower():
+                landmarks_in_instruction.append(cls)
+        
+        # 如果有明确的subtask_landmark，优先使用；否则使用提取的所有landmarks
+        if subtask_landmark and subtask_landmark in self.mapping_classes:
+            self.landmark_classes = [subtask_landmark]
+            self.target_landmark = subtask_landmark
+            print(f"  🎯 Landmark: {self.target_landmark}")
+        elif landmarks_in_instruction:
+            self.landmark_classes = landmarks_in_instruction
+            self.target_landmark = landmarks_in_instruction[0]  # 主要目标
+            print(f"  🎯 Landmarks from instruction: {', '.join(self.landmark_classes)}")
         else:
-            print(f"  ℹ️  未指定subtask_landmark，不标注landmark")
             self.target_landmark = None
-            self.landmark_classes = []  # 重置为空
+            self.landmark_classes = []
+            print(f"  ℹ️  No landmarks to mark")
         
         # 打印子任务信息
         self._print_subtask_info(response, is_initial=True)
@@ -595,25 +599,29 @@ class VLMNavigationController(InteractiveNavigationController):
             # 不传position参数，让add_waypoint()从mapper.curr_loc获取正确的地图像素坐标
             self.add_waypoint(waypoint_desc)
             
-            # 动态更新目标landmark（自动替换上一个子任务的landmark）
+            # 动态更新目标landmark（从instruction中提取所有相关landmark）
+            subtask_instruction = response.get('subtask_instruction', '')
             subtask_landmark = response.get('subtask_landmark', None)
-            if subtask_landmark:
-                # 验证：只要在mapping_classes中（能被GroundedSAM检测）就可以作为landmark
-                if subtask_landmark in self.mapping_classes:
-                    # 动态更新landmark_classes（只标注当前子任务的目标）
-                    # 注意：这里更新会自动替换掉上一个子任务的landmark标注
-                    self.landmark_classes = [subtask_landmark]
-                    self.target_landmark = subtask_landmark
-                    print(f"  🎯 新目标Landmark: {self.target_landmark}")
-                    print(f"  📍 已更新landmark_classes: {self.landmark_classes} (替换上一子任务)")
-                else:
-                    print(f"  ⚠️  警告: '{subtask_landmark}' 不在mapping_classes中，GroundedSAM无法检测")
-                    self.target_landmark = None
-                    self.landmark_classes = []  # 重置为空
+            
+            # 从instruction中提取所有mapping_classes中的类别作为landmark
+            landmarks_in_instruction = []
+            for cls in self.mapping_classes:
+                if cls.lower() in subtask_instruction.lower():
+                    landmarks_in_instruction.append(cls)
+            
+            # 如果有明确的subtask_landmark，优先使用；否则使用提取的所有landmarks
+            if subtask_landmark and subtask_landmark in self.mapping_classes:
+                self.landmark_classes = [subtask_landmark]
+                self.target_landmark = subtask_landmark
+                print(f"  🎯 New Landmark: {self.target_landmark}")
+            elif landmarks_in_instruction:
+                self.landmark_classes = landmarks_in_instruction
+                self.target_landmark = landmarks_in_instruction[0]  # 主要目标
+                print(f"  🎯 New Landmarks from instruction: {', '.join(self.landmark_classes)}")
             else:
-                print(f"  ℹ️  未指定新landmark，不标注landmark")
                 self.target_landmark = None
-                self.landmark_classes = []  # 重置为空
+                self.landmark_classes = []
+                print(f"  ℹ️  No landmarks to mark")
             
             self._print_subtask_info(response)
         else:
@@ -723,7 +731,7 @@ class VLMNavigationController(InteractiveNavigationController):
                 "rgb.jpg": fp_image,
                 "detection.jpg": detection_image,
                 "local_map.png": local_map,
-                "global_map.png": global_map if global_map and os.path.exists(global_map) else None,
+                "global_map.png": self.latest_global_map if self.latest_global_map and os.path.exists(self.latest_global_map) else None,
             },
             # 保存prompt关键信息
             "prompt": f"Subtask: {self.current_subtask.get('subtask_instruction', '')}\nProgress: {self.progress_summary}\nDetected: {detected_landmarks}"
@@ -974,18 +982,13 @@ class VLMNavigationController(InteractiveNavigationController):
             print(f"⚠️ 记录动作失败: {e}")
     
     def _print_subtask_info(self, response: Dict, is_initial: bool = False):
-        """打印子任务信息"""
-        title = "初始子任务" if is_initial else f"子任务 #{self.subtask_count}"
-        print(f"\n===== {title} =====")
-        print(f"全局指令: {self.current_instruction}")
-        print(f"Waypoint: {response.get('waypoint', 'N/A')}")
-        print(f"环境观察: {response.get('current_observation', 'N/A')}")
-        print(f"目的地: {response.get('subtask_destination', 'N/A')}")
-        print(f"目标Landmark: {response.get('subtask_destination_landmark', 'N/A')}")
-        print(f"子任务指令: {response.get('subtask_instruction', 'N/A')}")
-        print(f"规划提示: {response.get('planning_hints', 'N/A')}")
-        print(f"完成条件: {response.get('completion_criteria', 'N/A')}")
-        print(f"是否最终: {response.get('is_final_subtask', False)}")
+        """打印子任务信息（JSON格式）"""
+        import json
+        title = "Initial Subtask" if is_initial else f"Subtask #{self.subtask_count}"
+        print(f"\n{'='*50}")
+        print(f"{title}")
+        print(f"Global Instruction: {self.current_instruction}")
+        print(json.dumps(response, indent=2, ensure_ascii=False))
         print(f"{'='*50}\n")
     # ========== 向后兼容的方法（调用manager） ==========
     
@@ -1012,15 +1015,123 @@ class VLMNavigationController(InteractiveNavigationController):
     
     def _stitch_panorama(self, images: List[np.ndarray], hfov: float) -> np.ndarray:
         """
-        简单水平拼接3张图像生成90°全景图
+        柱面投影拼接3张图像生成90°全景图
         
         Args:
-            images: 3张连续的图像列表
-            hfov: 每张图的水平视场角（度，未使用）
+            images: 3张连续的图像列表（左-中-右）
+            hfov: 每张图的水平视场角（度）
             
         Returns:
             拼接后的全景图
         """
-        # 直接水平拼接3张图像
-        return np.hstack(images)
+        if len(images) != 3:
+            return np.hstack(images)
+        
+        h, w = images[0].shape[:2]
+        
+        # 计算焦距（像素单位）
+        f = w / (2 * np.tan(np.radians(hfov / 2)))
+        
+        # 相机之间的旋转角度（度）
+        rotation_angles = [-30, 0, 30]  # 左中右：-30°, 0°, 30°
+        
+        # 投影所有图像到柱面
+        cylindrical_images = []
+        for img, angle in zip(images, rotation_angles):
+            cyl_img = self._project_to_cylinder(img, f, angle)
+            cylindrical_images.append(cyl_img)
+        
+        # 在柱面上拼接图像
+        panorama = self._merge_cylindrical_images(cylindrical_images, f, hfov)
+        
+        return panorama
+    
+    def _project_to_cylinder(self, img: np.ndarray, f: float, rotation_angle: float) -> np.ndarray:
+        """
+        将平面图像投影到柱面
+        
+        Args:
+            img: 输入图像
+            f: 焦距（像素）
+            rotation_angle: 相机旋转角度（度）
+            
+        Returns:
+            柱面投影后的图像
+        """
+        h, w = img.shape[:2]
+        cy, cx = h / 2, w / 2
+        
+        # 创建输出图像
+        output = np.zeros_like(img)
+        
+        # 旋转角度转弧度
+        theta_offset = np.radians(rotation_angle)
+        
+        # 对每个输出像素进行逆映射
+        for y in range(h):
+            for x in range(w):
+                # 柱面坐标
+                theta = (x - cx) / f + theta_offset
+                h_cyl = (y - cy) / f
+                
+                # 映射回平面坐标
+                x_src = f * np.tan(theta - theta_offset) + cx
+                y_src = f * h_cyl + cy
+                
+                # 双线性插值
+                if 0 <= x_src < w - 1 and 0 <= y_src < h - 1:
+                    x0, y0 = int(x_src), int(y_src)
+                    x1, y1 = x0 + 1, y0 + 1
+                    
+                    dx, dy = x_src - x0, y_src - y0
+                    
+                    output[y, x] = (1 - dx) * (1 - dy) * img[y0, x0] + \
+                                   dx * (1 - dy) * img[y0, x1] + \
+                                   (1 - dx) * dy * img[y1, x0] + \
+                                   dx * dy * img[y1, x1]
+        
+        return output
+    
+    def _merge_cylindrical_images(self, images: List[np.ndarray], f: float, hfov: float) -> np.ndarray:
+        """
+        合并柱面投影的图像
+        
+        Args:
+            images: 柱面投影后的图像列表
+            f: 焦距（像素）
+            hfov: 单张图像的水平视场角（度）
+            
+        Returns:
+            拼接后的全景图
+        """
+        h = images[0].shape[0]
+        
+        # 计算全景图总宽度（90°视场角）
+        total_fov = 90.0  # 3张30°图像覆盖90°
+        panorama_width = int(2 * f * np.tan(np.radians(total_fov / 2)))
+        
+        # 创建全景图
+        panorama = np.zeros((h, panorama_width, 3), dtype=np.uint8)
+        
+        # 计算每张图像在全景图中的位置
+        angles = [-30, 0, 30]  # 左中右
+        
+        for img, angle in zip(images, angles):
+            # 计算该图像在全景图中的中心位置
+            theta_center = np.radians(angle)
+            x_center = int(f * np.tan(theta_center) + panorama_width / 2)
+            
+            # 图像宽度的一半
+            half_w = img.shape[1] // 2
+            
+            # 计算拷贝范围
+            x_start = max(0, x_center - half_w)
+            x_end = min(panorama_width, x_center + half_w)
+            img_start = max(0, half_w - x_center)
+            img_end = img_start + (x_end - x_start)
+            
+            # 拷贝图像到全景图
+            panorama[:, x_start:x_end] = img[:, img_start:img_end]
+        
+        return panorama
 
