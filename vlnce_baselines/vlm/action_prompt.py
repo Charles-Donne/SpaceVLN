@@ -14,6 +14,17 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Analyze en
 **Sub-Destination**: {subtask_destination}
 **Sub-Instruction**: {subtask_instruction}
 
+**CRITICAL EXECUTION RULES**:
+1. **STRICTLY FOLLOW** the sub-instruction step-by-step
+2. **DO NOT STOP** until you reach the sub-destination OR complete ALL actions in the sub-instruction
+3. Only output "STOP" when:
+   - You have completed ALL steps in the sub-instruction, AND
+   - The destination landmark is clearly visible in view, AND
+   - You are within the specified distance requirement (<0.5m or as instructed)
+4. If instruction says "turn left 90°", you MUST complete the full rotation even if obstacles appear
+5. If instruction says "move forward X meters", you MUST attempt all required moves unless blocked
+6. Execute actions sequentially as instructed - do not skip or reorder steps
+
 # Progress Summary
 {progress_summary}
 

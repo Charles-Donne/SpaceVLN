@@ -181,10 +181,12 @@ class VLMNavigationController(InteractiveNavigationController):
         
         from habitat.sims.habitat_simulator.actions import HabitatSimActions
         
-        # 直接开始12次旋转（1-12），每一步保存rgb、detection、maps
-        # step 12会回到正前方（360°）
-        for look_step in range(1, 13):  # 1, 2, 3, ..., 12
-            print(f"  [{look_step}/12] 第{look_step}次左转 (30°×{look_step}={look_step*30}°)", end="", flush=True)
+        # 直接开始12次旋转，每一步保存rgb、detection、maps
+        # 使用累加的self.current_step，避免覆盖之前的数据
+        for i in range(1, 13):  # 12次旋转
+            self.current_step += 1  # 累加总步数
+            look_step = self.current_step
+            print(f"  [{i}/12] 第{i}次左转 (30°×{i}={i*30}°)", end="", flush=True)
             
             # 执行旋转
             actions = [{"action": HabitatSimActions.TURN_LEFT}]
@@ -1016,6 +1018,7 @@ class VLMNavigationController(InteractiveNavigationController):
     def _create_full_panorama(self, images: List[np.ndarray], hfov: float) -> np.ndarray:
         """
         将12张环视图像投影到完整的360°柱面全景图
+        使用与地图建图相同的相机参数确保正确性
         
         Args:
             images: 12张环视图像（逆时针，每张30°）
@@ -1026,79 +1029,86 @@ class VLMNavigationController(InteractiveNavigationController):
         """
         h, w = images[0].shape[:2]
         
-        # 计算焦距（像素单位）
-        f = w / (2 * np.tan(np.radians(hfov / 2)))
+        # 使用与地图相同的相机模型
+        # 焦距计算：f = w / (2 * tan(hfov/2))
+        f_pixels = w / (2.0 * np.tan(np.radians(hfov / 2.0)))
         
-        # 计算全景图宽度（360°）
-        panorama_width = int(2 * np.pi * f)  # 柱面周长
+        # 计算全景图宽度（360°柱面周长）
+        # 使用更精确的计算：panorama_width = 2 * f * π
+        panorama_width = int(2 * np.pi * f_pixels)
         
-        # 创建全景图和权重图
-        panorama = np.zeros((h, panorama_width, 3), dtype=np.float32)
-        weights = np.zeros((h, panorama_width), dtype=np.float32)
+        # 创建全景图和权重图（用于混合重叠区域）
+        panorama = np.zeros((h, panorama_width, 3), dtype=np.float64)
+        weight_map = np.zeros((h, panorama_width), dtype=np.float64)
         
-        # 12张图像的旋转角度（从step-1到step-12）
-        # step-1=30°, step-2=60°, ..., step-12=360°(0°)
-        rotation_angles = [30 * i for i in range(1, 13)]
+        # 12张图像的旋转角度：30°, 60°, ..., 360°
+        rotation_angles = [30.0 * i for i in range(1, 13)]
         
-        # 将每张图像投影到全景图
-        for img, angle in zip(images, rotation_angles):
-            self._add_image_to_full_panorama(img, angle, f, hfov, panorama, weights)
-        
-        # 归一化（处理重叠区域）
-        mask = weights > 0
-        panorama[mask] = panorama[mask] / weights[mask, np.newaxis]
-        
-        return panorama.astype(np.uint8)
-    
-    def _add_image_to_full_panorama(self, img: np.ndarray, rotation_angle: float, f: float,
-                                     hfov: float, panorama: np.ndarray, weights: np.ndarray):
-        """
-        将单张图像通过柱面投影添加到360°全景图
-        
-        Args:
-            img: 输入图像
-            rotation_angle: 相机旋转角度（度，0°为初始朝向）
-            f: 焦距（像素）
-            hfov: 单张图像水平视场角（度）
-            panorama: 全景图（累加）
-            weights: 权重图（累加）
-        """
-        h, w = img.shape[:2]
-        cy, cx = h / 2, w / 2
-        pano_h, pano_w = panorama.shape[:2]
-        
-        # 旋转角度转弧度
-        theta_offset = np.radians(rotation_angle)
-        
-        # 遍历输入图像的每个像素
-        for y in range(h):
-            for x in range(w):
-                # 源图像坐标转换到相机坐标系
-                x_cam = (x - cx) / f
-                y_cam = (y - cy) / f
-                
-                # 计算该像素在柱面上的角度
-                theta = np.arctan(x_cam) + theta_offset
-                
-                # 归一化到[0, 2π)
-                theta = theta % (2 * np.pi)
-                
-                # 柱面坐标映射到全景图坐标
-                x_pano = theta * f
-                y_pano = f * y_cam + cy
-                
-                # 检查是否在全景图范围内
-                if 0 <= x_pano < pano_w and 0 <= y_pano < pano_h:
-                    x_p = int(round(x_pano))
-                    y_p = int(round(y_pano))
+        # 投影每张图像到柱面
+        for img, angle_deg in zip(images, rotation_angles):
+            angle_rad = np.radians(angle_deg)
+            
+            # 遍历源图像的每个像素
+            for v in range(h):
+                for u in range(w):
+                    # 1. 源像素坐标转换到相机坐标系（归一化坐标）
+                    x_norm = (u - w / 2.0) / f_pixels
+                    y_norm = (v - h / 2.0) / f_pixels
                     
-                    if 0 <= x_p < pano_w and 0 <= y_p < pano_h:
-                        # 使用线性权重（中心权重高，边缘权重低）
-                        weight = 1.0 - abs(x - cx) / (w / 2) * 0.5
+                    # 2. 计算该像素在柱面上的角度
+                    # theta = arctan(x_norm) + angle_offset
+                    theta = np.arctan(x_norm) + angle_rad
+                    
+                    # 归一化到[0, 2π)
+                    theta = theta % (2 * np.pi)
+                    
+                    # 3. 柱面坐标映射到全景图像素坐标
+                    x_pano = theta * f_pixels
+                    y_pano = y_norm * f_pixels + h / 2.0
+                    
+                    # 4. 双线性插值写入全景图
+                    x_pano_int = int(x_pano)
+                    y_pano_int = int(y_pano)
+                    
+                    if 0 <= x_pano_int < panorama_width - 1 and 0 <= y_pano_int < h - 1:
+                        # 计算插值权重
+                        dx = x_pano - x_pano_int
+                        dy = y_pano - y_pano_int
                         
-                        # 累加像素值和权重
-                        panorama[y_p, x_p] += img[y, x].astype(np.float32) * weight
-                        weights[y_p, x_p] += weight
+                        # 中心像素权重高，边缘像素权重低（高斯权重）
+                        dist_from_center = abs(u - w / 2.0) / (w / 2.0)
+                        pixel_weight = np.exp(-2.0 * dist_from_center * dist_from_center)
+                        
+                        # 四个相邻像素的双线性插值
+                        for dy_offset in [0, 1]:
+                            for dx_offset in [0, 1]:
+                                px = x_pano_int + dx_offset
+                                py = y_pano_int + dy_offset
+                                
+                                if 0 <= px < panorama_width and 0 <= py < h:
+                                    # 双线性插值权重
+                                    w_interp = (1 - abs(dx_offset - dx)) * (1 - abs(dy_offset - dy))
+                                    total_weight = pixel_weight * w_interp
+                                    
+                                    # 累加像素值和权重
+                                    panorama[py, px] += img[v, u].astype(np.float64) * total_weight
+                                    weight_map[py, px] += total_weight
+        
+        # 归一化：除以累积权重
+        mask = weight_map > 0
+        for c in range(3):
+            panorama[mask, c] /= weight_map[mask]
+        
+        # 处理未填充区域（使用最近邻填充）
+        unfilled = weight_map == 0
+        if np.any(unfilled):
+            from scipy.ndimage import distance_transform_edt
+            indices = distance_transform_edt(unfilled, return_distances=False, return_indices=True)
+            for c in range(3):
+                panorama[unfilled, c] = panorama[tuple(indices[:, unfilled]), c]
+        
+        return np.clip(panorama, 0, 255).astype(np.uint8)
+    
     
     def _crop_panorama_view(self, full_panorama: np.ndarray, center_angle: float, 
                             fov: float, hfov_per_image: float) -> np.ndarray:
@@ -1116,25 +1126,24 @@ class VLMNavigationController(InteractiveNavigationController):
         """
         h, pano_w = full_panorama.shape[:2]
         
-        # 计算焦距
-        w_original = pano_w / 12  # 假设原始图像宽度
-        f = w_original / (2 * np.tan(np.radians(hfov_per_image / 2)))
+        # 使用与_create_full_panorama相同的方法计算焦距
+        w_original = int(pano_w / (2 * np.pi) * 2 * np.tan(np.radians(hfov_per_image / 2)))
+        f_pixels = w_original / (2.0 * np.tan(np.radians(hfov_per_image / 2.0)))
         
-        # 计算裁剪区域
-        center_theta = np.radians(center_angle)
-        half_fov = np.radians(fov / 2)
+        # 计算裁剪的角度范围
+        center_rad = np.radians(center_angle)
+        half_fov_rad = np.radians(fov / 2.0)
         
-        # 起始和结束角度
-        theta_start = center_theta - half_fov
-        theta_end = center_theta + half_fov
+        theta_start = center_rad - half_fov_rad
+        theta_end = center_rad + half_fov_rad
         
-        # 映射到像素坐标
-        x_start = int((theta_start % (2 * np.pi)) * f)
-        x_end = int((theta_end % (2 * np.pi)) * f)
+        # 映射到全景图像素坐标
+        x_start = int((theta_start % (2 * np.pi)) * f_pixels)
+        x_end = int((theta_end % (2 * np.pi)) * f_pixels)
         
-        # 处理跨越0°的情况
+        # 处理跨越0°/360°边界的情况
         if x_end < x_start:
-            # 需要环绕拼接
+            # 环绕拼接
             part1 = full_panorama[:, x_start:]
             part2 = full_panorama[:, :x_end]
             view = np.hstack([part1, part2])
