@@ -253,13 +253,7 @@ class VLMNavigationController(InteractiveNavigationController):
         
         print(f"  扫描完成: +{total_new_classes}类 | 总计{len(self.detected_classes)}类")
         
-        # 使用固定的水平视场角30°（每次TURN_LEFT旋转30°）
-        hfov = 30.0  # 每张图的水平视场角（度）
-        
-        # 步骤1: 将12张图像投影到完整的360°柱面全景图
-        full_panorama = self._create_full_panorama(lookaround_images, hfov)
-        
-        # 步骤2: 从完整全景图中裁剪出4个方向的90°视图
+        # 直接为每个方向拼接3张图片生成90°全景图
         panorama_paths = []
         panorama_names = []
         panorama_dir = os.path.join(self.config.RESULTS_DIR, f"episode_{self.current_episode_id}", "panoramas")
@@ -267,10 +261,13 @@ class VLMNavigationController(InteractiveNavigationController):
         
         for config in PANORAMA_CONFIG:
             direction_name = config["name"]
-            center_angle = config.get("center_angle", 0)  # 方向中心角度
+            steps = config["steps"]  # 3张图片的索引（如[1,12,11]）
             
-            # 从完整全景图中裁剪90°视图
-            panorama = self._crop_panorama_view(full_panorama, center_angle, 90.0, hfov)
+            # 获取该方向的3张图片（steps是1-based，需要转为0-based索引）
+            direction_images = [lookaround_images[step-1] for step in steps]
+            
+            # 使用OpenCV Stitcher拼接3张图片
+            panorama = self._create_panorama_from_3_images(direction_images)
             
             # 保存全景图
             panorama_filename = f"{phase}_panorama_{direction_name.split()[0].lower()}.jpg"
@@ -1015,16 +1012,15 @@ class VLMNavigationController(InteractiveNavigationController):
             self.mapper.trajectory_points if hasattr(self.mapper, 'trajectory_points') else []
         )
     
-    def _create_full_panorama(self, images: List[np.ndarray], hfov: float) -> np.ndarray:
+    def _create_panorama_from_3_images(self, images: List[np.ndarray]) -> np.ndarray:
         """
-        使用OpenCV Stitcher拼接12张图像生成360°全景图
+        使用OpenCV Stitcher拼接3张图像生成90°全景图
         
         Args:
-            images: 12张环视图像
-            hfov: 单张图像水平视场角（度，未使用但保留接口兼容性）
+            images: 3张图像列表（按顺序：左-中-右）
             
         Returns:
-            360°全景图
+            90°全景图
         """
         stitcher = cv2.Stitcher_create(cv2.Stitcher_PANORAMA)
         status, panorama = stitcher.stitch(images)
