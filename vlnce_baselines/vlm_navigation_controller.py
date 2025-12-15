@@ -292,8 +292,7 @@ class VLMNavigationController(InteractiveNavigationController):
         
         if not os.path.exists(self.latest_local_map):
             print(f"  ⚠️  Local Map not found: {self.latest_local_map}")
-        else:
-            print(f"  ⚠️  Local Map not found: {local_map_src}")
+            self.latest_local_map = None
         
         print(f"  4方向全景图已保存 | Step={self.current_step}")
         print("="*60 + "\n")
