@@ -543,22 +543,23 @@ class MapVisualizer:
         labeled_map = map_image.copy()
         
         font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 0.8
-        thickness = 2
-        color = (0, 0, 0)  # 黑色文字
-        bg_color = (255, 255, 255)  # 白色背景
+        font_scale = 0.5
+        text_thickness = 1
+        outline_thickness = 3
+        text_color = (0, 0, 0)  # 黑色文字
+        outline_color = (255, 255, 255)  # 白色描边
         
         # 定义方位标签
         labels = {
-            'FRONT': (w // 2, 25),  # 上方
-            'BACK': (w // 2, h - 10),  # 下方
-            'LEFT': (25, h // 2),  # 左侧
-            'RIGHT': (w - 25, h // 2)  # 右侧
+            'FRONT': (w // 2, 20),  # 上方
+            'BACK': (w // 2, h - 8),  # 下方
+            'LEFT': (20, h // 2),  # 左侧
+            'RIGHT': (w - 20, h // 2)  # 右侧
         }
         
         for text, (x, y) in labels.items():
             # 计算文字大小
-            (text_width, text_height), baseline = cv2.getTextSize(text, font, font_scale, thickness)
+            (text_width, text_height), baseline = cv2.getTextSize(text, font, font_scale, text_thickness)
             
             # 调整位置使文字居中
             if text in ['FRONT', 'BACK']:
@@ -568,15 +569,13 @@ class MapVisualizer:
                 text_x = x - text_width // 2
                 text_y = y + text_height // 2
             
-            # 绘制白色背景矩形
-            cv2.rectangle(labeled_map,
-                         (text_x - 3, text_y - text_height - 3),
-                         (text_x + text_width + 3, text_y + baseline + 3),
-                         bg_color, -1)
-            
-            # 绘制黑色文字
+            # 先绘制白色描边
             cv2.putText(labeled_map, text, (text_x, text_y),
-                       font, font_scale, color, thickness, cv2.LINE_AA)
+                       font, font_scale, outline_color, outline_thickness, cv2.LINE_AA)
+            
+            # 再绘制黑色文字
+            cv2.putText(labeled_map, text, (text_x, text_y),
+                       font, font_scale, text_color, text_thickness, cv2.LINE_AA)
         
         return labeled_map
     
