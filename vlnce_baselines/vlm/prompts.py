@@ -55,7 +55,7 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 
 {{
     "waypoint": "<Current Area Type> - <Key Surrounding Landmarks>",
-    "waypoint_sequence": "<Current Location> → <Next Waypoint> → ... → <Final Goal>",
+    "waypoint_sequence": "<Current Location> → <Next Waypoint> → ... → <Final Waypoints>",
     "subtask_destination": "<Next immediate waypoint name>",
     "subtask_instruction": "<Step-by-step navigation instructions starting from Front view>",
     "subtask_landmark": "<Single landmark name for map marking>",
@@ -151,13 +151,13 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
   - Objects within this blue region are currently visible in IMAGE 1 (Front View)
 - Better for planning nearby movements and obstacle avoidance
 
+# Spatial Memory (Waypoint History)
+{waypoint_summary}
+
 **Use Maps for Planning**:
 1. **Verify previous trajectory**: Check orange line shows expected movement
 2. **Identify obstacles (black areas)**: Look for walls, furniture, barriers blocking future paths
 3. **Spatial awareness**: Use global map for overall layout, local map for immediate surroundings
-
-# Spatial Memory (Waypoint History)
-{waypoint_summary}
 
 **Note**: Each waypoint shows ID and location description. Waypoint markers appear as **dark red circles with white numbers** on the Global Map, marking past observation positions.
 
@@ -176,8 +176,7 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 {{
     "is_completed": <true if previous subtask completed, false if not>,
     "waypoint": "<Current Area Type> - <Key Surrounding Landmarks>",
-    "current_observation": "<1-2 sentences describing visible objects and spatial layout>",
-    "waypoint_sequence": "<Completed Waypoints(✓)> → <Current> → <Remaining> → <Goal>",
+    "waypoint_sequence": "<Completed Waypoints(✓)> → <Current> → <Remaining Waypoints> → <Final Waypoints>",
     "subtask_destination": "<Next waypoint if completed, same waypoint if not>",
     "subtask_instruction": "<Step-by-step navigation instructions from Front view>",
     "subtask_landmark": "<Single landmark name for map marking>",
@@ -197,7 +196,6 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 {{
     "is_completed": true,
     "waypoint": "Doorway - between bedroom and hallway",
-    "current_observation": "Standing at bedroom doorway. Hallway with walls on both sides extends ahead toward kitchen.",
     "waypoint_sequence": "Bedroom(✓) → Doorway(Current) → Hallway → Kitchen Entrance(Goal)",
     "subtask_destination": "hallway midpoint",
     "subtask_instruction": "Move forward 1.5m through hallway center toward kitchen entrance",
@@ -208,8 +206,7 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
         "spatial_relationship": "orange trajectory extends through hallway center on map toward kitchen"
     }},
     "is_final_subtask": false,
-    "reasoning": "Previous subtask completed: door detected in multiple views, orange trajectory confirms reached doorway on map. Now at doorway with hallway extending ahead in front view (IMAGE 1). Map shows green floor path clear straight through hallway center with black walls on both sid
-es, no obstacles blocking path. Task requires reaching kitchen entrance at hallway end, so next waypoint is to progress through hallway: move forward 1.5m straight through hallway center."
+    "reasoning": "Previous subtask completed: door detected in multiple views, orange trajectory confirms reached doorway on map. Now at doorway with hallway extending ahead in front view (IMAGE 1). Map shows green floor path clear straight through hallway center with black walls on both sides, no obstacles blocking path. Task requires reaching kitchen entrance at hallway end, so next waypoint is to progress through hallway: move forward 1.5m straight through hallway center."
 }}
 
 ## Example 2: Instruction "Turn around and navigate to refrigerator in kitchen"
@@ -219,7 +216,6 @@ es, no obstacles blocking path. Task requires reaching kitchen entrance at hallw
 {{
     "is_completed": true,
     "waypoint": "Kitchen Center - between refrigerator and counter",
-    "current_observation": "Standing in kitchen center. Refrigerator visible at Front-Left 30° with counter and appliances at Right 270°.",
     "waypoint_sequence": "Bedroom(✓) → Doorway(✓) → Hallway(✓) → Kitchen Center(Current) → Refrigerator(Goal)",
     "subtask_destination": "refrigerator in kitchen",
     "subtask_instruction": "Turn left 30° to face refrigerator directly, move forward 1.0m to approach refrigerator",
@@ -266,7 +262,6 @@ def get_verification_replanning_prompt(instruction: str,
                                        subtask_destination: str,
                                        subtask_instruction: str,
                                        completion_criteria: str,
-                                       direction_names: list,
                                        action_space: str,
                                        detected_landmarks: str = None,
                                        waypoint_summary: str = None) -> str:
@@ -279,7 +274,6 @@ def get_verification_replanning_prompt(instruction: str,
         subtask_destination: 当前子任务目的地
         subtask_instruction: 当前子任务指令
         completion_criteria: 完成条件
-        direction_names: 方向名称列表
         action_space: 动作空间描述
         detected_landmarks: 已检测到的landmark类别字符串
         waypoint_summary: 路径点历史记录字符串
@@ -298,7 +292,6 @@ def get_verification_replanning_prompt(instruction: str,
         subtask_destination=subtask_destination,
         subtask_instruction=subtask_instruction,
         completion_criteria=completion_criteria,
-        direction_names=', '.join(direction_names),
         action_space=action_space,
         detected_landmarks=detected_landmarks,
         waypoint_summary=waypoint_summary

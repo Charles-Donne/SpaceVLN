@@ -117,8 +117,6 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 
 def get_action_execution_prompt(subtask_destination: str,
                                 subtask_instruction: str,
-                                turn_angle: float,
-                                move_distance: float,
                                 progress_summary: str = "",
                                 detected_landmarks: str = None) -> str:
     """
@@ -127,8 +125,6 @@ def get_action_execution_prompt(subtask_destination: str,
     Args:
         subtask_destination: 子任务目的地
         subtask_instruction: 子任务指令
-        turn_angle: 转向角度（度）- 默认30°
-        move_distance: 前进距离（米）- 默认0.25m
         progress_summary: 当前子任务进度摘要
         detected_landmarks: 已检测到的landmark类别字符串
         
@@ -141,8 +137,6 @@ def get_action_execution_prompt(subtask_destination: str,
     return ACTION_EXECUTION_PROMPT.format(
         subtask_destination=subtask_destination,
         subtask_instruction=subtask_instruction,
-        turn_angle=turn_angle,
-        move_distance=move_distance,
         progress_summary=progress_summary if progress_summary else "(Just started - no actions yet)",
         detected_landmarks=detected_landmarks
     )

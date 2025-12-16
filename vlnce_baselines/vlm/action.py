@@ -67,8 +67,6 @@ class ActionExecutor(BaseAPIClient):
         prompt = get_action_execution_prompt(
             subtask_destination=subtask_destination,
             subtask_instruction=subtask_instruction,
-            turn_angle=self.turn_angle,
-            move_distance=self.move_distance,
             progress_summary=progress_summary,
             detected_landmarks=detected_landmarks
         )

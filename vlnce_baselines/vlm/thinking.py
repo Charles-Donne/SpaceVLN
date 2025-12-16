@@ -150,7 +150,6 @@ class LLMPlanner(BaseAPIClient):
             subtask_destination,
             subtask_instruction,
             completion_criteria,
-            direction_names,
             self.action_space,
             detected_landmarks=landmarks_str,
             waypoint_summary=waypoint_summary
