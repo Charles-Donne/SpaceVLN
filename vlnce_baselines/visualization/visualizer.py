@@ -291,6 +291,10 @@ class MapVisualizer:
                     cv2.putText(global_map_with_trajectory, text, (text_x, text_y),
                                font, font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
         
+        # 添加方位标签到global map
+        global_map_with_trajectory = self.add_orientation_labels(global_map_with_trajectory)
+        global_map_rotated = self.add_orientation_labels(global_map_rotated)
+        
         # 返回：基础地图 + 显示副本（带轨迹和landmark+waypoint） + 无轨迹的旋转地图（供local_map裁剪）
         return sem_map_vis, global_map_with_trajectory, landmarks, global_map_rotated
     
@@ -520,7 +524,61 @@ class MapVisualizer:
         # ===== 阶段10: 最终裁剪到400×400 =====
         local_map_cropped = local_map[40:440, 40:440].copy()
         
+        # 添加方位标签
+        local_map_cropped = self.add_orientation_labels(local_map_cropped)
+        
         return local_map_cropped
+    
+    def add_orientation_labels(self, map_image: np.ndarray) -> np.ndarray:
+        """
+        在地图四周添加方位标签（俯视图）
+        
+        Args:
+            map_image: 地图图像 (H, W, 3) BGR格式
+        
+        Returns:
+            带方位标签的地图
+        """
+        h, w = map_image.shape[:2]
+        labeled_map = map_image.copy()
+        
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.8
+        thickness = 2
+        color = (0, 0, 0)  # 黑色文字
+        bg_color = (255, 255, 255)  # 白色背景
+        
+        # 定义方位标签
+        labels = {
+            'FRONT': (w // 2, 25),  # 上方
+            'BACK': (w // 2, h - 10),  # 下方
+            'LEFT': (25, h // 2),  # 左侧
+            'RIGHT': (w - 25, h // 2)  # 右侧
+        }
+        
+        for text, (x, y) in labels.items():
+            # 计算文字大小
+            (text_width, text_height), baseline = cv2.getTextSize(text, font, font_scale, thickness)
+            
+            # 调整位置使文字居中
+            if text in ['FRONT', 'BACK']:
+                text_x = x - text_width // 2
+                text_y = y
+            else:  # LEFT, RIGHT
+                text_x = x - text_width // 2
+                text_y = y + text_height // 2
+            
+            # 绘制白色背景矩形
+            cv2.rectangle(labeled_map,
+                         (text_x - 3, text_y - text_height - 3),
+                         (text_x + text_width + 3, text_y + baseline + 3),
+                         bg_color, -1)
+            
+            # 绘制黑色文字
+            cv2.putText(labeled_map, text, (text_x, text_y),
+                       font, font_scale, color, thickness, cv2.LINE_AA)
+        
+        return labeled_map
     
     def render_detection_bbox(self, 
                               rgb: np.ndarray,

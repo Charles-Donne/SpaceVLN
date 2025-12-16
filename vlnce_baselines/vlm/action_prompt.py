@@ -19,13 +19,15 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 
 **IMAGE 1 - RGB View**: Environment, landmarks, obstacles
 **IMAGE 2 - Detection**: Landmark identification: {detected_landmarks}
-**IMAGE 3 - Local Map**: Spatial layout guide
-- **Red arrow**: Your position & facing (Front = up)
+**IMAGE 3 - Local Map** (Bird's-eye view): Spatial layout around you
+- **Red arrow**: Your position & facing direction (arrow points FRONT, map top = FRONT)
 - **Purple markers**: Destination landmarks
 - **Black**: Obstacles - **MUST AVOID**
 - **Green/White**: Safe paths
 - **Orange line**: Trajectory history
-- **Blue arc**: Current field of view
+- **Blue arc**: Current field of view (90° HFOV)
+- **Orientation labels**: FRONT (top) / BACK (bottom) / LEFT / RIGHT marked on map edges
+
 
 # Execution Strategy
 
@@ -34,7 +36,7 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 2. **Avoid obstacles**: NEVER move into black areas - detour if instruction path blocked
 3. **Adjust as needed**: If action result incorrect, make corrective adjustments immediately
 
-**Decision Priority**: Complete key action → Obstacle avoidance → Parameter refinement
+**Decision Priority**: Complete key action(sub-instruction goal) → Obstacle avoidance → Parameter refinement
 
 # Actions Available
 
