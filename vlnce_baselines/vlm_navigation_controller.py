@@ -193,8 +193,8 @@ class VLMNavigationController(InteractiveNavigationController):
         lookaround_images = []
         total_new_classes = 0
         
-        # 保存轨迹，环视结束后恢复（但不恢复current_step，环视步骤计入总步数）
-        saved_trajectory = self.mapper.trajectory_points.copy() if hasattr(self.mapper, 'trajectory_points') else []
+        # 注意：不保存/恢复轨迹，让轨迹自然累积
+        # 如需清空轨迹（如子任务切换），应在调用look_around_and_collect之前显式调用mapper.clear_trajectory()
         
         from habitat.sims.habitat_simulator.actions import HabitatSimActions
         
@@ -278,10 +278,9 @@ class VLMNavigationController(InteractiveNavigationController):
             # 保存所有12张环视图像（用于后续合成全景图）
             lookaround_images.append(rgb_bgr.copy())
         
-        # 环视建图完成，恢复轨迹（current_step保持为12，后续action从13开始）
-        self.mapper.trajectory_points = saved_trajectory
-        # 环视结束后，current_step已经累加到12
-        # 下一个真正的action将从step 13开始（在step_with_vlm中累加）
+        # 环视建图完成
+        # 注意：不恢复轨迹，轨迹会自然显示在地图上
+        # 如需清空轨迹，应在verify_and_replan中的子任务完成时调用mapper.clear_trajectory()
         
         # 缓存最后的观察（step 12，回到正前方）
         self.latest_obs = obs[0]
@@ -521,6 +520,7 @@ class VLMNavigationController(InteractiveNavigationController):
             return False, None
         
         # 重新执行环视建图并生成全景图（占用12个step）
+        # 注意：如果子任务已完成，会在后面清空轨迹；如果未完成，轨迹继续累积
         phase = f"verify_{self.subtask_count}"
         print(f"\n[验证] 重新环视以验证子任务完成状态（step {self.current_step + 1}-{self.current_step + 12}）...")
         image_paths, direction_names = self.look_around_and_collect(phase)
@@ -596,9 +596,10 @@ class VLMNavigationController(InteractiveNavigationController):
                 print("到达最终目的地")
                 return True, response
             
-            # 清空上一个子任务的轨迹（每个子任务独立显示）
-            print("  清空上一子任务轨迹")
+            # 清空上一个子任务的轨迹和landmark（每个子任务独立显示）
+            print("  清空上一子任务轨迹和landmark标注")
             self.mapper.clear_trajectory()
+            # landmark_classes会在下面更新为新子任务的目标
             
             # 更新到新子任务
             self.subtask_count += 1
@@ -653,6 +654,9 @@ class VLMNavigationController(InteractiveNavigationController):
                     'step': self.current_step
                 }
             self.current_subtask = response
+            
+            # 输出LLM验证结果和调整后的子任务
+            self._print_subtask_info(response, is_initial=False)
         
         return is_completed, response
     
@@ -1033,12 +1037,25 @@ class VLMNavigationController(InteractiveNavigationController):
     def _print_subtask_info(self, response: Dict, is_initial: bool = False):
         """打印子任务信息（JSON格式）"""
         import json
-        title = "Initial Subtask" if is_initial else f"Subtask #{self.subtask_count}"
-        print(f"\n{'='*50}")
+        
+        # 根据响应类型确定标题
+        if is_initial:
+            title = "Initial Subtask"
+        elif 'is_completed' in response:
+            # 验证响应
+            if response.get('is_completed', False):
+                title = f"Subtask #{self.subtask_count} - Completed ✓"
+            else:
+                title = f"Subtask #{self.subtask_count} - Continue (Not Completed)"
+        else:
+            title = f"Subtask #{self.subtask_count}"
+        
+        print(f"\n{'='*60}")
         print(f"{title}")
         print(f"Global Instruction: {self.current_instruction}")
+        print(f"{'-'*60}")
         print(json.dumps(response, indent=2, ensure_ascii=False))
-        print(f"{'='*50}\n")
+        print(f"{'='*60}\n")
     
     # ========== Waypoint辅助方法 ==========
     

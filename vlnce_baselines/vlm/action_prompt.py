@@ -32,9 +32,7 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 # Execution Strategy
 
 **Follow sub-instruction to complete key actions (turn/move/stop)**, BUT:
-1. **Adapt parameters**: Fine-tune angles/distances based on map and RGB - not rigidly bound to exact values
-2. **Avoid obstacles**: NEVER move into black areas - detour if instruction path blocked
-3. **Adjust as needed**: If action result incorrect, make corrective adjustments immediately
+- Avoid obstacles: NEVER move into black areas - detour if instruction path blocked
 
 **Decision Priority**: Complete key action(sub-instruction goal) → Obstacle avoidance → Parameter refinement
 
@@ -101,7 +99,7 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
    - Plan safe path: Avoid black obstacles
    - If trapped by black: Turn toward nearest green/white opening
 
-3. **FOLLOW INSTRUCTION & ADAPT**: Complete key actions (turn/move/stop) specified in sub-instruction, but fine-tune angles/distances based on map and RGB - not rigidly bound to exact values
+3. **Strictly FOLLOW INSTRUCTION & ADAPT**: Complete key actions (turn/move) specified in sub-instruction, but you can fine-tune angles/distances based on map and RGB - not rigidly bound to exact values
 
 4. **STOP CONDITIONS** - Only STOP when ALL met:
    - Completed key actions in sub-instruction

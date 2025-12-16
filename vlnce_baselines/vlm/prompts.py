@@ -16,7 +16,9 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 **IMAGE 5: Global Map** - Full explored area
 **IMAGE 6: Local Map** - Nearby region (agent-centered, FOV cone shown)
 
-**Direction Usage**: Use IMAGE number + portion + turn instruction (e.g., "IMAGE 4 right portion: turn right 120°").
+**Direction Usage**: e.g., "Right View right portion: turn right 120°".
+- Determine the destination of the sub-task based on the image content and 
+- Determine the location and orientation of the destination using the orientation indicators on the panoramic image.
 **Action Origin**: All actions start from Front (IMAGE 1 center)
 
 # Map Interpretation Guide
@@ -126,7 +128,9 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 **IMAGE 5: Global Map** - Full explored area (updated trajectory, waypoints, landmarks)
 **IMAGE 6: Local Map** - Nearby region (agent-centered, FOV cone shown)
 
-**Direction Usage**: Use IMAGE number + portion + turn instruction (e.g., "IMAGE 4 right portion: turn right 120°").
+**Direction Usage**: e.g., "Right View right portion: turn right 120°".
+- Determine the destination of the sub-task based on the image content and 
+- Determine the location and orientation of the destination using the orientation indicators on the panoramic image.
 **Action Origin**: All actions start from Front (IMAGE 1 center)
 
 # Map Interpretation Guide
@@ -227,6 +231,26 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
     }},
     "is_final_subtask": true,
     "reasoning": "Previous subtask completed: orange trajectory shows entered kitchen center on map. Refrigerator visible at Front-Left 30° (left portion of IMAGE 1), with green floor path clear between agent and refrigerator on map. Task requires reaching refrigerator (final destination), so next waypoint is refrigerator itself: turn left 30° to align front view with refrigerator, move forward 1.0m."
+}}
+
+## Example 3: Instruction "Enter the bedroom through the doorway"
+**Previous Subtask**: Approach bedroom doorway
+**Current Observation**: Agent facing slightly left of doorway, distance still > 1.0m, trajectory shows movement but orientation misaligned
+
+{{
+    "is_completed": false,
+    "waypoint": "Hallway - approaching bedroom doorway",
+    "waypoint_sequence": "Living Room(✓) → Hallway(Current) → Bedroom Doorway → Bedroom(Goal)",
+    "subtask_destination": "bedroom doorway",
+    "subtask_instruction": "First turn right 30° to align with doorway center (currently facing left edge), then move forward 0.75m to reach doorway (target distance < 0.5m)",
+    "subtask_landmark": "door",
+    "completion_criteria": {{
+        "landmark_detection": "bedroom doorway visible and centered in Front view (not left/right portion)",
+        "destination_reached": "distance to doorway < 0.5m, ready to enter",
+        "spatial_relationship": "orange trajectory shows approach with final alignment, red arrow centered on doorway on map"
+    }},
+    "is_final_subtask": false,
+    "reasoning": "Previous subtask NOT completed: Analysis shows three issues: (1) Doorway detected but in Front-Left portion of IMAGE 1 (not centered), indicating orientation misalignment by ~30°. (2) Map shows distance still > 1.0m (completion criteria requires < 0.5m), orange trajectory shows progress but insufficient. (3) Local map shows red arrow pointing slightly left of doorway entrance. Root cause: Initial approach instruction didn't account for narrow hallway causing drift left during movement. Corrective strategy: Two-step adjustment - first realign orientation (turn right 30° to center doorway in front view), then approach remaining distance (0.75m forward). Map confirms clear green path with no black obstacles blocking corrected path."
 }}
 
 **Critical Requirements**:
