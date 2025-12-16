@@ -85,9 +85,9 @@ class PanoramaGenerator:
         direction_key = direction_name.split()[0]
         label_map = {
             "Front": {"left": "Left 30°", "center": "Front 0°", "right": "Right 30°"},
-            "Left": {"left": "Left 60°", "center": "Left 90°", "right": "Left 120°"},
+            "Left": {"left": "Left 120°", "center": "Left 90°", "right": "Left 60°"},
             "Back": {"left": "Right 150°", "center": "Back 180°", "right": "Left 150°"},
-            "Right": {"left": "Right 120°", "center": "Right 90°", "right": "Right 60°"},
+            "Right": {"left": "Right 60°", "center": "Right 90°", "right": "Right 120°"},
         }
         labels = label_map.get(direction_key, {"left": "Left", "center": "Center", "right": "Right"})
         
@@ -142,9 +142,9 @@ class PanoramaGenerator:
         # 替换度数符号
         label_map_deg = {
             "Front": {"left": "Left 30deg", "center": "Front 0deg", "right": "Right 30deg"},
-            "Left": {"left": "Left 60deg", "center": "Left 90deg", "right": "Left 120deg"},
+            "Left": {"left": "Left 120deg", "center": "Left 90deg", "right": "Left 60deg"},
             "Back": {"left": "Right 150deg", "center": "Back 180deg", "right": "Left 150deg"},
-            "Right": {"left": "Right 120deg", "center": "Right 90deg", "right": "Right 60deg"},
+            "Right": {"left": "Right 60deg", "center": "Right 90deg", "right": "Right 120deg"},
         }
         labels_deg = label_map_deg.get(direction_key, labels)
         
