@@ -165,6 +165,9 @@ class InteractiveNavigationController:
     
     def step(self, action: int, save_vis: bool = True) -> Dict[str, Any]:
         """执行一步动作，更新地图并保存可视化"""
+        # ⚠️ 关键修复：在使用current_step之前先累加，避免覆盖环视最后一步
+        self.current_step += 1
+        
         print(f"\n[步骤{self.current_step}] {self._action_name(action)}", end="")
         
         outputs = self.envs.step([action])
@@ -172,7 +175,6 @@ class InteractiveNavigationController:
         
         if dones[0]:
             print(" → Episode结束")
-            self.current_step += 1
             return {
                 'obs': obs[0],
                 'reward': rewards[0],
@@ -221,7 +223,6 @@ class InteractiveNavigationController:
                 waypoint_ids=wp_ids
             )
         
-        self.current_step += 1
         return {
             'obs': obs[0],
             'reward': rewards[0],

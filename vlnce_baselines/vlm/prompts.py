@@ -11,19 +11,17 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 {instruction}
 
 # Visual Observations
-You are provided with 4 first-person RGB views and 2 bird's-eye view maps:
+4 panoramic views (90° FOV each) + 2 top-down maps:
 
-**⚠️ CRITICAL: Pay close attention to the directional orientation of each image:**
+**IMAGE 1: Front (0°)** - Left: -30° | Center: 0° | Right: +30°
+**IMAGE 2: Left (90°)** - Left: 60° | Center: 90° | Right: 120°
+**IMAGE 3: Back (180°)** - Left: 150° | Center: 180° | Right: 210°
+**IMAGE 4: Right (270°)** - Left: 240° | Center: 270° | Right: 300°
+**IMAGE 5: Global Map** - Full explored area (waypoint markers visible)
+**IMAGE 6: Local Map** - Nearby region (agent-centered, FOV cone shown)
 
-**IMAGE 1: Front View (0°)**
-**IMAGE 2: Left View (90°)**
-**IMAGE 3: Back View (180°)**
-**IMAGE 4: Right View (270°)** 
-**IMAGE 5: Global Semantic Map** - Top-down view of full explored area (with numbered waypoint markers)
-**IMAGE 6: Local Semantic Map** - Top-down view of nearby region (focused on agent)
-
-**Direction Reference**: 
-- All navigation instructions must start from the Front view (IMAGE 1, 0°)
+**Direction Usage**: Describe objects by panorama + portion + angle (e.g., "Back-Left 150°" = IMAGE 3 left portion at 150°, "Front-Right 30°" = IMAGE 1 right portion at 30°). The angles indicate image region positions and help determine exact turning angles.
+**Action Origin**: All actions start from Front (0°)
 
 # Map Interpretation Guide
 
@@ -90,24 +88,25 @@ You are provided with 4 first-person RGB views and 2 bird's-eye view maps:
     "reasoning": "Agent in bathroom with exercise room door visible in left view (IMAGE 2). Map shows green floor path available after turning left, with no black obstacles blocking entry to exercise room. Task requires entering exercise room, so first waypoint is to enter through doorway: turn left 90° to align with doorway, then move forward 0.5m to enter room."
 }}
 
-## Example 2: Instruction "Walk to the living room and stop near the sofa"
+## Example 2: Instruction "Go back to the kitchen and find the microwave"
 {{
-    "waypoint": "Hallway(Current) - sofa visible ahead-right, table obstacle in path",
-    "waypoint_sequence": "Hallway(Current) → Navigate around table → Sofa Area(Goal)",
-    "subtask_destination": "position near table",
-    "subtask_instruction": "Turn right 30° to avoid table obstacle ahead, move forward 1.0m along clear path toward sofa area",
-    "subtask_landmark": "table",
+    "waypoint": "Living Room(Current) - kitchen entrance visible at Back-Left 120°, chair behind",
+    "waypoint_sequence": "Living Room(Current) → Kitchen Entrance → Microwave(Goal)",
+    "subtask_destination": "kitchen entrance",
+    "subtask_instruction": "Turn left 120° to face kitchen entrance behind, move forward 1.5m to enter kitchen",
+    "subtask_landmark": "door",
     "completion_criteria": {{
-        "landmark_detection": "table visible in side views, sofa visible ahead",
-        "destination_reached": "bypassed table obstacle, closer to sofa area",
-        "spatial_relationship": "orange trajectory shows detour around black table obstacle on map"
+        "landmark_detection": "kitchen doorway visible in Front panorama after turning, chair visible at Back 180°",
+        "destination_reached": "entered kitchen area, distance to entrance < 0.5m",
+        "spatial_relationship": "orange trajectory shows 120° left turn and backward movement toward kitchen on map"
     }},
     "is_final_subtask": false,
-    "reasoning": "Agent in hallway with sofa partially visible ahead-right in front view (IMAGE 1), but black table obstacle blocks direct path on map. Green floor path available at right side offers safe detour bypassing table. Task requires reaching sofa, so first waypoint is to navigate around table: turn right 30° to avoid obstacle, move 1.0m along green path around table toward sofa area."
+    "reasoning": "Agent in living room with kitchen entrance visible at Back-Left 120° (right portion of IMAGE 2). Map shows green floor path clear between current position and kitchen entrance behind agent, with chair obstacle at Back 180° (center of IMAGE 3). Task requires returning to kitchen to find microwave, so first waypoint is kitchen entrance: turn left 120° to face entrance, move forward 1.5m to enter kitchen through doorway."
 }}
 
 **Critical Requirements**:
-- Start all actions from Front view
+- Use panorama portions for precise directional descriptions (e.g., "Front-Right 30°", "Back-Left 120°")
+- Start all actions from Front view (0°)
 - Use maps to identify obstacles and plan safe paths
 """
 
@@ -125,14 +124,17 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 **Completion Criteria**: {completion_criteria}
 
 # Visual Observations
-The agent has performed a 360° scan. You are provided with 4 first-person RGB views and 2 bird's-eye view maps:
+360° scan complete. 4 panoramic views (90° FOV each) + 2 top-down maps:
 
-**IMAGE 1: Front View (0°)**
-**IMAGE 2: Left View (90°)**
-**IMAGE 3: Back View (180°)**
-**IMAGE 4: Right View (270°)**
-**IMAGE 5: Global Semantic Map** - Top-down view of full explored area (updated)
-**IMAGE 6: Local Semantic Map** - Top-down view of nearby region (focused on agent)
+**IMAGE 1: Front (0°)** - Left portion: -30° | Center: 0° | Right portion: +30°
+**IMAGE 2: Left (90°)** - Left portion: 60° | Center: 90° | Right portion: 120°
+**IMAGE 3: Back (180°)** - Left portion: 150° | Center: 180° | Right portion: 210°
+**IMAGE 4: Right (270°)** - Left portion: 240° | Center: 270° | Right portion: 300°
+**IMAGE 5: Global Map** - Full explored area (updated trajectory, waypoints)
+**IMAGE 6: Local Map** - Nearby region (agent-centered, FOV cone shown)
+
+**Direction Usage**: Describe objects by panorama + portion + angle (e.g., "Back-Left 150°" = IMAGE 3 left portion at 150°, "Front-Right 30°" = IMAGE 1 right portion at 30°). The angles indicate image region positions and help determine exact turning angles.
+**Action Origin**: All actions start from Front (0°)
 
 # Map Interpretation Guide
 
@@ -213,34 +215,36 @@ The agent has performed a 360° scan. You are provided with 4 first-person RGB v
         "spatial_relationship": "orange trajectory extends through hallway center on map toward kitchen"
     }},
     "is_final_subtask": false,
-    "reasoning": "Previous subtask completed: door detected in multiple views, orange trajectory confirms reached doorway on map. Now at doorway with hallway extending ahead in front view (IMAGE 1). Map shows green floor path clear straight through hallway center with black walls on both sides, no obstacles blocking path. Task requires reaching kitchen entrance at hallway end, so next waypoint is to progress through hallway: move forward 1.5m straight through hallway center."
+    "reasoning": "Previous subtask completed: door detected in multiple views, orange trajectory confirms reached doorway on map. Now at doorway with hallway extending ahead in front view (IMAGE 1). Map shows green floor path clear straight through hallway center with black walls on both sid
+es, no obstacles blocking path. Task requires reaching kitchen entrance at hallway end, so next waypoint is to progress through hallway: move forward 1.5m straight through hallway center."
 }}
 
 ## Example 2: Instruction "Turn around and navigate to refrigerator in kitchen"
 **Previous Subtask**: Navigate through kitchen center
-**Current Observation**: Agent in kitchen center, refrigerator visible ahead-left
+**Current Observation**: Agent in kitchen center, refrigerator visible at Front-Left 30°
 
 {{
     "is_completed": true,
-    "waypoint": "Kitchen Center(Current) - refrigerator visible ahead-left, counter on right",
-    "current_observation": "Standing in kitchen center. Refrigerator visible ahead-left with counter and appliances on right side.",
+    "waypoint": "Kitchen Center(Current) - refrigerator at Front-Left 30°, counter at Right 270°",
+    "current_observation": "Standing in kitchen center. Refrigerator visible at Front-Left 30° with counter and appliances at Right 270°.",
     "waypoint_sequence": "Bedroom(✓) → Doorway(✓) → Hallway(✓) → Kitchen Center(Current) → Refrigerator(Goal)",
     "subtask_destination": "refrigerator in kitchen",
-    "subtask_instruction": "Turn left 30° to face refrigerator, move forward 1.0m to approach refrigerator",
+    "subtask_instruction": "Turn left 30° to face refrigerator directly, move forward 1.0m to approach refrigerator",
     "subtask_landmark": "refrigerator",
     "completion_criteria": {{
-        "landmark_detection": "refrigerator visible in front view after turning",
+        "landmark_detection": "refrigerator visible in Front panorama center after turning",
         "destination_reached": "reached refrigerator area, distance to refrigerator < 1.0m",
         "spatial_relationship": "orange trajectory shows left turn and approach to refrigerator on map"
     }},
     "is_final_subtask": true,
-    "reasoning": "Previous subtask completed: orange trajectory shows entered kitchen center on map. Refrigerator visible in front-left view (IMAGE 1 and IMAGE 2), with green floor path clear between agent and refrigerator on map. Task requires reaching refrigerator (final destination), so next waypoint is refrigerator itself: turn left 30° to align with refrigerator, move forward 1.0m to reach refrigerator area."
+    "reasoning": "Previous subtask completed: orange trajectory shows entered kitchen center on map. Refrigerator visible at Front-Left 30° (left portion of IMAGE 1), with green floor path clear between agent and refrigerator on map. Task requires reaching refrigerator (final destination), so next waypoint is refrigerator itself: turn left 30° to align front view with refrigerator, move forward 1.0m."
 }}
 
 **Critical Requirements**:
+- Use panorama portions for precise directional descriptions (e.g., "Front-Left 30°", "Back 180°", "Back-Right 210°")
 - Verify **completion_criteria** 3 checks: (1) landmark detected, (2) destination arrived, (3) trajectory/orientation matches
-- Analyze all 4 views and Map for 360° understanding
-- Start all actions from Front view
+- Analyze all 4 panoramas and Maps for complete 360° understanding
+- Start all actions from Front view (0°)
 - Use maps to identify obstacles and plan safe paths
 """
 

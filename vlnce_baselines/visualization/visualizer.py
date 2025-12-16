@@ -245,9 +245,10 @@ class MapVisualizer:
                         landmark_summary[cls_name]['total_pixels'] += pixel_count
                     
                     # 转换landmark坐标到旋转后的坐标系
-                    # marker_y 是地图列坐标（水平X方向），marker_x 是地图行坐标（垂直Y方向）
-                    display_x = marker_y * 480 / w
-                    display_y = (h - 1 - marker_x) * 480 / h
+                    # centroids返回(cx, cy)格式，cx是列坐标(map_y方向)，cy是行坐标(map_x方向)
+                    # 所以 marker_x=cx(列), marker_y=cy(行)
+                    display_x = marker_x * 480 / w  # 列坐标 → display_x
+                    display_y = (h - 1 - marker_y) * 480 / h  # 行坐标 → display_y（翻转）
                     point = np.array([display_x, display_y, 1])
                     rotated_point = rotation_matrix @ point
                     
@@ -260,33 +261,6 @@ class MapVisualizer:
                               landmark_marker_radius, landmark_marker_border, 1)
                 
                 # 静默处理，不输出标注统计
-            
-            # ===== 阶段7: 绘制Waypoint数字标记（深红色圆圈+白色数字）=====
-            if waypoint_positions and waypoint_ids:
-                for wp_pos, wp_id in zip(waypoint_positions, waypoint_ids):
-                    # waypoint_pos是地图像素坐标(map_x, map_y)
-                    # 转换到显示坐标并旋转
-                    display_x = wp_pos[1] * 480 / w  # map_y → display_x
-                    display_y = (h - 1 - wp_pos[0]) * 480 / h  # map_x → display_y（翻转）
-                    point = np.array([display_x, display_y, 1])
-                    rotated_point = rotation_matrix @ point
-                    
-                    wp_x = int(rotated_point[0])
-                    wp_y = int(rotated_point[1])
-                    
-                    # 绘制深红色圆圈（Dark Red: BGR=(0, 0, 139)）
-                    cv2.circle(global_map_with_trajectory, (wp_x, wp_y), 15, (0, 0, 139), 3)
-                    
-                    # 绘制白色数字（居中）
-                    text = str(wp_id)
-                    font = cv2.FONT_HERSHEY_SIMPLEX
-                    font_scale = 0.8
-                    thickness = 2
-                    text_size = cv2.getTextSize(text, font, font_scale, thickness)[0]
-                    text_x = wp_x - text_size[0] // 2
-                    text_y = wp_y + text_size[1] // 2
-                    cv2.putText(global_map_with_trajectory, text, (text_x, text_y),
-                               font, font_scale, (255, 255, 255), thickness)
         
         # 返回：基础地图 + 显示副本（带轨迹和landmark+waypoint） + 无轨迹的旋转地图（供local_map裁剪）
         return sem_map_vis, global_map_with_trajectory, landmarks, global_map_rotated
@@ -487,9 +461,9 @@ class MapVisualizer:
             
             for marker_x, marker_y, cls_name in landmarks:
                 # 转换landmark坐标（与全局地图坐标变换一致）
-                # marker_y 是地图列坐标（水平X方向），marker_x 是地图行坐标（垂直Y方向）
-                display_x = marker_y * 480 / w
-                display_y = (h - 1 - marker_x) * 480 / h
+                # centroids返回(cx, cy)格式，cx是列坐标(map_y方向)，cy是行坐标(map_x方向)
+                display_x = marker_x * 480 / w  # 列坐标 → display_x
+                display_y = (h - 1 - marker_y) * 480 / h  # 行坐标 → display_y（翻转）
                 point = np.array([display_x, display_y, 1])
                 rotated_point = rotation_matrix @ point
                 
@@ -499,48 +473,18 @@ class MapVisualizer:
                 
                 # 只绘制在可见范围内的landmark
                 if 0 <= local_x < 480 and 0 <= local_y < 480:
+                    # Local map使用更大的landmark标记（10像素）
+                    local_landmark_radius = 10
                     cv2.circle(local_map, 
                               (int(local_x), int(local_y)), 
-                              landmark_marker_radius, 
+                              local_landmark_radius, 
                               landmark_marker_color, -1)
                     cv2.circle(local_map, 
                               (int(local_x), int(local_y)), 
-                              landmark_marker_radius, 
-                              landmark_marker_border, 1)
+                              local_landmark_radius, 
+                              landmark_marker_border, 2)
         
-        # ===== 阶段10: 绘制Waypoint数字标记（深红色圆圈+白色数字）=====
-        if waypoint_positions and waypoint_ids:
-            for wp_pos, wp_id in zip(waypoint_positions, waypoint_ids):
-                # 转换waypoint坐标（与landmark相同的变换）
-                display_x = wp_pos[1] * 480 / w
-                display_y = (h - 1 - wp_pos[0]) * 480 / h
-                point = np.array([display_x, display_y, 1])
-                rotated_point = rotation_matrix @ point
-                
-                # 转换到local坐标系
-                local_x = (rotated_point[0] - 120) * 2
-                local_y = (rotated_point[1] - 120) * 2
-                
-                # 只绘制在可见范围内的waypoint
-                if 0 <= local_x < 480 and 0 <= local_y < 480:
-                    wp_x = int(local_x)
-                    wp_y = int(local_y)
-                    
-                    # 绘制深红色圆圈（放大到局部地图尺度）
-                    cv2.circle(local_map, (wp_x, wp_y), 20, (0, 0, 139), 4)
-                    
-                    # 绘制白色数字（居中）
-                    text = str(wp_id)
-                    font = cv2.FONT_HERSHEY_SIMPLEX
-                    font_scale = 1.0
-                    thickness = 2
-                    text_size = cv2.getTextSize(text, font, font_scale, thickness)[0]
-                    text_x = wp_x - text_size[0] // 2
-                    text_y = wp_y + text_size[1] // 2
-                    cv2.putText(local_map, text, (text_x, text_y),
-                               font, font_scale, (255, 255, 255), thickness)
-        
-        # ===== 阶段11: 最终裁剪到400×400 =====
+        # ===== 阶段10: 最终裁剪到400×400 =====
         local_map_cropped = local_map[40:440, 40:440].copy()
         
         return local_map_cropped

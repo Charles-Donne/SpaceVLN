@@ -1078,15 +1078,21 @@ class VLMNavigationController(InteractiveNavigationController):
         stitcher = cv2.Stitcher_create(cv2.Stitcher_PANORAMA)
         status, panorama = stitcher.stitch(images)
         
-        # 添加方向标注（白边红字）
+        # 添加方向标注（白边红字）- 使用PIL支持Unicode字符
         if direction_name and status == cv2.Stitcher_OK:
+            from PIL import Image, ImageDraw, ImageFont
+            
             h, w = panorama.shape[:2]
             
-            # 定义文字参数
-            font = cv2.FONT_HERSHEY_SIMPLEX
-            font_scale = 1.2
-            thickness = 3
-            border_thickness = 5
+            # 转换为PIL格式
+            pil_img = Image.fromarray(cv2.cvtColor(panorama, cv2.COLOR_BGR2RGB))
+            draw = ImageDraw.Draw(pil_img)
+            
+            # 使用默认字体（支持Unicode）
+            try:
+                font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 40)
+            except:
+                font = ImageFont.load_default()
             
             # 根据方向名称定义标注文字
             direction_key = direction_name.split()[0]  # "Front", "Left", "Back", "Right"
@@ -1097,43 +1103,34 @@ class VLMNavigationController(InteractiveNavigationController):
             }
             
             # 计算文字位置（三等分）
-            left_x = int(w * 0.15)
-            center_x = int(w * 0.50)
-            right_x = int(w * 0.85)
-            y_pos = 40  # 距离顶部的位置
+            positions = [
+                (int(w * 0.15), 30),  # 左侧
+                (int(w * 0.50), 30),  # 中央
+                (int(w * 0.85), 30),  # 右侧
+            ]
+            label_keys = ["left", "center", "right"]
             
-            # 左侧标注
-            text = labels["left"]
-            text_size = cv2.getTextSize(text, font, font_scale, thickness)[0]
-            text_x = left_x - text_size[0] // 2
-            # 白色边框
-            cv2.putText(panorama, text, (text_x, y_pos), font, font_scale, 
-                       (255, 255, 255), border_thickness, cv2.LINE_AA)
-            # 红色文字
-            cv2.putText(panorama, text, (text_x, y_pos), font, font_scale, 
-                       (0, 0, 255), thickness, cv2.LINE_AA)
+            for pos, key in zip(positions, label_keys):
+                text = labels[key]
+                
+                # 计算文字边界框以居中
+                bbox = draw.textbbox((0, 0), text, font=font)
+                text_width = bbox[2] - bbox[0]
+                text_x = pos[0] - text_width // 2
+                text_y = pos[1]
+                
+                # 绘制白色边框（描边效果）
+                for offset_x in range(-2, 3):
+                    for offset_y in range(-2, 3):
+                        if offset_x != 0 or offset_y != 0:
+                            draw.text((text_x + offset_x, text_y + offset_y), 
+                                    text, font=font, fill=(255, 255, 255))
+                
+                # 绘制红色文字
+                draw.text((text_x, text_y), text, font=font, fill=(255, 0, 0))
             
-            # 中央标注
-            text = labels["center"]
-            text_size = cv2.getTextSize(text, font, font_scale, thickness)[0]
-            text_x = center_x - text_size[0] // 2
-            # 白色边框
-            cv2.putText(panorama, text, (text_x, y_pos), font, font_scale, 
-                       (255, 255, 255), border_thickness, cv2.LINE_AA)
-            # 红色文字
-            cv2.putText(panorama, text, (text_x, y_pos), font, font_scale, 
-                       (0, 0, 255), thickness, cv2.LINE_AA)
-            
-            # 右侧标注
-            text = labels["right"]
-            text_size = cv2.getTextSize(text, font, font_scale, thickness)[0]
-            text_x = right_x - text_size[0] // 2
-            # 白色边框
-            cv2.putText(panorama, text, (text_x, y_pos), font, font_scale, 
-                       (255, 255, 255), border_thickness, cv2.LINE_AA)
-            # 红色文字
-            cv2.putText(panorama, text, (text_x, y_pos), font, font_scale, 
-                       (0, 0, 255), thickness, cv2.LINE_AA)
+            # 转换回OpenCV格式
+            panorama = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
         
         return panorama
     
