@@ -1078,7 +1078,7 @@ class VLMNavigationController(InteractiveNavigationController):
         stitcher = cv2.Stitcher_create(cv2.Stitcher_PANORAMA)
         status, panorama = stitcher.stitch(images)
         
-        # 添加方向标注（白边红字）- 使用PIL支持Unicode字符
+        # 添加方向标注（白边红字）- 跨平台字体支持
         if direction_name and status == cv2.Stitcher_OK:
             from PIL import Image, ImageDraw, ImageFont
             
@@ -1088,49 +1088,90 @@ class VLMNavigationController(InteractiveNavigationController):
             pil_img = Image.fromarray(cv2.cvtColor(panorama, cv2.COLOR_BGR2RGB))
             draw = ImageDraw.Draw(pil_img)
             
-            # 使用默认字体（支持Unicode）
-            try:
-                font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 40)
-            except:
-                font = ImageFont.load_default()
-            
-            # 根据方向名称定义标注文字
-            direction_key = direction_name.split()[0]  # "Front", "Left", "Back", "Right"
-            labels = {
-                "left": f"{direction_key}-Left 30°",
-                "center": direction_key,
-                "right": f"{direction_key}-Right 30°"
-            }
-            
-            # 计算文字位置（三等分）
-            positions = [
-                (int(w * 0.15), 30),  # 左侧
-                (int(w * 0.50), 30),  # 中央
-                (int(w * 0.85), 30),  # 右侧
+            # 跨平台字体加载（支持Unicode）
+            font = None
+            font_size = 40
+            font_paths = [
+                "/System/Library/Fonts/Helvetica.ttc",  # macOS
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",  # Linux (Debian/Ubuntu)
+                "/usr/share/fonts/dejavu/DejaVuSans.ttf",  # Linux (CentOS/RHEL)
+                "C:/Windows/Fonts/arial.ttf",  # Windows
             ]
-            label_keys = ["left", "center", "right"]
             
-            for pos, key in zip(positions, label_keys):
-                text = labels[key]
-                
-                # 计算文字边界框以居中
-                bbox = draw.textbbox((0, 0), text, font=font)
-                text_width = bbox[2] - bbox[0]
-                text_x = pos[0] - text_width // 2
-                text_y = pos[1]
-                
-                # 绘制白色边框（描边效果）
-                for offset_x in range(-2, 3):
-                    for offset_y in range(-2, 3):
-                        if offset_x != 0 or offset_y != 0:
-                            draw.text((text_x + offset_x, text_y + offset_y), 
-                                    text, font=font, fill=(255, 255, 255))
-                
-                # 绘制红色文字
-                draw.text((text_x, text_y), text, font=font, fill=(255, 0, 0))
+            for font_path in font_paths:
+                try:
+                    font = ImageFont.truetype(font_path, font_size)
+                    break
+                except:
+                    continue
             
-            # 转换回OpenCV格式
-            panorama = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+            # 如果所有TrueType字体都加载失败，回退到OpenCV绘制（不支持Unicode）
+            if font is None:
+                print("  [WARNING] TrueType font not found, using OpenCV rendering (degree symbol will show as 'deg')")
+                # 回退到OpenCV绘制
+                direction_key = direction_name.split()[0]
+                labels = {
+                    "left": f"{direction_key}-Left 30deg",
+                    "center": direction_key,
+                    "right": f"{direction_key}-Right 30deg"
+                }
+                positions = [
+                    (int(w * 0.15), 50),
+                    (int(w * 0.50), 50),
+                    (int(w * 0.85), 50),
+                ]
+                
+                for pos, key in zip(positions, ["left", "center", "right"]):
+                    text = labels[key]
+                    (text_width, text_height), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 1.0, 2)
+                    text_x = pos[0] - text_width // 2
+                    text_y = pos[1]
+                    
+                    # 白色边框
+                    for offset_x in range(-2, 3):
+                        for offset_y in range(-2, 3):
+                            if offset_x != 0 or offset_y != 0:
+                                cv2.putText(panorama, text, (text_x + offset_x, text_y + offset_y),
+                                          cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+                    # 红色文字
+                    cv2.putText(panorama, text, (text_x, text_y),
+                              cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
+            else:
+                # 使用PIL绘制（支持Unicode）
+                direction_key = direction_name.split()[0]
+                labels = {
+                    "left": f"{direction_key}-Left 30°",
+                    "center": direction_key,
+                    "right": f"{direction_key}-Right 30°"
+                }
+                
+                positions = [
+                    (int(w * 0.15), 30),
+                    (int(w * 0.50), 30),
+                    (int(w * 0.85), 30),
+                ]
+                
+                for pos, key in zip(positions, ["left", "center", "right"]):
+                    text = labels[key]
+                    
+                    # 计算文字边界框以居中
+                    bbox = draw.textbbox((0, 0), text, font=font)
+                    text_width = bbox[2] - bbox[0]
+                    text_x = pos[0] - text_width // 2
+                    text_y = pos[1]
+                    
+                    # 绘制白色边框（描边效果）
+                    for offset_x in range(-2, 3):
+                        for offset_y in range(-2, 3):
+                            if offset_x != 0 or offset_y != 0:
+                                draw.text((text_x + offset_x, text_y + offset_y), 
+                                        text, font=font, fill=(255, 255, 255))
+                    
+                    # 绘制红色文字
+                    draw.text((text_x, text_y), text, font=font, fill=(255, 0, 0))
+                
+                # 转换回OpenCV格式（只在成功使用PIL时）
+                panorama = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
         
         return panorama
     
