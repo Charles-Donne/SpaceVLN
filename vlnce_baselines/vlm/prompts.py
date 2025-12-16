@@ -13,12 +13,17 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 # Visual Observations
 You are provided with 4 first-person RGB views and 2 bird's-eye view maps:
 
+**⚠️ CRITICAL: Pay close attention to the directional orientation of each image:**
+
 **IMAGE 1: Front View (0°)**
 **IMAGE 2: Left View (90°)**
 **IMAGE 3: Back View (180°)**
 **IMAGE 4: Right View (270°)** 
 **IMAGE 5: Global Semantic Map** - Top-down view of full explored area (with numbered waypoint markers)
 **IMAGE 6: Local Semantic Map** - Top-down view of nearby region (focused on agent)
+
+**Direction Reference**: 
+- All navigation instructions must start from the Front view (IMAGE 1, 0°)
 
 # Map Interpretation Guide
 

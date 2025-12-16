@@ -117,10 +117,10 @@ class VLMNavigationController(InteractiveNavigationController):
         # 清理之前episode的输出目录
         if episode_id is not None:
             import shutil
-            episode_dir = os.path.join(self.config.RESULTS_DIR, f'episode_{episode_id}')
-            if os.path.exists(episode_dir):
-                print(f"[Reset] 清理旧数据: {episode_dir}")
-                shutil.rmtree(episode_dir)
+            old_episode_dir = os.path.join(self.config.RESULTS_DIR, f'episode_{episode_id}')
+            if os.path.exists(old_episode_dir):
+                print(f"[Reset] 清理旧数据: {old_episode_dir}")
+                shutil.rmtree(old_episode_dir)
         
         # 调用父类重置
         super().reset_episode(episode_id)
@@ -142,14 +142,18 @@ class VLMNavigationController(InteractiveNavigationController):
         print(f"[Reset] Episode {self.current_episode_id} 重置完成")
         
         # 初始化NavigationVisualizer（用于RGB+俯视图拼接和GIF生成）
-        episode_dir = os.path.join(self.config.RESULTS_DIR, f'episode_{self.current_episode_id}')
-        visualization_dir = os.path.join(episode_dir, 'visualization')
+        visualization_dir = os.path.join(self.episode_dir, 'visualization')
         self.nav_visualizer = NavigationVisualizer(visualization_dir)
-        self.nav_visualizer.setup_maps_dir(episode_dir)
+        self.nav_visualizer.setup_maps_dir(self.episode_dir)
         
         # 初始化输出记录列表
         self.thinking_outputs = []  # 记录LLM(thinking)的所有输出
         self.action_outputs = []    # 记录VLM(action)的所有输出
+    
+    @property
+    def episode_dir(self) -> str:
+        """获取当前episode的输出目录（动态属性，自动根据current_episode_id生成）"""
+        return os.path.join(self.config.RESULTS_DIR, f'episode_{self.current_episode_id}')
     
     def look_around_and_collect(self, phase: str = "initial") -> Tuple[List[str], List[str]]:
         """
@@ -294,8 +298,8 @@ class VLMNavigationController(InteractiveNavigationController):
             # 获取该方向的3张图片（steps是1-based，需要转为0-based索引）
             direction_images = [lookaround_images[step-1] for step in steps]
             
-            # 使用OpenCV Stitcher拼接3张图片
-            panorama = self._create_panorama_from_3_images(direction_images)
+            # 使用OpenCV Stitcher拼接3张图片，并添加方向标注
+            panorama = self._create_panorama_from_3_images(direction_images, direction_name)
             
             # 保存全景图
             panorama_filename = f"{phase}_panorama_{direction_name.split()[0].lower()}.jpg"
@@ -308,10 +312,8 @@ class VLMNavigationController(InteractiveNavigationController):
         
         # 保存全局地图和局部地图到 vlm/observations/
         # 直接使用episode目录下的地图（step-12是完成360°扫描后最完整的地图）
-        episode_dir = os.path.join(self.config.RESULTS_DIR, f'episode_{self.current_episode_id}')
-        
-        self.latest_global_map = os.path.join(episode_dir, 'global_map', f'step-12.png')
-        self.latest_local_map = os.path.join(episode_dir, 'local_map', f'step-12.png')
+        self.latest_global_map = os.path.join(self.episode_dir, 'global_map', f'step-12.png')
+        self.latest_local_map = os.path.join(self.episode_dir, 'local_map', f'step-12.png')
         
         if not os.path.exists(self.latest_global_map):
             print(f"  ⚠️  Global Map not found: {self.latest_global_map}")
@@ -334,12 +336,8 @@ class VLMNavigationController(InteractiveNavigationController):
             global_map目录中上一步保存的地图路径
         """
         # 返回上一步保存的地图（当前步的地图要等step()执行后才会保存）
-        episode_dir = os.path.join(
-            self.config.RESULTS_DIR, 
-            f'episode_{self.current_episode_id}'
-        )
         last_step = self.current_step - 1
-        map_path = os.path.join(episode_dir, 'global_map', f'step-{last_step}.png')
+        map_path = os.path.join(self.episode_dir, 'global_map', f'step-{last_step}.png')
         self.latest_map_image = map_path
         return map_path
 
@@ -357,8 +355,7 @@ class VLMNavigationController(InteractiveNavigationController):
         direction_names = []
         
         # 直接从episode的panoramas/目录读取
-        episode_dir = os.path.join(self.config.RESULTS_DIR, f'episode_{self.current_episode_id}')
-        panorama_dir = os.path.join(episode_dir, 'panoramas')
+        panorama_dir = os.path.join(self.episode_dir, 'panoramas')
         
         # 获取4个全景图
         for config in PANORAMA_CONFIG:
@@ -373,8 +370,8 @@ class VLMNavigationController(InteractiveNavigationController):
                 print(f"  ⚠️  {direction_name} 未找到: {panorama_filename}")
         
         # 获取地图（直接使用episode目录下的step-12地图）
-        global_map_path = os.path.join(episode_dir, 'global_map', 'step-12.png')
-        local_map_path = os.path.join(episode_dir, 'local_map', 'step-12.png')
+        global_map_path = os.path.join(self.episode_dir, 'global_map', 'step-12.png')
+        local_map_path = os.path.join(self.episode_dir, 'local_map', 'step-12.png')
         
         if not os.path.exists(global_map_path):
             print(f"  ⚠️  Global Map 未找到")
@@ -686,13 +683,13 @@ class VLMNavigationController(InteractiveNavigationController):
         # 获取最新保存的观察信息
         # 上一步已保存的文件（如果current_step=13，则读取step-12的地图）
         last_step = self.current_step  # execute_action在step执行前调用，所以用current_step
-        fp_image = os.path.join(episode_dir, 'rgb', f'step-{last_step}.png')
+        fp_image = os.path.join(self.episode_dir, 'rgb', f'step-{last_step}.png')
         
         # 如果rgb/中的图像还不存在，用当前观察创建临时文件
         if not os.path.exists(fp_image):
             rgb_bgr = cv2.cvtColor(obs['rgb'], cv2.COLOR_RGB2BGR)
             temp_image = os.path.join(
-                episode_dir,
+                self.episode_dir,
                 f'temp_fp_step{last_step}.png'
             )
             cv2.imwrite(temp_image, rgb_bgr)
@@ -702,12 +699,12 @@ class VLMNavigationController(InteractiveNavigationController):
         self._get_current_map_path()
         
         # 获取detection图像路径（如果存在）
-        detection_image = os.path.join(episode_dir, 'detection', f'step-{last_step}.png')
+        detection_image = os.path.join(self.episode_dir, 'detection', f'step-{last_step}.png')
         if not os.path.exists(detection_image):
             detection_image = None
         
         # 获取局部地图路径
-        local_map = os.path.join(episode_dir, 'local_map', f'step-{last_step}.png')
+        local_map = os.path.join(self.episode_dir, 'local_map', f'step-{last_step}.png')
         if not os.path.exists(local_map):
             local_map = None
         
@@ -1067,18 +1064,77 @@ class VLMNavigationController(InteractiveNavigationController):
     # ========== 原有方法 ==========
 
     
-    def _create_panorama_from_3_images(self, images: List[np.ndarray]) -> np.ndarray:
+    def _create_panorama_from_3_images(self, images: List[np.ndarray], direction_name: str = "") -> np.ndarray:
         """
         使用OpenCV Stitcher拼接3张图像生成90°全景图
         
         Args:
             images: 3张图像列表（按顺序：左-中-右）
+            direction_name: 方向名称，用于添加方向标注（如"Front", "Left", "Back", "Right"）
             
         Returns:
-            90°全景图
+            90°全景图（带方向标注）
         """
         stitcher = cv2.Stitcher_create(cv2.Stitcher_PANORAMA)
         status, panorama = stitcher.stitch(images)
+        
+        # 添加方向标注（白边红字）
+        if direction_name and status == cv2.Stitcher_OK:
+            h, w = panorama.shape[:2]
+            
+            # 定义文字参数
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = 1.2
+            thickness = 3
+            border_thickness = 5
+            
+            # 根据方向名称定义标注文字
+            direction_key = direction_name.split()[0]  # "Front", "Left", "Back", "Right"
+            labels = {
+                "left": f"{direction_key}-Left 30°",
+                "center": direction_key,
+                "right": f"{direction_key}-Right 30°"
+            }
+            
+            # 计算文字位置（三等分）
+            left_x = int(w * 0.15)
+            center_x = int(w * 0.50)
+            right_x = int(w * 0.85)
+            y_pos = 40  # 距离顶部的位置
+            
+            # 左侧标注
+            text = labels["left"]
+            text_size = cv2.getTextSize(text, font, font_scale, thickness)[0]
+            text_x = left_x - text_size[0] // 2
+            # 白色边框
+            cv2.putText(panorama, text, (text_x, y_pos), font, font_scale, 
+                       (255, 255, 255), border_thickness, cv2.LINE_AA)
+            # 红色文字
+            cv2.putText(panorama, text, (text_x, y_pos), font, font_scale, 
+                       (0, 0, 255), thickness, cv2.LINE_AA)
+            
+            # 中央标注
+            text = labels["center"]
+            text_size = cv2.getTextSize(text, font, font_scale, thickness)[0]
+            text_x = center_x - text_size[0] // 2
+            # 白色边框
+            cv2.putText(panorama, text, (text_x, y_pos), font, font_scale, 
+                       (255, 255, 255), border_thickness, cv2.LINE_AA)
+            # 红色文字
+            cv2.putText(panorama, text, (text_x, y_pos), font, font_scale, 
+                       (0, 0, 255), thickness, cv2.LINE_AA)
+            
+            # 右侧标注
+            text = labels["right"]
+            text_size = cv2.getTextSize(text, font, font_scale, thickness)[0]
+            text_x = right_x - text_size[0] // 2
+            # 白色边框
+            cv2.putText(panorama, text, (text_x, y_pos), font, font_scale, 
+                       (255, 255, 255), border_thickness, cv2.LINE_AA)
+            # 红色文字
+            cv2.putText(panorama, text, (text_x, y_pos), font, font_scale, 
+                       (0, 0, 255), thickness, cv2.LINE_AA)
+        
         return panorama
     
     
