@@ -198,7 +198,7 @@ class VLMNavigationController(InteractiveNavigationController):
             # 执行旋转
             actions = [{"action": HabitatSimActions.TURN_LEFT}]
             outputs = self.envs.step(actions)
-            obs, _, dones, _ = [list(x) for x in zip(*outputs)]
+            obs, _, dones, infos = [list(x) for x in zip(*outputs)]
             
             if dones[0]:
                 print(" - Episode提前结束")
@@ -247,12 +247,12 @@ class VLMNavigationController(InteractiveNavigationController):
             if self.nav_visualizer:
                 subtask_text = self.current_subtask.get('subtask_instruction', '') if self.current_subtask else f"[环视建图 {phase}]"
                 distance = 0.0
-                if len(outputs) > 0 and len(outputs[3]) > 0:  # infos
-                    distance = outputs[3][0].get('distance_to_goal', 0.0)
+                if infos and len(infos) > 0:
+                    distance = infos[0].get('distance_to_goal', 0.0)
                 
                 self.nav_visualizer.save_step_visualization(
                     observations=obs[0],
-                    info=outputs[3][0] if len(outputs) > 0 and len(outputs[3]) > 0 else {},
+                    info=infos[0] if infos and len(infos) > 0 else {},
                     step=look_step,
                     instruction=self.current_instruction,
                     current_subtask=subtask_text,

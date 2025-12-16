@@ -128,6 +128,8 @@ class InteractiveNavigationController:
             if new_classes > 0:
                 print(f"\r  [{step+1}/12] +{new_classes}类", end="", flush=True)
             
+            # 获取waypoint数据
+            wp_positions, wp_ids = self.mapper.get_waypoints()
             rgb_bgr = cv2.cvtColor(obs[0]['rgb'], cv2.COLOR_RGB2BGR)
             _, landmarks = self.visualizer.save_step_visualization(
                 step=step,
@@ -146,7 +148,9 @@ class InteractiveNavigationController:
                 landmark_config={
                     'min_total_pixels': self.landmark_min_total_pixels,
                     'min_area_threshold': self.landmark_min_area_threshold
-                }
+                },
+                waypoint_positions=wp_positions,
+                waypoint_ids=wp_ids
             )
         
         self.current_step = 12
@@ -192,6 +196,8 @@ class InteractiveNavigationController:
         print(f" +{new_classes}类" if new_classes > 0 else "")
         
         if save_vis:
+            # 获取waypoint数据
+            wp_positions, wp_ids = self.mapper.get_waypoints()
             rgb_bgr = cv2.cvtColor(obs[0]['rgb'], cv2.COLOR_RGB2BGR)
             _, landmarks = self.visualizer.save_step_visualization(
                 step=self.current_step,
@@ -210,7 +216,9 @@ class InteractiveNavigationController:
                 landmark_config={
                     'min_total_pixels': self.landmark_min_total_pixels,
                     'min_area_threshold': self.landmark_min_area_threshold
-                }
+                },
+                waypoint_positions=wp_positions,
+                waypoint_ids=wp_ids
             )
         
         self.current_step += 1
