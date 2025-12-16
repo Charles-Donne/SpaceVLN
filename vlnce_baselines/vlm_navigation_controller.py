@@ -1108,13 +1108,17 @@ class VLMNavigationController(InteractiveNavigationController):
             # 如果所有TrueType字体都加载失败，回退到OpenCV绘制（不支持Unicode）
             if font is None:
                 print("  [WARNING] TrueType font not found, using OpenCV rendering (degree symbol will show as 'deg')")
-                # 回退到OpenCV绘制
+                # 回退到OpenCV绘制 - 直接显示转向角度
                 direction_key = direction_name.split()[0]
-                labels = {
-                    "left": f"{direction_key}-Left 30deg",
-                    "center": direction_key,
-                    "right": f"{direction_key}-Right 30deg"
+                # 根据方向定义标签（与prompt描述一致）
+                label_map = {
+                    "Front": {"left": "Left 30deg", "center": "Front", "right": "Right 30deg"},
+                    "Left": {"left": "Left 60deg", "center": "Left 90", "right": "Left 120deg"},
+                    "Back": {"left": "Left 150deg", "center": "Back 180", "right": "Right 150deg"},
+                    "Right": {"left": "Right 120deg", "center": "Right 90", "right": "Right 60deg"},
                 }
+                labels = label_map.get(direction_key, {"left": "Left", "center": "Center", "right": "Right"})
+                
                 positions = [
                     (int(w * 0.15), 50),
                     (int(w * 0.50), 50),
@@ -1137,13 +1141,16 @@ class VLMNavigationController(InteractiveNavigationController):
                     cv2.putText(panorama, text, (text_x, text_y),
                               cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
             else:
-                # 使用PIL绘制（支持Unicode）
+                # 使用PIL绘制（支持Unicode） - 直接显示转向角度
                 direction_key = direction_name.split()[0]
-                labels = {
-                    "left": f"{direction_key}-Left 30°",
-                    "center": direction_key,
-                    "right": f"{direction_key}-Right 30°"
+                # 根据方向定义标签（与prompt描述一致）
+                label_map = {
+                    "Front": {"left": "Left 30°", "center": "Front", "right": "Right 30°"},
+                    "Left": {"left": "Left 60°", "center": "Left 90", "right": "Left 120°"},
+                    "Back": {"left": "Left 150°", "center": "Back 180", "right": "Right 150°"},
+                    "Right": {"left": "Right 120°", "center": "Right 90", "right": "Right 60°"},
                 }
+                labels = label_map.get(direction_key, {"left": "Left", "center": "Center", "right": "Right"})
                 
                 positions = [
                     (int(w * 0.15), 30),

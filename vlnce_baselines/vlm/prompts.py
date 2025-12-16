@@ -13,15 +13,15 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 # Visual Observations
 4 panoramic views (90° FOV each) + 2 top-down maps:
 
-**IMAGE 1: Front (0°)** - Left: -30° | Center: 0° | Right: +30°
-**IMAGE 2: Left (90°)** - Left: 60° | Center: 90° | Right: 120°
-**IMAGE 3: Back (180°)** - Left: 150° | Center: 180° | Right: 210°
-**IMAGE 4: Right (270°)** - Left: 240° | Center: 270° | Right: 300°
-**IMAGE 5: Global Map** - Full explored area (waypoint markers visible)
+**IMAGE 1 (Front)**: Left portion: Left 30° | Center: Front | Right portion: Right 30°
+**IMAGE 2 (Left 90°)**: Left portion: Left 60° | Center: Left 90 | Right portion: Left 120°
+**IMAGE 3 (Back 180°)**: Left portion: Left 150° | Center: Back 180 | Right portion: Right 150°
+**IMAGE 4 (Right 90°)**: Left portion: Right 120° | Center: Right 90 | Right portion: Right 60°
+**IMAGE 5: Global Map** - Full explored area (updated trajectory, waypoints)
 **IMAGE 6: Local Map** - Nearby region (agent-centered, FOV cone shown)
 
-**Direction Usage**: Describe objects by panorama + portion + angle (e.g., "Back-Left 150°" = IMAGE 3 left portion at 150°, "Front-Right 30°" = IMAGE 1 right portion at 30°). The angles indicate image region positions and help determine exact turning angles.
-**Action Origin**: All actions start from Front (0°)
+**Direction Usage**: Use IMAGE number + portion + turn instruction (e.g., "IMAGE 4 right portion: turn right 60°").
+**Action Origin**: All actions start from Front (IMAGE 1 center)
 
 # Map Interpretation Guide
 
@@ -126,15 +126,15 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 # Visual Observations
 360° scan complete. 4 panoramic views (90° FOV each) + 2 top-down maps:
 
-**IMAGE 1: Front (0°)** - Left portion: -30° | Center: 0° | Right portion: +30°
-**IMAGE 2: Left (90°)** - Left portion: 60° | Center: 90° | Right portion: 120°
-**IMAGE 3: Back (180°)** - Left portion: 150° | Center: 180° | Right portion: 210°
-**IMAGE 4: Right (270°)** - Left portion: 240° | Center: 270° | Right portion: 300°
+**IMAGE 1 (Front)**: Left portion: Left 30° | Center: Front | Right portion: Right 30°
+**IMAGE 2 (Left 90°)**: Left portion: Left 60° | Center: Left 90° | Right portion: Left 120°
+**IMAGE 3 (Back 180°)**: Left portion: Left 150° | Center: Back | Right portion: Right 150°
+**IMAGE 4 (Right 90°)**: Left portion: Right 120° | Center: Right 90° | Right portion: Right 60°
 **IMAGE 5: Global Map** - Full explored area (updated trajectory, waypoints)
 **IMAGE 6: Local Map** - Nearby region (agent-centered, FOV cone shown)
 
-**Direction Usage**: Describe objects by panorama + portion + angle (e.g., "Back-Left 150°" = IMAGE 3 left portion at 150°, "Front-Right 30°" = IMAGE 1 right portion at 30°). The angles indicate image region positions and help determine exact turning angles.
-**Action Origin**: All actions start from Front (0°)
+**Direction Usage**: Use IMAGE number + portion + turn instruction (e.g., "IMAGE 4 right portion: turn right 60°").
+**Action Origin**: All actions start from Front (IMAGE 1 center)
 
 # Map Interpretation Guide
 

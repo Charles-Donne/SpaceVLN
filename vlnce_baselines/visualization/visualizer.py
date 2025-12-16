@@ -261,6 +261,35 @@ class MapVisualizer:
                               landmark_marker_radius, landmark_marker_border, 1)
                 
                 # 静默处理，不输出标注统计
+            
+            # ===== 阶段7: 绘制Waypoint标记（深红色圆圈+白色数字）=====
+            if waypoint_positions and waypoint_ids and len(waypoint_positions) == len(waypoint_ids):
+                for (wp_x, wp_y), wp_id in zip(waypoint_positions, waypoint_ids):
+                    # 转换waypoint坐标到旋转后的坐标系
+                    # waypoint_positions是(map_x, map_y)格式，需要与trajectory_points相同的转换
+                    display_x = wp_y * 480 / w
+                    display_y = (h - 1 - wp_x) * 480 / h
+                    point = np.array([display_x, display_y, 1])
+                    rotated_point = rotation_matrix @ point
+                    
+                    # 绘制深红色圆圈（BGR=(0, 0, 139)）
+                    cv2.circle(global_map_with_trajectory,
+                              (int(rotated_point[0]), int(rotated_point[1])),
+                              8, (0, 0, 139), -1)  # 深红色填充
+                    cv2.circle(global_map_with_trajectory,
+                              (int(rotated_point[0]), int(rotated_point[1])),
+                              8, (255, 255, 255), 1)  # 白色边框
+                    
+                    # 绘制白色数字ID
+                    text = str(wp_id)
+                    font = cv2.FONT_HERSHEY_SIMPLEX
+                    font_scale = 0.4
+                    thickness = 1
+                    (text_width, text_height), baseline = cv2.getTextSize(text, font, font_scale, thickness)
+                    text_x = int(rotated_point[0]) - text_width // 2
+                    text_y = int(rotated_point[1]) + text_height // 2
+                    cv2.putText(global_map_with_trajectory, text, (text_x, text_y),
+                               font, font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
         
         # 返回：基础地图 + 显示副本（带轨迹和landmark+waypoint） + 无轨迹的旋转地图（供local_map裁剪）
         return sem_map_vis, global_map_with_trajectory, landmarks, global_map_rotated
@@ -483,6 +512,40 @@ class MapVisualizer:
                               (int(local_x), int(local_y)), 
                               local_landmark_radius, 
                               landmark_marker_border, 2)
+        
+        # ===== 阶段9.5: 绘制Waypoint标记（深红色圆圈+白色数字）=====
+        if waypoint_positions and waypoint_ids and len(waypoint_positions) == len(waypoint_ids):
+            for (wp_x, wp_y), wp_id in zip(waypoint_positions, waypoint_ids):
+                # 转换waypoint坐标（与全局地图坐标变换一致）
+                display_x = wp_y * 480 / w
+                display_y = (h - 1 - wp_x) * 480 / h
+                point = np.array([display_x, display_y, 1])
+                rotated_point = rotation_matrix @ point
+                
+                # 转换到local坐标系
+                local_x = (rotated_point[0] - 120) * 2
+                local_y = (rotated_point[1] - 120) * 2
+                
+                # 只绘制在可见范围内的waypoint
+                if 0 <= local_x < 480 and 0 <= local_y < 480:
+                    # 绘制深红色圆圈（BGR=(0, 0, 139)）
+                    cv2.circle(local_map,
+                              (int(local_x), int(local_y)),
+                              10, (0, 0, 139), -1)  # 深红色填充
+                    cv2.circle(local_map,
+                              (int(local_x), int(local_y)),
+                              10, (255, 255, 255), 2)  # 白色边框
+                    
+                    # 绘制白色数字ID
+                    text = str(wp_id)
+                    font = cv2.FONT_HERSHEY_SIMPLEX
+                    font_scale = 0.5
+                    thickness = 2
+                    (text_width, text_height), baseline = cv2.getTextSize(text, font, font_scale, thickness)
+                    text_x = int(local_x) - text_width // 2
+                    text_y = int(local_y) + text_height // 2
+                    cv2.putText(local_map, text, (text_x, text_y),
+                               font, font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
         
         # ===== 阶段10: 最终裁剪到400×400 =====
         local_map_cropped = local_map[40:440, 40:440].copy()
