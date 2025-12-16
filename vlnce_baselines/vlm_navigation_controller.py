@@ -588,6 +588,13 @@ class VLMNavigationController(InteractiveNavigationController):
         self.thinking_outputs.append(thinking_record)
         self.save_manager.save_thinking(thinking_record)
         
+        # ===== 关键修复：验证后清空所有状态（不论子任务是否完成） =====
+        # 这样每个新子任务都从干净的状态开始，VLM不会因为看到旧轨迹而误判
+        print("\n[状态清理] 清空轨迹、landmark和progress（准备新子任务）")
+        self.mapper.clear_trajectory()  # 清空轨迹
+        self.landmark_classes = []      # 清空landmark标注（会在后面重新设置）
+        self.progress_summary = ""      # 重置进度摘要
+        
         if is_completed:
             print(f"\n[子任务完成] #{self.subtask_count}")
             
@@ -596,15 +603,10 @@ class VLMNavigationController(InteractiveNavigationController):
                 print("到达最终目的地")
                 return True, response
             
-            # 清空上一个子任务的轨迹和landmark（每个子任务独立显示）
-            print("  清空上一子任务轨迹和landmark标注")
-            self.mapper.clear_trajectory()
-            # landmark_classes会在下面更新为新子任务的目标
-            
             # 更新到新子任务
             self.subtask_count += 1
             self.current_subtask = response
-            self.progress_summary = ""
+            # progress_summary已在上面清空
             
             # 更新当前位置信息（用于后续参考）
             self.current_position_info = {
@@ -615,7 +617,6 @@ class VLMNavigationController(InteractiveNavigationController):
             
             # 创建路径点记录（空间记忆）
             waypoint_desc = response.get('waypoint', 'Unknown location')
-            # 不传position参数，让add_waypoint()从mapper.curr_loc获取正确的地图像素坐标
             waypoint_id = self.mapper.add_waypoint(waypoint_desc)
             
             # 动态更新目标landmark（从instruction中提取所有相关landmark）
@@ -644,16 +645,41 @@ class VLMNavigationController(InteractiveNavigationController):
             
             self._print_subtask_info(response)
         else:
-            print(f"\n[子任务继续] #{self.subtask_count} 未完成")
+            print(f"\n[子任务未完成] #{self.subtask_count} - 重新规划")
             
-            # 即使未完成也更新位置观察（用于记录轨迹）
+            # 未完成时保持subtask_count不变，但更新子任务内容
+            self.current_subtask = response
+            # progress_summary和landmark_classes已在上面清空
+            
+            # 更新位置观察（用于记录轨迹）
             if 'current_observation' in response:
                 self.current_position_info = {
                     'waypoint': response.get('waypoint', getattr(self, 'current_position_info', {}).get('waypoint', 'Unknown')),
                     'observation': response.get('current_observation', ''),
                     'step': self.current_step
                 }
-            self.current_subtask = response
+            
+            # 从新的子任务指令中提取landmark（与完成时逻辑相同）
+            subtask_instruction = response.get('subtask_instruction', '')
+            subtask_landmark = response.get('subtask_landmark', None)
+            
+            landmarks_in_instruction = []
+            for cls in self.mapping_classes:
+                if cls.lower() in subtask_instruction.lower():
+                    landmarks_in_instruction.append(cls)
+            
+            if subtask_landmark and subtask_landmark in self.mapping_classes:
+                self.landmark_classes = [subtask_landmark]
+                self.target_landmark = subtask_landmark
+                print(f"  🎯 Updated Landmark: {self.target_landmark}")
+            elif landmarks_in_instruction:
+                self.landmark_classes = landmarks_in_instruction
+                self.target_landmark = landmarks_in_instruction[0]
+                print(f"  🎯 Updated Landmarks: {', '.join(self.landmark_classes)}")
+            else:
+                self.target_landmark = None
+                self.landmark_classes = []
+                print(f"  ℹ️  No landmarks to mark")
             
             # 输出LLM验证结果和调整后的子任务
             self._print_subtask_info(response, is_initial=False)

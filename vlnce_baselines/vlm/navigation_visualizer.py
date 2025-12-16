@@ -85,12 +85,18 @@ class NavigationVisualizer:
         rgb = observations["rgb"]
         
         # 获取俯视图（完全按照Sub-VLM-VLN的实现）
-        if "top_down_map_vlnce" in info:
-            top_down_map = maps.colorize_draw_agent_and_fit_to_height(
-                info["top_down_map_vlnce"], rgb.shape[0]
-            )
+        if "top_down_map_vlnce" in info and info["top_down_map_vlnce"] is not None:
+            try:
+                top_down_map = maps.colorize_draw_agent_and_fit_to_height(
+                    info["top_down_map_vlnce"], rgb.shape[0]
+                )
+            except Exception as e:
+                print(f"⚠️  [Step {step}] 俯视图渲染失败: {e}")
+                top_down_map = np.zeros_like(rgb)
         else:
-            # 如果没有地图，创建空白占位
+            # 如果没有地图，创建空白占位并警告
+            if step == 1:  # 只在第一步警告，避免重复输出
+                print(f"⚠️  info中没有top_down_map_vlnce，请确保config中启用了TOP_DOWN_MAP_VLNCE测量")
             top_down_map = np.zeros_like(rgb)
         
         # 拼接：左边RGB + 右边俯视图
@@ -158,7 +164,15 @@ class NavigationVisualizer:
         y_offset += 30
         
         # 第2-3行：全局指令（白色，最多2行）
-        instruction_lines = self._wrap_text(instruction, w - 20, font, font_scale)
+        # 处理中文字符：先编码为ASCII可表示的形式
+        try:
+            instruction_safe = instruction.encode('ascii', 'ignore').decode('ascii')
+            if not instruction_safe.strip():  # 如果全是中文，用原文但不显示
+                instruction_safe = "[Non-ASCII Instruction]"
+        except:
+            instruction_safe = "[Instruction]"
+        
+        instruction_lines = self._wrap_text(instruction_safe, w - 20, font, font_scale)
         for line in instruction_lines[:2]:
             cv2.putText(text_area, line, (10, y_offset), font, font_scale, color, thickness)
             y_offset += 25
@@ -166,7 +180,14 @@ class NavigationVisualizer:
         # 第4行：当前子任务（绿色，最多1行）
         if current_subtask:
             y_offset += 5
-            subtask_text = f"Subtask: {current_subtask}"
+            try:
+                subtask_safe = current_subtask.encode('ascii', 'ignore').decode('ascii')
+                if not subtask_safe.strip():
+                    subtask_safe = "[Non-ASCII Subtask]"
+            except:
+                subtask_safe = "[Subtask]"
+            
+            subtask_text = f"Subtask: {subtask_safe}"
             subtask_lines = self._wrap_text(subtask_text, w - 20, font, font_scale)
             for line in subtask_lines[:1]:
                 cv2.putText(text_area, line, (10, y_offset), font, font_scale, (0, 255, 0), thickness)

@@ -51,6 +51,11 @@ class ConfigHelper:
         config.MAP.NUM_ENVIRONMENTS = num_environments
         config.MAP.RESULTS_DIR = config.RESULTS_DIR
         
+        # ===== 启用TOP_DOWN_MAP_VLNCE测量（俯视图可视化必需） =====
+        if "TOP_DOWN_MAP_VLNCE" not in config.TASK_CONFIG.TASK.MEASUREMENTS:
+            config.TASK_CONFIG.TASK.MEASUREMENTS.append("TOP_DOWN_MAP_VLNCE")
+            print("[Config] 已启用 TOP_DOWN_MAP_VLNCE 测量")
+        
         config.freeze()
         return config
     
