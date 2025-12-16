@@ -454,7 +454,14 @@ class MapVisualizer:
         cv2.line(local_map, (fov_center_x, fov_center_y), (right_end_x, right_end_y),
                 fov_outline_color, fov_outline_thickness)
         
-        # ===== 阶段7: 叠加黑色障碍物层（在FOV之后、箭头之前）=====
+        # ===== 阶段7: 绘制朝上的大箭头（在FOV之上）=====
+        arrow_color = (0, 0, 255)  # 亮红色BGR
+        arrow_angle = np.deg2rad(-90)  # 朝上
+        agent_pos = (fov_center_x, fov_center_y, arrow_angle)
+        agent_arrow = vu.get_contour_points(agent_pos, origin=(0, 0), size=24)
+        cv2.drawContours(local_map, [agent_arrow], 0, arrow_color, -1)
+        
+        # ===== 阶段8: 叠加黑色障碍物层（覆盖在箭头之上）=====
         # ⚠️ 关键修复：障碍物也需要flipud翻转，与semantic_map保持一致
         obstacle_mask_flipped = np.flipud(obstacle_map > 0.5)
         # 缩放到480x480
@@ -477,14 +484,7 @@ class MapVisualizer:
         # 用黑色覆盖障碍物区域
         local_map[obstacle_local] = [0, 0, 0]  # 黑色BGR
         
-        # ===== 阶段8: 绘制朝上的大箭头（在障碍物层之上）=====
-        arrow_color = (0, 0, 255)  # 亮红色BGR
-        arrow_angle = np.deg2rad(-90)  # 朝上
-        agent_pos = (fov_center_x, fov_center_y, arrow_angle)
-        agent_arrow = vu.get_contour_points(agent_pos, origin=(0, 0), size=24)
-        cv2.drawContours(local_map, [agent_arrow], 0, arrow_color, -1)
-        
-        # ===== 阶段9: 绘制Landmark标记（紫色圆球）=====
+        # ===== 阶段9: 绘制Landmark标记（紫色圆球，最上层，不被遮挡）=====
         if landmark_classes and landmark_config:
             landmarks = self._extract_landmarks(
                 full_map, detected_classes, landmark_classes,
