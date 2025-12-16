@@ -27,7 +27,10 @@ from habitat import Config
 from habitat.sims.habitat_simulator.actions import HabitatSimActions
 
 from vlnce_baselines.interactive_navigation_controller import InteractiveNavigationController
-from vlnce_baselines.vlm import LLMPlanner, ActionExecutor, SaveManager, NavigationVisualizer
+from vlnce_baselines.vlm import (
+    LLMPlanner, ActionExecutor, SaveManager, NavigationVisualizer
+)
+from vlnce_baselines.visualization import PanoramaGenerator
 from vlnce_baselines.vlm.navigation_config import (
     DIRECTION_STEPS, DIRECTION_NAMES, PANORAMA_CONFIG, ACTION_MAPPING
 )
@@ -109,6 +112,9 @@ class VLMNavigationController(InteractiveNavigationController):
         
         # NavigationVisualizer（用于RGB+俯视图拼接和GIF生成）
         self.nav_visualizer = None
+        
+        # PanoramaGenerator（用于全景图拼接和标注）
+        self.panorama_generator = PanoramaGenerator()
         
         print("[Init] VLM模块初始化完成\n")
     
@@ -298,8 +304,8 @@ class VLMNavigationController(InteractiveNavigationController):
             # 获取该方向的3张图片（steps是1-based，需要转为0-based索引）
             direction_images = [lookaround_images[step-1] for step in steps]
             
-            # 使用OpenCV Stitcher拼接3张图片，并添加方向标注
-            panorama = self._create_panorama_from_3_images(direction_images, direction_name)
+            # 使用PanoramaGenerator拼接3张图片并添加方向标注
+            panorama = self.panorama_generator.create_panorama(direction_images, direction_name)
             
             # 保存全景图
             panorama_filename = f"{phase}_panorama_{direction_name.split()[0].lower()}.jpg"
@@ -1049,195 +1055,5 @@ class VLMNavigationController(InteractiveNavigationController):
         
         return "\n".join(summary_lines)
     
-    def add_waypoint(self, waypoint_description: str, position: np.ndarray = None) -> int:
-        """添加waypoint（已废弃，直接使用mapper.add_waypoint）"""
-        return self.mapper.add_waypoint(waypoint_description)
-    
-    def get_waypoint_summary(self) -> str:
-        """获取waypoint摘要（已废弃，使用_get_waypoint_summary）"""
-        return self._get_waypoint_summary()
-    
-    def visualize_waypoints_on_map(self, map_image: np.ndarray) -> np.ndarray:
-        """在地图上可视化waypoint（已废弃，visualizer自动渲染）"""
-        return map_image
-    
     # ========== 原有方法 ==========
-
-    
-    def _create_panorama_from_3_images(self, images: List[np.ndarray], direction_name: str = "") -> np.ndarray:
-        """
-        使用OpenCV Stitcher拼接3张图像生成90°全景图
-        
-        Args:
-            images: 3张图像列表（按顺序：左-中-右）
-            direction_name: 方向名称，用于添加方向标注（如"Front", "Left", "Back", "Right"）
-            
-        Returns:
-            90°全景图（带方向标注）
-        """
-        stitcher = cv2.Stitcher_create(cv2.Stitcher_PANORAMA)
-        status, panorama = stitcher.stitch(images)
-        
-        # 添加方向标注（白边红字）- 跨平台字体支持
-        if direction_name and status == cv2.Stitcher_OK:
-            from PIL import Image, ImageDraw, ImageFont
-            
-            h, w = panorama.shape[:2]
-            
-            # 转换为PIL格式
-            pil_img = Image.fromarray(cv2.cvtColor(panorama, cv2.COLOR_BGR2RGB))
-            draw = ImageDraw.Draw(pil_img)
-            
-            # 跨平台字体加载（支持Unicode）
-            font = None
-            font_size = 40
-            font_paths = [
-                "/System/Library/Fonts/Helvetica.ttc",  # macOS
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",  # Linux (Debian/Ubuntu)
-                "/usr/share/fonts/dejavu/DejaVuSans.ttf",  # Linux (CentOS/RHEL)
-                "C:/Windows/Fonts/arial.ttf",  # Windows
-            ]
-            
-            for font_path in font_paths:
-                try:
-                    font = ImageFont.truetype(font_path, font_size)
-                    break
-                except:
-                    continue
-            
-            # 如果所有TrueType字体都加载失败，回退到OpenCV绘制（不支持Unicode）
-            if font is None:
-                print("  [WARNING] TrueType font not found, using OpenCV rendering (degree symbol will show as 'deg')")
-                # 回退到OpenCV绘制 - 直接显示转向角度
-                direction_key = direction_name.split()[0]
-                # 根据方向定义标签（与prompt描述一致）
-                label_map = {
-                    "Front": {"left": "Left 30deg", "center": "Front 0deg", "right": "Right 30deg"},
-                    "Left": {"left": "Left 120deg", "center": "Left 90deg", "right": "Left 60deg"},
-                    "Back": {"left": "Right 150deg", "center": "Back 180deg", "right": "Left 150deg"},
-                    "Right": {"left": "Right 60deg", "center": "Right 90deg", "right": "Right 120deg"},
-                }
-                labels = label_map.get(direction_key, {"left": "Left", "center": "Center", "right": "Right"})
-                
-                positions = [
-                    (int(w * 0.15), 50),
-                    (int(w * 0.50), 50),
-                    (int(w * 0.85), 50),
-                ]
-                
-                for pos, key in zip(positions, ["left", "center", "right"]):
-                    text = labels[key]
-                    (text_width, text_height), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 1.0, 2)
-                    text_x = pos[0] - text_width // 2
-                    text_y = pos[1]
-                    
-                    # 白色边框
-                    for offset_x in range(-2, 3):
-                        for offset_y in range(-2, 3):
-                            if offset_x != 0 or offset_y != 0:
-                                cv2.putText(panorama, text, (text_x + offset_x, text_y + offset_y),
-                                          cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
-                    # 红色文字
-                    cv2.putText(panorama, text, (text_x, text_y),
-                              cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
-            else:
-                # 使用PIL绘制（支持Unicode） - 直接显示转向角度
-                direction_key = direction_name.split()[0]
-                # 根据方向定义标签（与prompt描述一致）
-                label_map = {
-                    "Front": {"left": "Left 30°", "center": "Front 0°", "right": "Right 30°"},
-                    "Left": {"left": "Left 120°", "center": "Left 90°", "right": "Left 60°"},
-                    "Back": {"left": "Right 150°", "center": "Back 180°", "right": "Left 150°"},
-                    "Right": {"left": "Right 60°", "center": "Right 90°", "right": "Right 120°"},
-                }
-                labels = label_map.get(direction_key, {"left": "Left", "center": "Center", "right": "Right"})
-                
-                positions = [
-                    (int(w * 0.15), 30),
-                    (int(w * 0.50), 30),
-                    (int(w * 0.85), 30),
-                ]
-                
-                for pos, key in zip(positions, ["left", "center", "right"]):
-                    text = labels[key]
-                    
-                    # 计算文字边界框以居中
-                    bbox = draw.textbbox((0, 0), text, font=font)
-                    text_width = bbox[2] - bbox[0]
-                    text_x = pos[0] - text_width // 2
-                    text_y = pos[1]
-                    
-                    # 绘制白色边框（描边效果）
-                    for offset_x in range(-2, 3):
-                        for offset_y in range(-2, 3):
-                            if offset_x != 0 or offset_y != 0:
-                                draw.text((text_x + offset_x, text_y + offset_y), 
-                                        text, font=font, fill=(255, 255, 255))
-                    
-                    # 绘制红色文字
-                    draw.text((text_x, text_y), text, font=font, fill=(255, 0, 0))
-                
-                # 转换回OpenCV格式（只在成功使用PIL时）
-                panorama = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
-        
-        return panorama
-    
-    
-    def _crop_panorama_view(self, full_panorama: np.ndarray, center_angle: float, 
-                            fov: float, hfov_per_image: float) -> np.ndarray:
-        """
-        从360°全景图中裁剪指定方向的视图
-        
-        Args:
-            full_panorama: 360°完整全景图
-            center_angle: 视图中心角度（度，0°=前方，90°=左侧）
-            fov: 视图的水平视场角（度，通常90°）
-            hfov_per_image: 单张原始图像的视场角（用于计算焦距）
-            
-        Returns:
-            裁剪后的视图
-        """
-        h, pano_w = full_panorama.shape[:2]
-        
-        # 使用与_create_full_panorama相同的方法计算焦距
-        w_original = int(pano_w / (2 * np.pi) * 2 * np.tan(np.radians(hfov_per_image / 2)))
-        f_pixels = w_original / (2.0 * np.tan(np.radians(hfov_per_image / 2.0)))
-        
-        # 计算裁剪的角度范围
-        center_rad = np.radians(center_angle)
-        half_fov_rad = np.radians(fov / 2.0)
-        
-        theta_start = center_rad - half_fov_rad
-        theta_end = center_rad + half_fov_rad
-        
-        # 映射到全景图像素坐标
-        x_start = int((theta_start % (2 * np.pi)) * f_pixels)
-        x_end = int((theta_end % (2 * np.pi)) * f_pixels)
-        
-        # 处理跨越0°/360°边界的情况
-        if x_end < x_start:
-            # 环绕拼接
-            part1 = full_panorama[:, x_start:]
-            part2 = full_panorama[:, :x_end]
-            view = np.hstack([part1, part2])
-        else:
-            view = full_panorama[:, x_start:x_end]
-        
-        return view
-    
-    def _stitch_panorama(self, images: List[np.ndarray], hfov: float) -> np.ndarray:
-        """
-        [已废弃] 柱面投影拼接3张图像生成90°全景图
-        现在使用 _create_full_panorama + _crop_panorama_view 替代
-        保留此方法以防向后兼容
-        
-        Args:
-            images: 3张连续的图像列表（左-中-右）
-            hfov: 每张图的水平视场角（度）
-            
-        Returns:
-            拼接后的全景图
-        """
-        # 简单水平拼接作为降级方案
-        return np.hstack(images)
 

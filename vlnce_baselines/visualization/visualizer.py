@@ -308,6 +308,8 @@ class MapVisualizer:
         """
         独立渲染局部地图（不继承全局地图，完全独立构建）
         
+        注意：Local Map不渲染waypoint标记，因为action模块不需要waypoint信息
+        
         Args:
             full_map: [C, H, W] 全局地图数据
             trajectory_points: [(x, y), ...] 原始轨迹坐标列表（地图像素坐标）
@@ -317,6 +319,8 @@ class MapVisualizer:
             landmark_classes: landmark类别列表
             landmark_config: landmark配置
             hfov: 水平视野角度（默认90度）
+            waypoint_positions: 未使用（保留接口兼容性）
+            waypoint_ids: 未使用（保留接口兼容性）
         
         Returns:
             local_map: 局部地图 (400×400)
@@ -512,40 +516,6 @@ class MapVisualizer:
                               (int(local_x), int(local_y)), 
                               local_landmark_radius, 
                               landmark_marker_border, 2)
-        
-        # ===== 阶段9.5: 绘制Waypoint标记（深红色圆圈+白色数字）=====
-        if waypoint_positions and waypoint_ids and len(waypoint_positions) == len(waypoint_ids):
-            for (wp_x, wp_y), wp_id in zip(waypoint_positions, waypoint_ids):
-                # 转换waypoint坐标（与全局地图坐标变换一致）
-                display_x = wp_y * 480 / w
-                display_y = (h - 1 - wp_x) * 480 / h
-                point = np.array([display_x, display_y, 1])
-                rotated_point = rotation_matrix @ point
-                
-                # 转换到local坐标系
-                local_x = (rotated_point[0] - 120) * 2
-                local_y = (rotated_point[1] - 120) * 2
-                
-                # 只绘制在可见范围内的waypoint
-                if 0 <= local_x < 480 and 0 <= local_y < 480:
-                    # 绘制深红色圆圈（BGR=(0, 0, 139)）
-                    cv2.circle(local_map,
-                              (int(local_x), int(local_y)),
-                              10, (0, 0, 139), -1)  # 深红色填充
-                    cv2.circle(local_map,
-                              (int(local_x), int(local_y)),
-                              10, (255, 255, 255), 2)  # 白色边框
-                    
-                    # 绘制白色数字ID
-                    text = str(wp_id)
-                    font = cv2.FONT_HERSHEY_SIMPLEX
-                    font_scale = 0.5
-                    thickness = 2
-                    (text_width, text_height), baseline = cv2.getTextSize(text, font, font_scale, thickness)
-                    text_x = int(local_x) - text_width // 2
-                    text_y = int(local_y) + text_height // 2
-                    cv2.putText(local_map, text, (text_x, text_y),
-                               font, font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
         
         # ===== 阶段10: 最终裁剪到400×400 =====
         local_map_cropped = local_map[40:440, 40:440].copy()
