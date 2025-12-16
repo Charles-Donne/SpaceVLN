@@ -38,19 +38,19 @@ class NavigationVisualizer:
             output_dir: 输出目录
         """
         self.output_dir = output_dir
-        self.maps_dir = None
+        self.visualization_dir = None
         self.video_frames = []
         os.makedirs(output_dir, exist_ok=True)
     
     def setup_maps_dir(self, episode_dir: str):
         """
-        设置地图可视化目录
+        设置可视化目录（RGB+俯视图拼接）
         
         Args:
             episode_dir: Episode输出根目录
         """
-        self.maps_dir = os.path.join(episode_dir, "maps")
-        os.makedirs(self.maps_dir, exist_ok=True)
+        self.visualization_dir = os.path.join(episode_dir, "visualization")
+        os.makedirs(self.visualization_dir, exist_ok=True)
         self.video_frames = []
     
     def save_step_visualization(self,
@@ -78,7 +78,7 @@ class NavigationVisualizer:
         Returns:
             保存的图像路径，失败返回None
         """
-        if not self.maps_dir or "rgb" not in observations:
+        if not self.visualization_dir or "rgb" not in observations:
             return None
         
         # 获取第一人称RGB
@@ -108,7 +108,7 @@ class NavigationVisualizer:
         
         # 保存（RGB格式需要转换为BGR）
         filename = f"step{step:04d}_visualization.jpg"
-        filepath = os.path.join(self.maps_dir, filename)
+        filepath = os.path.join(self.visualization_dir, filename)
         cv2.imwrite(filepath, cv2.cvtColor(combined, cv2.COLOR_RGB2BGR))
         
         # 记录到视频帧列表（保持RGB格式用于GIF）
@@ -213,7 +213,7 @@ class NavigationVisualizer:
         将所有帧保存为GIF动画
         
         Args:
-            output_path: 输出路径（可选，默认在maps目录下）
+            output_path: 输出路径（可选，默认在visualization目录下）
             fps: 帧率
             
         Returns:
@@ -227,8 +227,8 @@ class NavigationVisualizer:
             print("⚠️  imageio not installed, cannot create GIF")
             return None
         
-        if output_path is None and self.maps_dir:
-            output_path = os.path.join(self.maps_dir, "navigation.gif")
+        if output_path is None and self.visualization_dir:
+            output_path = os.path.join(self.visualization_dir, "navigation.gif")
         
         if not output_path:
             return None

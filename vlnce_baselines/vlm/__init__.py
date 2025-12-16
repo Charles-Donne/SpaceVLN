@@ -11,7 +11,6 @@ VLM (Vision-Language Model) 模块
 - action: VLM动作执行器
 - navigation_visualizer: 导航可视化和GIF生成
 - save_manager: 数据保存管理
-- waypoint_manager: 路径点管理
 """
 
 from vlnce_baselines.vlm.api_client import APIConfig, BaseAPIClient
@@ -20,7 +19,6 @@ from vlnce_baselines.vlm.action import ActionExecutor
 from vlnce_baselines.vlm.navigation_visualizer import NavigationVisualizer
 from vlnce_baselines.vlm.action_parser import ActionParser
 from vlnce_baselines.vlm.save_manager import SaveManager
-from vlnce_baselines.vlm.waypoint_manager import WaypointManager
 
 __all__ = [
     'APIConfig',
@@ -30,5 +28,4 @@ __all__ = [
     'NavigationVisualizer',
     'ActionParser',
     'SaveManager',
-    'WaypointManager',
 ]

@@ -28,8 +28,8 @@ You are provided with 4 first-person RGB views and 2 bird's-eye view maps:
 
 **Global Map**:
 - **White**: Unexplored/unknown areas
-- **Black**: Obstacles (walls, furniture, barriers, furniture)
-- **Green**: Confirmed floor areas (safe to navigate)
+- **Black**: Obstacles (walls, furniture, barriers) - **MUST AVOID in planning**
+- **Green**: Confirmed floor areas
 - **Orange line**: Trajectory from subtask start to current position
 - **Red circle with arrow**: Current position, arrow points to Front direction
   
@@ -40,9 +40,13 @@ You are provided with 4 first-person RGB views and 2 bird's-eye view maps:
   - Objects within this blue region are currently visible in IMAGE 1 (Front View)
 - Better for planning nearby movements and obstacle avoidance
 
+**Use Maps for Planning**:
+1. **Identify obstacles (black areas)**: Look for walls, furniture, barriers blocking paths
+2. **Spatial awareness**: Use global map for overall layout, local map for immediate surroundings
+
 # Your Task
 
-1. **Analyze environment**: Use 4-directional views + semantic map to identify landmarks and obstacles
+1. **Analyze environment**: Use 4-directional views + global and local map to identify landmarks and obstacles
 2. **Plan subtask**: Break down global task into achievable intermediate waypoints
 3. **Provide instructions**: Action sequence starting from Front view using concrete landmarks
 
@@ -65,40 +69,41 @@ You are provided with 4 first-person RGB views and 2 bird's-eye view maps:
     "reasoning": "<Brief explanation of analysis, waypoint selection, and action plan>"
 }}
 
-## Example 1: Instruction "Walk to the kitchen and stop at the refrigerator"
+## Example 1: Instruction "Turn around and enter the exercise room"
 {{
-    "waypoint": "Bedroom(Current) - standing near bed and door",
-    "waypoint_sequence": "Bedroom(Current) → Doorway → Hallway → Kitchen Entrance → Refrigerator(Goal)",
-    "subtask_destination": "bedroom doorway",
-    "subtask_instruction": "Move forward through the bedroom doorway ahead",
+    "waypoint": "Bathroom(Current) - near door to exercise room on left",
+    "waypoint_sequence": "Bathroom(Current) → Exercise Room Entrance → Exercise Room Center(Goal)",
+    "subtask_destination": "exercise room entrance",
+    "subtask_instruction": "Turn left 90° to face the open doorway, then move forward 0.5m to enter exercise room",
     "subtask_landmark": "door",
     "completion_criteria": {{
-        "landmark_detection": "door visible in front view or side views",
-        "destination_reached": "reached doorway area, distance to door < 1.0m",
-        "spatial_relationship": "orange trajectory reaches doorway on map, agent facing towards door"
+        "landmark_detection": "exercise room doorway visible in front view after turning",
+        "destination_reached": "entered exercise room, distance to doorway < 0.5m",
+        "spatial_relationship": "orange trajectory shows 90° left turn and entry into exercise room on map"
     }},
     "is_final_subtask": false,
-    "reasoning": "(1) Agent starts in bedroom near bed and door (2) First waypoint: exit bedroom through doorway (3) Actions: move forward to reach doorway"
+    "reasoning": "Agent in bathroom with exercise room door visible in left view (IMAGE 2). Map shows green floor path available after turning left, with no black obstacles blocking entry to exercise room. Task requires entering exercise room, so first waypoint is to enter through doorway: turn left 90° to align with doorway, then move forward 0.5m to enter room."
 }}
 
 ## Example 2: Instruction "Walk to the living room and stop near the sofa"
 {{
-    "waypoint": "Hallway(Current) - near wall and opening to living room",
-    "waypoint_sequence": "Hallway(Current) → Living Room Entrance → Sofa Area(Goal)",
-    "subtask_destination": "living room entrance",
-    "subtask_instruction": "Move forward through the opening ahead into the living room",
-    "subtask_landmark": "sofa",
+    "waypoint": "Hallway(Current) - sofa visible ahead-right, table obstacle in path",
+    "waypoint_sequence": "Hallway(Current) → Navigate around table → Sofa Area(Goal)",
+    "subtask_destination": "position near table",
+    "subtask_instruction": "Turn right 30° to avoid table obstacle ahead, move forward 1.0m along clear path toward sofa area",
+    "subtask_landmark": "table",
     "completion_criteria": {{
-        "landmark_detection": "sofa visible in front view",
-        "destination_reached": "entered living room, distance to sofa < 2.0m",
-        "spatial_relationship": "orange trajectory reaches living room area on map"
+        "landmark_detection": "table visible in side views, sofa visible ahead",
+        "destination_reached": "bypassed table obstacle, closer to sofa area",
+        "spatial_relationship": "orange trajectory shows detour around black table obstacle on map"
     }},
     "is_final_subtask": false,
-    "reasoning": "(1) Currently in hallway with living room opening visible ahead (2) Next: enter living room (3) Then approach sofa"
+    "reasoning": "Agent in hallway with sofa partially visible ahead-right in front view (IMAGE 1), but black table obstacle blocks direct path on map. Green floor path available at right side offers safe detour bypassing table. Task requires reaching sofa, so first waypoint is to navigate around table: turn right 30° to avoid obstacle, move 1.0m along green path around table toward sofa area."
 }}
 
 **Critical Requirements**:
 - Start all actions from Front view
+- Use maps to identify obstacles and plan safe paths
 """
 
 
@@ -132,8 +137,8 @@ The agent has performed a 360° scan. You are provided with 4 first-person RGB v
 
 **Global Map**:
 - **White**: Unexplored/unknown areas
-- **Black**: Obstacles (walls, furniture, barriers)
-- **Green**: Confirmed floor areas (safe to navigate)
+- **Black**: Obstacles (walls, furniture, barriers) - **MUST AVOID in next planning**
+- **Green**: Confirmed floor areas
 - **Orange line**: Trajectory from subtask start to current position
 - **Red circle with arrow**: Current position, arrow points to Front direction
 - **Purple markers with labels**: Detected landmark objects: {detected_landmarks}
@@ -145,6 +150,11 @@ The agent has performed a 360° scan. You are provided with 4 first-person RGB v
   - The opening of the semi-circle indicates Front view direction
   - Objects within this blue region are currently visible in IMAGE 1 (Front View)
 - Better for planning nearby movements and obstacle avoidance
+
+**Use Maps for Planning**:
+1. **Verify previous trajectory**: Check orange line shows expected movement
+2. **Identify obstacles (black areas)**: Look for walls, furniture, barriers blocking future paths
+3. **Spatial awareness**: Use global map for overall layout, local map for immediate surroundings
 
 # Spatial Memory (Waypoint History)
 {waypoint_summary}
@@ -180,32 +190,53 @@ The agent has performed a 360° scan. You are provided with 4 first-person RGB v
     "reasoning": "<Brief explanation of completion verification, progress, and next plan>"
 }}
 
-## Example: Instruction "Walk to the kitchen and stop at the refrigerator"
-**Previous Subtask**: Move to bedroom doorway
-**Current Observation**: Agent is at doorway, door detected, trajectory reaches doorway area
+## Example 1: Instruction "Walk through hallway to kitchen entrance"
+**Previous Subtask**: Enter bedroom doorway
+**Current Observation**: Agent at doorway, door detected, trajectory shows entry completed
 
 {{
     "is_completed": true,
     "waypoint": "Doorway(Current) - between bedroom and hallway",
-    "current_observation": "Standing at bedroom doorway. Hallway visible ahead with walls on both sides.",
-    "waypoint_sequence": "Bedroom(✓) → Doorway(✓) → Hallway → Kitchen Entrance → Refrigerator(Goal)",
-    "subtask_destination": "hallway end",
-    "subtask_instruction": "Move forward through hallway towards kitchen entrance",
+    "current_observation": "Standing at bedroom doorway. Hallway with walls on both sides extends ahead toward kitchen.",
+    "waypoint_sequence": "Bedroom(✓) → Doorway(Current) → Hallway → Kitchen Entrance(Goal)",
+    "subtask_destination": "hallway midpoint",
+    "subtask_instruction": "Move forward 1.5m through hallway center toward kitchen entrance",
     "subtask_landmark": "wall",
     "completion_criteria": {{
-        "landmark_detection": "walls visible on both sides in front and side views",
-        "destination_reached": "reached hallway end, near kitchen entrance",
-        "spatial_relationship": "orange trajectory extends through hallway towards kitchen on map"
+        "landmark_detection": "hallway walls visible on both sides in views",
+        "destination_reached": "progressed through hallway, closer to kitchen entrance",
+        "spatial_relationship": "orange trajectory extends through hallway center on map toward kitchen"
     }},
     "is_final_subtask": false,
-    "reasoning": "(1) Previous subtask completed: door detected in views, reached doorway area (2) Now at doorway, hallway ahead (3) Next: navigate through hallway to kitchen"
+    "reasoning": "Previous subtask completed: door detected in multiple views, orange trajectory confirms reached doorway on map. Now at doorway with hallway extending ahead in front view (IMAGE 1). Map shows green floor path clear straight through hallway center with black walls on both sides, no obstacles blocking path. Task requires reaching kitchen entrance at hallway end, so next waypoint is to progress through hallway: move forward 1.5m straight through hallway center."
+}}
+
+## Example 2: Instruction "Turn around and navigate to refrigerator in kitchen"
+**Previous Subtask**: Navigate through kitchen center
+**Current Observation**: Agent in kitchen center, refrigerator visible ahead-left
+
+{{
+    "is_completed": true,
+    "waypoint": "Kitchen Center(Current) - refrigerator visible ahead-left, counter on right",
+    "current_observation": "Standing in kitchen center. Refrigerator visible ahead-left with counter and appliances on right side.",
+    "waypoint_sequence": "Bedroom(✓) → Doorway(✓) → Hallway(✓) → Kitchen Center(Current) → Refrigerator(Goal)",
+    "subtask_destination": "refrigerator in kitchen",
+    "subtask_instruction": "Turn left 30° to face refrigerator, move forward 1.0m to approach refrigerator",
+    "subtask_landmark": "refrigerator",
+    "completion_criteria": {{
+        "landmark_detection": "refrigerator visible in front view after turning",
+        "destination_reached": "reached refrigerator area, distance to refrigerator < 1.0m",
+        "spatial_relationship": "orange trajectory shows left turn and approach to refrigerator on map"
+    }},
+    "is_final_subtask": true,
+    "reasoning": "Previous subtask completed: orange trajectory shows entered kitchen center on map. Refrigerator visible in front-left view (IMAGE 1 and IMAGE 2), with green floor path clear between agent and refrigerator on map. Task requires reaching refrigerator (final destination), so next waypoint is refrigerator itself: turn left 30° to align with refrigerator, move forward 1.0m to reach refrigerator area."
 }}
 
 **Critical Requirements**:
-- Verify **completion_criteria** 3 checks: (1) landmark detected in 4 views, (2) destination arrived, (3) trajectory/orientation on map
-- Analyze all 4 views for 360° understanding
-- Mark completed waypoints with (✓)
+- Verify **completion_criteria** 3 checks: (1) landmark detected, (2) destination arrived, (3) trajectory/orientation matches
+- Analyze all 4 views and Map for 360° understanding
 - Start all actions from Front view
+- Use maps to identify obstacles and plan safe paths
 """
 
 

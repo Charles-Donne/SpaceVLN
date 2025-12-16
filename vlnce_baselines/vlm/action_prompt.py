@@ -14,51 +14,39 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Analyze en
 **Sub-Destination**: {subtask_destination}
 **Sub-Instruction**: {subtask_instruction}
 
-**CRITICAL EXECUTION RULES**:
-1. **STRICTLY FOLLOW** the sub-instruction step-by-step
-2. **DO NOT STOP** until you reach the sub-destination OR complete ALL actions in the sub-instruction
-3. Only output "STOP" when:
-   - You have completed ALL steps in the sub-instruction, AND
-   - The destination landmark is clearly visible in view, AND
-   - You are within the specified distance requirement (<0.5m or as instructed)
-4. If instruction says "turn left 90°", you MUST complete the full rotation even if obstacles appear
-5. If instruction says "move forward X meters", you MUST attempt all required moves unless blocked
-6. Execute actions sequentially as instructed - do not skip or reorder steps
-
 # Progress Summary
 {progress_summary}
 
 # Visual Observations
 
 **3 Images Provided**:
-- **IMAGE 1**: First-person RGB view (current facing direction)
-- **IMAGE 2**: Object detection view with bounding boxes (landmarks: {detected_landmarks})
-- **IMAGE 3**: Local semantic map (nearby region, landmarks shown as purple markers)
+- **IMAGE 1**: First-person RGB view - observe environment, landmarks, spatial layout
+- **IMAGE 2**: Object detection with bounding boxes - identify landmarks: {detected_landmarks}
+- **IMAGE 3**: Local semantic map - spatial relationships, obstacles, path planning
+
+**Use all 3 images together**: RGB shows what you see, detection identifies objects, map shows spatial layout.
 
 # Local Map Guide
 
 **Orientation**: Top = Front, map rotates with agent, agent at center
 
 **Colors**:
-- White: Unexplored | Black: Obstacles (AVOID) | Green: Safe floor
-- Orange line: Recent trajectory | Red arrow: Agent position & facing direction
-- Purple markers: Detected landmarks | Blue semi-circle: Current field of view (opening = Front)
+- **White**: Unexplored areas
+- **Black**: Obstacles (walls/furniture) - AVOID
+- **Green**: Safe floor
+- **Orange line**: Movement trajectory
+- **Red arrow**: Current position & facing direction
+- **Purple markers**: Instruction-related landmarks 
+- **Blue semi-circle**: Field of view (opening = Front)
 
 # Task
 
-Decide next action to complete the sub-task based on:
-1. **Progress Summary**: Review past actions (rotation, movement)
-2. **Orange Trajectory** on local map: Shows completed movement path
-3. **Current View**: Identify sub-destination location and obstacles
-
-**STOP Conditions**
-- Sub-destination within 0.5m or Sub-instruction completed
-- Must have moved (verify via progress & trajectory)
-- Landmark detected (if applicable)
-
-**Decision Strategy**: Use progress history + trajectory to determine next action
-
-**Safety**: Avoid black obstacles on local map
+**Analyze all 3 images together to decide next action**:
+- **RGB (IMAGE 1)**: What environment/landmarks/obstacles visible?
+- **Detection (IMAGE 2)**: Which landmarks detected and where?
+- **Map (IMAGE 3)**: Your position (red arrow), instruction-related landmarks (purple), safe paths (green), obstacles (black), trajectory (orange)
+- **Progress**: What actions completed?
+- **Next Action**: Follow sub-instruction, adapt to environment, avoid obstacles
 
 # Available Actions
 
@@ -69,7 +57,7 @@ Decide next action to complete the sub-task based on:
 # Output Format (JSON only)
 
 {{
-    "reasoning": "<Single-paragraph: destination location, distance estimate, obstacle check, action decision>",
+    "reasoning": "<Combine: (1) RGB view: what visible in IMAGE 1, (2) Detection: landmarks in IMAGE 2, (3) Map: position/destination/obstacles/path in IMAGE 3, (4) Progress, (5) Action decision>",
     "action": "TURN_LEFT" | "TURN_RIGHT" | "MOVE_FORWARD" | "STOP",
     "degrees": <30|60|90|120|150|180> (for TURN only),
     "meters": <0.25|0.5|0.75|1.0|1.25|1.5> (for MOVE_FORWARD only),
@@ -78,42 +66,61 @@ Decide next action to complete the sub-task based on:
 
 # Examples
 
-**Ex1 - Orientation**
+**Ex1 - Safe Movement**
 {{
-    "reasoning": "Sub-destination sofa at left ~3m. No movement yet. Rotate 90° left to face sofa.",
-    "action": "TURN_LEFT",
-    "degrees": 90,
-    "progress_summary": "Rotated left 90°, facing sofa"
-}}
-
-**Ex2 - Approaching**
-{{
-    "reasoning": "Sofa ahead ~2m. Orange trajectory shows rotated 90°. Clear path. Move 0.5m toward sofa.",
+    "reasoning": "RGB: Open space visible ahead. Detection: Sofa detected ahead-left. Map: Green clear 2m ahead, no black obstacles; purple marker (sofa) 3m ahead-left. Progress: started. Decision: Move 0.5m safely.",
     "action": "MOVE_FORWARD",
     "meters": 0.5,
-    "progress_summary": "Rotated left 90°, moved 0.5m, approaching sofa"
+    "progress_summary": "Moved 0.5m forward, approaching sofa"
 }}
 
-**Ex3 - Obstacle Avoidance**
+**Ex2 - Obstacle Avoidance**
 {{
-    "reasoning": "Table sub-destination ahead-right ~2.5m. Black obstacle blocks path. Turn 60° right to navigate around.",
+    "reasoning": "RGB: Wall visible ahead, table visible at right. Detection: Table detected. Map: Black obstacle ahead; green opening right 60°; purple marker (table) right 2.5m. Decision: Turn right 60° to avoid wall and approach table.",
     "action": "TURN_RIGHT",
     "degrees": 60,
-    "progress_summary": "Rotated left 90°, moved 0.5m, turned right 60°, navigating to table"
+    "progress_summary": "Moved 0.5m, turned right 60°, avoiding obstacle"
+}}
+
+**Ex3 - Dead-End Escape**
+{{
+    "reasoning": "RGB: Walls on front/left/right. Detection: No destination landmarks visible. Map: Black walls front/left/right; green opening behind 180°. Progress: 1.0m into corner. Decision: Turn 180° to escape dead-end.",
+    "action": "TURN_LEFT",
+    "degrees": 180,
+    "progress_summary": "Moved 1.0m, encountered dead-end, turning 180° to backtrack"
 }}
 
 **Ex4 - Destination Reached**
 {{
-    "reasoning": "Refrigerator fills view <0.5m. Moved 1.0m total (trajectory visible). Sub-destination reached.",
+    "reasoning": "RGB: Refrigerator fills view. Detection: Refrigerator detected center <0.5m. Map: Purple marker (refrigerator) at center <0.5m; orange trajectory 1.5m. Progress: completed all steps. Decision: Destination reached, STOP.",
     "action": "STOP",
-    "progress_summary": "Rotated left 30°, moved 1.0m, reached refrigerator"
+    "progress_summary": "Rotated left 30°, moved 1.5m, reached refrigerator"
 }}
 
-**Rules**:
-- Specify degrees (30-180) for TURN | meters (0.25-1.5) for MOVE_FORWARD
-- STOP when ANY: sub-destination <0.5m OR landmark detected OR sub-instruction done (must have moved)
-- Use progress + orange trajectory to understand past actions and decide next
-- Progress must be cumulative and precise
+
+**CRITICAL EXECUTION RULES** (MUST FOLLOW):
+
+1. **MULTIMODAL UNDERSTANDING** - Combine all 3 images for every decision:
+   - **RGB (IMAGE 1)**: Observe visible environment, landmarks, obstacles
+   - **Detection (IMAGE 2)**: Confirm which landmarks detected and positions
+   - **Map (IMAGE 3)**: Your position (red arrow), instruction-related landmarks (purple), safe areas (green floor or unexplored white), obstacles (black)
+
+2. **MAP NAVIGATION**:
+   - Locate instruction landmarks: Purple markers show instruction-related objects, estimate distance/angle from red arrow
+   - Plan safe path: Avoid black obstacles
+   - If trapped by black: Turn toward nearest green/white opening
+
+3. **FOLLOW INSTRUCTION**: Execute sub-instruction step-by-step - do not skip or reorder
+
+4. **STOP CONDITIONS** - Only STOP when ALL met:
+   - Completed ALL sub-instruction steps
+   - Destination landmark visible in RGB + detected in IMAGE 2 + within <0.5m
+   - Orange trajectory on map confirms arrival at destination area
+   - Must have moved (verify via progress & trajectory)
+
+5. **ACTION PARAMETERS**:
+   - Specify degrees (30-180) for TURN | meters (0.25-1.5) for MOVE_FORWARD
+   - Progress must be cumulative and precise (track total rotation, distance, status)
 """
 
 

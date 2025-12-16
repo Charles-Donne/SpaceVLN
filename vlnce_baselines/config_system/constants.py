@@ -28,7 +28,14 @@ legend_color_palette = [
     196, 225, 165,  # 5: 浅绿 - Floor
 ]
 
-map_channels = 4  # 地图通道数
+# 地图通道定义
+# Channel 0: Obstacle (障碍物)
+# Channel 1: Explored (已探索区域)
+# Channel 2: Current Location (当前位置)
+# Channel 3: Past Locations (历史位置)
+# Channel 4+: Semantic Categories (语义类别，动态扩展)
+# 注意：Waypoint不需要独立通道，而是通过轨迹点列表+ID管理
+map_channels = 4  # 基础地图通道数（不含语义类别）
 
 
 # ========================================

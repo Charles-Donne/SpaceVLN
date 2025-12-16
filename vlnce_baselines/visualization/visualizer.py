@@ -68,7 +68,9 @@ class MapVisualizer:
                          floor: Optional[np.ndarray] = None,
                          current_pose: Optional[Tuple[float, float, float]] = None,
                          landmark_classes: Optional[List[str]] = None,
-                         landmark_config: Optional[Dict] = None) -> Tuple[np.ndarray, np.ndarray]:
+                         landmark_config: Optional[Dict] = None,
+                         waypoint_positions: Optional[List[Tuple[int, int]]] = None,
+                         waypoint_ids: Optional[List[int]] = None) -> Tuple[np.ndarray, np.ndarray, List, np.ndarray]:
         """
         渲染全局地图（严格按照ZS_Evaluator的渲染逻辑 + 平滑轨迹线）
         
@@ -111,9 +113,9 @@ class MapVisualizer:
         obstacle_mask = np.rint(obstacle_map) == 1
         explored_mask = np.rint(explored_map) == 1
         
-        # ===== 正确的渲染顺序：防止障碍物被覆盖 =====
-        # 正确顺序：已探索自由空间(底层) → Floor(中层) → 障碍物(顶层)
-        # 这样确保障碍物始终可见，不会被Floor覆盖
+        # ===== 基础层渲染顺序 =====
+        # 底层到中层：已探索自由空间(底层) → Floor(中层)
+        # 障碍物层将在绘制轨迹后、箭头前单独叠加
         
         # Layer 1: 已探索自由空间（浅灰色）- 先绘制底层
         explored_free_mask = np.logical_and(explored_mask, ~obstacle_mask)
@@ -124,10 +126,6 @@ class MapVisualizer:
             floor_mask = floor.astype(bool)
             floor_display_mask = np.logical_and(floor_mask, explored_mask)
             semantic_map[floor_display_mask] = 5  # 浅绿色
-        
-        # Layer 3: 障碍物（黑色）- 最后绘制，确保覆盖Floor和自由空间
-        # 这样障碍物永远可见，防止碰撞
-        semantic_map[obstacle_mask] = 1
         
         # ===== 阶段2: PIL调色板渲染 =====
         sem_map_vis = Image.new("P", (w, h))
@@ -203,7 +201,20 @@ class MapVisualizer:
                     cv2.polylines(global_map_with_trajectory, [trajectory_array], isClosed=False,
                                  color=(0, 165, 255), thickness=2, lineType=cv2.LINE_8)
             
-            # 再在中心绘制箭头（顶层，覆盖轨迹）
+            # ===== 阶段5.5: 叠加黑色障碍物层（在轨迹之后、箭头之前）=====
+            # 创建障碍物掩码并叠加到已渲染的地图上
+            obstacle_mask_display = obstacle_map > 0.5
+            # 转换到旋转后的坐标系
+            obstacle_mask_rotated = cv2.warpAffine(
+                obstacle_mask_display.astype(np.uint8) * 255,
+                rotation_matrix, (480, 480),
+                flags=cv2.INTER_NEAREST
+            ) > 127
+            # 用黑色覆盖障碍物区域
+            global_map_with_trajectory[obstacle_mask_rotated] = [0, 0, 0]  # 黑色BGR
+            global_map_rotated[obstacle_mask_rotated] = [0, 0, 0]  # 无轨迹版本也叠加
+            
+            # 再在中心绘制箭头（在障碍物层之上）
             center_x, center_y = 240, 240
             arrow_angle = np.deg2rad(-90)  # 朝上
             agent_pos = (center_x, center_y, arrow_angle)
@@ -226,8 +237,9 @@ class MapVisualizer:
                         landmark_summary[cls_name]['total_pixels'] += pixel_count
                     
                     # 转换landmark坐标到旋转后的坐标系
-                    display_x = marker_x * 480 / w
-                    display_y = (h - 1 - marker_y) * 480 / h
+                    # marker_y 是地图列坐标（水平X方向），marker_x 是地图行坐标（垂直Y方向）
+                    display_x = marker_y * 480 / w
+                    display_y = (h - 1 - marker_x) * 480 / h
                     point = np.array([display_x, display_y, 1])
                     rotated_point = rotation_matrix @ point
                     
@@ -240,31 +252,123 @@ class MapVisualizer:
                               landmark_marker_radius, landmark_marker_border, 1)
                 
                 # 静默处理，不输出标注统计
+            
+            # ===== 阶段7: 绘制Waypoint数字标记（深红色圆圈+白色数字）=====
+            if waypoint_positions and waypoint_ids:
+                for wp_pos, wp_id in zip(waypoint_positions, waypoint_ids):
+                    # waypoint_pos是地图像素坐标(map_x, map_y)
+                    # 转换到显示坐标并旋转
+                    display_x = wp_pos[1] * 480 / w  # map_y → display_x
+                    display_y = (h - 1 - wp_pos[0]) * 480 / h  # map_x → display_y（翻转）
+                    point = np.array([display_x, display_y, 1])
+                    rotated_point = rotation_matrix @ point
+                    
+                    wp_x = int(rotated_point[0])
+                    wp_y = int(rotated_point[1])
+                    
+                    # 绘制深红色圆圈（Dark Red: BGR=(0, 0, 139)）
+                    cv2.circle(global_map_with_trajectory, (wp_x, wp_y), 15, (0, 0, 139), 3)
+                    
+                    # 绘制白色数字（居中）
+                    text = str(wp_id)
+                    font = cv2.FONT_HERSHEY_SIMPLEX
+                    font_scale = 0.8
+                    thickness = 2
+                    text_size = cv2.getTextSize(text, font, font_scale, thickness)[0]
+                    text_x = wp_x - text_size[0] // 2
+                    text_y = wp_y + text_size[1] // 2
+                    cv2.putText(global_map_with_trajectory, text, (text_x, text_y),
+                               font, font_scale, (255, 255, 255), thickness)
         
-        # 返回：基础地图 + 显示副本（带轨迹和landmark） + 无轨迹的旋转地图（供local_map裁剪）
+        # 返回：基础地图 + 显示副本（带轨迹和landmark+waypoint） + 无轨迹的旋转地图（供local_map裁剪）
         return sem_map_vis, global_map_with_trajectory, landmarks, global_map_rotated
     
     def render_local_map(self, 
-                        global_map_clean: np.ndarray,
+                        full_map: np.ndarray,
                         trajectory_points: List[Tuple[int, int]],
+                        detected_classes: List[str],
                         current_pose: Tuple[float, float, float],
-                        hfov: float = 90.0) -> np.ndarray:
+                        floor: Optional[np.ndarray] = None,
+                        landmark_classes: Optional[List[str]] = None,
+                        landmark_config: Optional[Dict] = None,
+                        hfov: float = 90.0,
+                        waypoint_positions: Optional[List[Tuple[int, int]]] = None,
+                        waypoint_ids: Optional[List[int]] = None) -> np.ndarray:
         """
-        渲染局部地图（从无轨迹的全局地图裁剪，独立绘制local轨迹）
+        独立渲染局部地图（不继承全局地图，完全独立构建）
         
         Args:
-            global_map_clean: 旋转后的全局地图（无轨迹，480×480），agent已居中在(240,240)
+            full_map: [C, H, W] 全局地图数据
             trajectory_points: [(x, y), ...] 原始轨迹坐标列表（地图像素坐标）
+            detected_classes: 已检测类别列表
             current_pose: (x, y, orientation) 当前位姿（米）
+            floor: [H, W] floor地图
+            landmark_classes: landmark类别列表
+            landmark_config: landmark配置
             hfov: 水平视野角度（默认90度）
         
         Returns:
-            local_map: 局部地图 (400×400)，裁剪自480×480
+            local_map: 局部地图 (400×400)
         """
-        if global_map_clean is None:
+        if full_map is None:
             return None
         
-        # ===== 阶段1: 从无轨迹的地图裁剪中心240×240区域（对应12m×12m）=====
+        # ===== 阶段1: 独立构建局部地图基础层 =====
+        obstacle_map = full_map[0, ...]
+        explored_map = full_map[1, ...]
+        h, w = obstacle_map.shape
+        
+        # 创建语义地图
+        semantic_map = np.zeros((h, w), dtype=np.uint8)
+        obstacle_mask = np.rint(obstacle_map) == 1
+        explored_mask = np.rint(explored_map) == 1
+        
+        # Layer 1: 已探索自由空间（浅灰色）
+        explored_free_mask = np.logical_and(explored_mask, ~obstacle_mask)
+        semantic_map[explored_free_mask] = 2
+        
+        # Layer 2: Floor（浅绿色）
+        if floor is not None:
+            floor_mask = floor.astype(bool)
+            floor_display_mask = np.logical_and(floor_mask, explored_mask)
+            semantic_map[floor_display_mask] = 5
+        
+        # ===== 阶段2: PIL调色板渲染 =====
+        sem_map_vis = Image.new("P", (w, h))
+        sem_map_vis.putpalette(self.color_palette)
+        sem_map_vis.putdata(semantic_map.flatten().astype(np.uint8))
+        sem_map_vis = sem_map_vis.convert("RGB")
+        
+        # 坐标系变换
+        sem_map_vis = np.flipud(sem_map_vis)
+        sem_map_vis = np.array(sem_map_vis)
+        sem_map_vis = sem_map_vis[:, :, [2, 1, 0]]  # RGB → BGR
+        sem_map_vis = cv2.resize(sem_map_vis, (480, 480), interpolation=cv2.INTER_NEAREST)
+        
+        # ===== 阶段3: 旋转地图（Agent朝上居中）=====
+        current_x, current_y, current_o = current_pose
+        map_x = current_x * 100.0 / self.resolution
+        map_y = current_y * 100.0 / self.resolution
+        agent_x = map_x * 480 / h
+        agent_y = (w - map_y) * 480 / w
+        
+        rotation_angle = 90 - current_o
+        rotation_center = (agent_x, agent_y)
+        rotation_matrix = cv2.getRotationMatrix2D(rotation_center, rotation_angle, 1.0)
+        
+        # 添加平移到中心
+        target_center = np.array([240, 240, 1])
+        current_center = np.array([agent_x, agent_y, 1])
+        translation = target_center[:2] - rotation_matrix @ current_center
+        rotation_matrix[0, 2] += translation[0]
+        rotation_matrix[1, 2] += translation[1]
+        
+        local_map = cv2.warpAffine(sem_map_vis, rotation_matrix, (480, 480),
+                                    flags=cv2.INTER_NEAREST,
+                                    borderMode=cv2.BORDER_CONSTANT,
+                                    borderValue=(255, 255, 255))
+        
+        # ===== 阶段4: 裁剪中心240×240区域并放大到480×480 =====
         center_x, center_y = 240, 240
         crop_size = 240
         crop_half = crop_size // 2
@@ -274,48 +378,25 @@ class MapVisualizer:
         y1 = center_y - crop_half
         y2 = center_y + crop_half
         
-        local_map = global_map_clean[y1:y2, x1:x2].copy()
-        
-        # ===== 阶段2: 扩充到480×480 =====
+        local_map = local_map[y1:y2, x1:x2].copy()
         local_map = cv2.resize(local_map, (480, 480), interpolation=cv2.INTER_NEAREST)
         
-        # ===== 阶段3: 在local_map上独立绘制轨迹线 =====
+        # ===== 阶段5: 独立绘制轨迹线 =====
         if len(trajectory_points) >= 2:
-            # 计算裁剪区域在global_map中的边界
-            h, w = global_map_clean.shape[:2]
-            
-            # 转换轨迹点到旋转后的global坐标系，然后映射到local坐标
             local_trajectory = []
             for x, y in trajectory_points:
-                # 原始地图坐标 -> 翻转Y轴 -> 缩放到480x480
+                # 原始地图坐标 -> 翻转Y轴 -> 缩放
                 display_x = y * 480 / w
                 display_y = (h - 1 - x) * 480 / h
                 
-                # 应用旋转变换（使用global_map的旋转矩阵）
-                current_x, current_y, current_o = current_pose
-                map_x = current_x * 100.0 / self.resolution
-                map_y = current_y * 100.0 / self.resolution
-                agent_x = map_x * 480 / h
-                agent_y = (w - map_y) * 480 / w
-                rotation_angle = 90 - current_o
-                rotation_center = (agent_x, agent_y)
-                rotation_matrix = cv2.getRotationMatrix2D(rotation_center, rotation_angle, 1.0)
-                
-                # 添加平移到中心
-                target_center = np.array([240, 240, 1])
-                current_center = np.array([agent_x, agent_y, 1])
-                translation = target_center[:2] - rotation_matrix @ current_center
-                rotation_matrix[0, 2] += translation[0]
-                rotation_matrix[1, 2] += translation[1]
-                
+                # 应用旋转变换
                 point = np.array([display_x, display_y, 1])
                 rotated_point = rotation_matrix @ point
                 
                 # 转换到local_map坐标系（裁剪区域120-360映射到0-480）
-                local_x = (rotated_point[0] - 120) * 2  # 240区域放大2倍到480
+                local_x = (rotated_point[0] - 120) * 2
                 local_y = (rotated_point[1] - 120) * 2
                 
-                # 只添加在可见范围内的点
                 if 0 <= local_x < 480 and 0 <= local_y < 480:
                     local_trajectory.append([int(round(local_x)), int(round(local_y))])
             
@@ -325,7 +406,7 @@ class MapVisualizer:
                 cv2.polylines(local_map, [trajectory_array], isClosed=False,
                              color=(0, 165, 255), thickness=3, lineType=cv2.LINE_8)
         
-        # ===== 阶段4: 绘制FOV扇形（5米视野半径）=====
+        # ===== 阶段6: 绘制FOV扇形（5米视野半径）=====
         # 480像素 = 12m，所以1像素 = 2.5cm
         # 5米 = 500cm ÷ 2.5cm/pixel = 200像素
         fov_center_x, fov_center_y = 240, 240
@@ -358,14 +439,92 @@ class MapVisualizer:
         cv2.line(local_map, (fov_center_x, fov_center_y), (right_end_x, right_end_y),
                 fov_outline_color, fov_outline_thickness)
         
-        # ===== 阶段5: 绘制朝上的大箭头（size=24）=====
+        # ===== 阶段7: 叠加黑色障碍物层（在FOV之后、箭头之前）=====
+        # 转换障碍物掩码到旋转后的坐标系
+        obstacle_mask_rotated = cv2.warpAffine(
+            (obstacle_map > 0.5).astype(np.uint8) * 255,
+            rotation_matrix, (480, 480),
+            flags=cv2.INTER_NEAREST
+        ) > 127
+        # 裁剪中心区域并放大
+        obstacle_crop = obstacle_mask_rotated[y1:y2, x1:x2]
+        obstacle_local = cv2.resize(obstacle_crop.astype(np.uint8) * 255, 
+                                   (480, 480), 
+                                   interpolation=cv2.INTER_NEAREST) > 127
+        # 用黑色覆盖障碍物区域
+        local_map[obstacle_local] = [0, 0, 0]  # 黑色BGR
+        
+        # ===== 阶段8: 绘制朝上的大箭头（在障碍物层之上）=====
         arrow_color = (0, 0, 255)  # 亮红色BGR
         arrow_angle = np.deg2rad(-90)  # 朝上
         agent_pos = (fov_center_x, fov_center_y, arrow_angle)
         agent_arrow = vu.get_contour_points(agent_pos, origin=(0, 0), size=24)
         cv2.drawContours(local_map, [agent_arrow], 0, arrow_color, -1)
         
-        # ===== 阶段6: 裁剪中心400×400 =====
+        # ===== 阶段9: 绘制Landmark标记（紫色圆球）=====
+        if landmark_classes and landmark_config:
+            landmarks = self._extract_landmarks(
+                full_map, detected_classes, landmark_classes,
+                landmark_config['min_total_pixels'],
+                landmark_config['min_area_threshold']
+            )
+            
+            for marker_x, marker_y, cls_name in landmarks:
+                # 转换landmark坐标（与全局地图坐标变换一致）
+                # marker_y 是地图列坐标（水平X方向），marker_x 是地图行坐标（垂直Y方向）
+                display_x = marker_y * 480 / w
+                display_y = (h - 1 - marker_x) * 480 / h
+                point = np.array([display_x, display_y, 1])
+                rotated_point = rotation_matrix @ point
+                
+                # 转换到local坐标系（裁剪区域是120-360，映射到0-480）
+                local_x = (rotated_point[0] - 120) * 2
+                local_y = (rotated_point[1] - 120) * 2
+                
+                # 只绘制在可见范围内的landmark
+                if 0 <= local_x < 480 and 0 <= local_y < 480:
+                    cv2.circle(local_map, 
+                              (int(local_x), int(local_y)), 
+                              landmark_marker_radius, 
+                              landmark_marker_color, -1)
+                    cv2.circle(local_map, 
+                              (int(local_x), int(local_y)), 
+                              landmark_marker_radius, 
+                              landmark_marker_border, 1)
+        
+        # ===== 阶段10: 绘制Waypoint数字标记（深红色圆圈+白色数字）=====
+        if waypoint_positions and waypoint_ids:
+            for wp_pos, wp_id in zip(waypoint_positions, waypoint_ids):
+                # 转换waypoint坐标（与landmark相同的变换）
+                display_x = wp_pos[1] * 480 / w
+                display_y = (h - 1 - wp_pos[0]) * 480 / h
+                point = np.array([display_x, display_y, 1])
+                rotated_point = rotation_matrix @ point
+                
+                # 转换到local坐标系
+                local_x = (rotated_point[0] - 120) * 2
+                local_y = (rotated_point[1] - 120) * 2
+                
+                # 只绘制在可见范围内的waypoint
+                if 0 <= local_x < 480 and 0 <= local_y < 480:
+                    wp_x = int(local_x)
+                    wp_y = int(local_y)
+                    
+                    # 绘制深红色圆圈（放大到局部地图尺度）
+                    cv2.circle(local_map, (wp_x, wp_y), 20, (0, 0, 139), 4)
+                    
+                    # 绘制白色数字（居中）
+                    text = str(wp_id)
+                    font = cv2.FONT_HERSHEY_SIMPLEX
+                    font_scale = 1.0
+                    thickness = 2
+                    text_size = cv2.getTextSize(text, font, font_scale, thickness)[0]
+                    text_x = wp_x - text_size[0] // 2
+                    text_y = wp_y + text_size[1] // 2
+                    cv2.putText(local_map, text, (text_x, text_y),
+                               font, font_scale, (255, 255, 255), thickness)
+        
+        # ===== 阶段11: 最终裁剪到400×400 =====
         local_map_cropped = local_map[40:440, 40:440].copy()
         
         return local_map_cropped
@@ -556,9 +715,11 @@ class MapVisualizer:
                                landmark_classes: Optional[List[str]] = None,
                                mapping_classes: Optional[List[str]] = None,  # 新增
                                landmark_config: Optional[Dict] = None,
-                               masks: Optional[np.ndarray] = None) -> Dict[str, str]:  # 兼容旧参数
+                               waypoint_positions: Optional[List[Tuple[int, int]]] = None,
+                               waypoint_ids: Optional[List[int]] = None,
+                               masks: Optional[np.ndarray] = None) -> Tuple[Dict[str, str], List]:  # 兼容旧参数
         """
-        一键保存当前步骤的所有可视化（支持新detection渲染 + 平滑轨迹线）
+        一键保存当前步骤的所有可视化（支持新detection渲染 + 平滑轨迹线 + waypoint标记）
         
         Args:
             trajectory_points: [(x, y), ...] 轨迹坐标列表（像素坐标）
@@ -567,27 +728,36 @@ class MapVisualizer:
             masks: 检测掩码（向后兼容，已废弃）
             mapping_classes: Mapping类别列表
             landmark_classes: Landmark类别列表
+            waypoint_positions: [(map_x, map_y), ...] waypoint位置列表（可选，从mapper.get_waypoints()获取）
+            waypoint_ids: [1, 2, 3, ...] waypoint ID列表（可选，从mapper.get_waypoints()获取）
         
         Returns:
             paths: 保存路径字典 {'rgb', 'global_map', 'local_map', 'detection'}
             landmarks: Landmark列表
             
-        注意：floor通过形态学方法计算（像ZS_Evaluator._process_map）
+        注意：
+        1. floor通过形态学方法计算（像ZS_Evaluator._process_map）
+        2. waypoint数据建议直接从mapper.get_waypoints()传入，无需手动管理
         """
         paths = {}
         
         # 1. 保存RGB
         paths['rgb'] = self.save_rgb(step, episode_id, rgb)
         
-        # 2. 渲染并保存全局地图（floor通过形态学方法计算 + 平滑轨迹线）
+        # 2. 渲染并保存全局地图（floor通过形态学方法计算 + 平滑轨迹线 + waypoint标记）
         _, global_map_with_trajectory, landmarks, global_map_clean = self.render_global_map(
             full_map, trajectory_points, detected_classes, floor,
-            current_pose, landmark_classes, landmark_config
+            current_pose, landmark_classes, landmark_config,
+            waypoint_positions, waypoint_ids
         )
         paths['global_map'] = self.save_global_map(step, episode_id, global_map_with_trajectory)
         
-        # 3. 渲染并保存局部地图（从无轨迹地图裁剪，独立绘制轨迹）
-        local_map = self.render_local_map(global_map_clean, trajectory_points, current_pose, hfov)
+        # 3. 渲染并保存局部地图（独立渲染，不继承全局地图 + waypoint标记）
+        local_map = self.render_local_map(
+            full_map, trajectory_points, detected_classes, current_pose,
+            floor, landmark_classes, landmark_config, hfov,
+            waypoint_positions, waypoint_ids
+        )
         paths['local_map'] = self.save_local_map(step, episode_id, local_map)        # 4. 渲染并保存检测结果
         if detections is not None and labels is not None:
             detection_vis = self.render_detection_bbox(

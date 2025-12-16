@@ -27,7 +27,7 @@ from habitat import Config
 from habitat.sims.habitat_simulator.actions import HabitatSimActions
 
 from vlnce_baselines.interactive_navigation_controller import InteractiveNavigationController
-from vlnce_baselines.vlm import LLMPlanner, ActionExecutor, SaveManager, WaypointManager, NavigationVisualizer
+from vlnce_baselines.vlm import LLMPlanner, ActionExecutor, SaveManager, NavigationVisualizer
 from vlnce_baselines.vlm.navigation_config import (
     DIRECTION_STEPS, DIRECTION_NAMES, PANORAMA_CONFIG, ACTION_MAPPING
 )
@@ -97,7 +97,7 @@ class VLMNavigationController(InteractiveNavigationController):
         
         # 初始化管理器
         self.save_manager = None  # 在reset_episode时初始化
-        self.waypoint_manager = WaypointManager()
+        # waypoint_manager已废弃，直接使用mapper.add_waypoint()
         
         # 观察缓存
         self.latest_obs = None  # 缓存最新的观察
@@ -114,6 +114,14 @@ class VLMNavigationController(InteractiveNavigationController):
     
     def reset_episode(self, episode_id: int = None):
         """重置Episode，包括VLM状态"""
+        # 清理之前episode的输出目录
+        if episode_id is not None:
+            import shutil
+            episode_dir = os.path.join(self.config.RESULTS_DIR, f'episode_{episode_id}')
+            if os.path.exists(episode_dir):
+                print(f"[Reset] 清理旧数据: {episode_dir}")
+                shutil.rmtree(episode_dir)
+        
         # 调用父类重置
         super().reset_episode(episode_id)
         
@@ -129,8 +137,7 @@ class VLMNavigationController(InteractiveNavigationController):
         self.direction_images = {}
         self.latest_map_image = None
         
-        # 重置waypoint管理器
-        self.waypoint_manager.reset()
+        # waypoint已集成到mapper中，mapper.reset()会自动清空
         
         print(f"[Reset] Episode {self.current_episode_id} 重置完成")
         
@@ -211,6 +218,8 @@ class VLMNavigationController(InteractiveNavigationController):
             total_new_classes += new_classes
             
             # 调用visualizer保存所有数据（RGB、检测、全局地图、局部地图）
+            # 自动从mapper获取waypoint并渲染
+            wp_positions, wp_ids = self.mapper.get_waypoints()
             rgb_bgr = cv2.cvtColor(obs[0]['rgb'], cv2.COLOR_RGB2BGR)
             paths, landmarks = self.visualizer.save_step_visualization(
                 step=look_step,
@@ -229,8 +238,27 @@ class VLMNavigationController(InteractiveNavigationController):
                 landmark_config={
                     'min_total_pixels': self.landmark_min_total_pixels,
                     'min_area_threshold': self.landmark_min_area_threshold
-                }
+                },
+                waypoint_positions=wp_positions,
+                waypoint_ids=wp_ids
             )
+            
+            # 保存导航可视化（RGB+俯视图拼接）
+            if self.nav_visualizer:
+                subtask_text = self.current_subtask.get('subtask_instruction', '') if self.current_subtask else f"[环视建图 {phase}]"
+                distance = 0.0
+                if len(outputs) > 0 and len(outputs[3]) > 0:  # infos
+                    distance = outputs[3][0].get('distance_to_goal', 0.0)
+                
+                self.nav_visualizer.save_step_visualization(
+                    observations=obs[0],
+                    info=outputs[3][0] if len(outputs) > 0 and len(outputs[3]) > 0 else {},
+                    step=look_step,
+                    instruction=self.current_instruction,
+                    current_subtask=subtask_text,
+                    distance=distance,
+                    action=f"TURN_LEFT (360°环视 {i}/12)"
+                )
             
             if new_classes > 0:
                 print(f" +{new_classes}类")
@@ -238,12 +266,12 @@ class VLMNavigationController(InteractiveNavigationController):
                 print()
             
             # 保存所有12张环视图像（用于后续合成全景图）
-            rgb_bgr = cv2.cvtColor(obs[0]['rgb'], cv2.COLOR_RGB2BGR)
             lookaround_images.append(rgb_bgr.copy())
         
-        # 环视建图完成，恢复轨迹（current_step保持为12，后续导航从13开始）
+        # 环视建图完成，恢复轨迹（current_step保持为12，后续action从13开始）
         self.mapper.trajectory_points = saved_trajectory
-        self.current_step = 12  # 环视完成后停在step-12
+        # 环视结束后，current_step已经累加到12
+        # 下一个真正的action将从step 13开始（在step_with_vlm中累加）
         
         # 缓存最后的观察（step 12，回到正前方）
         self.latest_obs = obs[0]
@@ -378,18 +406,8 @@ class VLMNavigationController(InteractiveNavigationController):
             print(f"✗ Global map not found: {global_map}")
             return None
         
-        # 创建带waypoint标注的地图副本
+        # 地图已包含waypoint标记（在visualizer.save_step_visualization中渲染）
         global_map_for_llm = global_map
-        if self.waypoint_manager.get_count() > 0:
-            global_map_img = cv2.imread(global_map)
-            global_map_img = self.waypoint_manager.visualize_on_map(
-                global_map_img,
-                self.mapper.trajectory_points if hasattr(self.mapper, 'trajectory_points') else []
-            )
-            # 保存带waypoint的地图到global_map目录
-            episode_dir = os.path.join(self.config.RESULTS_DIR, f"episode_{self.current_episode_id}")
-            global_map_for_llm = os.path.join(episode_dir, 'global_map', 'initial_with_waypoints.png')
-            cv2.imwrite(global_map_for_llm, global_map_img)
         
         # 调用LLM生成初始子任务
         response = self.planner.generate_initial_subtask(
@@ -405,8 +423,9 @@ class VLMNavigationController(InteractiveNavigationController):
             return None
         
         # 记录thinking输出（包含输入图片和prompt）
+        # 此时current_step=12（环视完成），规划在step 12之后完成
         thinking_record = {
-            "step": self.current_step,
+            "step": self.current_step,  # 12
             "phase": "initial_planning",
             "subtask_count": self.subtask_count + 1,
             "prompt_type": "initial",
@@ -439,11 +458,14 @@ class VLMNavigationController(InteractiveNavigationController):
             'step': self.current_step
         }
         
-        # 创建路径点记录（空间记忆）
+        # 在mapper中添加waypoint（自动计算地图坐标）
         waypoint_desc = response.get('waypoint', 'Unknown location')
-        self.waypoint_manager.add_waypoint(waypoint_desc)
+        waypoint_id = self.mapper.add_waypoint(waypoint_desc)
+        
+        # 保存waypoint摘要（用于后续LLM提示词）
+        waypoint_summary = self._get_waypoint_summary()
         self.save_manager.save_waypoint_memory(
-            self.waypoint_manager.get_memory(),
+            waypoint_summary,
             self.current_instruction,
             self.current_step
         )
@@ -482,10 +504,12 @@ class VLMNavigationController(InteractiveNavigationController):
         验证当前子任务并重新规划
         
         流程：
-        1. 执行360°环视建图（更新语义地图）
+        1. 执行360°环视建图（更新语义地图）- 占用12个step
         2. 生成当前位置的4方向全景图
         3. 调用LLM验证子任务完成状态
         4. 如未完成，生成新子任务
+        
+        注意：重新扫描会占用新的12个step，验证完成后下一个action继续累加
         
         Returns:
             (is_completed, new_subtask)
@@ -493,9 +517,9 @@ class VLMNavigationController(InteractiveNavigationController):
         if not self.planner or not self.current_subtask:
             return False, None
         
-        # 重新执行环视建图并生成全景图
+        # 重新执行环视建图并生成全景图（占用12个step）
         phase = f"verify_{self.subtask_count}"
-        print(f"\n[验证] 重新环视以验证子任务完成状态...")
+        print(f"\n[验证] 重新环视以验证子任务完成状态（step {self.current_step + 1}-{self.current_step + 12}）...")
         image_paths, direction_names = self.look_around_and_collect(phase)
         
         if not image_paths:
@@ -509,23 +533,14 @@ class VLMNavigationController(InteractiveNavigationController):
             print(f"✗ Global map not found: {global_map}")
             return False, None
         
-        # 创建带waypoint标注的地图副本
+        # 地图已包含waypoint标记（在visualizer.save_step_visualization中渲染）
         global_map_for_llm = global_map
-        if self.waypoint_manager.get_count() > 0:
-            global_map_img = cv2.imread(global_map)
-            global_map_img = self.waypoint_manager.visualize_on_map(
-                global_map_img,
-                self.mapper.trajectory_points if hasattr(self.mapper, 'trajectory_points') else []
-            )
-            # 保存带waypoint的地图
-            global_map_for_llm = os.path.join(episode_dir, 'global_map', f'verify_{last_saved_step}_with_waypoints.png')
-            cv2.imwrite(global_map_for_llm, global_map_img)
         
         # 获取已检测到的landmark类别
         detected_landmarks = list(self.detected_classes) if hasattr(self, 'detected_classes') else []
         
-        # 获取路径点历史记录
-        waypoint_summary = self.waypoint_manager.get_summary()
+        # 获取waypoint摘要
+        waypoint_summary = self._get_waypoint_summary()
         
         # 调用LLM验证（全局地图必需，局部地图可选，传递实际检测到的类别）
         response, is_completed = self.planner.verify_and_replan(
@@ -546,8 +561,9 @@ class VLMNavigationController(InteractiveNavigationController):
             return False, None
         
         # 记录thinking输出（包含输入图片和prompt）
+        # 此时current_step已经是验证扫描完成后的step（+12）
         thinking_record = {
-            "step": self.current_step,
+            "step": self.current_step,  # 验证扫描完成后的step
             "phase": f"verify_subtask_{self.subtask_count}",
             "subtask_count": self.subtask_count + (1 if is_completed and not response.get('is_final_subtask', False) else 0),
             "prompt_type": "verification",
@@ -667,12 +683,9 @@ class VLMNavigationController(InteractiveNavigationController):
                 return None, None, True
             obs = obs[0]
         
-        # 使用上一步保存的图像（当前步图像要等step()执行后才会保存）
-        episode_dir = os.path.join(
-            self.config.RESULTS_DIR, 
-            f'episode_{self.current_episode_id}'
-        )
-        last_step = self.current_step - 1  # 上一步已保存的文件
+        # 获取最新保存的观察信息
+        # 上一步已保存的文件（如果current_step=13，则读取step-12的地图）
+        last_step = self.current_step  # execute_action在step执行前调用，所以用current_step
         fp_image = os.path.join(episode_dir, 'rgb', f'step-{last_step}.png')
         
         # 如果rgb/中的图像还不存在，用当前观察创建临时文件
@@ -725,14 +738,15 @@ class VLMNavigationController(InteractiveNavigationController):
             return None, None, True, 1
         
         # 记录action输出（包含输入图片和prompt）
+        # step记录即将执行的action的步数（例如：当前step=12，下一个action将在step 13执行）
         action_record = {
-            "step": self.current_step,
+            "step": self.current_step + 1,  # 即将执行的action的step
             "subtask_count": self.subtask_count,
             "action_name": action_name,
             "action_id": action_id,
             "response": response,
             "timestamp": datetime.now().isoformat(),
-            # 保存输入图片路径
+            # 保存输入图片路径（使用当前step的图像作为决策依据）
             "input_images": {
                 "rgb.jpg": fp_image,
                 "detection.jpg": detection_image,
@@ -749,7 +763,7 @@ class VLMNavigationController(InteractiveNavigationController):
             "subtask_id": self.subtask_count,
             "subtask_destination": self.current_subtask.get('subtask_destination', ''),
             "subtask_instruction": self.current_subtask.get('subtask_instruction', ''),
-            "start_step": self.current_step,  # 记录子任务开始的步数
+            "start_step": self.current_step,  # 子任务开始时的step（决策前）
             "timestamp": datetime.now().isoformat()
         }
         self.save_manager.save_action(action_record, subtask_info)
@@ -833,16 +847,16 @@ class VLMNavigationController(InteractiveNavigationController):
         print(f"最大步数: {max_steps} | 子任务步数: {max_subtask_steps} | 验证间隔: {verify_interval}")
         print("="*60 + "\n")
         
-        # 1. 环视建图 + 收集观察
+        # 1. 环视建图 + 收集观察（占用step 1-12）
         self.look_around_and_collect()
         
-        # 2. 生成初始子任务
+        # 2. 生成初始子任务（在step 12完成，下一个action从step 13开始）
         subtask = self.generate_initial_subtask()
         if not subtask:
             print("✗ 初始子任务生成失败")
             return {
                 'success': False,
-                'total_steps': self.current_step,
+                'total_steps': self.current_step,  # 12
                 'subtask_count': 0,
                 'detected_classes': list(self.detected_classes) if hasattr(self, 'detected_classes') else [],
                 'gif_path': None,
@@ -1022,28 +1036,36 @@ class VLMNavigationController(InteractiveNavigationController):
         print(f"Global Instruction: {self.current_instruction}")
         print(json.dumps(response, indent=2, ensure_ascii=False))
         print(f"{'='*50}\n")
-    # ========== 向后兼容的方法（调用manager） ==========
+    
+    # ========== Waypoint辅助方法 ==========
+    
+    def _get_waypoint_summary(self) -> str:
+        """获取waypoint摘要（用于LLM提示词）"""
+        wp_pos, wp_ids = self.mapper.get_waypoints()
+        if len(wp_ids) == 0:
+            return ""
+        
+        # 根据waypoint ID生成摘要
+        summary_lines = []
+        for wp_id in wp_ids:
+            summary_lines.append(f"#{wp_id}")
+        
+        return "\n".join(summary_lines)
     
     def add_waypoint(self, waypoint_description: str, position: np.ndarray = None) -> int:
-        """添加waypoint（调用waypoint_manager）"""
-        waypoint_id = self.waypoint_manager.add_waypoint(waypoint_description)
-        self.save_manager.save_waypoint_memory(
-            self.waypoint_manager.get_memory(),
-            self.current_instruction,
-            self.current_step
-        )
-        return waypoint_id
+        """添加waypoint（已废弃，直接使用mapper.add_waypoint）"""
+        return self.mapper.add_waypoint(waypoint_description)
     
     def get_waypoint_summary(self) -> str:
-        """获取waypoint摘要（调用waypoint_manager）"""
-        return self.waypoint_manager.get_summary()
+        """获取waypoint摘要（已废弃，使用_get_waypoint_summary）"""
+        return self._get_waypoint_summary()
     
     def visualize_waypoints_on_map(self, map_image: np.ndarray) -> np.ndarray:
-        """在地图上可视化waypoint（调用waypoint_manager）"""
-        return self.waypoint_manager.visualize_on_map(
-            map_image,
-            self.mapper.trajectory_points if hasattr(self.mapper, 'trajectory_points') else []
-        )
+        """在地图上可视化waypoint（已废弃，visualizer自动渲染）"""
+        return map_image
+    
+    # ========== 原有方法 ==========
+
     
     def _create_panorama_from_3_images(self, images: List[np.ndarray]) -> np.ndarray:
         """
