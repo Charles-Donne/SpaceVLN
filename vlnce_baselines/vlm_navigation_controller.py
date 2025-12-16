@@ -442,8 +442,8 @@ class VLMNavigationController(InteractiveNavigationController):
                 "back.jpg": image_paths[2] if len(image_paths) > 2 else None,
                 "right.jpg": image_paths[3] if len(image_paths) > 3 else None,
             },
-            # 保存prompt（后续从planner获取）
-            "prompt": f"Instruction: {self.current_instruction}\nDirection Names: {direction_names}"
+            # 保存完整的prompt文本
+            "prompt": response.get('_full_prompt', f"Instruction: {self.current_instruction}\nDirection Names: {direction_names}")
         }
         self.thinking_outputs.append(thinking_record)
         self.save_manager.save_thinking(thinking_record)
@@ -582,8 +582,8 @@ class VLMNavigationController(InteractiveNavigationController):
                 "back.jpg": image_paths[2] if len(image_paths) > 2 else None,
                 "right.jpg": image_paths[3] if len(image_paths) > 3 else None,
             },
-            # 保存prompt关键信息
-            "prompt": f"Instruction: {self.current_instruction}\nCurrent Subtask: {self.current_subtask.get('subtask_instruction', '')}\nDetected Landmarks: {detected_landmarks}\nWaypoint Summary: {waypoint_summary}"
+            # 保存完整的prompt文本
+            "prompt": response.get('_full_prompt', f"Instruction: {self.current_instruction}\nCurrent Subtask: {self.current_subtask.get('subtask_instruction', '')}\nDetected Landmarks: {detected_landmarks}\nWaypoint Summary: {waypoint_summary}")
         }
         self.thinking_outputs.append(thinking_record)
         self.save_manager.save_thinking(thinking_record)
@@ -786,8 +786,8 @@ class VLMNavigationController(InteractiveNavigationController):
                 "local_map.png": local_map,
                 "global_map.png": self.latest_global_map if self.latest_global_map and os.path.exists(self.latest_global_map) else None,
             },
-            # 保存prompt关键信息
-            "prompt": f"Subtask: {self.current_subtask.get('subtask_instruction', '')}\nProgress: {self.progress_summary}\nDetected: {detected_landmarks}"
+            # 保存完整的prompt文本
+            "prompt": response.get('_full_prompt', f"Subtask: {self.current_subtask.get('subtask_instruction', '')}\nProgress: {self.progress_summary}\nDetected: {detected_landmarks}")
         }
         self.action_outputs.append(action_record)
         

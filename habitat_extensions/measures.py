@@ -592,49 +592,52 @@ class TopDownMapVLNCE(Measure):
 
         point_padding = int(0.2 / self._meters_per_pixel)
         prev_nearest_node = self._nearest_node
-        self._nearest_node = maps.update_nearest_node(
-            self._conn_graphs[self._scene_id],
-            self._nearest_node,
-            np.take(agent_position, (0, 2)),
-        )
-        if (
-            self._nearest_node != prev_nearest_node
-            and self._config.DRAW_MP3D_AGENT_PATH
-        ):
-            nn_position = self._conn_graphs[self._scene_id].nodes[
-                self._nearest_node
-            ]["position"]
-            (prev_s_x, prev_s_y) = (self.s_x, self.s_y)
-            self.s_x, self.s_y = habitat_maps.to_grid(
-                nn_position[2],
-                nn_position[0],
-                self._top_down_map.shape[0:2],
-                self._sim,
+        
+        # 仅在connectivity graphs可用时更新最近节点
+        if self._conn_graphs is not None:
+            self._nearest_node = maps.update_nearest_node(
+                self._conn_graphs[self._scene_id],
+                self._nearest_node,
+                np.take(agent_position, (0, 2)),
             )
-            self._top_down_map[
-                self.s_x
-                - int(2.0 / 3.0 * point_padding) : self.s_x
-                + int(2.0 / 3.0 * point_padding)
-                + 1,
-                self.s_y
-                - int(2.0 / 3.0 * point_padding) : self.s_y
-                + int(2.0 / 3.0 * point_padding)
-                + 1,
-            ] = gradient_color
+            if (
+                self._nearest_node != prev_nearest_node
+                and self._config.DRAW_MP3D_AGENT_PATH
+            ):
+                nn_position = self._conn_graphs[self._scene_id].nodes[
+                    self._nearest_node
+                ]["position"]
+                (prev_s_x, prev_s_y) = (self.s_x, self.s_y)
+                self.s_x, self.s_y = habitat_maps.to_grid(
+                    nn_position[2],
+                    nn_position[0],
+                    self._top_down_map.shape[0:2],
+                    self._sim,
+                )
+                self._top_down_map[
+                    self.s_x
+                    - int(2.0 / 3.0 * point_padding) : self.s_x
+                    + int(2.0 / 3.0 * point_padding)
+                    + 1,
+                    self.s_y
+                    - int(2.0 / 3.0 * point_padding) : self.s_y
+                    + int(2.0 / 3.0 * point_padding)
+                    + 1,
+                ] = gradient_color
 
-            maps.drawline(
-                self._top_down_map,
-                (prev_s_y, prev_s_x),
-                (self.s_y, self.s_x),
-                gradient_color,
-                thickness=int(
-                    1.0
-                    / 2.0
-                    * np.round(
-                        self._config.MAP_RESOLUTION / maps.MAP_THICKNESS_SCALAR
-                    )
-                ),
-            )
+                maps.drawline(
+                    self._top_down_map,
+                    (prev_s_y, prev_s_x),
+                    (self.s_y, self.s_x),
+                    gradient_color,
+                    thickness=int(
+                        1.0
+                        / 2.0
+                        * np.round(
+                            self._config.MAP_RESOLUTION / maps.MAP_THICKNESS_SCALAR
+                        )
+                    ),
+                )
 
         self._previous_xy_location = (a_y, a_x)
         map_agent_pos = (a_x, a_y)

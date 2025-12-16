@@ -99,6 +99,11 @@ class LLMPlanner(BaseAPIClient):
             print(f"  📍 Images: 4 directions + Global map")
         
         response = self.call_api(prompt, images)
+        
+        # 返回response和完整的prompt（用于记录）
+        if response:
+            response['_full_prompt'] = prompt  # 添加完整prompt到响应中
+        
         return response
     
     def verify_and_replan(self,
@@ -164,6 +169,8 @@ class LLMPlanner(BaseAPIClient):
         response = self.call_api(prompt, images)
         
         if response and self.validate_response(response, mode='verify'):
+            # 添加完整prompt到响应中
+            response['_full_prompt'] = prompt
             is_completed = response.get('is_completed', False)
             return response, is_completed
         
