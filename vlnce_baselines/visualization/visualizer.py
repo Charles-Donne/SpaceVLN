@@ -515,7 +515,7 @@ class MapVisualizer:
                     cv2.circle(local_map, 
                               (int(local_x), int(local_y)), 
                               local_landmark_radius, 
-                              landmark_marker_border, 2)
+                              landmark_marker_border, 1)
         
         # ===== 阶段10: 最终裁剪到400×400 =====
         local_map_cropped = local_map[40:440, 40:440].copy()
@@ -573,7 +573,7 @@ class MapVisualizer:
             x1, y1, x2, y2 = map(int, bbox)
             cv2.rectangle(detection_vis, (x1, y1), (x2, y2), color, thickness)
             
-            # 准备标签文本（Landmark专属）
+            # 准备标签文本（Landmark专属，主流标注风格：框下方显示）
             text = f"{label_name} {confidence:.2f}"
             font = cv2.FONT_HERSHEY_SIMPLEX
             font_scale = 0.6
@@ -582,15 +582,15 @@ class MapVisualizer:
             # 计算文本尺寸
             (text_w, text_h), baseline = cv2.getTextSize(text, font, font_scale, font_thickness)
             
-            # 画标签背景（黄色）
+            # 画标签背景（黄色，在框下方）
             cv2.rectangle(detection_vis, 
-                         (x1, y1 - text_h - baseline - 5), 
-                         (x1 + text_w + 5, y1), 
+                         (x1, y2), 
+                         (x1 + text_w + 5, y2 + text_h + baseline + 5), 
                          color, -1)
             
-            # 画标签文字（黑色，清晰易读）
+            # 画标签文字（黑色，清晰易读，在框下方）
             cv2.putText(detection_vis, text, 
-                       (x1 + 2, y1 - baseline - 2),
+                       (x1 + 2, y2 + text_h + baseline),
                        font, font_scale, (0, 0, 0), font_thickness)
         
         # 静默处理，不输出检测统计

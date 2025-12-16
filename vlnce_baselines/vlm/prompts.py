@@ -74,7 +74,7 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 
 ## Example 1: Instruction "Turn around and enter the exercise room"
 {{
-    "waypoint": "Bathroom(Current) - near door to exercise room on left",
+    "waypoint": "Bathroom - beside exercise room door",
     "waypoint_sequence": "Bathroom(Current) → Exercise Room Entrance → Exercise Room Center(Goal)",
     "subtask_destination": "exercise room entrance",
     "subtask_instruction": "Turn left 90° to face the open doorway, then move forward 0.5m to enter exercise room",
@@ -90,7 +90,7 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 
 ## Example 2: Instruction "Go back to the kitchen and find the microwave"
 {{
-    "waypoint": "Living Room(Current) - kitchen entrance visible at Back-Left 120°, chair behind",
+    "waypoint": "Living Room - near kitchen entrance and chair",
     "waypoint_sequence": "Living Room(Current) → Kitchen Entrance → Microwave(Goal)",
     "subtask_destination": "kitchen entrance",
     "subtask_instruction": "Turn left 120° to face kitchen entrance behind, move forward 1.5m to enter kitchen",
@@ -204,7 +204,7 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 
 {{
     "is_completed": true,
-    "waypoint": "Doorway(Current) - between bedroom and hallway",
+    "waypoint": "Doorway - between bedroom and hallway",
     "current_observation": "Standing at bedroom doorway. Hallway with walls on both sides extends ahead toward kitchen.",
     "waypoint_sequence": "Bedroom(✓) → Doorway(Current) → Hallway → Kitchen Entrance(Goal)",
     "subtask_destination": "hallway midpoint",
@@ -226,7 +226,7 @@ es, no obstacles blocking path. Task requires reaching kitchen entrance at hallw
 
 {{
     "is_completed": true,
-    "waypoint": "Kitchen Center(Current) - refrigerator at Front-Left 30°, counter at Right 270°",
+    "waypoint": "Kitchen Center - between refrigerator and counter",
     "current_observation": "Standing in kitchen center. Refrigerator visible at Front-Left 30° with counter and appliances at Right 270°.",
     "waypoint_sequence": "Bedroom(✓) → Doorway(✓) → Hallway(✓) → Kitchen Center(Current) → Refrigerator(Goal)",
     "subtask_destination": "refrigerator in kitchen",

@@ -228,8 +228,8 @@ class VLMNavigationController(InteractiveNavigationController):
             total_new_classes += new_classes
             
             # 调用visualizer保存所有数据（RGB、检测、全局地图、局部地图）
-            # 自动从mapper获取waypoint并渲染
-            wp_positions, wp_ids = self.mapper.get_waypoints()
+            # 自动从mapper获取waypoint并渲染（忽略descriptions，可视化不需要）
+            wp_positions, wp_ids, _ = self.mapper.get_waypoints()
             rgb_bgr = cv2.cvtColor(obs[0]['rgb'], cv2.COLOR_RGB2BGR)
             paths, landmarks = self.visualizer.save_step_visualization(
                 step=look_step,
@@ -1044,14 +1044,14 @@ class VLMNavigationController(InteractiveNavigationController):
     
     def _get_waypoint_summary(self) -> str:
         """获取waypoint摘要（用于LLM提示词）"""
-        wp_pos, wp_ids = self.mapper.get_waypoints()
+        wp_pos, wp_ids, wp_descs = self.mapper.get_waypoints()
         if len(wp_ids) == 0:
             return ""
         
-        # 根据waypoint ID生成摘要
+        # 根据waypoint ID和描述生成摘要
         summary_lines = []
-        for wp_id in wp_ids:
-            summary_lines.append(f"#{wp_id}")
+        for wp_id, wp_desc in zip(wp_ids, wp_descs):
+            summary_lines.append(f"#{wp_id}: {wp_desc}")
         
         return "\n".join(summary_lines)
     

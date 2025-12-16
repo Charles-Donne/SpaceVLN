@@ -48,6 +48,7 @@ class SemanticMapper:
         # Waypoint管理（与轨迹系统集成）
         self.waypoint_positions = []  # [(map_x, map_y), ...] waypoint的地图坐标
         self.waypoint_ids = []  # [1, 2, 3, ...] 对应的waypoint ID
+        self.waypoint_descriptions = []  # ["desc1", "desc2", ...] 对应的waypoint描述
         self.waypoint_counter = 0  # waypoint计数器
         
         # 地图缓存
@@ -60,6 +61,7 @@ class SemanticMapper:
         self.trajectory_points = []  # 清空轨迹点列表
         self.waypoint_positions = []  # 清空waypoint位置
         self.waypoint_ids = []  # 清空waypoint ID
+        self.waypoint_descriptions = []  # 清空waypoint描述
         self.waypoint_counter = 0  # 重置计数器
         self.floor = np.zeros(self.map_shape)
         self.full_map = None
@@ -274,25 +276,28 @@ class SemanticMapper:
         # 保存waypoint
         self.waypoint_positions.append((map_x, map_y))
         self.waypoint_ids.append(waypoint_id)
+        self.waypoint_descriptions.append(description)
         
         print(f"  📍 Waypoint #{waypoint_id} @ ({map_x}, {map_y}) - {description}")
         
         return waypoint_id
     
-    def get_waypoints(self) -> Tuple[List[Tuple[int, int]], List[int]]:
+    def get_waypoints(self) -> Tuple[List[Tuple[int, int]], List[int], List[str]]:
         """
-        获取所有waypoint的位置和ID
+        获取所有waypoint的位置、ID和描述
         
         Returns:
             positions: [(map_x, map_y), ...] 地图坐标列表
             ids: [1, 2, 3, ...] waypoint ID列表
+            descriptions: ["desc1", "desc2", ...] waypoint描述列表
         """
-        return self.waypoint_positions, self.waypoint_ids
+        return self.waypoint_positions, self.waypoint_ids, self.waypoint_descriptions
     
     def clear_waypoints(self):
         """清空所有waypoint"""
         self.waypoint_positions = []
         self.waypoint_ids = []
+        self.waypoint_descriptions = []
         self.waypoint_counter = 0
     
     def get_waypoint_count(self) -> int:

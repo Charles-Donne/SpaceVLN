@@ -128,8 +128,8 @@ class InteractiveNavigationController:
             if new_classes > 0:
                 print(f"\r  [{step+1}/12] +{new_classes}类", end="", flush=True)
             
-            # 获取waypoint数据
-            wp_positions, wp_ids = self.mapper.get_waypoints()
+            # 获取waypoint数据（忽略descriptions，可视化不需要）
+            wp_positions, wp_ids, _ = self.mapper.get_waypoints()
             rgb_bgr = cv2.cvtColor(obs[0]['rgb'], cv2.COLOR_RGB2BGR)
             _, landmarks = self.visualizer.save_step_visualization(
                 step=step,
@@ -198,8 +198,8 @@ class InteractiveNavigationController:
         print(f" +{new_classes}类" if new_classes > 0 else "")
         
         if save_vis:
-            # 获取waypoint数据
-            wp_positions, wp_ids = self.mapper.get_waypoints()
+            # 获取waypoint数据（忽略descriptions，可视化不需要）
+            wp_positions, wp_ids, _ = self.mapper.get_waypoints()
             rgb_bgr = cv2.cvtColor(obs[0]['rgb'], cv2.COLOR_RGB2BGR)
             _, landmarks = self.visualizer.save_step_visualization(
                 step=self.current_step,
