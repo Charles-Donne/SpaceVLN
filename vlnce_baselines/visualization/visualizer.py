@@ -204,6 +204,14 @@ class MapVisualizer:
             # ===== 阶段5.5: 叠加黑色障碍物层（在轨迹之后、箭头之前）=====
             # 创建障碍物掩码并叠加到已渲染的地图上
             obstacle_mask_display = obstacle_map > 0.5
+            # ⚠️ 关键修复：障碍物也需要flipud翻转，与semantic_map保持一致
+            obstacle_mask_display = np.flipud(obstacle_mask_display)
+            # 缩放到480x480
+            obstacle_mask_display = cv2.resize(
+                obstacle_mask_display.astype(np.uint8) * 255,
+                (480, 480),
+                interpolation=cv2.INTER_NEAREST
+            ) > 127
             # 转换到旋转后的坐标系
             obstacle_mask_rotated = cv2.warpAffine(
                 obstacle_mask_display.astype(np.uint8) * 255,
@@ -440,9 +448,17 @@ class MapVisualizer:
                 fov_outline_color, fov_outline_thickness)
         
         # ===== 阶段7: 叠加黑色障碍物层（在FOV之后、箭头之前）=====
+        # ⚠️ 关键修复：障碍物也需要flipud翻转，与semantic_map保持一致
+        obstacle_mask_flipped = np.flipud(obstacle_map > 0.5)
+        # 缩放到480x480
+        obstacle_mask_resized = cv2.resize(
+            obstacle_mask_flipped.astype(np.uint8) * 255,
+            (480, 480),
+            interpolation=cv2.INTER_NEAREST
+        ) > 127
         # 转换障碍物掩码到旋转后的坐标系
         obstacle_mask_rotated = cv2.warpAffine(
-            (obstacle_map > 0.5).astype(np.uint8) * 255,
+            obstacle_mask_resized.astype(np.uint8) * 255,
             rotation_matrix, (480, 480),
             flags=cv2.INTER_NEAREST
         ) > 127
