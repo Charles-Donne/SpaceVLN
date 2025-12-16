@@ -105,9 +105,9 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 
 4. **STOP CONDITIONS** - Only STOP when ALL met:
    - Completed key actions in sub-instruction
-   - Destination landmark visible in RGB + detected in IMAGE 2 + within <0.5m
-   - Orange trajectory on map confirms arrival at destination area
-   - Must have moved (verify via progress & trajectory)
+   - Destination landmark detected in IMAGE 2 + within <0.5m + visible in FRONT RGB view (maximized proximity before stop)
+   - Facing toward subtask destination (landmark in FRONT view, NOT left/right/back) AND arrived at destination area
+   - Must have moved - orange trajectory on map confirms arrival at destination area
 
 5. **ACTION PARAMETERS**:
    - Specify degrees (30-180) for TURN | meters (0.25-1.5) for MOVE_FORWARD

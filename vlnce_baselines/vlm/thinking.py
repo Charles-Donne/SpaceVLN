@@ -167,14 +167,6 @@ class LLMPlanner(BaseAPIClient):
             print(f"  📍 Images: 4 directions (updated) + Global map")
         
         response = self.call_api(prompt, images)
-        images = observation_images.copy()
-        if map_image:
-            images.append(map_image)
-            print(f"  📍 Images: 4 directions (updated) + Global map (with trajectory)")
-        else:
-            print(f"  📍 Images: 4 directions only")
-        
-        response = self.call_api(prompt, images)
         
         if response and self.validate_response(response, mode='verify'):
             is_completed = response.get('is_completed', False)
