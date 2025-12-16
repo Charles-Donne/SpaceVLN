@@ -101,8 +101,17 @@ class ActionExecutor(BaseAPIClient):
         action_id = action_mapping[action_name]
         updated_progress = response['progress_summary']
         
+        # 提取degrees/meters参数（用于计算重复次数）
+        degrees = response.get('degrees', 0) if action_name in ['TURN_LEFT', 'TURN_RIGHT'] else 0
+        meters = response.get('meters', 0) if action_name == 'MOVE_FORWARD' else 0
+        
         # 打印推理过程
         print(f"Reasoning: {response['reasoning']}")
-        print(f"Action: {action_name}")
+        if action_name == 'TURN_LEFT' or action_name == 'TURN_RIGHT':
+            print(f"Action: {action_name} {degrees}°")
+        elif action_name == 'MOVE_FORWARD':
+            print(f"Action: {action_name} {meters}m")
+        else:
+            print(f"Action: {action_name}")
         
-        return action_id, action_name, updated_progress, response
+        return action_id, action_name, updated_progress, response, degrees, meters

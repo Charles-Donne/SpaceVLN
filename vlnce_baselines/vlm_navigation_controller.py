@@ -637,12 +637,12 @@ class VLMNavigationController(InteractiveNavigationController):
         
         return is_completed, response
     
-    def execute_action_with_vlm(self) -> Tuple[Optional[int], Optional[str], bool]:
+    def execute_action_with_vlm(self) -> Tuple[Optional[int], Optional[str], bool, int]:
         """
         使用VLM决策并执行动作
         
         Returns:
-            (action_id, action_name, should_stop)
+            (action_id, action_name, should_stop, repeat_count)
         """
         if not self.action_executor or not self.current_subtask:
             return None, None, True
@@ -702,7 +702,7 @@ class VLMNavigationController(InteractiveNavigationController):
         detected_landmarks = ', '.join(self.detected_classes) if hasattr(self, 'detected_classes') and self.detected_classes else None
         
         # 调用VLM决策
-        action_id, action_name, updated_progress, response = self.action_executor.decide_action(
+        result = self.action_executor.decide_action(
             subtask_destination=self.current_subtask.get('subtask_destination', ''),
             subtask_instruction=self.current_subtask.get('subtask_instruction', ''),
             first_person_image=fp_image,
@@ -713,9 +713,16 @@ class VLMNavigationController(InteractiveNavigationController):
             detected_landmarks=detected_landmarks
         )
         
+        if len(result) == 6:
+            action_id, action_name, updated_progress, response, degrees, meters = result
+        else:
+            # 兼容旧版本返回（没有degrees/meters）
+            action_id, action_name, updated_progress, response = result
+            degrees, meters = 0, 0
+        
         if action_id is None:
             print("✗ VLM决策失败")
-            return None, None, True
+            return None, None, True, 1
         
         # 记录action输出（包含输入图片和prompt）
         action_record = {
@@ -753,7 +760,18 @@ class VLMNavigationController(InteractiveNavigationController):
         # 检查是否停止
         should_stop = (action_name == "STOP")
         
-        return action_id, action_name, should_stop
+        # 计算需要重复执行的次数
+        repeat_count = 1
+        if action_name == 'TURN_LEFT' or action_name == 'TURN_RIGHT':
+            # 每次转30度，计算需要转几次
+            if degrees > 0:
+                repeat_count = max(1, round(degrees / self.action_executor.turn_angle))
+        elif action_name == 'MOVE_FORWARD':
+            # 每次移动0.25m，计算需要移动几次
+            if meters > 0:
+                repeat_count = max(1, round(meters / self.action_executor.move_distance))
+        
+        return action_id, action_name, should_stop, repeat_count
     
     def step_with_vlm(self, action: int, action_name: str = "", save_vis: bool = True) -> Dict[str, Any]:
         """
@@ -839,13 +857,14 @@ class VLMNavigationController(InteractiveNavigationController):
         
         while total_steps < max_steps:
             # VLM决策动作
-            action_id, action_name, should_stop = self.execute_action_with_vlm()
+            action_id, action_name, should_stop, repeat_count = self.execute_action_with_vlm()
             
             if action_id is None:
                 print("VLM决策失败，尝试手动输入")
                 action_id = self.get_keyboard_action()
                 action_name = self._action_name(action_id)
                 should_stop = (action_id == 0)
+                repeat_count = 1
             
             # 如果VLM决定停止 → 验证子任务
             if should_stop:
@@ -859,12 +878,26 @@ class VLMNavigationController(InteractiveNavigationController):
                 subtask_steps = 0
                 continue
             
-            # 执行动作（传入action_name用于可视化）
-            result = self.step_with_vlm(action_id, action_name=action_name, save_vis=True)
-            total_steps = self.current_step
-            subtask_steps += 1
+            # 执行动作（可能需要重复多次）
+            for i in range(repeat_count):
+                result = self.step_with_vlm(action_id, action_name=action_name, save_vis=True)
+                total_steps = self.current_step
+                subtask_steps += 1
+                
+                if i == 0 and repeat_count > 1:
+                    print(f"[Step {total_steps}] {action_name} (1/{repeat_count}) | 子任务步数: {subtask_steps}")
+                elif repeat_count > 1:
+                    print(f"[Step {total_steps}] {action_name} ({i+1}/{repeat_count}) | 子任务步数: {subtask_steps}")
+                else:
+                    print(f"[Step {total_steps}] {action_name} | 子任务步数: {subtask_steps}")
+                
+                if result['done']:
+                    print("\nEpisode自动完成")
+                    navigation_complete = True
+                    break
             
-            print(f"[Step {total_steps}] {action_name} | 子任务步数: {subtask_steps}")
+            if navigation_complete:
+                break
             
             if result['done']:
                 print("\nEpisode自动完成")
