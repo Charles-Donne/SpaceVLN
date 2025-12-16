@@ -185,7 +185,7 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
     "subtask_instruction": "<Step-by-step navigation instructions from Front view>",
     "subtask_landmark": "<Single landmark name for map marking>",
     "completion_criteria": {{
-        "landmark_detection": "<What landmark should be detected in 4 views>",
+        "landmark_detection": "<What landmark should be detected in views>",
         "destination_reached": "<Distance/position requirement>",
         "spatial_relationship": "<Trajectory and orientation check on map>"
     }},
@@ -225,7 +225,7 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
     "subtask_instruction": "Turn left 30° to face refrigerator directly, move forward 1.0m to approach refrigerator",
     "subtask_landmark": "refrigerator",
     "completion_criteria": {{
-        "landmark_detection": "refrigerator visible in Front panorama center after turning",
+        "landmark_detection": "refrigerator visible in Front panorama center",
         "destination_reached": "reached refrigerator area, distance to refrigerator < 1.0m",
         "spatial_relationship": "orange trajectory shows left turn and approach to refrigerator on map"
     }},
