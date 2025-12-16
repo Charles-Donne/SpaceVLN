@@ -388,8 +388,24 @@ class TopDownMapVLNCE(Measure):
     ):
         self._sim = sim
         self._config = config
-        with open(self._config.GRAPHS_FILE, "rb") as f:
-            self._conn_graphs = pickle.load(f)
+        
+        # Load connectivity graphs if file exists (optional)
+        # Only needed for DRAW_FIXED_WAYPOINTS and nearest node features
+        self._conn_graphs = None
+        if hasattr(self._config, 'GRAPHS_FILE'):
+            import os
+            if os.path.exists(self._config.GRAPHS_FILE):
+                try:
+                    with open(self._config.GRAPHS_FILE, "rb") as f:
+                        self._conn_graphs = pickle.load(f)
+                except Exception as e:
+                    print(f"⚠️  无法加载connectivity graphs: {e}")
+                    print(f"   文件路径: {self._config.GRAPHS_FILE}")
+                    print(f"   功能受限: DRAW_FIXED_WAYPOINTS和最近节点功能不可用")
+            else:
+                print(f"⚠️  Connectivity graphs文件不存在: {self._config.GRAPHS_FILE}")
+                print(f"   基础俯视图功能仍然可用")
+        
         super().__init__()
 
     def _get_uuid(self, *args: Any, **kwargs: Any) -> str:
@@ -441,7 +457,7 @@ class TopDownMapVLNCE(Measure):
                 ),
             )
 
-        if self._config.DRAW_FIXED_WAYPOINTS:
+        if self._config.DRAW_FIXED_WAYPOINTS and self._conn_graphs is not None:
             maps.draw_mp3d_nodes(
                 self._top_down_map,
                 self._sim,
@@ -479,19 +495,25 @@ class TopDownMapVLNCE(Measure):
                 self._meters_per_pixel,
             )
 
-        # MP3D START NODE
-        self._nearest_node = maps.get_nearest_node(
-            self._conn_graphs[scene_id], np.take(agent_position, (0, 2))
-        )
-        nn_position = self._conn_graphs[self._scene_id].nodes[
-            self._nearest_node
-        ]["position"]
-        self.s_x, self.s_y = habitat_maps.to_grid(
-            nn_position[2],
-            nn_position[0],
-            self._top_down_map.shape[0:2],
-            self._sim,
-        )
+        # MP3D START NODE (optional, requires connectivity graphs)
+        if self._conn_graphs is not None and scene_id in self._conn_graphs:
+            self._nearest_node = maps.get_nearest_node(
+                self._conn_graphs[scene_id], np.take(agent_position, (0, 2))
+            )
+            nn_position = self._conn_graphs[self._scene_id].nodes[
+                self._nearest_node
+            ]["position"]
+            self.s_x, self.s_y = habitat_maps.to_grid(
+                nn_position[2],
+                nn_position[0],
+                self._top_down_map.shape[0:2],
+                self._sim,
+            )
+        else:
+            # Use agent position as fallback
+            self._nearest_node = None
+            self.s_x, self.s_y = a_x, a_y
+        
         self.update_metric(episode, action=None)
 
     def update_metric(self, *args: Any, **kwargs: Any):
