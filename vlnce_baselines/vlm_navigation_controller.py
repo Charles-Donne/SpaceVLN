@@ -616,7 +616,7 @@ class VLMNavigationController(InteractiveNavigationController):
             # 创建路径点记录（空间记忆）
             waypoint_desc = response.get('waypoint', 'Unknown location')
             # 不传position参数，让add_waypoint()从mapper.curr_loc获取正确的地图像素坐标
-            self.add_waypoint(waypoint_desc)
+            waypoint_id = self.mapper.add_waypoint(waypoint_desc)
             
             # 动态更新目标landmark（从instruction中提取所有相关landmark）
             subtask_instruction = response.get('subtask_instruction', '')
