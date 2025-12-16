@@ -13,11 +13,11 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 # Visual Observations
 4 panoramic views (90° FOV each) + 2 top-down maps:
 
-**IMAGE 1 (Front)**: Left portion: Left 30 | Center: Front | Right portion: Right 30
-**IMAGE 2 (Left 90°)**: Left portion: Left 120 | Center: Left 90 | Right portion: Left 30
-**IMAGE 3 (Back 180°)**: Left portion: Right 150 | Center: Back 180 | Right portion: Left 150
-**IMAGE 4 (Right 90°)**: Left portion: Right 30 | Center: Right 90 | Right portion: Right 120
-**IMAGE 5: Global Map** - Full explored area (updated trajectory, waypoints)
+**IMAGE 1 **: Left portion: Left 30 | Center: Front | Right portion: Right 30
+**IMAGE 2 **: Left portion: Left 120 | Center: Left 90 | Right portion: Left 30
+**IMAGE 3 **: Left portion: Right 150 | Center: Back 180 | Right portion: Left 150
+**IMAGE 4 **: Left portion: Right 30 | Center: Right 90 | Right portion: Right 120
+**IMAGE 5: Global Map** - Full explored area
 **IMAGE 6: Local Map** - Nearby region (agent-centered, FOV cone shown)
 
 **Direction Usage**: Use IMAGE number + portion + turn instruction (e.g., "IMAGE 4 right portion: turn right 120°").
@@ -127,11 +127,11 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 # Visual Observations
 4 panoramic views (90° FOV each) + 2 top-down maps:
 
-**IMAGE 1 (Front)**: Left portion: Left 30 | Center: Front | Right portion: Right 30
-**IMAGE 2 (Left 90°)**: Left portion: Left 120 | Center: Left 90 | Right portion: Left 30
-**IMAGE 3 (Back 180°)**: Left portion: Right 150 | Center: Back 180 | Right portion: Left 150
-**IMAGE 4 (Right 90°)**: Left portion: Right 30 | Center: Right 90 | Right portion: Right 120
-**IMAGE 5: Global Map** - Full explored area (updated trajectory, waypoints)
+**IMAGE 1 **: Left portion: Left 30 | Center: Front | Right portion: Right 30
+**IMAGE 2 **: Left portion: Left 120 | Center: Left 90 | Right portion: Left 30
+**IMAGE 3 **: Left portion: Right 150 | Center: Back 180 | Right portion: Left 150
+**IMAGE 4 **: Left portion: Right 30 | Center: Right 90 | Right portion: Right 120
+**IMAGE 5: Global Map** - Full explored area (updated trajectory, waypoints, landmarks)
 **IMAGE 6: Local Map** - Nearby region (agent-centered, FOV cone shown)
 
 **Direction Usage**: Use IMAGE number + portion + turn instruction (e.g., "IMAGE 4 right portion: turn right 120°").

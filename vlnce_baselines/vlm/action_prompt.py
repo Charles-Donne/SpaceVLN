@@ -8,91 +8,79 @@
 - MOVE_FORWARD: 0.25m
 """
 
-ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Analyze environment and decide next action to complete this sub-task.
+ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the sub-instruction guidance while adapting to actual environment.
 
 # Current Sub-Task
 **Sub-Destination**: {subtask_destination}
 **Sub-Instruction**: {subtask_instruction}
+**Progress**: {progress_summary}
 
-# Progress Summary
-{progress_summary}
+# Visual Inputs (Analyze Together)
 
-# Visual Observations
+**IMAGE 1 - RGB View**: Environment, landmarks, obstacles
+**IMAGE 2 - Detection**: Landmark identification: {detected_landmarks}
+**IMAGE 3 - Local Map**: Spatial layout guide
+- **Red arrow**: Your position & facing (Front = up)
+- **Purple markers**: Destination landmarks
+- **Black**: Obstacles - **MUST AVOID**
+- **Green/White**: Safe paths
+- **Orange line**: Trajectory history
+- **Blue arc**: Current field of view
 
-**3 Images Provided**:
-- **IMAGE 1**: First-person RGB view - observe environment, landmarks, spatial layout
-- **IMAGE 2**: Object detection with bounding boxes - identify landmarks: {detected_landmarks}
-- **IMAGE 3**: Local semantic map - spatial relationships, obstacles, path planning
+# Execution Strategy
 
-**Use all 3 images together**: RGB shows what you see, detection identifies objects, map shows spatial layout.
+**Follow sub-instruction to complete key actions (turn/move/stop)**, BUT:
+1. **Adapt parameters**: Fine-tune angles/distances based on map and RGB - not rigidly bound to exact values
+2. **Avoid obstacles**: NEVER move into black areas - detour if instruction path blocked
+3. **Adjust as needed**: If action result incorrect, make corrective adjustments immediately
 
-# Local Map Guide
+**Decision Priority**: Complete key action → Obstacle avoidance → Parameter refinement
 
-**Orientation**: Top = Front, map rotates with agent, agent at center
+# Actions Available
 
-**Colors**:
-- **White**: Unexplored areas
-- **Black**: Obstacles (walls/furniture) - AVOID
-- **Green**: Safe floor
-- **Orange line**: Movement trajectory
-- **Red arrow**: Current position & facing direction
-- **Purple markers**: Instruction-related landmarks 
-- **Blue semi-circle**: Field of view (opening = Front)
+**Turn**: TURN_LEFT/RIGHT (30°, 60°, 90°, 120°, 150°, 180°)
+**Move**: MOVE_FORWARD (0.25m, 0.5m, 0.75m, 1.0m, 1.25m, 1.5m)
+**Arrive**: STOP (when <0.5m from destination)
 
-# Task
+# Output Format (JSON)
 
-**Analyze all 3 images together to decide next action**:
-- **RGB (IMAGE 1)**: What environment/landmarks/obstacles visible?
-- **Detection (IMAGE 2)**: Which landmarks detected and where?
-- **Map (IMAGE 3)**: Your position (red arrow), instruction-related landmarks (purple), safe paths (green), obstacles (black), trajectory (orange)
-- **Progress**: What actions completed?
-- **Next Action**: Follow sub-instruction, adapt to environment, avoid obstacles
-
-# Available Actions
-
-**Rotation** (30° increments): TURN_LEFT / TURN_RIGHT (30, 60, 90, 120, 150, 180)
-**Movement** (0.25m increments): MOVE_FORWARD (0.25, 0.5, 0.75, 1.0, 1.25, 1.5)
-**Arrival**: STOP
-
-# Output Format (JSON only)
-
-{{
-    "reasoning": "<Combine: (1) RGB view: what visible in IMAGE 1, (2) Detection: landmarks in IMAGE 2, (3) Map: position/destination/obstacles/path in IMAGE 3, (4) Progress, (5) Action decision>",
+{
+    "reasoning": "<(1) Sub-instruction goal, (2) Map check: purple marker position vs instruction, obstacles blocking path, (3) RGB/Detection validation, (4) Action decision: follow instruction OR adapt (specify adjustments or detours)>",
     "action": "TURN_LEFT" | "TURN_RIGHT" | "MOVE_FORWARD" | "STOP",
-    "degrees": <30|60|90|120|150|180> (for TURN only),
-    "meters": <0.25|0.5|0.75|1.0|1.25|1.5> (for MOVE_FORWARD only),
-    "progress_summary": "<Cumulative: rotation total, facing direction, distance total>"
-}}
+    "degrees": <30-180> (TURN only),
+    "meters": <0.25-1.5> (MOVE_FORWARD only),
+    "progress_summary": "<Total rotation, facing direction, total distance>"
+}
 
 # Examples
 
-**Ex1 - Safe Movement**
-{{
-    "reasoning": "RGB: Open space visible ahead. Detection: Sofa detected ahead-left. Map: Green clear 2m ahead, no black obstacles; purple marker (sofa) 3m ahead-left. Progress: started. Decision: Move 0.5m safely.",
+**Ex1 - Follow Instruction (Path Clear)**
+{
+    "reasoning": "Sub-instruction: 'Move 0.5m toward sofa'. Map: Purple marker (sofa) 3m ahead, green path clear, no obstacles. RGB: Open space. Detection: Sofa detected. Action: Follow instruction, move 0.5m.",
     "action": "MOVE_FORWARD",
     "meters": 0.5,
-    "progress_summary": "Moved 0.5m forward, approaching sofa"
-}}
+    "progress_summary": "Moved 0.5m toward sofa"
+}
 
-**Ex2 - Obstacle Avoidance**
-{{
-    "reasoning": "RGB: Wall visible ahead, table visible at right. Detection: Table detected. Map: Black obstacle ahead; green opening right 60°; purple marker (table) right 2.5m. Decision: Turn right 60° to avoid wall and approach table.",
+**Ex2 - Adapt Angle (Refine Direction)**
+{
+    "reasoning": "Sub-instruction: 'Turn left 90° to table'. Map: Purple marker (table) at left 75° (not 90°), green path clear. RGB: Table visible left. Detection: Table detected. Action: Adjust to 90° (close enough to instruction).",
+    "action": "TURN_LEFT",
+    "degrees": 90,
+    "progress_summary": "Turned left 90°, facing table"
+}
+
+**Ex3 - Detour Obstacle**
+{
+    "reasoning": "Sub-instruction: 'Move forward 1m'. Map: Black wall directly ahead, purple marker (door) accessible via right 60°, green path opens right. RGB: Wall ahead. Action: Detour right to avoid obstacle.",
     "action": "TURN_RIGHT",
     "degrees": 60,
-    "progress_summary": "Moved 0.5m, turned right 60°, avoiding obstacle"
-}}
+    "progress_summary": "Moved 0.5m, detouring right 60° around wall"
+}
 
-**Ex3 - Dead-End Escape**
-{{
-    "reasoning": "RGB: Walls on front/left/right. Detection: No destination landmarks visible. Map: Black walls front/left/right; green opening behind 180°. Progress: 1.0m into corner. Decision: Turn 180° to escape dead-end.",
-    "action": "TURN_LEFT",
-    "degrees": 180,
-    "progress_summary": "Moved 1.0m, encountered dead-end, turning 180° to backtrack"
-}}
-
-**Ex4 - Destination Reached**
-{{
-    "reasoning": "RGB: Refrigerator fills view. Detection: Refrigerator detected center <0.5m. Map: Purple marker (refrigerator) at center <0.5m; orange trajectory 1.5m. Progress: completed all steps. Decision: Destination reached, STOP.",
+**Ex4 - Stop at Destination**
+{
+    "reasoning": "Sub-instruction: 'Reach refrigerator'. Map: Red arrow overlaps purple marker <0.5m. RGB: Refrigerator fills view. Detection: Refrigerator detected <0.5m. Action: Destination reached, STOP.",
     "action": "STOP",
     "progress_summary": "Rotated left 30°, moved 1.5m, reached refrigerator"
 }}
@@ -110,10 +98,10 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Analyze en
    - Plan safe path: Avoid black obstacles
    - If trapped by black: Turn toward nearest green/white opening
 
-3. **FOLLOW INSTRUCTION**: Execute sub-instruction step-by-step - do not skip or reorder
+3. **FOLLOW INSTRUCTION & ADAPT**: Complete key actions (turn/move/stop) specified in sub-instruction, but fine-tune angles/distances based on map and RGB - not rigidly bound to exact values
 
 4. **STOP CONDITIONS** - Only STOP when ALL met:
-   - Completed ALL sub-instruction steps
+   - Completed key actions in sub-instruction
    - Destination landmark visible in RGB + detected in IMAGE 2 + within <0.5m
    - Orange trajectory on map confirms arrival at destination area
    - Must have moved (verify via progress & trajectory)
