@@ -44,46 +44,47 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 
 # Output Format (JSON)
 
-{
+{{
     "reasoning": "<(1) Sub-instruction goal, (2) Map check: purple marker position vs instruction, obstacles blocking path, (3) RGB/Detection validation, (4) Action decision: follow instruction OR adapt (specify adjustments or detours)>",
     "action": "TURN_LEFT" | "TURN_RIGHT" | "MOVE_FORWARD" | "STOP",
     "degrees": <30-180> (TURN only),
     "meters": <0.25-1.5> (MOVE_FORWARD only),
     "progress_summary": "<Total rotation, facing direction, total distance>"
-}
+}}
 
 # Examples
 
 **Ex1 - Follow Instruction (Path Clear)**
-{
+{{
     "reasoning": "Sub-instruction: 'Move 0.5m toward sofa'. Map: Purple marker (sofa) 3m ahead, green path clear, no obstacles. RGB: Open space. Detection: Sofa detected. Action: Follow instruction, move 0.5m.",
     "action": "MOVE_FORWARD",
     "meters": 0.5,
     "progress_summary": "Moved 0.5m toward sofa"
-}
+}}
 
 **Ex2 - Adapt Angle (Refine Direction)**
-{
+{{
     "reasoning": "Sub-instruction: 'Turn left 90° to table'. Map: Purple marker (table) at left 75° (not 90°), green path clear. RGB: Table visible left. Detection: Table detected. Action: Adjust to 90° (close enough to instruction).",
     "action": "TURN_LEFT",
     "degrees": 90,
     "progress_summary": "Turned left 90°, facing table"
-}
+}}
 
 **Ex3 - Detour Obstacle**
-{
+{{
     "reasoning": "Sub-instruction: 'Move forward 1m'. Map: Black wall directly ahead, purple marker (door) accessible via right 60°, green path opens right. RGB: Wall ahead. Action: Detour right to avoid obstacle.",
     "action": "TURN_RIGHT",
     "degrees": 60,
     "progress_summary": "Moved 0.5m, detouring right 60° around wall"
-}
+}}
 
 **Ex4 - Stop at Destination**
-{
+{{
     "reasoning": "Sub-instruction: 'Reach refrigerator'. Map: Red arrow overlaps purple marker <0.5m. RGB: Refrigerator fills view. Detection: Refrigerator detected <0.5m. Action: Destination reached, STOP.",
     "action": "STOP",
     "progress_summary": "Rotated left 30°, moved 1.5m, reached refrigerator"
 }}
+
 
 
 **CRITICAL EXECUTION RULES** (MUST FOLLOW):
