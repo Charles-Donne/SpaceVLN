@@ -398,13 +398,8 @@ class TopDownMapVLNCE(Measure):
                 try:
                     with open(self._config.GRAPHS_FILE, "rb") as f:
                         self._conn_graphs = pickle.load(f)
-                except Exception as e:
-                    print(f"⚠️  无法加载connectivity graphs: {e}")
-                    print(f"   文件路径: {self._config.GRAPHS_FILE}")
-                    print(f"   功能受限: DRAW_FIXED_WAYPOINTS和最近节点功能不可用")
-            else:
-                print(f"⚠️  Connectivity graphs文件不存在: {self._config.GRAPHS_FILE}")
-                print(f"   基础俯视图功能仍然可用")
+                except Exception:
+                    pass  # 静默失败，功能可选
         
         super().__init__()
 

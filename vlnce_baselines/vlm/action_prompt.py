@@ -13,7 +13,7 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 # Current Sub-Task
 **Sub-Destination**: {subtask_destination}
 **Sub-Instruction**: {subtask_instruction}
-**Progress**: {progress_summary}
+**Previous Progress**: {progress_summary}
 
 # Visual Inputs (Analyze Together)
 
@@ -34,7 +34,7 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 **Follow sub-instruction to complete key actions (turn/move/stop)**, BUT:
 - Avoid obstacles: NEVER move into black areas - detour if instruction path blocked
 
-**Decision Priority**: Complete key action(sub-instruction goal) → Obstacle avoidance → Parameter refinement
+**Decision Priority**: Complete key action(sub-instruction goal) → Obstacle avoidance → Parameter refinement(optional) → Progress update
 
 # Actions Available
 
@@ -45,44 +45,56 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 # Output Format (JSON)
 
 {{
-    "reasoning": "<(1) Sub-instruction goal, (2) Map check: purple marker position vs instruction, obstacles blocking path, (3) RGB/Detection validation, (4) Action decision: follow instruction OR adapt (specify adjustments or detours)>",
+    "reasoning": "<(1) Subtask goal. (2) Finding of observation. (3) Map check: your position, orientation, landmark, obstacles. (4) Action: follow instruction OR adaptive fine-tuning>",
     "action": "TURN_LEFT" | "TURN_RIGHT" | "MOVE_FORWARD" | "STOP",
     "degrees": <30-180> (TURN only),
     "meters": <0.25-1.5> (MOVE_FORWARD only),
-    "progress_summary": "<Total rotation, facing direction, total distance>"
+    "progress_summary": "<Update motion trajectory and the observed object>"
 }}
 
 # Examples
 
-**Ex1 - Follow Instruction (Path Clear)**
+## Ex1 - Start turning to face the target:
+**Sub-Instruction**: Turn left 90° to face the oven, then move forward 0.5m, Stop in front of oven.
+**Previous Progress**: None
+**Current Observation**: Oven is not in front view; need to turn to face it.
 {{
-    "reasoning": "Sub-instruction: 'Move 0.5m toward sofa'. Map: Purple marker (sofa) 3m ahead, green path clear, no obstacles. RGB: Open space. Detection: Sofa detected. Action: Follow instruction, move 0.5m.",
-    "action": "MOVE_FORWARD",
-    "meters": 0.5,
-    "progress_summary": "Moved 0.5m toward sofa"
-}}
-
-**Ex2 - Adapt Angle (Refine Direction)**
-{{
-    "reasoning": "Sub-instruction: 'Turn left 90° to table'. Map: Purple marker (table) at left 75° (not 90°), green path clear. RGB: Table visible left. Detection: Table detected. Action: Adjust to 90° (close enough to instruction).",
+    "reasoning": "The subtask goal is to face the oven first. RGB: No oven visible in current front view. Map: Purple marker (oven) is to the left, need to rotate. Action: Follow instruction - turn left 90° to align with oven direction.",
     "action": "TURN_LEFT",
     "degrees": 90,
-    "progress_summary": "Turned left 90°, facing table"
+    "progress_summary": "Turned left 90° to face oven"
 }}
 
-**Ex3 - Detour Obstacle**
+## Ex2 - Continue with the instruction action:
+**Sub-Instruction**: Turn left 90° to face the oven, then move forward 0.5m, Stop in front of oven.
+**Previous Progress**: Turned left 90°, moved 0.5m toward oven.
+**Current Observation**: Facing the oven, but the distance is still too far.
 {{
-    "reasoning": "Sub-instruction: 'Move forward 1m'. Map: Black wall directly ahead, purple marker (door) accessible via right 60°, green path opens right. RGB: Wall ahead. Action: Detour right to avoid obstacle.",
-    "action": "TURN_RIGHT",
-    "degrees": 60,
-    "progress_summary": "Moved 0.5m, detouring right 60° around wall"
+    "reasoning": "The subtask goal is to stop at the oven. RGB & Detection: The oven is ahead, and there's space to move. Map: Purple marker (oven) ahead, green path clear, no obstacles. Action: Move a little closer to the oven.",
+    "action": "MOVE_FORWARD",
+    "meters": 0.5,
+    "progress_summary": "Turned left 90°, moved 1.0m (0.5+0.5m) toward oven"
 }}
 
-**Ex4 - Stop at Destination**
+## Ex3 - Arrive at destination and stop:
+**Sub-Instruction**: Turn left 90° to face the oven, then move forward 0.5m, Stop in front of oven.
+**Previous Progress**: Turned left 90°, moved 1.5m toward oven.
+**Current Observation**: The oven is directly in front, very close (within 0.5m).
 {{
-    "reasoning": "Sub-instruction: 'Reach refrigerator'. Map: Red arrow overlaps purple marker <0.5m. RGB: Refrigerator fills view. Detection: Refrigerator detected <0.5m. Action: Destination reached, STOP.",
+    "reasoning": "The subtask goal is to stop at the oven. RGB: Oven clearly visible in front view. Detection: Oven detected. Map: Red arrow overlaps purple marker (oven), distance <0.5m, orange trajectory confirms arrival. All key actions completed. Action: STOP.",
     "action": "STOP",
-    "progress_summary": "Rotated left 30°, moved 1.5m, reached refrigerator"
+    "progress_summary": "Turned left 90°, moved 1.5m toward oven, arrived and stopped"
+}}
+
+## Ex4 - Detour around obstacle:
+**Sub-Instruction**: Turn left 90° to face the oven, then move forward 0.5m, Stop in front of oven.
+**Previous Progress**: Turned left 90°.
+**Current Observation**: Oven is at front-left 30°, but straight ahead has a wall (black obstacle on map).
+{{
+    "reasoning": "The subtask goal is to reach the oven. RGB: Wall/obstacle blocking direct path ahead. Detection: Oven detected at left side. Map: Purple marker (oven) at front-left 30°, black obstacle directly ahead, green path to the left. Action: Turn left 30° to avoid obstacle and align toward oven.",
+    "action": "TURN_LEFT",
+    "degrees": 30,
+    "progress_summary": "Turned left 120° (90°+30° detour) to avoid wall and face oven"
 }}
 
 

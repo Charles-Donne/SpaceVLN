@@ -501,7 +501,7 @@ class Semantic_Mapping(nn.Module):
             result_dir = self.args.RESULTS_DIR
             save_dir = "{}/visualization/eps_{}".format(result_dir, current_episode_id)
             os.makedirs(save_dir, exist_ok=True)
-            fn = "{}/step-{}.png".format(save_dir, step)
+            fn = "{}/step_{:04d}.png".format(save_dir, step)
             cv2.imwrite(fn, self.vis_image)
 
     def forward(self, obs: torch.Tensor, pose_obs: torch.Tensor):

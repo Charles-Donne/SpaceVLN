@@ -94,6 +94,7 @@ class VLMNavigationController(InteractiveNavigationController):
         # VLM状态
         self.current_subtask = None
         self.subtask_count = 0
+        self.subtask_attempt = 0  # 当前子任务的尝试次数（a, b, c...）
         self.progress_summary = ""
         self.subtask_history = []
         self.current_subtask_file = None
@@ -137,6 +138,7 @@ class VLMNavigationController(InteractiveNavigationController):
         # 重置VLM状态
         self.current_subtask = None
         self.subtask_count = 0
+        self.subtask_attempt = 0  # 重置尝试计数
         self.progress_summary = ""
         self.subtask_history = []
         self.current_subtask_file = None
@@ -260,6 +262,7 @@ class VLMNavigationController(InteractiveNavigationController):
                 if infos and len(infos) > 0:
                     distance = infos[0].get('distance_to_goal', 0.0)
                 
+                # 环视阶段的subtask_id为phase（如initial, verify_1a）
                 self.nav_visualizer.save_step_visualization(
                     observations=obs[0],
                     info=infos[0] if infos and len(infos) > 0 else {},
@@ -267,7 +270,8 @@ class VLMNavigationController(InteractiveNavigationController):
                     instruction=self.current_instruction,
                     current_subtask=subtask_text,
                     distance=distance,
-                    action=f"TURN_LEFT (360°环视 {i}/12)"
+                    action=f"TURN_LEFT (360°环视 {i}/12)",
+                    subtask_id=phase
                 )
             
             if new_classes > 0:
@@ -306,8 +310,8 @@ class VLMNavigationController(InteractiveNavigationController):
             # 使用PanoramaGenerator拼接3张图片并添加方向标注
             panorama = self.panorama_generator.create_panorama(direction_images, direction_name)
             
-            # 保存全景图
-            panorama_filename = f"{phase}_panorama_{direction_name.split()[0].lower()}.jpg"
+            # 保存全景图（统一使用PNG格式）
+            panorama_filename = f"{phase}_panorama_{direction_name.split()[0].lower()}.png"
             panorama_path = os.path.join(panorama_dir, panorama_filename)
             cv2.imwrite(panorama_path, panorama)
             
@@ -317,8 +321,8 @@ class VLMNavigationController(InteractiveNavigationController):
         
         # 保存全局地图和局部地图到 vlm/observations/
         # 直接使用episode目录下的地图（step-12是完成360°扫描后最完整的地图）
-        self.latest_global_map = os.path.join(self.episode_dir, 'global_map', f'step-12.png')
-        self.latest_local_map = os.path.join(self.episode_dir, 'local_map', f'step-12.png')
+        self.latest_global_map = os.path.join(self.episode_dir, 'global_map', f'step_{12:04d}.png')
+        self.latest_local_map = os.path.join(self.episode_dir, 'local_map', f'step_{12:04d}.png')
         
         if not os.path.exists(self.latest_global_map):
             print(f"  ⚠️  Global Map not found: {self.latest_global_map}")
@@ -342,7 +346,7 @@ class VLMNavigationController(InteractiveNavigationController):
         """
         # 返回上一步保存的地图（当前步的地图要等step()执行后才会保存）
         last_step = self.current_step - 1
-        map_path = os.path.join(self.episode_dir, 'global_map', f'step-{last_step}.png')
+        map_path = os.path.join(self.episode_dir, 'global_map', f'step_{last_step:04d}.png')
         self.latest_map_image = map_path
         return map_path
 
@@ -365,7 +369,7 @@ class VLMNavigationController(InteractiveNavigationController):
         # 获取4个全景图
         for config in PANORAMA_CONFIG:
             direction_name = config["name"]
-            panorama_filename = f"{phase}_panorama_{direction_name.split()[0].lower()}.jpg"
+            panorama_filename = f"{phase}_panorama_{direction_name.split()[0].lower()}.png"
             panorama_path = os.path.join(panorama_dir, panorama_filename)
             
             if os.path.exists(panorama_path):
@@ -430,20 +434,20 @@ class VLMNavigationController(InteractiveNavigationController):
             "step": self.current_step,  # 12
             "phase": "initial_planning",
             "subtask_count": self.subtask_count + 1,
+            "subtask_attempt": 0,  # 初始规划总是a
+            "subtask_id": f"{self.subtask_count + 1}a",  # 如 "1a"
             "prompt_type": "initial",
             "response": response,
             "timestamp": datetime.now().isoformat(),
-            # 保存输入图片路径
+            # 保存输入图片路径（与PANORAMA_CONFIG顺序一致：Front, Left, Back, Right）
             "input_images": {
                 "global_map.png": global_map_for_llm,
                 "local_map.png": local_map,
-                "front.jpg": image_paths[0] if len(image_paths) > 0 else None,
-                "left.jpg": image_paths[1] if len(image_paths) > 1 else None,
-                "back.jpg": image_paths[2] if len(image_paths) > 2 else None,
-                "right.jpg": image_paths[3] if len(image_paths) > 3 else None,
-            },
-            # 保存完整的prompt文本
-            "prompt": response.get('_full_prompt', f"Instruction: {self.current_instruction}\nDirection Names: {direction_names}")
+                "IMAGE 1 - Front (0°).png": image_paths[0] if len(image_paths) > 0 else None,
+                "IMAGE 2 - Left (90°).png": image_paths[1] if len(image_paths) > 1 else None,
+                "IMAGE 3 - Back (180°).png": image_paths[2] if len(image_paths) > 2 else None,
+                "IMAGE 4 - Right (270°).png": image_paths[3] if len(image_paths) > 3 else None,
+            }
         }
         self.thinking_outputs.append(thinking_record)
         self.save_manager.save_thinking(thinking_record)
@@ -521,8 +525,10 @@ class VLMNavigationController(InteractiveNavigationController):
         
         # 重新执行环视建图并生成全景图（占用12个step）
         # 注意：如果子任务已完成，会在后面清空轨迹；如果未完成，轨迹继续累积
-        phase = f"verify_{self.subtask_count}"
-        print(f"\n[验证] 重新环视以验证子任务完成状态（step {self.current_step + 1}-{self.current_step + 12}）...")
+        # 使用attempt字母标识（a=0, b=1, c=2...）
+        attempt_letter = chr(ord('a') + self.subtask_attempt)
+        phase = f"verify_{self.subtask_count}{attempt_letter}"
+        print(f"\n[验证] 子任务#{self.subtask_count}{attempt_letter} - 重新环视（step {self.current_step + 1}-{self.current_step + 12}）...")
         image_paths, direction_names = self.look_around_and_collect(phase)
         
         if not image_paths:
@@ -565,25 +571,31 @@ class VLMNavigationController(InteractiveNavigationController):
         
         # 记录thinking输出（包含输入图片和prompt）
         # 此时current_step已经是验证扫描完成后的step（+12）
+        attempt_letter = chr(ord('a') + self.subtask_attempt)
+        next_subtask_count = self.subtask_count + (1 if is_completed and not response.get('is_final_subtask', False) else 0)
+        next_attempt = 0 if is_completed else self.subtask_attempt + 1
+        next_attempt_letter = chr(ord('a') + next_attempt)
+        
         thinking_record = {
             "step": self.current_step,  # 验证扫描完成后的step
-            "phase": f"verify_subtask_{self.subtask_count}",
-            "subtask_count": self.subtask_count + (1 if is_completed and not response.get('is_final_subtask', False) else 0),
+            "phase": phase,  # 已包含attempt，如 "verify_1a"
+            "subtask_count": self.subtask_count,
+            "subtask_attempt": self.subtask_attempt,
+            "subtask_id": f"{self.subtask_count}{attempt_letter}",  # 当前验证的子任务，如 "1a"
+            "next_subtask_id": f"{next_subtask_count}{next_attempt_letter}" if not response.get('is_final_subtask', False) else "final",
             "prompt_type": "verification",
             "is_completed": is_completed,
             "response": response,
             "timestamp": datetime.now().isoformat(),
-            # 保存输入图片路径
+            # 保存输入图片路径（与PANORAMA_CONFIG顺序一致：Front, Left, Back, Right）
             "input_images": {
                 "global_map.png": global_map_for_llm,
                 "local_map.png": local_map if os.path.exists(local_map) else None,
-                "front.jpg": image_paths[0] if len(image_paths) > 0 else None,
-                "left.jpg": image_paths[1] if len(image_paths) > 1 else None,
-                "back.jpg": image_paths[2] if len(image_paths) > 2 else None,
-                "right.jpg": image_paths[3] if len(image_paths) > 3 else None,
-            },
-            # 保存完整的prompt文本
-            "prompt": response.get('_full_prompt', f"Instruction: {self.current_instruction}\nCurrent Subtask: {self.current_subtask.get('subtask_instruction', '')}\nDetected Landmarks: {detected_landmarks}\nWaypoint Summary: {waypoint_summary}")
+                "IMAGE 1 - Front (0°).png": image_paths[0] if len(image_paths) > 0 else None,
+                "IMAGE 2 - Left (90°).png": image_paths[1] if len(image_paths) > 1 else None,
+                "IMAGE 3 - Back (180°).png": image_paths[2] if len(image_paths) > 2 else None,
+                "IMAGE 4 - Right (270°).png": image_paths[3] if len(image_paths) > 3 else None,
+            }
         }
         self.thinking_outputs.append(thinking_record)
         self.save_manager.save_thinking(thinking_record)
@@ -596,15 +608,17 @@ class VLMNavigationController(InteractiveNavigationController):
         self.progress_summary = ""      # 重置进度摘要
         
         if is_completed:
-            print(f"\n[子任务完成] #{self.subtask_count}")
+            attempt_letter = chr(ord('a') + self.subtask_attempt)
+            print(f"\n[子任务完成] #{self.subtask_count}{attempt_letter}")
             
             # 检查是否是最终子任务
             if response.get('is_final_subtask', False):
                 print("到达最终目的地")
                 return True, response
             
-            # 更新到新子任务
+            # 更新到新子任务：递增计数，重置尝试
             self.subtask_count += 1
+            self.subtask_attempt = 0  # 新子任务从a开始
             self.current_subtask = response
             # progress_summary已在上面清空
             
@@ -645,9 +659,11 @@ class VLMNavigationController(InteractiveNavigationController):
             
             self._print_subtask_info(response)
         else:
-            print(f"\n[子任务未完成] #{self.subtask_count} - 重新规划")
+            attempt_letter = chr(ord('a') + self.subtask_attempt)
+            print(f"\n[子任务未完成] #{self.subtask_count}{attempt_letter} - 重新规划")
             
-            # 未完成时保持subtask_count不变，但更新子任务内容
+            # 未完成时保持subtask_count不变，递增attempt
+            self.subtask_attempt += 1  # 下次验证用b, c, d...
             self.current_subtask = response
             # progress_summary和landmark_classes已在上面清空
             
@@ -717,9 +733,9 @@ class VLMNavigationController(InteractiveNavigationController):
             obs = obs[0]
         
         # 获取最新保存的观察信息
-        # 上一步已保存的文件（如果current_step=13，则读取step-12的地图）
+        # 上一步已保存的文件（如果current_step=13，则读取step_0012的地图）
         last_step = self.current_step  # execute_action在step执行前调用，所以用current_step
-        fp_image = os.path.join(self.episode_dir, 'rgb', f'step-{last_step}.png')
+        fp_image = os.path.join(self.episode_dir, 'rgb', f'step_{last_step:04d}.png')
         
         # 如果rgb/中的图像还不存在，用当前观察创建临时文件
         if not os.path.exists(fp_image):
@@ -735,12 +751,12 @@ class VLMNavigationController(InteractiveNavigationController):
         self._get_current_map_path()
         
         # 获取detection图像路径（如果存在）
-        detection_image = os.path.join(self.episode_dir, 'detection', f'step-{last_step}.png')
+        detection_image = os.path.join(self.episode_dir, 'detection', f'step_{last_step:04d}.png')
         if not os.path.exists(detection_image):
             detection_image = None
         
         # 获取局部地图路径
-        local_map = os.path.join(self.episode_dir, 'local_map', f'step-{last_step}.png')
+        local_map = os.path.join(self.episode_dir, 'local_map', f'step_{last_step:04d}.png')
         if not os.path.exists(local_map):
             local_map = None
         
@@ -772,22 +788,23 @@ class VLMNavigationController(InteractiveNavigationController):
         
         # 记录action输出（包含输入图片和prompt）
         # step记录即将执行的action的步数（例如：当前step=12，下一个action将在step 13执行）
+        attempt_letter = chr(ord('a') + self.subtask_attempt)
         action_record = {
             "step": self.current_step + 1,  # 即将执行的action的step
             "subtask_count": self.subtask_count,
+            "subtask_attempt": self.subtask_attempt,
+            "subtask_id": f"{self.subtask_count}{attempt_letter}",  # 如 "1a"
             "action_name": action_name,
             "action_id": action_id,
             "response": response,
             "timestamp": datetime.now().isoformat(),
             # 保存输入图片路径（使用当前step的图像作为决策依据）
             "input_images": {
-                "rgb.jpg": fp_image,
-                "detection.jpg": detection_image,
+                "rgb.png": fp_image,
+                "detection.png": detection_image,
                 "local_map.png": local_map,
                 "global_map.png": self.latest_global_map if self.latest_global_map and os.path.exists(self.latest_global_map) else None,
-            },
-            # 保存完整的prompt文本
-            "prompt": response.get('_full_prompt', f"Subtask: {self.current_subtask.get('subtask_instruction', '')}\nProgress: {self.progress_summary}\nDetected: {detected_landmarks}")
+            }
         }
         self.action_outputs.append(action_record)
         
@@ -847,6 +864,9 @@ class VLMNavigationController(InteractiveNavigationController):
             if self.latest_info:
                 distance = self.latest_info.get('distance_to_goal', 0.0)
             
+            attempt_letter = chr(ord('a') + self.subtask_attempt)
+            subtask_id = f"{self.subtask_count}{attempt_letter}"
+            
             self.nav_visualizer.save_step_visualization(
                 observations=self.latest_obs,
                 info=self.latest_info or {},
@@ -854,7 +874,8 @@ class VLMNavigationController(InteractiveNavigationController):
                 instruction=self.current_instruction,
                 current_subtask=subtask_text,
                 distance=distance,
-                action=action_name
+                action=action_name,
+                subtask_id=subtask_id
             )
         
         return result
@@ -1065,16 +1086,17 @@ class VLMNavigationController(InteractiveNavigationController):
         import json
         
         # 根据响应类型确定标题
+        attempt_letter = chr(ord('a') + self.subtask_attempt)
         if is_initial:
-            title = "Initial Subtask"
+            title = f"Initial Subtask #{self.subtask_count}{attempt_letter}"
         elif 'is_completed' in response:
             # 验证响应
             if response.get('is_completed', False):
-                title = f"Subtask #{self.subtask_count} - Completed ✓"
+                title = f"Subtask #{self.subtask_count}{attempt_letter} - Completed ✓"
             else:
-                title = f"Subtask #{self.subtask_count} - Continue (Not Completed)"
+                title = f"Subtask #{self.subtask_count}{attempt_letter} - Continue (Not Completed)"
         else:
-            title = f"Subtask #{self.subtask_count}"
+            title = f"Subtask #{self.subtask_count}{attempt_letter}"
         
         print(f"\n{'='*60}")
         print(f"{title}")

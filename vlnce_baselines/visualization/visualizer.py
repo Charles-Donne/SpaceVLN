@@ -669,7 +669,7 @@ class MapVisualizer:
             save_path: 保存路径
         """
         episode_dir = self._create_episode_directories(episode_id)
-        save_path = os.path.join(episode_dir, 'rgb', f'step-{step}.png')
+        save_path = os.path.join(episode_dir, 'rgb', f'step_{step:04d}.png')
         cv2.imwrite(save_path, rgb)
         return save_path
     
@@ -696,7 +696,7 @@ class MapVisualizer:
         
         # 简化路径：data/manual_navigation/episode_X/global_map/step-Y.png
         episode_dir = self._create_episode_directories(episode_id)
-        save_path = os.path.join(episode_dir, 'global_map', f'step-{step}.png')
+        save_path = os.path.join(episode_dir, 'global_map', f'step_{step:04d}.png')
         cv2.imwrite(save_path, global_map_cropped, [cv2.IMWRITE_PNG_COMPRESSION, 1])
         return save_path
     
@@ -718,9 +718,9 @@ class MapVisualizer:
         if local_map is None:
             return None
         
-        # 简化路径：data/manual_navigation/episode_X/local_map/step-Y.png
+        # 简化路径：data/manual_navigation/episode_X/local_map/step_XXXX.png
         episode_dir = self._create_episode_directories(episode_id)
-        save_path = os.path.join(episode_dir, 'local_map', f'step-{step}.png')
+        save_path = os.path.join(episode_dir, 'local_map', f'step_{step:04d}.png')
         cv2.imwrite(save_path, local_map, [cv2.IMWRITE_PNG_COMPRESSION, 1])
         return save_path
     
@@ -742,9 +742,9 @@ class MapVisualizer:
         if detection_vis is None:
             return None
         
-        # 简化路径：data/manual_navigation/episode_X/detection/step-Y.png
+        # 简化路径：data/manual_navigation/episode_X/detection/step_XXXX.png
         episode_dir = self._create_episode_directories(episode_id)
-        save_path = os.path.join(episode_dir, 'detection', f'step-{step}.png')
+        save_path = os.path.join(episode_dir, 'detection', f'step_{step:04d}.png')
         cv2.imwrite(save_path, detection_vis)
         return save_path
     

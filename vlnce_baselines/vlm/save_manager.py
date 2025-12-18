@@ -7,16 +7,33 @@
 data/vlm_navigation/episode_XXX/
 ├── rgb/, detection/, global_map/, local_map/  # 每步的观察和地图
 ├── panoramas/                                  # 环视全景图
-├── thinking/subtask_N/                         # LLM规划详细输入输出
+├── thinking/subtask_Na/                        # LLM规划详细输入输出（带尝试标识）
 ├── action/                                     # VLM动作（按subtask组织）
-│   └── subtask_N/
+│   └── subtask_Na/                             # 带尝试标识
 │       ├── info.json                           # 子任务信息
 │       └── step_X/                             # 每步的VLM输入输出
 └── records/                                    # 所有摘要记录
-    ├── thinking_summary.json                   # LLM调用摘要
-    ├── action_summary.json                     # VLM调用摘要
+    ├── thinking_summary.json                   # LLM调用摘要（按子任务分组）
+    │   └── {subtask_id: {phase: record}}
+    ├── action_summary.json                     # VLM调用摘要（按子任务分组）
+    │   └── {subtask_id: {step_X: record}}
     ├── waypoint_memory.json                    # 路径点记录
     └── result.json                             # 最终结果
+
+子任务标识格式: 1a, 1b, 1c... (同一子任务的多次尝试)
+summary结构示例:
+{
+  "1a": {
+    "initial_planning": {...},
+    "verify_1a": {...}
+  },
+  "1b": {
+    "verify_1b": {...}
+  },
+  "2a": {
+    "verify_2a": {...}
+  }
+}
 """
 import os
 import json
@@ -47,15 +64,15 @@ class SaveManager:
         """
         保存LLM思考输出
         
-        结构: thinking/subtask_N/
+        结构: thinking/subtask_Na/ (a/b/c标识尝试次数)
             - input_images/ (输入图片)
-            - prompt.txt (提示词)
             - response.json (响应)
         
         同时更新records/thinking_summary.json汇总文件
         """
-        subtask_count = thinking_record.get('subtask_count', 1)
-        thinking_dir = os.path.join(self.episode_dir, "thinking", f"subtask_{subtask_count}")
+        # 使用subtask_id（如 "1a", "1b"）作为目录名
+        subtask_id = thinking_record.get('subtask_id', f"{thinking_record.get('subtask_count', 1)}a")
+        thinking_dir = os.path.join(self.episode_dir, "thinking", f"subtask_{subtask_id}")
         os.makedirs(thinking_dir, exist_ok=True)
         
         # 保存输入图片
@@ -77,26 +94,26 @@ class SaveManager:
         
         # 更新汇总文件到records/
         self._update_summary_file("thinking_summary.json", thinking_record, 
-                                 exclude_keys=['input_images', 'prompt'])
+                                 exclude_keys=['input_images'])
     
     def save_action(self, action_record: Dict, subtask_info: Optional[Dict] = None):
         """
         保存VLM动作输出
         
-        结构: action/subtask_N/
+        结构: action/subtask_Na/ (a/b/c标识尝试次数)
             - info.json (子任务信息：destination、instruction等)
             - step_X/
                 - input_images/ (输入图片)
-                - prompt.txt (提示词)
                 - response.json (响应)
         
         同时更新records/action_summary.json汇总文件
         """
-        subtask_count = action_record.get('subtask_count', 1)
+        # 使用subtask_id（如 "1a", "1b"）作为目录名
+        subtask_id = action_record.get('subtask_id', f"{action_record.get('subtask_count', 1)}a")
         step = action_record.get('step', 0)
         
         # 子任务目录
-        subtask_dir = os.path.join(self.episode_dir, "action", f"subtask_{subtask_count}")
+        subtask_dir = os.path.join(self.episode_dir, "action", f"subtask_{subtask_id}")
         os.makedirs(subtask_dir, exist_ok=True)
         
         # 保存子任务信息（首次创建时）
@@ -129,7 +146,7 @@ class SaveManager:
         
         # 更新汇总文件到records/
         self._update_summary_file("action_summary.json", action_record, 
-                                 exclude_keys=['input_images', 'prompt'])
+                                 exclude_keys=['input_images'])
     
     def save_waypoint_memory(self, waypoint_memory: List[Dict], 
                             instruction: str, current_step: int):
@@ -165,15 +182,14 @@ class SaveManager:
         return filepath
     
     def _update_summary_file(self, filename: str, record: Dict, exclude_keys: List[str] = None):
-        """更新records/目录下的汇总JSON文件"""
-        filepath = os.path.join(self.records_dir, filename)
+        """
+        更新records/目录下的汇总JSON文件
         
-        # 读取现有记录
-        if os.path.exists(filepath):
-            with open(filepath, 'r', encoding='utf-8') as f:
-                records = json.load(f)
-        else:
-            records = []
+        结构:
+        - thinking_summary.json: 按子任务分组 {subtask_id: {phase: record}}
+        - action_summary.json: 按子任务分组 {subtask_id: {step: record}}
+        """
+        filepath = os.path.join(self.records_dir, filename)
         
         # 过滤不需要的键
         if exclude_keys:
@@ -181,8 +197,37 @@ class SaveManager:
         else:
             summary_record = record
         
-        records.append(summary_record)
+        # 读取现有记录
+        if os.path.exists(filepath):
+            with open(filepath, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        else:
+            data = {}
+        
+        # 根据文件类型组织结构
+        if filename == "thinking_summary.json":
+            # thinking: {subtask_id: {phase: record}}
+            subtask_id = summary_record.get('subtask_id', f"{summary_record.get('subtask_count', 1)}a")
+            phase = summary_record.get('phase', 'unknown')
+            
+            if subtask_id not in data:
+                data[subtask_id] = {}
+            data[subtask_id][phase] = summary_record
+            
+        elif filename == "action_summary.json":
+            # action: {subtask_id: {step_X: record}}
+            subtask_id = summary_record.get('subtask_id', f"{summary_record.get('subtask_count', 1)}a")
+            step = summary_record.get('step', 0)
+            
+            if subtask_id not in data:
+                data[subtask_id] = {}
+            data[subtask_id][f"step_{step}"] = summary_record
+        else:
+            # 其他文件保持列表格式
+            if not isinstance(data, list):
+                data = []
+            data.append(summary_record)
         
         # 保存
         with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(records, f, ensure_ascii=False, indent=2)
+            json.dump(data, f, ensure_ascii=False, indent=2)

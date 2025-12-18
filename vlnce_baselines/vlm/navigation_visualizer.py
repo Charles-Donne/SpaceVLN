@@ -60,7 +60,8 @@ class NavigationVisualizer:
                                 instruction: str,
                                 current_subtask: str = None,
                                 distance: float = 0.0,
-                                action: str = "") -> Optional[str]:
+                                action: str = "",
+                                subtask_id: str = None) -> Optional[str]:
         """
         保存单步可视化：左边第一人称视角 + 右边俯视图 + 文本信息
         
@@ -74,6 +75,7 @@ class NavigationVisualizer:
             current_subtask: 当前子任务指令（可选）
             distance: 到目标距离
             action: 当前执行的动作名称
+            subtask_id: 子任务ID（如"1a", "1b"等）
             
         Returns:
             保存的图像路径，失败返回None
@@ -113,7 +115,11 @@ class NavigationVisualizer:
         )
         
         # 保存（RGB格式需要转换为BGR）
-        filename = f"step{step:04d}_visualization.jpg"
+        # 文件名格式：step_0001_subtask1a.png（统一使用PNG格式）
+        if subtask_id:
+            filename = f"step_{step:04d}_subtask{subtask_id}.png"
+        else:
+            filename = f"step_{step:04d}.png"
         filepath = os.path.join(self.visualization_dir, filename)
         cv2.imwrite(filepath, cv2.cvtColor(combined, cv2.COLOR_RGB2BGR))
         
