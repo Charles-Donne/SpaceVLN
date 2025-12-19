@@ -18,7 +18,7 @@ class LLMPlanner(BaseAPIClient):
     REQUIRED_FIELDS_VERIFY = ['is_completed', 'subtask_destination', 'subtask_instruction', 'completion_criteria']
     
     # completion_criteria 子字段（嵌套结构）
-    REQUIRED_CRITERIA_FIELDS = ['landmark_detection', 'destination_reached', 'spatial_relationship']
+    REQUIRED_CRITERIA_FIELDS = ['Object_Detection', 'Location', 'Spatial_relationship']
     
     def __init__(self, config_path: str = "vlnce_baselines/vlm/llm_config.yaml", 
                  action_space: str = None):
@@ -100,11 +100,7 @@ class LLMPlanner(BaseAPIClient):
         
         response = self.call_api(prompt, images)
         
-        # 返回response和完整的prompt（用于记录）
-        if response:
-            response['_full_prompt'] = prompt  # 添加完整prompt到响应中
-        
-        return response
+        return response, prompt
     
     def verify_and_replan(self,
                          instruction: str,
@@ -169,9 +165,7 @@ class LLMPlanner(BaseAPIClient):
         response = self.call_api(prompt, images)
         
         if response and self.validate_response(response, mode='verify'):
-            # 添加完整prompt到响应中
-            response['_full_prompt'] = prompt
             is_completed = response.get('is_completed', False)
-            return response, is_completed
+            return response, is_completed, prompt
         
-        return None, False
+        return None, False, None

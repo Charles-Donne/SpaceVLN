@@ -85,10 +85,7 @@ class ActionExecutor(BaseAPIClient):
             print("✗ No response from VLM")
             return None, None, None, None
         
-        # 添加完整prompt到响应中（用于记录）
-        response['_full_prompt'] = prompt
-        
-        # 验证响应
+        # 验诈1响应
         if not self.validate_response(response):
             return None, None, None, None
         
@@ -115,4 +112,4 @@ class ActionExecutor(BaseAPIClient):
         else:
             print(f"Action: {action_name}")
         
-        return action_id, action_name, updated_progress, response, degrees, meters
+        return action_id, action_name, updated_progress, response, degrees, meters, prompt

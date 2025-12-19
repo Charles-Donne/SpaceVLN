@@ -416,7 +416,7 @@ class VLMNavigationController(InteractiveNavigationController):
         global_map_for_llm = global_map
         
         # 调用LLM生成初始子任务
-        response = self.planner.generate_initial_subtask(
+        response, prompt = self.planner.generate_initial_subtask(
             instruction=self.current_instruction,
             observation_images=image_paths,
             direction_names=direction_names,
@@ -437,6 +437,7 @@ class VLMNavigationController(InteractiveNavigationController):
             "subtask_attempt": 0,  # 初始规划总是a
             "subtask_id": f"{self.subtask_count + 1}a",  # 如 "1a"
             "prompt_type": "initial",
+            "prompt": prompt,  # 保存prompt
             "response": response,
             "timestamp": datetime.now().isoformat(),
             # 保存输入图片路径（与PANORAMA_CONFIG顺序一致：Front, Left, Back, Right）
@@ -552,7 +553,7 @@ class VLMNavigationController(InteractiveNavigationController):
         waypoint_summary = self._get_waypoint_summary()
         
         # 调用LLM验证（全局地图必需，局部地图可选，传递实际检测到的类别）
-        response, is_completed = self.planner.verify_and_replan(
+        response, is_completed, prompt = self.planner.verify_and_replan(
             instruction=self.current_instruction,
             current_subtask=self.current_subtask,
             observation_images=image_paths,
@@ -595,7 +596,8 @@ class VLMNavigationController(InteractiveNavigationController):
                 "IMAGE 2 - Left (90°).png": image_paths[1] if len(image_paths) > 1 else None,
                 "IMAGE 3 - Back (180°).png": image_paths[2] if len(image_paths) > 2 else None,
                 "IMAGE 4 - Right (270°).png": image_paths[3] if len(image_paths) > 3 else None,
-            }
+            },
+            "prompt": prompt,
         }
         self.thinking_outputs.append(thinking_record)
         self.save_manager.save_thinking(thinking_record)
@@ -775,12 +777,16 @@ class VLMNavigationController(InteractiveNavigationController):
             detected_landmarks=detected_landmarks
         )
         
-        if len(result) == 6:
+        if len(result) == 7:
+            action_id, action_name, updated_progress, response, degrees, meters, prompt = result
+        elif len(result) == 6:
             action_id, action_name, updated_progress, response, degrees, meters = result
+            prompt = None
         else:
             # 兼容旧版本返回（没有degrees/meters）
             action_id, action_name, updated_progress, response = result
             degrees, meters = 0, 0
+            prompt = None
         
         if action_id is None:
             print("✗ VLM决策失败")
@@ -804,7 +810,8 @@ class VLMNavigationController(InteractiveNavigationController):
                 "detection.png": detection_image,
                 "local_map.png": local_map,
                 "global_map.png": self.latest_global_map if self.latest_global_map and os.path.exists(self.latest_global_map) else None,
-            }
+            },
+            "prompt": prompt,
         }
         self.action_outputs.append(action_record)
         
@@ -936,7 +943,7 @@ class VLMNavigationController(InteractiveNavigationController):
             
             # 如果VLM决定停止 → 验证子任务
             if should_stop:
-                is_completed, new_subtask = self.verify_and_replan()
+                is_completed, new_subtask, _ = self.verify_and_replan()
                 
                 if is_completed and new_subtask and new_subtask.get('is_final_subtask', False):
                     print("\n[导航完成]")
@@ -974,14 +981,14 @@ class VLMNavigationController(InteractiveNavigationController):
             
             # 定期验证
             if subtask_steps >= verify_interval:
-                is_completed, _ = self.verify_and_replan()
+                is_completed, _, _ = self.verify_and_replan()
                 if is_completed:
                     subtask_steps = 0
             
             # 子任务超时
             if subtask_steps >= max_subtask_steps:
                 print(f"\n[警告] 子任务超时 ({max_subtask_steps}步)，重新规划")
-                _, _ = self.verify_and_replan()
+                _, _, _ = self.verify_and_replan()
                 subtask_steps = 0
         
         # 4. 生成GIF动画
