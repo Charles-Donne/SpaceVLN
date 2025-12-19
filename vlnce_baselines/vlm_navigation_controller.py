@@ -506,7 +506,7 @@ class VLMNavigationController(InteractiveNavigationController):
         
         return response
     
-    def verify_and_replan(self) -> Tuple[bool, Optional[Dict]]:
+    def verify_and_replan(self) -> Tuple[bool, Optional[Dict], Optional[str]]:
         """
         验证当前子任务并重新规划
         
@@ -519,10 +519,10 @@ class VLMNavigationController(InteractiveNavigationController):
         注意：重新扫描会占用新的12个step，验证完成后下一个action继续累加
         
         Returns:
-            (is_completed, new_subtask)
+            (is_completed, new_subtask, prompt)
         """
         if not self.planner or not self.current_subtask:
-            return False, None
+            return False, None, None
         
         # 重新执行环视建图并生成全景图（占用12个step）
         # 注意：如果子任务已完成，会在后面清空轨迹；如果未完成，轨迹继续累积
@@ -568,7 +568,7 @@ class VLMNavigationController(InteractiveNavigationController):
         
         if not response:
             print("✗ LLM验证未返回有效响应")
-            return False, None
+            return False, None, None
         
         # 记录thinking输出（包含输入图片和prompt）
         # 此时current_step已经是验证扫描完成后的step（+12）
@@ -616,7 +616,7 @@ class VLMNavigationController(InteractiveNavigationController):
             # 检查是否是最终子任务
             if response.get('is_final_subtask', False):
                 print("到达最终目的地")
-                return True, response
+                return True, response, prompt
             
             # 更新到新子任务：递增计数，重置尝试
             self.subtask_count += 1
@@ -702,7 +702,7 @@ class VLMNavigationController(InteractiveNavigationController):
             # 输出LLM验证结果和调整后的子任务
             self._print_subtask_info(response, is_initial=False)
         
-        return is_completed, response
+        return is_completed, response, prompt
     
     def execute_action_with_vlm(self) -> Tuple[Optional[int], Optional[str], bool, int]:
         """
