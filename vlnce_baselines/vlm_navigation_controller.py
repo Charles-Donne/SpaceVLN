@@ -378,9 +378,9 @@ class VLMNavigationController(InteractiveNavigationController):
             else:
                 print(f"  ⚠️  {direction_name} 未找到: {panorama_filename}")
         
-        # 获取地图（直接使用episode目录下的step-12地图）
-        global_map_path = os.path.join(self.episode_dir, 'global_map', 'step-12.png')
-        local_map_path = os.path.join(self.episode_dir, 'local_map', 'step-12.png')
+        # 获取地图（直接使用episode目录下的step_0012地图）
+        global_map_path = os.path.join(self.episode_dir, 'global_map', f'step_{12:04d}.png')
+        local_map_path = os.path.join(self.episode_dir, 'local_map', f'step_{12:04d}.png')
         
         if not os.path.exists(global_map_path):
             print(f"  ⚠️  Global Map 未找到")
