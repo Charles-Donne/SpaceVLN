@@ -780,15 +780,15 @@ class VLMNavigationController(InteractiveNavigationController):
         action_phase = f"action{self.subtask_count}{attempt_letter}"
         
         # 智能查找可用的图像：优先使用action phase，回退到verify/initial
-        # 可能的phase顺序: action1a -> verify1a -> initial
+        # 可能的phase顺序: action1a -> verify_1a -> initial (注意verify带下划线)
         possible_phases = [action_phase]
         if self.subtask_attempt > 0:
-            # 如果是1b, 1c等，可能需要回退到verify1a
-            verify_phase = f"verify{self.subtask_count}{chr(ord('a') + self.subtask_attempt - 1)}"
+            # 如果是1b, 1c等，可能需要回退到verify_1a
+            verify_phase = f"verify_{self.subtask_count}{chr(ord('a') + self.subtask_attempt - 1)}"
             possible_phases.append(verify_phase)
         elif self.subtask_count > 1:
             # 如果是2a, 3a等，回退到上一个verify
-            prev_verify_phase = f"verify{self.subtask_count - 1}a"
+            prev_verify_phase = f"verify_{self.subtask_count - 1}a"
             possible_phases.append(prev_verify_phase)
         else:
             # 如果是1a，回退到initial

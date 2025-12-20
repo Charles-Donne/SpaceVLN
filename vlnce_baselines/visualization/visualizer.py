@@ -153,26 +153,16 @@ class MapVisualizer:
         if current_pose is not None:
             current_x, current_y, current_o = current_pose
             
-            # ===== 关键修复：用轨迹最后一个点作为agent位置 =====
-            # 原因：current_pose和trajectory_points可能有坐标系转换的细微差异
-            # 使用轨迹最后点可以确保agent和轨迹完美对齐
-            if len(trajectory_points) > 0:
-                # 轨迹点存储格式：(map_x, map_y)
-                last_traj_x, last_traj_y = trajectory_points[-1]
-                
-                # 转换到显示坐标系（480x480）
-                # 与轨迹点转换保持完全一致
-                agent_x = last_traj_y * 480 / w  # 列 → X
-                agent_y = (h - 1 - last_traj_x) * 480 / h  # 行 → Y（翻转）
-                
-                print(f"[DEBUG Global Map] Using trajectory last point: map_x={last_traj_x}, map_y={last_traj_y} -> agent_x={agent_x:.1f}, agent_y={agent_y:.1f}")
-            else:
-                # 如果没有轨迹点，回退到使用current_pose
-                map_x = int(current_x * 100.0 / self.resolution)
-                map_y = int(current_y * 100.0 / self.resolution)
-                agent_x = map_y * 480 / w
-                agent_y = (h - 1 - map_x) * 480 / h
-                print(f"[DEBUG Global Map] Using current_pose: map_x={map_x}, map_y={map_y} -> agent_x={agent_x:.1f}, agent_y={agent_y:.1f}")
+            # 计算agent在地图中的位置（map坐标系）
+            # current_x, current_y是真实世界坐标（米）
+            # 转换为地图像素坐标：map_x是行索引，map_y是列索引
+            map_x = int(current_x * 100.0 / self.resolution)
+            map_y = int(current_y * 100.0 / self.resolution)
+            
+            # 转换到显示坐标系（480x480）
+            # 注意：需要翻转Y轴，与轨迹点保持一致
+            agent_x = map_y * 480 / w  # 列 → X
+            agent_y = (h - 1 - map_x) * 480 / h  # 行 → Y（翻转）
             
             # ===== 变换矩阵数学原理 =====
             # 
@@ -232,14 +222,11 @@ class MapVisualizer:
             current_center = np.array([agent_x, agent_y, 1])  # agent当前在这里
             rotated_center = rotation_matrix @ current_center  # 旋转后agent在这里
             
-            print(f"[DEBUG Global Map] Before translation: rotated_center={rotated_center[:2]}")
-            
             # 计算平移量：从rotated_center到target_center需要移动多少
             translation = target_center[:2] - rotated_center[:2]
             rotation_matrix[0, 2] += translation[0]  # 添加X方向平移
             rotation_matrix[1, 2] += translation[1]  # 添加Y方向平移
-            
-            print(f"[DEBUG Global Map] Translation applied: {translation}, rotation_angle={rotation_angle:.1f}°")
+
             
             global_map_rotated = cv2.warpAffine(
                 sem_map_vis, rotation_matrix, (480, 480),
@@ -342,10 +329,10 @@ class MapVisualizer:
                     point = np.array([display_x, display_y, 1])
                     rotated_point = rotation_matrix @ point
                     
-                    # 绘制深红色圆圈（BGR=(0, 0, 139)）
+                    # 绘制蓝色圆圈（BGR=(255, 0, 0)）
                     cv2.circle(global_map_with_trajectory,
                               (int(rotated_point[0]), int(rotated_point[1])),
-                              8, (0, 0, 139), -1)  # 深红色填充
+                              8, (255, 0, 0), -1)  # 蓝色填充
                     cv2.circle(global_map_with_trajectory,
                               (int(rotated_point[0]), int(rotated_point[1])),
                               8, (255, 255, 255), 1)  # 白色边框

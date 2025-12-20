@@ -151,7 +151,7 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 - **Orange line**: Trajectory from previous subtask start to current position
 - **Red circle with arrow**: Current position, arrow points to Front direction
 - **Purple markers with labels**: Previous Detected Landmark: {detected_landmarks}
-- **Dark red circles with white numbers**: Historical waypoints (see below)
+- **Blue circles with white numbers**: Historical waypoints (see below)
 
 # Spatial Memory (Waypoint History):
 {waypoint_summary}
