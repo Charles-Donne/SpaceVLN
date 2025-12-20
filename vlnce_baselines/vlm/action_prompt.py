@@ -21,7 +21,7 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 **IMAGE 2 - Detection**: Landmark identification: {detected_landmarks}
 **IMAGE 3 - Local Map** (Bird's-eye view): Spatial layout around you
 - **Red arrow**: Your position & facing direction (arrow points FRONT, map top = FRONT)
-- **Purple markers**: Destination landmarks
+- **Purple markers**: Destination landmarks: {detected_landmarks}
 - **Black**: Obstacles - **MUST AVOID**
 - **Green/White**: Safe paths
 - **Orange line**: Trajectory history

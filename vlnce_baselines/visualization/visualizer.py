@@ -164,17 +164,31 @@ class MapVisualizer:
             agent_x = map_y * 480 / w  # 列 → X
             agent_y = (h - 1 - map_x) * 480 / h  # 行 → Y（翻转）
             
-            # 旋转使箭头朝正上方
+            # 旋转使箭头朝正上方，并将agent移动到(240, 240)
             rotation_angle = 90 - current_o
-            rotation_center = (agent_x, agent_y)
-            rotation_matrix = cv2.getRotationMatrix2D(rotation_center, rotation_angle, 1.0)
             
-            # ✅ 添加平移步骤：将旋转后的agent移动到(240, 240)
-            target_center = np.array([240, 240, 1])
-            current_center = np.array([agent_x, agent_y, 1])
-            translation = target_center[:2] - rotation_matrix @ current_center
-            rotation_matrix[0, 2] += translation[0]
-            rotation_matrix[1, 2] += translation[1]
+            # 计算需要的平移：将agent从当前位置移动到(240, 240)
+            translation_x = 240 - agent_x
+            translation_y = 240 - agent_y
+            
+            # 创建旋转+平移矩阵：以(240, 240)为中心旋转
+            rotation_matrix = cv2.getRotationMatrix2D((240, 240), rotation_angle, 1.0)
+            
+            # 添加平移：先平移到(240,240)，然后旋转
+            # 需要调整平移量，因为旋转是围绕(240,240)进行的
+            # 先计算agent相对于(240,240)的偏移
+            offset_x = agent_x - 240
+            offset_y = agent_y - 240
+            
+            # 旋转偏移向量
+            cos_a = np.cos(np.radians(rotation_angle))
+            sin_a = np.sin(np.radians(rotation_angle))
+            rotated_offset_x = cos_a * offset_x - sin_a * offset_y
+            rotated_offset_y = sin_a * offset_x + cos_a * offset_y
+            
+            # 调整平移量：抵消旋转后的偏移
+            rotation_matrix[0, 2] -= rotated_offset_x
+            rotation_matrix[1, 2] -= rotated_offset_y
             
             global_map_rotated = cv2.warpAffine(
                 sem_map_vis, rotation_matrix, (480, 480),
@@ -383,16 +397,25 @@ class MapVisualizer:
         agent_x = map_y * 480 / w  # 列 → X
         agent_y = (h - 1 - map_x) * 480 / h  # 行 → Y（翻转）
         
+        # 旋转使箭头朝正上方，并将agent移动到(240, 240)
         rotation_angle = 90 - current_o
-        rotation_center = (agent_x, agent_y)
-        rotation_matrix = cv2.getRotationMatrix2D(rotation_center, rotation_angle, 1.0)
         
-        # 添加平移到中心
-        target_center = np.array([240, 240, 1])
-        current_center = np.array([agent_x, agent_y, 1])
-        translation = target_center[:2] - rotation_matrix @ current_center
-        rotation_matrix[0, 2] += translation[0]
-        rotation_matrix[1, 2] += translation[1]
+        # 计算agent相对于(240,240)的偏移
+        offset_x = agent_x - 240
+        offset_y = agent_y - 240
+        
+        # 创建旋转+平移矩阵：以(240, 240)为中心旋转
+        rotation_matrix = cv2.getRotationMatrix2D((240, 240), rotation_angle, 1.0)
+        
+        # 旋转偏移向量
+        cos_a = np.cos(np.radians(rotation_angle))
+        sin_a = np.sin(np.radians(rotation_angle))
+        rotated_offset_x = cos_a * offset_x - sin_a * offset_y
+        rotated_offset_y = sin_a * offset_x + cos_a * offset_y
+        
+        # 调整平移量：抵消旋转后的偏移
+        rotation_matrix[0, 2] -= rotated_offset_x
+        rotation_matrix[1, 2] -= rotated_offset_y
         
         local_map = cv2.warpAffine(sem_map_vis, rotation_matrix, (480, 480),
                                     flags=cv2.INTER_NEAREST,
