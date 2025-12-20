@@ -191,13 +191,8 @@ class VLMNavigationController(InteractiveNavigationController):
         """
         print(f"\n[环视建图] {phase}...")
         
-        # ===== 关键修复：环视前清空旧landmark和轨迹 =====
-        # 这样环视期间渲染的地图不会显示上一个子任务的landmark标注
-        print("[状态清理] 清空轨迹和landmark（准备环视建图）")
-        self.mapper.clear_trajectory()
-        self.landmark_classes = []
-        if hasattr(self, 'current_step_landmarks'):
-            self.current_step_landmarks.clear()
+        # 注意：不清空landmark，让VLM能看到旧landmark来判断子任务是否完成
+        # 轨迹和landmark的清空会在verify_and_replan中VLM输出后进行
         
         # 存储12张环视图像用于合成全景图（step 1-12）
         lookaround_images = []
@@ -638,9 +633,14 @@ class VLMNavigationController(InteractiveNavigationController):
         self.thinking_outputs.append(thinking_record)
         self.save_manager.save_thinking(thinking_record)
         
-        # 注意：轨迹和landmark已经在look_around_and_collect开始时清空
-        # 这里只需要重置progress_summary即可
-        self.progress_summary = ""  # 重置进度摘要
+        # ===== 关键修复：VLM输出后清空旧状态，然后设置新状态 =====
+        # 这样VLM能看到旧landmark来判断完成度，之后切换到新landmark
+        print("\n[状态清理] VLM已输出 - 清空旧landmark和轨迹（准备新子任务）")
+        self.mapper.clear_trajectory()  # 清空轨迹
+        self.landmark_classes = []      # 清空landmark标注（马上会重新设置）
+        self.progress_summary = ""      # 重置进度摘要
+        if hasattr(self, 'current_step_landmarks'):
+            self.current_step_landmarks.clear()  # 清空step landmark记录
         
         if is_completed:
             attempt_letter = chr(ord('a') + self.subtask_attempt)
