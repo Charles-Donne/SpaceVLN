@@ -170,13 +170,14 @@ class MapVisualizer:
             rotation_matrix = cv2.getRotationMatrix2D(rotation_center, rotation_angle, 1.0)
             
             # 添加平移步骤：将旋转后的agent移动到(240, 240)
-            # 修复：平移方向反过来
+            # 修复：地图应该向相反方向移动
             target_center = np.array([240, 240, 1])
             current_center = np.array([agent_x, agent_y, 1])
             rotated_center = rotation_matrix @ current_center
             translation = target_center[:2] - rotated_center[:2]
-            rotation_matrix[0, 2] += translation[0]
-            rotation_matrix[1, 2] += translation[1]
+            # 地图应该向相反方向移动，才能让agent到达目标位置
+            rotation_matrix[0, 2] -= translation[0]
+            rotation_matrix[1, 2] -= translation[1]
             
             global_map_rotated = cv2.warpAffine(
                 sem_map_vis, rotation_matrix, (480, 480),
@@ -390,13 +391,14 @@ class MapVisualizer:
         rotation_matrix = cv2.getRotationMatrix2D(rotation_center, rotation_angle, 1.0)
         
         # 添加平移到中心
-        # 修复：平移方向反过来
+        # 修夏：地图应该向相反方向移动
         target_center = np.array([240, 240, 1])
         current_center = np.array([agent_x, agent_y, 1])
         rotated_center = rotation_matrix @ current_center
         translation = target_center[:2] - rotated_center[:2]
-        rotation_matrix[0, 2] += translation[0]
-        rotation_matrix[1, 2] += translation[1]
+        # 地图应该向相反方向移动，才能让agent到达目标位置
+        rotation_matrix[0, 2] -= translation[0]
+        rotation_matrix[1, 2] -= translation[1]
         
         local_map = cv2.warpAffine(sem_map_vis, rotation_matrix, (480, 480),
                                     flags=cv2.INTER_NEAREST,
@@ -646,7 +648,7 @@ class MapVisualizer:
             x1, y1, x2, y2 = map(int, bbox)
             cv2.rectangle(detection_vis, (x1, y1), (x2, y2), color, thickness)
             
-            # 准备标签文本（Landmark专属，主流标注风格：框下方显示）
+            # 准备标签文本（在框内部上方显示）
             text = f"{label_name} {confidence:.2f}"
             font = cv2.FONT_HERSHEY_SIMPLEX
             font_scale = 0.6
@@ -655,15 +657,19 @@ class MapVisualizer:
             # 计算文本尺寸
             (text_w, text_h), baseline = cv2.getTextSize(text, font, font_scale, font_thickness)
             
-            # 画标签背景（黄色，在框下方）
+            # 文本位置：框内部顶端
+            text_x = x1 + 5
+            text_y = y1 + text_h + 5
+            
+            # 画黄色背景（填充）
             cv2.rectangle(detection_vis, 
-                         (x1, y2), 
-                         (x1 + text_w + 5, y2 + text_h + baseline + 5), 
+                         (text_x - 2, text_y - text_h - 2), 
+                         (text_x + text_w + 2, text_y + baseline + 2), 
                          color, -1)
             
-            # 画标签文字（黑色，清晰易读，在框下方）
+            # 画黑色文字（在黄色背景上清晰可见）
             cv2.putText(detection_vis, text, 
-                       (x1 + 2, y2 + text_h + baseline),
+                       (text_x, text_y),
                        font, font_scale, (0, 0, 0), font_thickness)
         
         # 返回检测可视化和检测到的landmark列表

@@ -98,9 +98,9 @@ class SaveManager:
         with open(os.path.join(thinking_dir, "response.json"), 'w', encoding='utf-8') as f:
             json.dump(thinking_record['response'], f, ensure_ascii=False, indent=2)
         
-        # 更新汇总文件到records/
+        # 更新汇总文件到records/（排除input_images和prompt，避免文件过大）
         self._update_summary_file("thinking_summary.json", thinking_record, 
-                                 exclude_keys=['input_images'])
+                                 exclude_keys=['input_images', 'prompt'])
     
     def save_action(self, action_record: Dict, subtask_info: Optional[Dict] = None):
         """
@@ -150,9 +150,9 @@ class SaveManager:
         with open(os.path.join(action_dir, "response.json"), 'w', encoding='utf-8') as f:
             json.dump(action_record.get('response', {}), f, ensure_ascii=False, indent=2)
         
-        # 更新汇总文件到records/
+        # 更新汇总文件到records/（排除input_images和prompt，避免文件过大）
         self._update_summary_file("action_summary.json", action_record, 
-                                 exclude_keys=['input_images'])
+                                 exclude_keys=['input_images', 'prompt'])
     
     def save_waypoint_memory(self, waypoint_memory: List[Dict], 
                             instruction: str, current_step: int):
