@@ -233,7 +233,7 @@ class VLMNavigationController(InteractiveNavigationController):
             # 自动从mapper获取waypoint并渲染（忽略descriptions，可视化不需要）
             wp_positions, wp_ids, _ = self.mapper.get_waypoints()
             rgb_bgr = cv2.cvtColor(obs[0]['rgb'], cv2.COLOR_RGB2BGR)
-            paths, landmarks = self.visualizer.save_step_visualization(
+            paths, detected_landmarks_step = self.visualizer.save_step_visualization(
                 step=look_step,
                 episode_id=self.current_episode_id,
                 rgb=rgb_bgr,
@@ -252,8 +252,15 @@ class VLMNavigationController(InteractiveNavigationController):
                     'min_area_threshold': self.landmark_min_area_threshold
                 },
                 waypoint_positions=wp_positions,
-                waypoint_ids=wp_ids
+                waypoint_ids=wp_ids,
+                phase=phase
             )
+            
+            # 累积当前step检测到的landmarks
+            if detected_landmarks_step:
+                if not hasattr(self, 'current_step_landmarks'):
+                    self.current_step_landmarks = {}
+                self.current_step_landmarks[look_step] = detected_landmarks_step
             
             # 保存导航可视化（RGB+俯视图拼接）
             if self.nav_visualizer:
@@ -378,9 +385,10 @@ class VLMNavigationController(InteractiveNavigationController):
             else:
                 print(f"  ⚠️  {direction_name} 未找到: {panorama_filename}")
         
-        # 获取地图（直接使用episode目录下的step_0012地图）
-        global_map_path = os.path.join(self.episode_dir, 'global_map', f'step_{12:04d}.png')
-        local_map_path = os.path.join(self.episode_dir, 'local_map', f'step_{12:04d}.png')
+        # 获取地图（使用当前step的地图，每次环视后current_step已更新）
+        # current_step是最后一次环视后的step，地图文件名需要加上phase后缀
+        global_map_path = os.path.join(self.episode_dir, 'global_map', f'step_{self.current_step:04d}_{phase}.png')
+        local_map_path = os.path.join(self.episode_dir, 'local_map', f'step_{self.current_step:04d}_{phase}.png')
         
         if not os.path.exists(global_map_path):
             print(f"  ⚠️  Global Map 未找到")
@@ -430,12 +438,13 @@ class VLMNavigationController(InteractiveNavigationController):
         
         # 记录thinking输出（包含输入图片和prompt）
         # 此时current_step=12（环视完成），规划在step 12之后完成
+        # 初始规划的subtask_id为 "1a" (第1个子任务，第a次尝试)
         thinking_record = {
             "step": self.current_step,  # 12
             "phase": "initial_planning",
-            "subtask_count": self.subtask_count + 1,
+            "subtask_count": 1,  # 初始化总是第1个子任务
             "subtask_attempt": 0,  # 初始规划总是a
-            "subtask_id": f"{self.subtask_count + 1}a",  # 如 "1a"
+            "subtask_id": "1a",  # 初始化总是1a
             "prompt_type": "initial",
             "prompt": prompt,  # 保存prompt
             "response": response,
@@ -453,9 +462,10 @@ class VLMNavigationController(InteractiveNavigationController):
         self.thinking_outputs.append(thinking_record)
         self.save_manager.save_thinking(thinking_record)
         
-        # 保存子任务
+        # 保存子任务并初始化计数
         self.current_subtask = response
-        self.subtask_count += 1
+        self.subtask_count = 1  # 初始化为第1个子任务
+        self.subtask_attempt = 0  # 第a次尝试
         self.progress_summary = ""
         
         # 记录当前位置信息（用于后续验证参考）
@@ -491,15 +501,18 @@ class VLMNavigationController(InteractiveNavigationController):
         if subtask_landmark and subtask_landmark in self.mapping_classes:
             self.landmark_classes = [subtask_landmark]
             self.target_landmark = subtask_landmark
-            print(f"  🎯 Landmark: {self.target_landmark}")
+            print(f"  🎯 Target Landmark: {self.target_landmark}")
         elif landmarks_in_instruction:
             self.landmark_classes = landmarks_in_instruction
             self.target_landmark = landmarks_in_instruction[0]  # 主要目标
-            print(f"  🎯 Landmarks from instruction: {', '.join(self.landmark_classes)}")
+            print(f"  🎯 Target Landmarks: {', '.join(self.landmark_classes)}")
         else:
             self.target_landmark = None
             self.landmark_classes = []
-            print(f"  ℹ️  No landmarks to mark")
+            print(f"  ℹ️  No target landmark")
+        
+        # ⚠️ 重要：self.classes始终保持为所有mapping_classes，用于完整的语义建图
+        # landmark_classes只用于可视化标注和导航决策
         
         # 打印子任务信息
         self._print_subtask_info(response, is_initial=True)
@@ -546,8 +559,18 @@ class VLMNavigationController(InteractiveNavigationController):
         # 地图已包含waypoint标记（在visualizer.save_step_visualization中渲染）
         global_map_for_llm = global_map
         
-        # 获取已检测到的landmark类别
-        detected_landmarks = list(self.detected_classes) if hasattr(self, 'detected_classes') else []
+        # 获取已检测到的landmark类别 - 汇总环视12步中检测到的所有landmarks
+        detected_landmarks = []
+        if hasattr(self, 'current_step_landmarks') and self.current_step_landmarks:
+            # 汇总12步环视中所有检测到的landmarks
+            all_landmarks = set()
+            for step_idx, landmarks_list in self.current_step_landmarks.items():
+                for name, conf in landmarks_list:
+                    all_landmarks.add(name)
+            detected_landmarks = sorted(list(all_landmarks))
+        else:
+            # 退化使用全局detected_classes
+            detected_landmarks = sorted(list(self.detected_classes)) if hasattr(self, 'detected_classes') else []
         
         # 获取waypoint摘要
         waypoint_summary = self._get_waypoint_summary()
@@ -573,21 +596,29 @@ class VLMNavigationController(InteractiveNavigationController):
         # 记录thinking输出（包含输入图片和prompt）
         # 此时current_step已经是验证扫描完成后的step（+12）
         attempt_letter = chr(ord('a') + self.subtask_attempt)
-        next_subtask_count = self.subtask_count + (1 if is_completed and not response.get('is_final_subtask', False) else 0)
-        next_attempt = 0 if is_completed else self.subtask_attempt + 1
+        subtask_id = f"{self.subtask_count}{attempt_letter}"  # 当前验证的子任务，如 "1a"
+        
+        # 计算下一个subtask_id
+        if is_completed and not response.get('is_final_subtask', False):
+            next_subtask_count = self.subtask_count + 1
+            next_attempt = 0
+        else:
+            next_subtask_count = self.subtask_count
+            next_attempt = self.subtask_attempt + 1 if not is_completed else 0
         next_attempt_letter = chr(ord('a') + next_attempt)
         
         thinking_record = {
             "step": self.current_step,  # 验证扫描完成后的step
-            "phase": phase,  # 已包含attempt，如 "verify_1a"
+            "phase": f"verify_{subtask_id}",  # verify_1a, verify_2b, etc.
             "subtask_count": self.subtask_count,
             "subtask_attempt": self.subtask_attempt,
-            "subtask_id": f"{self.subtask_count}{attempt_letter}",  # 当前验证的子任务，如 "1a"
+            "subtask_id": subtask_id,  # 当前验证的子任务，如 "1a"
             "next_subtask_id": f"{next_subtask_count}{next_attempt_letter}" if not response.get('is_final_subtask', False) else "final",
             "prompt_type": "verification",
             "is_completed": is_completed,
             "response": response,
             "timestamp": datetime.now().isoformat(),
+            "detected_landmarks": detected_landmarks,  # 记录传递给LLM的landmarks
             # 保存输入图片路径（与PANORAMA_CONFIG顺序一致：Front, Left, Back, Right）
             "input_images": {
                 "global_map.png": global_map_for_llm,
@@ -608,6 +639,8 @@ class VLMNavigationController(InteractiveNavigationController):
         self.mapper.clear_trajectory()  # 清空轨迹
         self.landmark_classes = []      # 清空landmark标注（会在后面重新设置）
         self.progress_summary = ""      # 重置进度摘要
+        if hasattr(self, 'current_step_landmarks'):
+            self.current_step_landmarks.clear()  # 清空step landmark记录
         
         if is_completed:
             attempt_letter = chr(ord('a') + self.subtask_attempt)
@@ -649,15 +682,17 @@ class VLMNavigationController(InteractiveNavigationController):
             if subtask_landmark and subtask_landmark in self.mapping_classes:
                 self.landmark_classes = [subtask_landmark]
                 self.target_landmark = subtask_landmark
-                print(f"  🎯 New Landmark: {self.target_landmark}")
+                print(f"  🎯 New Target Landmark: {self.target_landmark}")
             elif landmarks_in_instruction:
                 self.landmark_classes = landmarks_in_instruction
                 self.target_landmark = landmarks_in_instruction[0]  # 主要目标
-                print(f"  🎯 New Landmarks from instruction: {', '.join(self.landmark_classes)}")
+                print(f"  🎯 New Target Landmarks: {', '.join(self.landmark_classes)}")
             else:
                 self.target_landmark = None
                 self.landmark_classes = []
-                print(f"  ℹ️  No landmarks to mark")
+                print(f"  ℹ️  No target landmark")
+            
+            # ⚠️ 重要：self.classes始终保持为所有mapping_classes，用于完整的语义建图
             
             self._print_subtask_info(response)
         else:
@@ -689,15 +724,17 @@ class VLMNavigationController(InteractiveNavigationController):
             if subtask_landmark and subtask_landmark in self.mapping_classes:
                 self.landmark_classes = [subtask_landmark]
                 self.target_landmark = subtask_landmark
-                print(f"  🎯 Updated Landmark: {self.target_landmark}")
+                print(f"  🎯 Updated Target Landmark: {self.target_landmark}")
             elif landmarks_in_instruction:
                 self.landmark_classes = landmarks_in_instruction
                 self.target_landmark = landmarks_in_instruction[0]
-                print(f"  🎯 Updated Landmarks: {', '.join(self.landmark_classes)}")
+                print(f"  🎯 Updated Target Landmarks: {', '.join(self.landmark_classes)}")
             else:
                 self.target_landmark = None
                 self.landmark_classes = []
-                print(f"  ℹ️  No landmarks to mark")
+                print(f"  ℹ️  No target landmark")
+            
+            # ⚠️ 重要：self.classes始终保持为所有mapping_classes，用于完整的语义建图
             
             # 输出LLM验证结果和调整后的子任务
             self._print_subtask_info(response, is_initial=False)
@@ -762,8 +799,22 @@ class VLMNavigationController(InteractiveNavigationController):
         if not os.path.exists(local_map):
             local_map = None
         
-        # 获取已检测的landmark类别
-        detected_landmarks = ', '.join(self.detected_classes) if hasattr(self, 'detected_classes') and self.detected_classes else None
+        # 获取当前step检测到的landmark类别
+        # 由于detection现在只检测subtask_landmark，直接传递当前step检测到的结果
+        detected_landmarks = None
+        if hasattr(self, 'current_step_landmarks') and last_step in self.current_step_landmarks:
+            # 当前step检测到的landmarks: [(name, confidence), ...]
+            step_landmarks = self.current_step_landmarks[last_step]
+            if step_landmarks:
+                # 格式化为 "name1 (conf1), name2 (conf2)"
+                detected_landmarks = ', '.join([f"{name} ({conf:.2f})" for name, conf in step_landmarks])
+        
+        # 退化策略：如果当前step没有检测结果，报告"未检测到"
+        if not detected_landmarks:
+            if hasattr(self, 'target_landmark') and self.target_landmark:
+                detected_landmarks = f"No {self.target_landmark} detected in current view"
+            else:
+                detected_landmarks = "No landmarks detected"
         
         # 调用VLM决策
         result = self.action_executor.decide_action(
@@ -804,12 +855,12 @@ class VLMNavigationController(InteractiveNavigationController):
             "action_id": action_id,
             "response": response,
             "timestamp": datetime.now().isoformat(),
-            # 保存输入图片路径（使用当前step的图像作为决策依据）
+            "detected_landmarks": detected_landmarks,  # 记录传递给VLM的landmarks
+            # 保存输入图片路径（action模块只使用3张图：RGB + Detection + Local Map）
             "input_images": {
                 "rgb.png": fp_image,
                 "detection.png": detection_image,
                 "local_map.png": local_map,
-                "global_map.png": self.latest_global_map if self.latest_global_map and os.path.exists(self.latest_global_map) else None,
             },
             "prompt": prompt,
         }
@@ -856,7 +907,11 @@ class VLMNavigationController(InteractiveNavigationController):
         Returns:
             步骤结果字典
         """
-        result = self.step(action, save_vis)
+        # 生成phase标识: action1a, action2b等
+        attempt_letter = chr(ord('a') + self.subtask_attempt)
+        phase = f"action{self.subtask_count}{attempt_letter}"
+        
+        result = self.step(action, save_vis, phase)
         # 缓存最新观察和info用于下次VLM决策和可视化
         self.latest_obs = result.get('obs', None)
         self.latest_info = result.get('info', None)

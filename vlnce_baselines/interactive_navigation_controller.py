@@ -163,7 +163,7 @@ class InteractiveNavigationController:
             print(f"📍 Landmark: {', '.join(landmarks_found)}")
         print("="*60 + "\n")
     
-    def step(self, action: int, save_vis: bool = True) -> Dict[str, Any]:
+    def step(self, action: int, save_vis: bool = True, phase: str = "action") -> Dict[str, Any]:
         """执行一步动作，更新地图并保存可视化"""
         # ⚠️ 关键修复：在使用current_step之前先累加，避免覆盖环视最后一步
         self.current_step += 1
@@ -220,7 +220,8 @@ class InteractiveNavigationController:
                     'min_area_threshold': self.landmark_min_area_threshold
                 },
                 waypoint_positions=wp_positions,
-                waypoint_ids=wp_ids
+                waypoint_ids=wp_ids,
+                phase=phase
             )
         
         return {

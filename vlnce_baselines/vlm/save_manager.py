@@ -64,13 +64,19 @@ class SaveManager:
         """
         保存LLM思考输出
         
-        结构: thinking/subtask_Na/ (a/b/c标识尝试次数)
+        结构: thinking/subtask_Xa/
+          - subtask_1a/ - 初始规划
+          - subtask_1b/ - 验证未完成，继续尝试
+          - subtask_2a/ - 验证完成，新子任务
+          
+        每个目录包含:
             - input_images/ (输入图片)
+            - prompt.txt (prompt)
             - response.json (响应)
         
         同时更新records/thinking_summary.json汇总文件
         """
-        # 使用subtask_id（如 "1a", "1b"）作为目录名
+        # 使用subtask_id（如 "1a", "2b"）构建目录名
         subtask_id = thinking_record.get('subtask_id', f"{thinking_record.get('subtask_count', 1)}a")
         thinking_dir = os.path.join(self.episode_dir, "thinking", f"subtask_{subtask_id}")
         os.makedirs(thinking_dir, exist_ok=True)

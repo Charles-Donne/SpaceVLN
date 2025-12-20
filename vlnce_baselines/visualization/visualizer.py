@@ -153,11 +153,16 @@ class MapVisualizer:
         if current_pose is not None:
             current_x, current_y, current_o = current_pose
             
-            # 计算agent在地图中的位置
-            map_x = current_x * 100.0 / self.resolution
-            map_y = current_y * 100.0 / self.resolution
-            agent_x = map_x * 480 / h
-            agent_y = (w - map_y) * 480 / w
+            # 计算agent在地图中的位置（map坐标系）
+            # current_x, current_y是真实世界坐标（米）
+            # 转换为地图像素坐标：map_x是行索引，map_y是列索引
+            map_x = int(current_x * 100.0 / self.resolution)
+            map_y = int(current_y * 100.0 / self.resolution)
+            
+            # 转换到显示坐标系（480x480）
+            # 注意：需要翻转Y轴，与轨迹点保持一致
+            agent_x = map_y * 480 / w  # 列 → X
+            agent_y = (h - 1 - map_x) * 480 / h  # 行 → Y（翻转）
             
             # 旋转使箭头朝正上方
             rotation_angle = 90 - current_o
@@ -366,10 +371,17 @@ class MapVisualizer:
         
         # ===== 阶段3: 旋转地图（Agent朝上居中）=====
         current_x, current_y, current_o = current_pose
-        map_x = current_x * 100.0 / self.resolution
-        map_y = current_y * 100.0 / self.resolution
-        agent_x = map_x * 480 / h
-        agent_y = (w - map_y) * 480 / w
+        
+        # 计算agent在地图中的位置（map坐标系）
+        # current_x, current_y是真实世界坐标（米）
+        # 转换为地图像素坐标：map_x是行索引，map_y是列索引
+        map_x = int(current_x * 100.0 / self.resolution)
+        map_y = int(current_y * 100.0 / self.resolution)
+        
+        # 转换到显示坐标系（480x480）
+        # 注意：需要翻转Y轴，与轨迹点保持一致
+        agent_x = map_y * 480 / w  # 列 → X
+        agent_y = (h - 1 - map_x) * 480 / h  # 行 → Y（翻转）
         
         rotation_angle = 90 - current_o
         rotation_center = (agent_x, agent_y)
@@ -650,13 +662,12 @@ class MapVisualizer:
                        (x1 + 2, y2 + text_h + baseline),
                        font, font_scale, (0, 0, 0), font_thickness)
         
-        # 静默处理，不输出检测统计
-        
-        return detection_vis
+        # 返回检测可视化和检测到的landmark列表
+        return detection_vis, detected_landmarks
     
     # ========== 保存方法 ==========
     
-    def save_rgb(self, step: int, episode_id: int, rgb: np.ndarray) -> str:
+    def save_rgb(self, step: int, episode_id: int, rgb: np.ndarray, phase: str = "action") -> str:
         """
         保存原始RGB帧
         
@@ -664,19 +675,21 @@ class MapVisualizer:
             step: 步数
             episode_id: episode ID
             rgb: RGB图像 (H, W, 3) BGR格式
+            phase: 阶段标识 ("initial", "action1a", "verify1a" 等)
         
         Returns:
             save_path: 保存路径
         """
         episode_dir = self._create_episode_directories(episode_id)
-        save_path = os.path.join(episode_dir, 'rgb', f'step_{step:04d}.png')
+        save_path = os.path.join(episode_dir, 'rgb', f'step_{step:04d}_{phase}.png')
         cv2.imwrite(save_path, rgb)
         return save_path
     
     def save_global_map(self, 
                        step: int,
                        episode_id: int,
-                       global_map: np.ndarray) -> str:
+                       global_map: np.ndarray,
+                       phase: str = "action") -> str:
         """
         保存全局地图（裁剪为400×400）
         
@@ -684,6 +697,7 @@ class MapVisualizer:
             step: 步数
             episode_id: episode ID
             global_map: 旋转后的全局地图 (480×480)
+            phase: 阶段标识 ("initial", "action1a", "verify1a" 等)
         
         Returns:
             save_path: 保存路径
@@ -696,14 +710,15 @@ class MapVisualizer:
         
         # 简化路径：data/manual_navigation/episode_X/global_map/step-Y.png
         episode_dir = self._create_episode_directories(episode_id)
-        save_path = os.path.join(episode_dir, 'global_map', f'step_{step:04d}.png')
+        save_path = os.path.join(episode_dir, 'global_map', f'step_{step:04d}_{phase}.png')
         cv2.imwrite(save_path, global_map_cropped, [cv2.IMWRITE_PNG_COMPRESSION, 1])
         return save_path
     
     def save_local_map(self,
                       step: int,
                       episode_id: int,
-                      local_map: np.ndarray) -> str:
+                      local_map: np.ndarray,
+                      phase: str = "action") -> str:
         """
         保存局部地图
         
@@ -711,6 +726,7 @@ class MapVisualizer:
             step: 步数
             episode_id: episode ID
             local_map: 局部地图 (400×400)
+            phase: 阶段标识 ("initial", "action1a", "verify1a" 等)
         
         Returns:
             save_path: 保存路径
@@ -720,14 +736,15 @@ class MapVisualizer:
         
         # 简化路径：data/manual_navigation/episode_X/local_map/step_XXXX.png
         episode_dir = self._create_episode_directories(episode_id)
-        save_path = os.path.join(episode_dir, 'local_map', f'step_{step:04d}.png')
+        save_path = os.path.join(episode_dir, 'local_map', f'step_{step:04d}_{phase}.png')
         cv2.imwrite(save_path, local_map, [cv2.IMWRITE_PNG_COMPRESSION, 1])
         return save_path
     
     def save_detection(self,
                       step: int,
                       episode_id: int,
-                      detection_vis: np.ndarray) -> str:
+                      detection_vis: np.ndarray,
+                      phase: str = "action") -> str:
         """
         保存检测可视化
         
@@ -735,6 +752,7 @@ class MapVisualizer:
             step: 步数
             episode_id: episode ID
             detection_vis: 检测可视化图像
+            phase: 阶段标识 ("initial", "action1a", "verify1a" 等)
         
         Returns:
             save_path: 保存路径
@@ -744,7 +762,7 @@ class MapVisualizer:
         
         # 简化路径：data/manual_navigation/episode_X/detection/step_XXXX.png
         episode_dir = self._create_episode_directories(episode_id)
-        save_path = os.path.join(episode_dir, 'detection', f'step_{step:04d}.png')
+        save_path = os.path.join(episode_dir, 'detection', f'step_{step:04d}_{phase}.png')
         cv2.imwrite(save_path, detection_vis)
         return save_path
     
@@ -767,7 +785,8 @@ class MapVisualizer:
                                landmark_config: Optional[Dict] = None,
                                waypoint_positions: Optional[List[Tuple[int, int]]] = None,
                                waypoint_ids: Optional[List[int]] = None,
-                               masks: Optional[np.ndarray] = None) -> Tuple[Dict[str, str], List]:  # 兼容旧参数
+                               masks: Optional[np.ndarray] = None,
+                               phase: str = "action") -> Tuple[Dict[str, str], List]:  # 兼容旧参数
         """
         一键保存当前步骤的所有可视化（支持新detection渲染 + 平滑轨迹线 + waypoint标记）
         
@@ -780,6 +799,7 @@ class MapVisualizer:
             landmark_classes: Landmark类别列表
             waypoint_positions: [(map_x, map_y), ...] waypoint位置列表（可选，从mapper.get_waypoints()获取）
             waypoint_ids: [1, 2, 3, ...] waypoint ID列表（可选，从mapper.get_waypoints()获取）
+            phase: 阶段标识 ("initial", "action1a", "verify1a" 等)
         
         Returns:
             paths: 保存路径字典 {'rgb', 'global_map', 'local_map', 'detection'}
@@ -792,7 +812,7 @@ class MapVisualizer:
         paths = {}
         
         # 1. 保存RGB
-        paths['rgb'] = self.save_rgb(step, episode_id, rgb)
+        paths['rgb'] = self.save_rgb(step, episode_id, rgb, phase)
         
         # 2. 渲染并保存全局地图（floor通过形态学方法计算 + 平滑轨迹线 + waypoint标记）
         _, global_map_with_trajectory, landmarks, global_map_clean = self.render_global_map(
@@ -800,7 +820,7 @@ class MapVisualizer:
             current_pose, landmark_classes, landmark_config,
             waypoint_positions, waypoint_ids
         )
-        paths['global_map'] = self.save_global_map(step, episode_id, global_map_with_trajectory)
+        paths['global_map'] = self.save_global_map(step, episode_id, global_map_with_trajectory, phase)
         
         # 3. 渲染并保存局部地图（独立渲染，不继承全局地图 + waypoint标记）
         local_map = self.render_local_map(
@@ -808,15 +828,16 @@ class MapVisualizer:
             floor, landmark_classes, landmark_config, hfov,
             waypoint_positions, waypoint_ids
         )
-        paths['local_map'] = self.save_local_map(step, episode_id, local_map)        # 4. 渲染并保存检测结果
+        paths['local_map'] = self.save_local_map(step, episode_id, local_map, phase)        # 4. 渲染并保存检测结果
+        detected_landmarks_step = []
         if detections is not None and labels is not None:
-            detection_vis = self.render_detection_bbox(
+            detection_vis, detected_landmarks_step = self.render_detection_bbox(
                 rgb, detections, labels, 
                 landmark_classes, mapping_classes
             )
-            paths['detection'] = self.save_detection(step, episode_id, detection_vis)
+            paths['detection'] = self.save_detection(step, episode_id, detection_vis, phase)
         
-        return paths, landmarks
+        return paths, detected_landmarks_step
     
     # ========== 辅助方法 ==========
     
