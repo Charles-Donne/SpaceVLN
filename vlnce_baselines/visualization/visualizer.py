@@ -153,49 +153,74 @@ class MapVisualizer:
         if current_pose is not None:
             current_x, current_y, current_o = current_pose
             
-            # 计算agent在地图中的位置（map坐标系）
-            # current_x, current_y是真实世界坐标（米）
-            # 转换为地图像素坐标：map_x是行索引，map_y是列索引
-            map_x = int(current_x * 100.0 / self.resolution)
-            map_y = int(current_y * 100.0 / self.resolution)
-            
-            # 转换到显示坐标系（480x480）
-            # 注意：需要翻转Y轴，与轨迹点保持一致
-            agent_x = map_y * 480 / w  # 列 → X
-            agent_y = (h - 1 - map_x) * 480 / h  # 行 → Y（翻转）
-            
-            print(f"[DEBUG Global Map] Agent pose: map_x={map_x}, map_y={map_y} -> display agent_x={agent_x:.1f}, agent_y={agent_y:.1f}")
+            # ===== 关键修复：用轨迹最后一个点作为agent位置 =====
+            # 原因：current_pose和trajectory_points可能有坐标系转换的细微差异
+            # 使用轨迹最后点可以确保agent和轨迹完美对齐
             if len(trajectory_points) > 0:
-                last_traj = trajectory_points[-1]
-                print(f"[DEBUG Global Map] Last trajectory point: map_x={last_traj[0]}, map_y={last_traj[1]}")
+                # 轨迹点存储格式：(map_x, map_y)
+                last_traj_x, last_traj_y = trajectory_points[-1]
+                
+                # 转换到显示坐标系（480x480）
+                # 与轨迹点转换保持完全一致
+                agent_x = last_traj_y * 480 / w  # 列 → X
+                agent_y = (h - 1 - last_traj_x) * 480 / h  # 行 → Y（翻转）
+                
+                print(f"[DEBUG Global Map] Using trajectory last point: map_x={last_traj_x}, map_y={last_traj_y} -> agent_x={agent_x:.1f}, agent_y={agent_y:.1f}")
+            else:
+                # 如果没有轨迹点，回退到使用current_pose
+                map_x = int(current_x * 100.0 / self.resolution)
+                map_y = int(current_y * 100.0 / self.resolution)
+                agent_x = map_y * 480 / w
+                agent_y = (h - 1 - map_x) * 480 / h
+                print(f"[DEBUG Global Map] Using current_pose: map_x={map_x}, map_y={map_y} -> agent_x={agent_x:.1f}, agent_y={agent_y:.1f}")
             
-            # ===== 变换原理说明 =====
-            # 目标：让agent在最终地图上位于中心(240, 240)，且朝上
+            # ===== 变换矩阵数学原理 =====
             # 
-            # 步骤1: 旋转变换
-            #   - 围绕agent当前位置(agent_x, agent_y)旋转地图
-            #   - 旋转角度 = 90° - current_o，使agent方向变为朝上(-90°)
-            #   - 此时agent仍在(agent_x, agent_y)，但整个地图围绕它旋转了
+            # 变换矩阵结构（2x3仿射变换矩阵）：
+            #   rotation_matrix = [
+            #       [cos(θ), -sin(θ), tx],   ← 第0行：X方向变换
+            #       [sin(θ),  cos(θ), ty]    ← 第1行：Y方向变换
+            #   ]
             # 
-            # 步骤2: 平移变换
-            #   - 计算旋转后agent的新坐标：rotated_center = rotation_matrix @ [agent_x, agent_y]
-            #   - 由于旋转中心就是agent位置，所以 rotated_center ≈ (agent_x, agent_y)
-            #   - 但旋转矩阵内部可能有微小的数值误差，所以需要重新计算
-            #   - 计算平移量：translation = (240, 240) - rotated_center
-            #   - 将平移量添加到变换矩阵：rotation_matrix[0,2] += tx, rotation_matrix[1,2] += ty
+            # 对地图上任意点(x, y)，计算变换后的新位置(new_x, new_y)：
+            #   new_x = cos(θ)*x - sin(θ)*y + tx  ← 旋转部分 + 平移部分
+            #   new_y = sin(θ)*x + cos(θ)*y + ty  ← 旋转部分 + 平移部分
+            #          └──────旋转──────┘   └─平移─┘
             # 
-            # 步骤3: 应用变换到地图
-            #   - cv2.warpAffine(地图, rotation_matrix, ...)
-            #   - 对地图上的每个像素(x, y)，计算新位置：
-            #     new_x = rotation_matrix[0,0]*x + rotation_matrix[0,1]*y + rotation_matrix[0,2]
-            #     new_y = rotation_matrix[1,0]*x + rotation_matrix[1,1]*y + rotation_matrix[1,2]
-            #   - 地图内容被"移动"了，agent相对于画布的位置变成了(240, 240)
+            # 也就是写成：
+            #   new_x = rotation_matrix[0,0]*x + rotation_matrix[0,1]*y + rotation_matrix[0,2]
+            #   new_y = rotation_matrix[1,0]*x + rotation_matrix[1,1]*y + rotation_matrix[1,2]
             # 
-            # 关键理解：
-            # - 我们不是移动agent，而是移动整个地图（背景）
-            # - agent相对于画布的位置从(agent_x, agent_y)变成了(240, 240)
-            # - 就像相机跟随agent移动：agent不动，背景在动
-            # - 轨迹点、landmark等所有地图元素都会随着地图一起变换
+            # 所以你的理解完全正确：确实是"相加了两个部分"！
+            # - 前两项 (rotation_matrix[0,0]*x + rotation_matrix[0,1]*y)：旋转
+            # - 最后一项 (rotation_matrix[0,2])：平移
+            # 
+            # ===== 我们的具体操作 =====
+            # 
+            # 步骤1: 创建旋转矩阵（围绕agent位置旋转）
+            #   rotation_matrix = cv2.getRotationMatrix2D((agent_x, agent_y), rotation_angle, 1.0)
+            #   此时 rotation_matrix[0,2] 和 rotation_matrix[1,2] 已经包含了：
+            #   - 围绕(agent_x, agent_y)旋转所需的平移分量
+            #   - 公式：先平移到原点 → 旋转 → 平移回去
+            # 
+            # 步骤2: 计算旋转后agent的实际位置
+            #   rotated_center = rotation_matrix @ [agent_x, agent_y, 1]
+            #   理论上应该还在(agent_x, agent_y)，因为它是旋转中心
+            #   但实际有微小数值误差
+            # 
+            # 步骤3: 添加额外平移，让agent移动到(240, 240)
+            #   translation = [240, 240] - rotated_center[:2]
+            #   rotation_matrix[0, 2] += translation[0]  ← 在原有tx上叠加新的平移
+            #   rotation_matrix[1, 2] += translation[1]  ← 在原有ty上叠加新的平移
+            # 
+            # 步骤4: 应用最终变换到整个地图
+            #   cv2.warpAffine(地图, rotation_matrix, ...)
+            #   对地图每个像素都执行上面的公式计算
+            # 
+            # ===== 最终效果 =====
+            # - agent从(agent_x, agent_y)移动到(240, 240) ← 视觉效果
+            # - 实际是：整个地图背景移动了，agent相对画布的位置改变了
+            # - 轨迹点、landmark等所有元素都跟随地图一起变换
             
             # 旋转使箭头朝正上方
             rotation_angle = 90 - current_o
@@ -412,16 +437,17 @@ class MapVisualizer:
         # ===== 阶段3: 旋转地图（Agent朝上居中）=====
         current_x, current_y, current_o = current_pose
         
-        # 计算agent在地图中的位置（map坐标系）
-        # current_x, current_y是真实世界坐标（米）
-        # 转换为地图像素坐标：map_x是行索引，map_y是列索引
-        map_x = int(current_x * 100.0 / self.resolution)
-        map_y = int(current_y * 100.0 / self.resolution)
-        
-        # 转换到显示坐标系（480x480）
-        # 注意：需要翻转Y轴，与轨迹点保持一致
-        agent_x = map_y * 480 / w  # 列 → X
-        agent_y = (h - 1 - map_x) * 480 / h  # 行 → Y（翻转）
+        # ===== 关键修复：用轨迹最后一个点作为agent位置 =====
+        if len(trajectory_points) > 0:
+            last_traj_x, last_traj_y = trajectory_points[-1]
+            agent_x = last_traj_y * 480 / w
+            agent_y = (h - 1 - last_traj_x) * 480 / h
+        else:
+            # 回退到使用current_pose
+            map_x = int(current_x * 100.0 / self.resolution)
+            map_y = int(current_y * 100.0 / self.resolution)
+            agent_x = map_y * 480 / w
+            agent_y = (h - 1 - map_x) * 480 / h
         
         rotation_angle = 90 - current_o
         rotation_center = (agent_x, agent_y)
