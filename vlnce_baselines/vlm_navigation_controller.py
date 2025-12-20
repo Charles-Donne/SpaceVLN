@@ -487,25 +487,14 @@ class VLMNavigationController(InteractiveNavigationController):
             self.current_step
         )
         
-        # 记录并动态更新目标landmark（从instruction中提取所有相关landmark）
-        subtask_instruction = response.get('subtask_instruction', '')
+        # 动态更新目标landmark（直接使用VLM输出的subtask_landmark）
         subtask_landmark = response.get('subtask_landmark', None)
         
-        # 从instruction中提取所有mapping_classes中的类别作为landmark
-        landmarks_in_instruction = []
-        for cls in self.mapping_classes:
-            if cls.lower() in subtask_instruction.lower():
-                landmarks_in_instruction.append(cls)
-        
-        # 如果有明确的subtask_landmark，优先使用；否则使用提取的所有landmarks
-        if subtask_landmark and subtask_landmark in self.mapping_classes:
+        # 直接使用VLM输出，不自动提取
+        if subtask_landmark:
             self.landmark_classes = [subtask_landmark]
             self.target_landmark = subtask_landmark
             print(f"  🎯 Target Landmark: {self.target_landmark}")
-        elif landmarks_in_instruction:
-            self.landmark_classes = landmarks_in_instruction
-            self.target_landmark = landmarks_in_instruction[0]  # 主要目标
-            print(f"  🎯 Target Landmarks: {', '.join(self.landmark_classes)}")
         else:
             self.target_landmark = None
             self.landmark_classes = []
@@ -668,25 +657,22 @@ class VLMNavigationController(InteractiveNavigationController):
             waypoint_desc = response.get('waypoint', 'Unknown location')
             waypoint_id = self.mapper.add_waypoint(waypoint_desc)
             
-            # 动态更新目标landmark（从instruction中提取所有相关landmark）
-            subtask_instruction = response.get('subtask_instruction', '')
+            # 保存waypoint摘要（用于后续LLM提示词）
+            waypoint_summary = self._get_waypoint_summary()
+            self.save_manager.save_waypoint_memory(
+                waypoint_summary,
+                self.current_instruction,
+                self.current_step
+            )
+            
+            # 动态更新目标landmark（直接使用VLM输出的subtask_landmark）
             subtask_landmark = response.get('subtask_landmark', None)
             
-            # 从instruction中提取所有mapping_classes中的类别作为landmark
-            landmarks_in_instruction = []
-            for cls in self.mapping_classes:
-                if cls.lower() in subtask_instruction.lower():
-                    landmarks_in_instruction.append(cls)
-            
-            # 如果有明确的subtask_landmark，优先使用；否则使用提取的所有landmarks
-            if subtask_landmark and subtask_landmark in self.mapping_classes:
+            # 直接使用VLM输出，不自动提取
+            if subtask_landmark:
                 self.landmark_classes = [subtask_landmark]
                 self.target_landmark = subtask_landmark
                 print(f"  🎯 New Target Landmark: {self.target_landmark}")
-            elif landmarks_in_instruction:
-                self.landmark_classes = landmarks_in_instruction
-                self.target_landmark = landmarks_in_instruction[0]  # 主要目标
-                print(f"  🎯 New Target Landmarks: {', '.join(self.landmark_classes)}")
             else:
                 self.target_landmark = None
                 self.landmark_classes = []
@@ -712,23 +698,27 @@ class VLMNavigationController(InteractiveNavigationController):
                     'step': self.current_step
                 }
             
-            # 从新的子任务指令中提取landmark（与完成时逻辑相同）
-            subtask_instruction = response.get('subtask_instruction', '')
+            # ===== 关键修复：verify失败时也要添加waypoint =====
+            # 每次thinking输出后都应该标记waypoint，记录agent的决策位置
+            waypoint_desc = response.get('waypoint', 'Replanning location')
+            waypoint_id = self.mapper.add_waypoint(waypoint_desc)
+            
+            # 保存waypoint摘要（用于后续LLM提示词）
+            waypoint_summary = self._get_waypoint_summary()
+            self.save_manager.save_waypoint_memory(
+                waypoint_summary,
+                self.current_instruction,
+                self.current_step
+            )
+            
+            # 从新的子任务指令中提取landmark（直接使用VLM输出的subtask_landmark）
             subtask_landmark = response.get('subtask_landmark', None)
             
-            landmarks_in_instruction = []
-            for cls in self.mapping_classes:
-                if cls.lower() in subtask_instruction.lower():
-                    landmarks_in_instruction.append(cls)
-            
-            if subtask_landmark and subtask_landmark in self.mapping_classes:
+            # 直接使用VLM输出，不自动提取
+            if subtask_landmark:
                 self.landmark_classes = [subtask_landmark]
                 self.target_landmark = subtask_landmark
                 print(f"  🎯 Updated Target Landmark: {self.target_landmark}")
-            elif landmarks_in_instruction:
-                self.landmark_classes = landmarks_in_instruction
-                self.target_landmark = landmarks_in_instruction[0]
-                print(f"  🎯 Updated Target Landmarks: {', '.join(self.landmark_classes)}")
             else:
                 self.target_landmark = None
                 self.landmark_classes = []
