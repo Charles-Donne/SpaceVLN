@@ -18,7 +18,7 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 # Visual Inputs (Analyze Together)
 
 **IMAGE 1 - RGB View**: Environment, landmarks, obstacles
-**IMAGE 2 - Detection**: Landmark identification: {detected_landmarks}
+**IMAGE 2 - Detection**: Detected Landmark: {detected_landmarks}
 **IMAGE 3 - Local Map** (Bird's-eye view): Spatial layout around you
 - **Red arrow**: Your position & facing direction (arrow points FRONT, map top = FRONT)
 - **Purple markers**: Destination landmarks: {detected_landmarks}

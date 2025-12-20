@@ -164,20 +164,30 @@ class MapVisualizer:
             agent_x = map_y * 480 / w  # 列 → X
             agent_y = (h - 1 - map_x) * 480 / h  # 行 → Y（翻转）
             
+            print(f"[DEBUG Global Map] Agent pose: map_x={map_x}, map_y={map_y} -> display agent_x={agent_x:.1f}, agent_y={agent_y:.1f}")
+            if len(trajectory_points) > 0:
+                last_traj = trajectory_points[-1]
+                print(f"[DEBUG Global Map] Last trajectory point: map_x={last_traj[0]}, map_y={last_traj[1]}")
+            
             # 旋转使箭头朝正上方
             rotation_angle = 90 - current_o
             rotation_center = (agent_x, agent_y)
             rotation_matrix = cv2.getRotationMatrix2D(rotation_center, rotation_angle, 1.0)
             
             # 添加平移步骤：将旋转后的agent移动到(240, 240)
-            # 修复：地图应该向相反方向移动
+            # agent需要到达(240, 240)，所以地图需要平移
             target_center = np.array([240, 240, 1])
             current_center = np.array([agent_x, agent_y, 1])
             rotated_center = rotation_matrix @ current_center
+            
+            print(f"[DEBUG Global Map] Before translation: rotated_center={rotated_center[:2]}")
+            
+            # 计算需要的平移量（让rotated_center移动到target_center）
             translation = target_center[:2] - rotated_center[:2]
-            # 地图应该向相反方向移动，才能让agent到达目标位置
-            rotation_matrix[0, 2] -= translation[0]
-            rotation_matrix[1, 2] -= translation[1]
+            rotation_matrix[0, 2] += translation[0]
+            rotation_matrix[1, 2] += translation[1]
+            
+            print(f"[DEBUG Global Map] Translation applied: {translation}, rotation_angle={rotation_angle:.1f}°")
             
             global_map_rotated = cv2.warpAffine(
                 sem_map_vis, rotation_matrix, (480, 480),
@@ -391,14 +401,12 @@ class MapVisualizer:
         rotation_matrix = cv2.getRotationMatrix2D(rotation_center, rotation_angle, 1.0)
         
         # 添加平移到中心
-        # 修夏：地图应该向相反方向移动
         target_center = np.array([240, 240, 1])
         current_center = np.array([agent_x, agent_y, 1])
         rotated_center = rotation_matrix @ current_center
         translation = target_center[:2] - rotated_center[:2]
-        # 地图应该向相反方向移动，才能让agent到达目标位置
-        rotation_matrix[0, 2] -= translation[0]
-        rotation_matrix[1, 2] -= translation[1]
+        rotation_matrix[0, 2] += translation[0]
+        rotation_matrix[1, 2] += translation[1]
         
         local_map = cv2.warpAffine(sem_map_vis, rotation_matrix, (480, 480),
                                     flags=cv2.INTER_NEAREST,
@@ -619,7 +627,7 @@ class MapVisualizer:
         detection_vis = rgb.copy()
         
         if detections is None or len(detections.xyxy) == 0:
-            return detection_vis
+            return detection_vis, []
         
         # 统计检测到的landmark
         detected_landmarks = []

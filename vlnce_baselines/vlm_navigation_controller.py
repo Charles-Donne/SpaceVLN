@@ -814,10 +814,12 @@ class VLMNavigationController(InteractiveNavigationController):
         
         # 查找detection图像（使用相同的回退逻辑）
         detection_image = None
+        detection_step = None  # 记录找到的detection图像对应的step
         for phase in possible_phases:
             candidate = os.path.join(self.episode_dir, 'detection', f'step_{last_step:04d}_{phase}.png')
             if os.path.exists(candidate):
                 detection_image = candidate
+                detection_step = last_step
                 break
         if not detection_image:
             print(f"  ⚠️  Detection image not found for step {last_step} (tried phases: {possible_phases})")
@@ -832,17 +834,17 @@ class VLMNavigationController(InteractiveNavigationController):
         if not local_map:
             print(f"  ⚠️  Local map not found for step {last_step} (tried phases: {possible_phases})")
         
-        # 获取当前step检测到的landmark类别
-        # 由于detection现在只检测subtask_landmark，直接传递当前step检测到的结果
+        # 获取detection图像对应的landmark类别
+        # 使用找到的detection图像对应的step
         detected_landmarks = None
-        if hasattr(self, 'current_step_landmarks') and last_step in self.current_step_landmarks:
+        if detection_step is not None and hasattr(self, 'current_step_landmarks') and detection_step in self.current_step_landmarks:
             # 当前step检测到的landmarks: [(name, confidence), ...]
-            step_landmarks = self.current_step_landmarks[last_step]
+            step_landmarks = self.current_step_landmarks[detection_step]
             if step_landmarks:
                 # 格式化为 "name1 (conf1), name2 (conf2)"
                 detected_landmarks = ', '.join([f"{name} ({conf:.2f})" for name, conf in step_landmarks])
         
-        # 退化策略：如果当前step没有检测结果，报告"未检测到"
+        # 退化策略：如果没有检测结果，报告"未检测到"
         if not detected_landmarks:
             if hasattr(self, 'target_landmark') and self.target_landmark:
                 detected_landmarks = f"No {self.target_landmark} detected in current view"
