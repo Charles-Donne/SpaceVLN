@@ -153,14 +153,19 @@ class MapVisualizer:
         if current_pose is not None:
             current_x, current_y, current_o = current_pose
             
-            # 计算agent在地图中的位置（map坐标系）
-            # current_x, current_y是真实世界坐标（米）
-            # 转换为地图像素坐标：map_x是行索引，map_y是列索引
-            map_x = int(current_x * 100.0 / self.resolution)
-            map_y = int(current_y * 100.0 / self.resolution)
+            # ===== 关键修复：与mapper.update_trajectory保持一致 =====
+            # 在mapper.py中：
+            #   position = full_pose[:2] * 100 / resolution
+            #   y = int(position[0])  # full_pose[0] → 行坐标(map_x)
+            #   x = int(position[1])  # full_pose[1] → 列坐标(map_y)
+            #   trajectory_points.append((x, y))  # 存储为(map_y, map_x)
+            # 因此：current_pose = full_pose = (第一维坐标, 第二维坐标, 朝向)
+            position = np.array([current_x, current_y]) * 100.0 / self.resolution
+            map_x = int(np.clip(position[0], 0, h - 1))  # 行坐标
+            map_y = int(np.clip(position[1], 0, w - 1))  # 列坐标
             
             # 转换到显示坐标系（480x480）
-            # 注意：需要翻转Y轴，与轨迹点保持一致
+            # 与trajectory_points的转换逻辑完全一致
             agent_x = map_y * 480 / w  # 列 → X
             agent_y = (h - 1 - map_x) * 480 / h  # 行 → Y（翻转）
             
