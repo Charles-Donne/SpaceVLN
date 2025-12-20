@@ -622,15 +622,6 @@ class VLMNavigationController(InteractiveNavigationController):
         self.thinking_outputs.append(thinking_record)
         self.save_manager.save_thinking(thinking_record)
         
-        # ===== 关键修复：VLM输出后清空旧状态，然后设置新状态 =====
-        # 这样VLM能看到旧landmark来判断完成度，之后切换到新landmark
-        print("\n[状态清理] VLM已输出 - 清空旧landmark和轨迹（准备新子任务）")
-        self.mapper.clear_trajectory()  # 清空轨迹
-        self.landmark_classes = []      # 清空landmark标注（马上会重新设置）
-        self.progress_summary = ""      # 重置进度摘要
-        if hasattr(self, 'current_step_landmarks'):
-            self.current_step_landmarks.clear()  # 清空step landmark记录
-        
         if is_completed:
             attempt_letter = chr(ord('a') + self.subtask_attempt)
             print(f"\n[子任务完成] #{self.subtask_count}{attempt_letter}")
@@ -640,11 +631,32 @@ class VLMNavigationController(InteractiveNavigationController):
                 print("到达最终目的地")
                 return True, response, prompt
             
+            # ===== 关键顺序：先添加waypoint（使用当前trajectory），再清空 =====
+            
+            # 1. 先创建waypoint（此时trajectory还存在）
+            waypoint_desc = response.get('waypoint', 'Unknown location')
+            waypoint_id = self.mapper.add_waypoint(waypoint_desc)
+            
+            # 保存waypoint摘要
+            waypoint_summary = self._get_waypoint_summary()
+            self.save_manager.save_waypoint_memory(
+                waypoint_summary,
+                self.current_instruction,
+                self.current_step
+            )
+            
+            # 2. 然后清空旧状态（为新子任务准备）
+            print("\n[状态清理] 添加waypoint后 - 清空旧landmark和轨迹（准备新子任务）")
+            self.mapper.clear_trajectory()  # 清空轨迹
+            self.landmark_classes = []      # 清空landmark标注（马上会重新设置）
+            self.progress_summary = ""      # 重置进度摘要
+            if hasattr(self, 'current_step_landmarks'):
+                self.current_step_landmarks.clear()  # 清空step landmark记录
+            
             # 更新到新子任务：递增计数，重置尝试
             self.subtask_count += 1
             self.subtask_attempt = 0  # 新子任务从a开始
             self.current_subtask = response
-            # progress_summary已在上面清空
             
             # 更新当前位置信息（用于后续参考）
             self.current_position_info = {
@@ -652,18 +664,6 @@ class VLMNavigationController(InteractiveNavigationController):
                 'observation': response.get('current_observation', ''),
                 'step': self.current_step
             }
-            
-            # 创建路径点记录（空间记忆）
-            waypoint_desc = response.get('waypoint', 'Unknown location')
-            waypoint_id = self.mapper.add_waypoint(waypoint_desc)
-            
-            # 保存waypoint摘要（用于后续LLM提示词）
-            waypoint_summary = self._get_waypoint_summary()
-            self.save_manager.save_waypoint_memory(
-                waypoint_summary,
-                self.current_instruction,
-                self.current_step
-            )
             
             # 动态更新目标landmark（直接使用VLM输出的subtask_landmark）
             subtask_landmark = response.get('subtask_landmark', None)
@@ -685,10 +685,31 @@ class VLMNavigationController(InteractiveNavigationController):
             attempt_letter = chr(ord('a') + self.subtask_attempt)
             print(f"\n[子任务未完成] #{self.subtask_count}{attempt_letter} - 重新规划")
             
+            # ===== 关键顺序：先添加waypoint（使用当前trajectory），再清空 =====
+            
+            # 1. 先创建waypoint（此时trajectory还存在）
+            waypoint_desc = response.get('waypoint', 'Replanning location')
+            waypoint_id = self.mapper.add_waypoint(waypoint_desc)
+            
+            # 保存waypoint摘要
+            waypoint_summary = self._get_waypoint_summary()
+            self.save_manager.save_waypoint_memory(
+                waypoint_summary,
+                self.current_instruction,
+                self.current_step
+            )
+            
+            # 2. 然后清空旧状态（为新规划准备）
+            print("\n[状态清理] 添加waypoint后 - 清空旧landmark和轨迹（准备重新规划）")
+            self.mapper.clear_trajectory()  # 清空轨迹
+            self.landmark_classes = []      # 清空landmark标注（马上会重新设置）
+            self.progress_summary = ""      # 重置进度摘要
+            if hasattr(self, 'current_step_landmarks'):
+                self.current_step_landmarks.clear()
+            
             # 未完成时保持subtask_count不变，递增attempt
             self.subtask_attempt += 1  # 下次验证用b, c, d...
             self.current_subtask = response
-            # progress_summary和landmark_classes已在上面清空
             
             # 更新位置观察（用于记录轨迹）
             if 'current_observation' in response:
@@ -697,19 +718,6 @@ class VLMNavigationController(InteractiveNavigationController):
                     'observation': response.get('current_observation', ''),
                     'step': self.current_step
                 }
-            
-            # ===== 关键修复：verify失败时也要添加waypoint =====
-            # 每次thinking输出后都应该标记waypoint，记录agent的决策位置
-            waypoint_desc = response.get('waypoint', 'Replanning location')
-            waypoint_id = self.mapper.add_waypoint(waypoint_desc)
-            
-            # 保存waypoint摘要（用于后续LLM提示词）
-            waypoint_summary = self._get_waypoint_summary()
-            self.save_manager.save_waypoint_memory(
-                waypoint_summary,
-                self.current_instruction,
-                self.current_step
-            )
             
             # 从新的子任务指令中提取landmark（直接使用VLM输出的subtask_landmark）
             subtask_landmark = response.get('subtask_landmark', None)
