@@ -29,10 +29,8 @@ def main():
                        help="VLM配置文件路径")
     
     # 导航参数
-    parser.add_argument("--max-subtask-steps", type=int, default=50,
-                       help="每个子任务最大步数")
-    parser.add_argument("--verify-interval", type=int, default=10,
-                       help="子任务验证间隔步数")
+    parser.add_argument("--max-subtask-steps", type=int, default=10,
+                       help="每个子任务最大步数（达到后触发验证）")
     
     # 运行模式
     parser.add_argument("--auto", action="store_true",
@@ -73,8 +71,7 @@ def main():
     # 运行VLM导航
     result = controller.run_vlm_navigation(
         max_steps=args.max_steps,
-        max_subtask_steps=args.max_subtask_steps,
-        verify_interval=args.verify_interval
+        max_subtask_steps=args.max_subtask_steps
     )
     
     # 结束Episode
