@@ -261,13 +261,16 @@ class SemanticMapper:
             print("  ⚠️  Cannot add waypoint: full_pose is None")
             return -1
         
-        # 计算当前位置的地图坐标
-        map_x = int(self.full_pose[0] * 100.0 / self.resolution)
-        map_y = int(self.full_pose[1] * 100.0 / self.resolution)
+        # ===== 关键修复：与trajectory_points使用相同的转换逻辑 =====
+        # 转换位置到像素坐标（与update_trajectory完全一致）
+        position = self.full_pose[:2] * 100 / self.resolution  # 米 → 像素
+        y = int(np.clip(position[0], 0, self.map_shape[0] - 1))  # → map_x
+        x = int(np.clip(position[1], 0, self.map_shape[1] - 1))  # → map_y
         
-        # 边界检查
-        map_x = np.clip(map_x, 0, self.map_shape[0] - 1)
-        map_y = np.clip(map_y, 0, self.map_shape[1] - 1)
+        # 注意：为了与visualizer中waypoint渲染逻辑兼容
+        # 存储为(map_x, map_y)格式（与trajectory的(x,y)顺序不同，但坐标值相同）
+        map_x = y  # position[0] → map_x (行)
+        map_y = x  # position[1] → map_y (列)
         
         # 分配ID
         self.waypoint_counter += 1
