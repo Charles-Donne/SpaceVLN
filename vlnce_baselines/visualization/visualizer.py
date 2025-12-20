@@ -169,23 +169,50 @@ class MapVisualizer:
                 last_traj = trajectory_points[-1]
                 print(f"[DEBUG Global Map] Last trajectory point: map_x={last_traj[0]}, map_y={last_traj[1]}")
             
+            # ===== 变换原理说明 =====
+            # 目标：让agent在最终地图上位于中心(240, 240)，且朝上
+            # 
+            # 步骤1: 旋转变换
+            #   - 围绕agent当前位置(agent_x, agent_y)旋转地图
+            #   - 旋转角度 = 90° - current_o，使agent方向变为朝上(-90°)
+            #   - 此时agent仍在(agent_x, agent_y)，但整个地图围绕它旋转了
+            # 
+            # 步骤2: 平移变换
+            #   - 计算旋转后agent的新坐标：rotated_center = rotation_matrix @ [agent_x, agent_y]
+            #   - 由于旋转中心就是agent位置，所以 rotated_center ≈ (agent_x, agent_y)
+            #   - 但旋转矩阵内部可能有微小的数值误差，所以需要重新计算
+            #   - 计算平移量：translation = (240, 240) - rotated_center
+            #   - 将平移量添加到变换矩阵：rotation_matrix[0,2] += tx, rotation_matrix[1,2] += ty
+            # 
+            # 步骤3: 应用变换到地图
+            #   - cv2.warpAffine(地图, rotation_matrix, ...)
+            #   - 对地图上的每个像素(x, y)，计算新位置：
+            #     new_x = rotation_matrix[0,0]*x + rotation_matrix[0,1]*y + rotation_matrix[0,2]
+            #     new_y = rotation_matrix[1,0]*x + rotation_matrix[1,1]*y + rotation_matrix[1,2]
+            #   - 地图内容被"移动"了，agent相对于画布的位置变成了(240, 240)
+            # 
+            # 关键理解：
+            # - 我们不是移动agent，而是移动整个地图（背景）
+            # - agent相对于画布的位置从(agent_x, agent_y)变成了(240, 240)
+            # - 就像相机跟随agent移动：agent不动，背景在动
+            # - 轨迹点、landmark等所有地图元素都会随着地图一起变换
+            
             # 旋转使箭头朝正上方
             rotation_angle = 90 - current_o
-            rotation_center = (agent_x, agent_y)
+            rotation_center = (agent_x, agent_y)  # 围绕agent当前位置旋转
             rotation_matrix = cv2.getRotationMatrix2D(rotation_center, rotation_angle, 1.0)
             
             # 添加平移步骤：将旋转后的agent移动到(240, 240)
-            # agent需要到达(240, 240)，所以地图需要平移
-            target_center = np.array([240, 240, 1])
-            current_center = np.array([agent_x, agent_y, 1])
-            rotated_center = rotation_matrix @ current_center
+            target_center = np.array([240, 240, 1])  # 目标：agent应该在这里
+            current_center = np.array([agent_x, agent_y, 1])  # agent当前在这里
+            rotated_center = rotation_matrix @ current_center  # 旋转后agent在这里
             
             print(f"[DEBUG Global Map] Before translation: rotated_center={rotated_center[:2]}")
             
-            # 计算需要的平移量（让rotated_center移动到target_center）
+            # 计算平移量：从rotated_center到target_center需要移动多少
             translation = target_center[:2] - rotated_center[:2]
-            rotation_matrix[0, 2] += translation[0]
-            rotation_matrix[1, 2] += translation[1]
+            rotation_matrix[0, 2] += translation[0]  # 添加X方向平移
+            rotation_matrix[1, 2] += translation[1]  # 添加Y方向平移
             
             print(f"[DEBUG Global Map] Translation applied: {translation}, rotation_angle={rotation_angle:.1f}°")
             
