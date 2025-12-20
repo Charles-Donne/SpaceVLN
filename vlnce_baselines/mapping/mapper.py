@@ -257,20 +257,18 @@ class SemanticMapper:
         Returns:
             waypoint_id: 新添加的waypoint ID
         """
-        if self.full_pose is None:
-            print("  ⚠️  Cannot add waypoint: full_pose is None")
+        # ===== 关键修复：直接使用trajectory_points[-1]，确保与agent位置完全一致 =====
+        if len(self.trajectory_points) == 0:
+            print("  ⚠️  Cannot add waypoint: trajectory is empty")
             return -1
         
-        # ===== 关键修复：与trajectory_points使用相同的转换逻辑 =====
-        # 转换位置到像素坐标（与update_trajectory完全一致）
-        position = self.full_pose[:2] * 100 / self.resolution  # 米 → 像素
-        y = int(np.clip(position[0], 0, self.map_shape[0] - 1))  # → map_x
-        x = int(np.clip(position[1], 0, self.map_shape[1] - 1))  # → map_y
+        # 直接使用轨迹最后一个点作为waypoint位置
+        # trajectory_points存储格式：(map_y, map_x)
+        last_traj_x, last_traj_y = self.trajectory_points[-1]
         
-        # 注意：为了与visualizer中waypoint渲染逻辑兼容
-        # 存储为(map_x, map_y)格式（与trajectory的(x,y)顺序不同，但坐标值相同）
-        map_x = y  # position[0] → map_x (行)
-        map_y = x  # position[1] → map_y (列)
+        # waypoint存储为(map_x, map_y)格式
+        map_x = last_traj_x  # 从trajectory的x → map_x
+        map_y = last_traj_y  # 从trajectory的y → map_y
         
         # 分配ID
         self.waypoint_counter += 1

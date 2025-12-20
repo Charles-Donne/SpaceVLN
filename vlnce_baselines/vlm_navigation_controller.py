@@ -191,12 +191,17 @@ class VLMNavigationController(InteractiveNavigationController):
         """
         print(f"\n[环视建图] {phase}...")
         
+        # ===== 关键修复：环视前清空旧landmark和轨迹 =====
+        # 这样环视期间渲染的地图不会显示上一个子任务的landmark标注
+        print("[状态清理] 清空轨迹和landmark（准备环视建图）")
+        self.mapper.clear_trajectory()
+        self.landmark_classes = []
+        if hasattr(self, 'current_step_landmarks'):
+            self.current_step_landmarks.clear()
+        
         # 存储12张环视图像用于合成全景图（step 1-12）
         lookaround_images = []
         total_new_classes = 0
-        
-        # 注意：不保存/恢复轨迹，让轨迹自然累积
-        # 如需清空轨迹（如子任务切换），应在调用look_around_and_collect之前显式调用mapper.clear_trajectory()
         
         from habitat.sims.habitat_simulator.actions import HabitatSimActions
         
@@ -633,14 +638,9 @@ class VLMNavigationController(InteractiveNavigationController):
         self.thinking_outputs.append(thinking_record)
         self.save_manager.save_thinking(thinking_record)
         
-        # ===== 关键修复：验证后清空所有状态（不论子任务是否完成） =====
-        # 这样每个新子任务都从干净的状态开始，VLM不会因为看到旧轨迹而误判
-        print("\n[状态清理] 清空轨迹、landmark和progress（准备新子任务）")
-        self.mapper.clear_trajectory()  # 清空轨迹
-        self.landmark_classes = []      # 清空landmark标注（会在后面重新设置）
-        self.progress_summary = ""      # 重置进度摘要
-        if hasattr(self, 'current_step_landmarks'):
-            self.current_step_landmarks.clear()  # 清空step landmark记录
+        # 注意：轨迹和landmark已经在look_around_and_collect开始时清空
+        # 这里只需要重置progress_summary即可
+        self.progress_summary = ""  # 重置进度摘要
         
         if is_completed:
             attempt_letter = chr(ord('a') + self.subtask_attempt)
