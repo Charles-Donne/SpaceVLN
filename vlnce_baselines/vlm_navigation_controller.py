@@ -774,7 +774,12 @@ class VLMNavigationController(InteractiveNavigationController):
         # 获取最新保存的观察信息
         # 上一步已保存的文件（如果current_step=13，则读取step_0012的地图）
         last_step = self.current_step  # execute_action在step执行前调用，所以用current_step
-        fp_image = os.path.join(self.episode_dir, 'rgb', f'step_{last_step:04d}.png')
+        
+        # 生成当前子任务的phase标识
+        attempt_letter = chr(ord('a') + self.subtask_attempt)
+        action_phase = f"action{self.subtask_count}{attempt_letter}"
+        
+        fp_image = os.path.join(self.episode_dir, 'rgb', f'step_{last_step:04d}_{action_phase}.png')
         
         # 如果rgb/中的图像还不存在，用当前观察创建临时文件
         if not os.path.exists(fp_image):
@@ -790,14 +795,12 @@ class VLMNavigationController(InteractiveNavigationController):
         self._get_current_map_path()
         
         # 获取detection图像路径（如果存在）
-        detection_image = os.path.join(self.episode_dir, 'detection', f'step_{last_step:04d}.png')
+        detection_image = os.path.join(self.episode_dir, 'detection', f'step_{last_step:04d}_{action_phase}.png')
         if not os.path.exists(detection_image):
+            print(f"  ⚠️  Detection image not found: {detection_image}")
             detection_image = None
         
         # 获取局部地图路径（需要使用phase后缀）
-        # 生成当前子任务的phase标识
-        attempt_letter = chr(ord('a') + self.subtask_attempt)
-        action_phase = f"action{self.subtask_count}{attempt_letter}"
         local_map = os.path.join(self.episode_dir, 'local_map', f'step_{last_step:04d}_{action_phase}.png')
         if not os.path.exists(local_map):
             print(f"  ⚠️  Local map not found: {local_map}")
