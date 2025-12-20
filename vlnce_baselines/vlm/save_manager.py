@@ -66,8 +66,8 @@ class SaveManager:
         
         结构: thinking/subtask_Xa/
           - subtask_1a/ - 初始规划
-          - subtask_1b/ - 验证未完成，继续尝试
-          - subtask_2a/ - 验证完成，新子任务
+          - subtask_1b/ - 验证未完成，继续尝试（保存verify_1a的结果到1b）
+          - subtask_2a/ - 验证完成，新子任务（保存verify_1a的结果到2a）
           
         每个目录包含:
             - input_images/ (输入图片)
@@ -76,8 +76,18 @@ class SaveManager:
         
         同时更新records/thinking_summary.json汇总文件
         """
-        # 使用subtask_id（如 "1a", "2b"）构建目录名
-        subtask_id = thinking_record.get('subtask_id', f"{thinking_record.get('subtask_count', 1)}a")
+        # 关键修复：verify阶段使用next_subtask_id（即将执行的子任务）
+        # - verify_1a完成 → 保存到subtask_2a（下一个子任务）
+        # - verify_1a未完成 → 保存到subtask_1b（重试）
+        # - initial阶段使用subtask_id
+        phase = thinking_record.get('phase', '')
+        if phase.startswith('verify'):
+            # 验证阶段：保存到下一个子任务的文件夹
+            subtask_id = thinking_record.get('next_subtask_id', f"{thinking_record.get('subtask_count', 1)}a")
+        else:
+            # 初始规划阶段：保存到当前子任务的文件夹
+            subtask_id = thinking_record.get('subtask_id', f"{thinking_record.get('subtask_count', 1)}a")
+        
         thinking_dir = os.path.join(self.episode_dir, "thinking", f"subtask_{subtask_id}")
         os.makedirs(thinking_dir, exist_ok=True)
         

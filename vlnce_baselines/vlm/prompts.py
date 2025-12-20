@@ -150,7 +150,7 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 - **Green**: Confirmed floor areas (safe to navigate)
 - **Orange line**: Trajectory from previous subtask start to current position
 - **Red circle with arrow**: Current position, arrow points to Front direction
-- **Purple markers with labels**: Detected landmark objects: {detected_landmarks}
+- **Purple markers with labels**: Previous Detected Landmark: {detected_landmarks}
 - **Dark red circles with white numbers**: Historical waypoints (see below)
 
 # Spatial Memory (Waypoint History):
@@ -165,7 +165,7 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 - Better for planning nearby movements and obstacle avoidance
 
 **Use Maps for Verification & Planning**:
-- **Verify Previous Subtask**: Detect current position, landmarks({detected_landmarks})'s direction and distance, trajectory history to confirm if previous subtask completed.
+- **Verify Previous Subtask**: Detect current position, previous landmarks({detected_landmarks})'s direction and distance, trajectory history to confirm if previous subtask completed.
 - **Identify obstacles**: Black areas and space behind black areas(unexplored) - MUST AVOID in next planning.
 - **Spatial awareness**: Use global map for overall layout, local map for immediate surroundings.
 
