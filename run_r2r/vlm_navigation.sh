@@ -100,8 +100,7 @@ CUDA_VISIBLE_DEVICES=0 python vlm_navigation.py \
     --results-dir "$RESULTS_DIR" \
     --llm-config "$LLM_CONFIG" \
     --vlm-config "$VLM_CONFIG" \
-    --max-subtask-steps 50 \
-    --verify-interval 10
+    --max-subtask-steps 10
 
 EXIT_CODE=$?
 set -e
