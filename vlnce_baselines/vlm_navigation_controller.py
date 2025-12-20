@@ -794,9 +794,13 @@ class VLMNavigationController(InteractiveNavigationController):
         if not os.path.exists(detection_image):
             detection_image = None
         
-        # 获取局部地图路径
-        local_map = os.path.join(self.episode_dir, 'local_map', f'step_{last_step:04d}.png')
+        # 获取局部地图路径（需要使用phase后缀）
+        # 生成当前子任务的phase标识
+        attempt_letter = chr(ord('a') + self.subtask_attempt)
+        action_phase = f"action{self.subtask_count}{attempt_letter}"
+        local_map = os.path.join(self.episode_dir, 'local_map', f'step_{last_step:04d}_{action_phase}.png')
         if not os.path.exists(local_map):
+            print(f"  ⚠️  Local map not found: {local_map}")
             local_map = None
         
         # 获取当前step检测到的landmark类别
