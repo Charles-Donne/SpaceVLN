@@ -779,32 +779,58 @@ class VLMNavigationController(InteractiveNavigationController):
         attempt_letter = chr(ord('a') + self.subtask_attempt)
         action_phase = f"action{self.subtask_count}{attempt_letter}"
         
-        fp_image = os.path.join(self.episode_dir, 'rgb', f'step_{last_step:04d}_{action_phase}.png')
+        # 智能查找可用的图像：优先使用action phase，回退到verify/initial
+        # 可能的phase顺序: action1a -> verify1a -> initial
+        possible_phases = [action_phase]
+        if self.subtask_attempt > 0:
+            # 如果是1b, 1c等，可能需要回退到verify1a
+            verify_phase = f"verify{self.subtask_count}{chr(ord('a') + self.subtask_attempt - 1)}"
+            possible_phases.append(verify_phase)
+        elif self.subtask_count > 1:
+            # 如果是2a, 3a等，回退到上一个verify
+            prev_verify_phase = f"verify{self.subtask_count - 1}a"
+            possible_phases.append(prev_verify_phase)
+        else:
+            # 如果是1a，回退到initial
+            possible_phases.append("initial")
         
-        # 如果rgb/中的图像还不存在，用当前观察创建临时文件
-        if not os.path.exists(fp_image):
+        # 查找RGB图像
+        fp_image = None
+        for phase in possible_phases:
+            candidate = os.path.join(self.episode_dir, 'rgb', f'step_{last_step:04d}_{phase}.png')
+            if os.path.exists(candidate):
+                fp_image = candidate
+                break
+        
+        # 如果都不存在，用当前观察创建临时文件
+        if not fp_image:
             rgb_bgr = cv2.cvtColor(obs['rgb'], cv2.COLOR_RGB2BGR)
-            temp_image = os.path.join(
-                self.episode_dir,
-                f'temp_fp_step{last_step}.png'
-            )
+            temp_image = os.path.join(self.episode_dir, f'temp_fp_step{last_step}.png')
             cv2.imwrite(temp_image, rgb_bgr)
             fp_image = temp_image
         
         # 获取当前地图路径和检测图像
         self._get_current_map_path()
         
-        # 获取detection图像路径（如果存在）
-        detection_image = os.path.join(self.episode_dir, 'detection', f'step_{last_step:04d}_{action_phase}.png')
-        if not os.path.exists(detection_image):
-            print(f"  ⚠️  Detection image not found: {detection_image}")
-            detection_image = None
+        # 查找detection图像（使用相同的回退逻辑）
+        detection_image = None
+        for phase in possible_phases:
+            candidate = os.path.join(self.episode_dir, 'detection', f'step_{last_step:04d}_{phase}.png')
+            if os.path.exists(candidate):
+                detection_image = candidate
+                break
+        if not detection_image:
+            print(f"  ⚠️  Detection image not found for step {last_step} (tried phases: {possible_phases})")
         
-        # 获取局部地图路径（需要使用phase后缀）
-        local_map = os.path.join(self.episode_dir, 'local_map', f'step_{last_step:04d}_{action_phase}.png')
-        if not os.path.exists(local_map):
-            print(f"  ⚠️  Local map not found: {local_map}")
-            local_map = None
+        # 查找局部地图（使用相同的回退逻辑）
+        local_map = None
+        for phase in possible_phases:
+            candidate = os.path.join(self.episode_dir, 'local_map', f'step_{last_step:04d}_{phase}.png')
+            if os.path.exists(candidate):
+                local_map = candidate
+                break
+        if not local_map:
+            print(f"  ⚠️  Local map not found for step {last_step} (tried phases: {possible_phases})")
         
         # 获取当前step检测到的landmark类别
         # 由于detection现在只检测subtask_landmark，直接传递当前step检测到的结果
