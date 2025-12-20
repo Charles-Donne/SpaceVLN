@@ -206,7 +206,14 @@ class MapVisualizer:
                     cv2.polylines(global_map_with_trajectory, [trajectory_array], isClosed=False,
                                  color=(0, 165, 255), thickness=2, lineType=cv2.LINE_8)
             
-            # ===== 阶段5.5: 叠加黑色障碍物层（在轨迹之后、箭头之前）=====
+            # ===== 阶段5.5: 在中心绘制箭头（先绘制）=====
+            center_x, center_y = 240, 240
+            arrow_angle = np.deg2rad(-90)  # 朝上
+            agent_pos = (center_x, center_y, arrow_angle)
+            agent_arrow = vu.get_contour_points(agent_pos, origin=(0, 0), size=12)
+            cv2.drawContours(global_map_with_trajectory, [agent_arrow], 0, (0, 0, 255), -1)
+            
+            # ===== 阶段5.6: 叠加黑色障碍物层（覆盖在箭头之上，使障碍物更醒目）=====
             # 创建障碍物掩码并叠加到已渲染的地图上
             obstacle_mask_display = obstacle_map > 0.5
             # ⚠️ 关键修复：障碍物也需要flipud翻转，与semantic_map保持一致
@@ -223,16 +230,9 @@ class MapVisualizer:
                 rotation_matrix, (480, 480),
                 flags=cv2.INTER_NEAREST
             ) > 127
-            # 用黑色覆盖障碍物区域
+            # 用黑色覆盖障碍物区域（会覆盖箭头，使障碍物更醒目）
             global_map_with_trajectory[obstacle_mask_rotated] = [0, 0, 0]  # 黑色BGR
             global_map_rotated[obstacle_mask_rotated] = [0, 0, 0]  # 无轨迹版本也叠加
-            
-            # 再在中心绘制箭头（在障碍物层之上）
-            center_x, center_y = 240, 240
-            arrow_angle = np.deg2rad(-90)  # 朝上
-            agent_pos = (center_x, center_y, arrow_angle)
-            agent_arrow = vu.get_contour_points(agent_pos, origin=(0, 0), size=12)
-            cv2.drawContours(global_map_with_trajectory, [agent_arrow], 0, (0, 0, 255), -1)
             
             # ===== 阶段6: 在显示副本上绘制Landmark标记 =====
             if len(landmarks) > 0:
@@ -477,7 +477,7 @@ class MapVisualizer:
         agent_arrow = vu.get_contour_points(agent_pos, origin=(0, 0), size=24)
         cv2.drawContours(local_map, [agent_arrow], 0, arrow_color, -1)
         
-        # ===== 阶段8: 叠加黑色障碍物层（覆盖在箭头之上）=====
+        # ===== 阶段8: 叠加黑色障碍物层（覆盖在箭头之上，使障碍物更醒目）=====
         # ⚠️ 关键修复：障碍物也需要flipud翻转，与semantic_map保持一致
         obstacle_mask_flipped = np.flipud(obstacle_map > 0.5)
         # 缩放到480x480

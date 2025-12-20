@@ -327,9 +327,9 @@ class VLMNavigationController(InteractiveNavigationController):
             self.direction_images[direction_name] = panorama_path
         
         # 保存全局地图和局部地图到 vlm/observations/
-        # 直接使用episode目录下的地图（step-12是完成360°扫描后最完整的地图）
-        self.latest_global_map = os.path.join(self.episode_dir, 'global_map', f'step_{12:04d}.png')
-        self.latest_local_map = os.path.join(self.episode_dir, 'local_map', f'step_{12:04d}.png')
+        # 使用当前step的地图（环视完成后的最新地图）
+        self.latest_global_map = os.path.join(self.episode_dir, 'global_map', f'step_{self.current_step:04d}_{phase}.png')
+        self.latest_local_map = os.path.join(self.episode_dir, 'local_map', f'step_{self.current_step:04d}_{phase}.png')
         
         if not os.path.exists(self.latest_global_map):
             print(f"  ⚠️  Global Map not found: {self.latest_global_map}")
