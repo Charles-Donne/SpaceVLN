@@ -198,24 +198,24 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 }}
 
 ## Example 1:
-**Global Task**: Walk through hallway to kitchen entrance
-**Previous Subtask**: Enter bedroom doorway 
-**Current Observation:** Agent at doorway, door detected, trajectory shows entry completed
+**Global Task**: Turn around walk through the exercise room into the living room. Wait by the Table.
+**Previous Subtask**: Navigate to exercise room entrance
+**Current Observation:** Living room visible at left 30°-60° (right portion of Left-View and left portion of Front-View) beyond arched doorway. Exercise equipment blocking direct left path in Front view.
 
 {{
     "is_completed": true,
-    "waypoint": "Doorway - between bedroom and hallway",
-    "waypoint_sequence": "Bedroom(✓) → Doorway(Current) → Hallway → Kitchen Entrance(Goal)",
-    "subtask_destination": "hallway midpoint",
-    "subtask_instruction": "Move forward 1.5m through hallway center toward kitchen entrance",
-    "subtask_landmark": "hallway",
+    "waypoint": "Exercise Room - near entrance, exercise equipment at left",
+    "waypoint_sequence": "Restroom(✓) → Exercise Room Entrance(✓) → Exercise Room(Current) → Living Room Arched Doorway → Living Room's Table(Goal)",
+    "subtask_destination": "living room arched doorway",
+    "subtask_instruction": "Move forward to bypass exercise equipment, then turn left to face arched doorway when left side is no obstacle, move forward and stop in front of sofa",
+    "subtask_landmark": "sofa",
     "completion_criteria": {{
-        "Object_Detection": "Hallway walls visible on both sides in Front view",
-        "Location": "Hallway Midpoint - walls left/right, kitchen entrance ahead",
-        "Spatial_relationship": "Walls on both sides. Kitchen entrance ahead. Orange trajectory extends through hallway center"
+        "Object_Detection": "Sofa detected in Front view. Arched doorway visible ahead",
+        "Location": "Living Room Arched Doorway - arched doorway and sofa centered ahead",
+        "Spatial_relationship": "Sofa directly ahead < 0.5m. Arched doorway frames view. Exercise equipment behind."
     }},
     "is_final_subtask": false,
-    "reasoning": "Previous subtask completed: door detected in Front view, orange trajectory confirms reached doorway. Current position: doorway between bedroom and hallway, hallway extending ahead (Front view). Map: green floor path clear straight through hallway center, black walls both sides, no obstacles blocking path. Global task requires reaching kitchen entrance at hallway end, so next waypoint is hallway midpoint."
+    "reasoning": "Previous subtask completed: reached exercise room entrance, orange trajectory confirms entry. Current position: inside exercise room near entrance, exercise equipment visible at left blocking direct path. Living room visible at left 30°-60° (right portion of Left-View + left portion of Front-View) through arched doorway. Map: exercise equipment is black obstacle at left, green floor path clear straight ahead to bypass equipment, then green path clear at left 30° after bypass leading to arched doorway. Global task requires passing through exercise room to reach living room table, so next waypoint is living room arched doorway area with sofa."
 }}
 
 ## Example 2:

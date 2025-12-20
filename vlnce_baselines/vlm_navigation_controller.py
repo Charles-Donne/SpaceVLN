@@ -976,15 +976,13 @@ class VLMNavigationController(InteractiveNavigationController):
         return result
     
     def run_vlm_navigation(self, max_steps: int = 500, 
-                          max_subtask_steps: int = 50,
-                          verify_interval: int = 10) -> Dict[str, Any]:
+                          max_subtask_steps: int = 10) -> Dict[str, Any]:
         """
         运行完整的VLM导航流程
         
         Args:
             max_steps: 最大总步数
-            max_subtask_steps: 每个子任务最大步数
-            verify_interval: 验证间隔步数
+            max_subtask_steps: 每个子任务最大步数（达到后触发验证）
             
         Returns:
             导航结果字典
@@ -993,7 +991,7 @@ class VLMNavigationController(InteractiveNavigationController):
         print("启动VLM自动导航")
         print("="*60)
         print(f"指令: {self.current_instruction}")
-        print(f"最大步数: {max_steps} | 子任务步数: {max_subtask_steps} | 验证间隔: {verify_interval}")
+        print(f"最大步数: {max_steps} | 子任务最大步数: {max_subtask_steps}")
         print("="*60 + "\n")
         
         # 1. 环视建图 + 收集观察（占用step 1-12）
@@ -1067,17 +1065,11 @@ class VLMNavigationController(InteractiveNavigationController):
                 navigation_complete = True
                 break
             
-            # 定期验证
-            if subtask_steps >= verify_interval:
-                is_completed, _, _ = self.verify_and_replan()
-                if is_completed:
-                    subtask_steps = 0
-            
-            # 子任务超时
+            # 子任务超时验证
             if subtask_steps >= max_subtask_steps:
-                print(f"\n[警告] 子任务超时 ({max_subtask_steps}步)，重新规划")
+                print(f"\n[警告] 子任务达到最大步数 ({max_subtask_steps}步)，触发验证")
                 _, _, _ = self.verify_and_replan()
-                subtask_steps = 0
+                subtask_steps = 0  # 无论验证成功与否，都清空子任务步数
         
         # 4. 生成GIF动画
         gif_path = None

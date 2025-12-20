@@ -68,8 +68,7 @@ def main():
     print(f"🔧 VLM: LLM={args.llm_config} | VLM={args.vlm_config}")
     print("="*60)
     
-    if not args.auto:
-        input("\n按Enter开始导航...")
+    # 运行VLM导航（移除手动确认，直接开始）
     
     # 运行VLM导航
     result = controller.run_vlm_navigation(
