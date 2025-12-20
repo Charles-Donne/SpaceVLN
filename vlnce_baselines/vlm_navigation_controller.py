@@ -1039,18 +1039,20 @@ class VLMNavigationController(InteractiveNavigationController):
                 subtask_steps = 0
                 continue
             
+            # VLM决策计数（每次调用action模型算1步）
+            subtask_steps += 1
+            
             # 执行动作（可能需要重复多次）
             for i in range(repeat_count):
                 result = self.step_with_vlm(action_id, action_name=action_name, save_vis=True)
                 total_steps = self.current_step
-                subtask_steps += 1
                 
                 if i == 0 and repeat_count > 1:
-                    print(f"[Step {total_steps}] {action_name} (1/{repeat_count}) | 子任务步数: {subtask_steps}")
+                    print(f"[Step {total_steps}] {action_name} (1/{repeat_count}) | VLM决策次数: {subtask_steps}")
                 elif repeat_count > 1:
-                    print(f"[Step {total_steps}] {action_name} ({i+1}/{repeat_count}) | 子任务步数: {subtask_steps}")
+                    print(f"[Step {total_steps}] {action_name} ({i+1}/{repeat_count}) | VLM决策次数: {subtask_steps}")
                 else:
-                    print(f"[Step {total_steps}] {action_name} | 子任务步数: {subtask_steps}")
+                    print(f"[Step {total_steps}] {action_name} | VLM决策次数: {subtask_steps}")
                 
                 if result['done']:
                     print("\nEpisode自动完成")
