@@ -1017,15 +1017,25 @@ class VLMNavigationController(InteractiveNavigationController):
         navigation_complete = False
         
         while total_steps < max_steps:
-            # VLM决策动作
-            action_id, action_name, should_stop, repeat_count = self.execute_action_with_vlm()
+            # VLM决策动作（失败则重试）
+            max_retries = 3
+            action_id = None
             
+            for retry in range(max_retries):
+                action_id, action_name, should_stop, repeat_count = self.execute_action_with_vlm()
+                
+                if action_id is not None:
+                    break
+                
+                if retry < max_retries - 1:
+                    print(f"VLM决策失败，重试 ({retry + 1}/{max_retries - 1})...")
+                    import time
+                    time.sleep(1)
+            
+            # 所有重试都失败，跳过此步
             if action_id is None:
-                print("VLM决策失败，尝试手动输入")
-                action_id = self.get_keyboard_action()
-                action_name = self._action_name(action_id)
-                should_stop = (action_id == 0)
-                repeat_count = 1
+                print("✗ VLM决策失败，已达最大重试次数，跳过此步")
+                continue
             
             # 如果VLM决定停止 → 验证子任务
             if should_stop:
