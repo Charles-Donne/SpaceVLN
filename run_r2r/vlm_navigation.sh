@@ -1,7 +1,10 @@
 #!/bin/bash
 # VLM Navigation Controller
 # VLM自动导航系统：LLM规划 + VLM执行 + 语义建图
-# 用法: bash run_r2r/vlm_navigation.sh [episode_id] [max_steps]
+# 用法: 
+#   单个episode: bash run_r2r/vlm_navigation.sh [episode_id] [max_steps]
+#   批量运行:    bash run_r2r/vlm_navigation.sh [start_id] [max_steps] [num_episodes]
+#   随机运行:    bash run_r2r/vlm_navigation.sh random [max_steps] [num_episodes]
 
 set -e
 trap 'echo "❌ 错误：脚本在第 $LINENO 行失败"; exit 1' ERR
@@ -15,6 +18,14 @@ export TRANSFORMERS_VERBOSITY=error
 # 参数解析
 EPISODE_ID=${1:-0}
 MAX_STEPS=${2:-500}
+NUM_EPISODES=${3:-1}
+RANDOM_MODE=""
+
+# 检查是否为随机模式
+if [ "$EPISODE_ID" == "random" ]; then
+    RANDOM_MODE="--random"
+    EPISODE_ID=0
+fi
 
 # 参数验证
 if ! [[ "$EPISODE_ID" =~ ^[0-9]+$ ]]; then
@@ -66,8 +77,19 @@ echo "║           VLM Navigation Controller                        ║"
 echo "║       LLM Planning + VLM Action Execution                  ║"
 echo "╚════════════════════════════════════════════════════════════╝"
 echo ""
-echo "📋 配置: Episode $EPISODE_ID | 最大步数 $MAX_STEPS"
-echo "📁 结果: $RESULTS_DIR/episode_$EPISODE_ID/"
+
+if [ -n "$RANDOM_MODE" ]; then
+    echo "📋 配置: 随机运行 $NUM_EPISODES 个episodes | 最大步数 $MAX_STEPS"
+else
+    if [ "$NUM_EPISODES" -eq 1 ]; then
+        echo "📋 配置: Episode $EPISODE_ID | 最大步数 $MAX_STEPS"
+    else
+        END_ID=$((EPISODE_ID + NUM_EPISODES - 1))
+        echo "📋 配置: Episodes $EPISODE_ID-$END_ID (共$NUM_EPISODES个) | 最大步数 $MAX_STEPS"
+    fi
+fi
+
+echo "📁 结果: $RESULTS_DIR/"
 echo ""
 echo "🤖 模型配置:"
 echo "   LLM: $LLM_CONFIG"
@@ -96,6 +118,8 @@ set +e
 CUDA_VISIBLE_DEVICES=0 python vlm_navigation.py \
     --exp-config "$CONFIG_FILE" \
     --episode-id "$EPISODE_ID" \
+    --num-episodes "$NUM_EPISODES" \
+    $RANDOM_MODE \
     --max-steps "$MAX_STEPS" \
     --results-dir "$RESULTS_DIR" \
     --llm-config "$LLM_CONFIG" \
@@ -117,7 +141,7 @@ else
     echo "❌ 异常退出 (code: $EXIT_CODE)"
 fi
 
-OUTPUT_DIR="$RESULTS_DIR/episode_$EPISODE_ID"
+echo "📁 输出目录: $RESULTS_DIR"
 if [ -d "$OUTPUT_DIR" ]; then
     RGB_COUNT=$(find "$OUTPUT_DIR/rgb" -name "*.png" 2>/dev/null | wc -l)
     MAP_COUNT=$(find "$OUTPUT_DIR/global_map" -name "*.png" 2>/dev/null | wc -l)
