@@ -139,10 +139,27 @@ class BaseAPIClient(ABC):
             
             result = response.json()
             content = result['choices'][0]['message']['content']
-            return self.parse_json_response(content)
+            
+            # 打印原始响应以便调试
+            if not content or len(content.strip()) < 10:
+                print(f"✗ Empty or too short API response: {content}")
+                return None
+                
+            parsed = self.parse_json_response(content)
+            
+            if parsed is None:
+                print(f"✗ Failed to parse JSON from API response")
+                print(f"✗ Raw response (first 500 chars): {content[:500]}")
+                print(f"✗ Raw response (last 500 chars): {content[-500:]}")
+                
+            return parsed
             
         except requests.exceptions.Timeout:
             print(f"✗ API timeout after {self.config.timeout}s")
+            return None
+        except json.JSONDecodeError as e:
+            print(f"✗ JSON decode error: {e}")
+            print(f"✗ Response text: {response.text[:500]}")
             return None
         except Exception as e:
             print(f"✗ API call failed: {e}")

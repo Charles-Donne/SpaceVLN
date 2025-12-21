@@ -79,31 +79,32 @@ def main():
         print(f"🔄 [{idx}/{len(episode_ids)}] 开始Episode {episode_id}")
         print(f"{'='*80}")
         
-        # 重新配置episode
-        episode_config = config.clone()
-        episode_config.defrost()
-        episode_config = ConfigHelper.setup_episode_config(episode_config, [episode_id], num_environments=1)
-        if args.results_dir:
-            episode_config = ConfigHelper.setup_results_dir(episode_config, args.results_dir)
-        episode_config = ConfigHelper.setup_navigation_config(episode_config)
-        episode_config.freeze()
-        
-        # 初始化控制器
-        controller = VLMNavigationController(
-            episode_config,
-            llm_config_path=args.llm_config,
-            vlm_config_path=args.vlm_config
-        )
-        
-        # 重置Episode
-        controller.reset_episode(episode_id=episode_id)
-        
-        print(f"\n📝 指令: {controller.current_instruction}")
-        print(f"⚙️  配置: Episode {episode_id} | 最大步数 {args.max_steps}")
-        print(f"🔧 VLM: LLM={args.llm_config} | VLM={args.vlm_config}")
-        
-        # 运行VLM导航
+        controller = None
         try:
+            # 重新配置episode
+            episode_config = config.clone()
+            episode_config.defrost()
+            episode_config = ConfigHelper.setup_episode_config(episode_config, [episode_id], num_environments=1)
+            if args.results_dir:
+                episode_config = ConfigHelper.setup_results_dir(episode_config, args.results_dir)
+            episode_config = ConfigHelper.setup_navigation_config(episode_config)
+            episode_config.freeze()
+            
+            # 初始化控制器
+            controller = VLMNavigationController(
+                episode_config,
+                llm_config_path=args.llm_config,
+                vlm_config_path=args.vlm_config
+            )
+            
+            # 重置Episode
+            controller.reset_episode(episode_id=episode_id)
+            
+            print(f"\n📝 指令: {controller.current_instruction}")
+            print(f"⚙️  配置: Episode {episode_id} | 最大步数 {args.max_steps}")
+            print(f"🔧 VLM: LLM={args.llm_config} | VLM={args.vlm_config}")
+            
+            # 运行VLM导航
             result = controller.run_vlm_navigation(
                 max_steps=args.max_steps,
                 max_subtask_steps=args.max_subtask_steps
@@ -127,19 +128,25 @@ def main():
             print(f"{'='*80}")
             
         except Exception as e:
-            print(f"\n❌ Episode {episode_id} 运行失败: {e}")
+            import traceback
+            error_msg = str(e)
+            print(f"\n❌ Episode {episode_id} 运行失败: {error_msg}")
+            print(f"\n完整错误堆栈:")
+            traceback.print_exc()
+            
             results_summary.append({
                 'episode_id': episode_id,
                 'success': False,
                 'steps': 0,
-                'error': str(e)
+                'error': error_msg
             })
         finally:
             # 清理控制器
-            try:
-                controller.envs.close()
-            except:
-                pass
+            if controller is not None:
+                try:
+                    controller.envs.close()
+                except Exception as cleanup_error:
+                    print(f"⚠️  清理环境时出错: {cleanup_error}")
     
     # 打印总结
     print(f"\n\n{'='*80}")
@@ -159,19 +166,14 @@ def main():
         print(f"  {status} Episode {r['episode_id']}: 步数={r['steps']}{error_msg}")
     
     print(f"\n{'='*80}")
-    controller.close()
     
-    # 打印结果
+    # 打印整体统计
     print("\n" + "="*60)
-    print("🏁 导航结果")
+    print("🏁 批量运行统计")
     print("="*60)
-    print(f"✅ 成功: {result.get('success', False)}")
-    print(f"📊 总步数: {result.get('total_steps', 0)}")
-    print(f"📋 子任务数: {result.get('subtask_count', 0)}")
-    print(f"🔍 检测类别: {len(result.get('detected_classes', []))}")
-    if result.get('reason'):
-        print(f"❌ 失败原因: {result['reason']}")
-    print(f"📁 结果目录: {config.RESULTS_DIR}/episode_{args.episode_id}/")
+    print(f"✅ 成功率: {success_count}/{total_count} ({success_count/total_count*100:.1f}%)")
+    print(f"📊 平均步数: {sum(r['steps'] for r in results_summary)/total_count:.1f}")
+    print(f"📁 结果目录: {args.results_dir or config.RESULTS_DIR}")
     print("="*60)
 
 

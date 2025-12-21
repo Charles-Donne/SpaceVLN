@@ -98,9 +98,21 @@ class LLMPlanner(BaseAPIClient):
         else:
             print(f"  📍 Images: 4 directions + Global map")
         
-        response = self.call_api(prompt, images)
+        # 添加重试机制
+        max_retries = 3
+        for retry in range(max_retries):
+            response = self.call_api(prompt, images)
+            
+            if response and self.validate_response(response, mode='initial'):
+                return response
+            
+            if retry < max_retries - 1:
+                print(f"  ⚠️  初始规划API调用失败，重试 ({retry + 1}/{max_retries - 1})...")
+                import time
+                time.sleep(2)
         
-        return response, prompt
+        print(f"  ✗ 初始规划API调用失败，已达最大重试次数")
+        return None
     
     def verify_and_replan(self,
                          instruction: str,
@@ -162,10 +174,19 @@ class LLMPlanner(BaseAPIClient):
         else:
             print(f"  📍 Images: 4 directions (updated) + Global map")
         
-        response = self.call_api(prompt, images)
+        # 添加重试机制
+        max_retries = 3
+        for retry in range(max_retries):
+            response = self.call_api(prompt, images)
+            
+            if response and self.validate_response(response, mode='verify'):
+                is_completed = response.get('is_completed', False)
+                return response, is_completed, prompt
+            
+            if retry < max_retries - 1:
+                print(f"  ⚠️  验证API调用失败，重试 ({retry + 1}/{max_retries - 1})...")
+                import time
+                time.sleep(2)  # 等待2秒后重试
         
-        if response and self.validate_response(response, mode='verify'):
-            is_completed = response.get('is_completed', False)
-            return response, is_completed, prompt
-        
+        print(f"  ✗ 验证API调用失败，已达最大重试次数")
         return None, False, None
