@@ -31,10 +31,12 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 - **Black**: Obstacles (walls, furniture, barriers) - **MUST AVOID in planning**
 - **Green**: Confirmed floor areas (safe to navigate)
 - **Orange line**: Trajectory from subtask start to current position
-- **Red circle with arrow**: Current position, arrow points to Front direction
+- **Red arrow**: Current position, arrow points to Front direction
   
 **Local Map** (zoomed view around agent, same color legend as Global Map):
 - Shows finer details in immediate vicinity for precise navigation
+- **Red arrow**: Current position, arrow points to Front direction
+- **Dark green circle**: 0.5m radius nearby area around current position
 - **Blue semi-circle**: Agent's current field of view (Front direction visibility range)
   - The opening of the semi-circle indicates Front view direction
   - Objects within this blue region are currently visible in IMAGE 1 Front (Front View)
@@ -55,15 +57,15 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 # Output Format (JSON only)
 
 {{
-    "waypoint": "<Current Area Type> - <Key Surrounding Landmarks>",
+    "waypoint": "<Current Area Type> - <Key Surrounding Landmarks and Relationships>",
     "waypoint_sequence": "<Current Location> → <Next Waypoint> → ... → <Final Waypoints>",
     "subtask_destination": "<Next immediate waypoint name>",
     "subtask_instruction": "<Step-by-step navigation instructions starting from Front view>",
     "subtask_landmark": "<Single landmark to detect (common, e.g. door, table, painting, cabinet)>",
     "completion_criteria": {{
-        "Object_Detection": "<What landmark should be detected in 4-directional views>",
-        "Location": "<Current Area Type> - <Key Surrounding Landmarks>",
-        "Spatial_relationship": "<Destination should be directly ahead. Distance. Other Objects Relationships>"
+        "Panoramic_Detection": "<Destination detected in which view>. <Other objects detected in which view>",(from panoramic view detection)
+        "Spatial_relationship": "<Destination position and distance> (map verification). <Other objects relationships> (map verification). <Trajectory description>",
+        "Location": "<Current Area Type> - <relative position descriptions>"
     }},
     "is_final_subtask": <true if this is the final subtask to finish global task (next waypoint is final waypoint), false otherwise>,
     "reasoning": "<Brief explanation of observationion and analysis leading to this subtask planning>"
@@ -75,15 +77,15 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 **Global Task**: Turn around walk through the exercise room into the living room. Wait by the Table.
 **Current Observation: Far front is a bookshelf. Toilet and Sink can be seen from right view. Left is a wall but left 120° is doorway to gym. 
 {{
-    "waypoint": "Restroom - beside exercise room door, toilet and washbasin.",
+    "waypoint": "Restroom - beside exercise room door, toilet and washbasin nearby.",
     "waypoint_sequence": "Restroom(Current) → Exercise Room Entrance → Exercise Room → Living Room → Living Room's Table(Goal)",
     "subtask_destination": "exercise room entrance",
     "subtask_instruction": "Turn left 120° to face doorway, then move forward 0.5m to stop at gym's entrance.",
     "subtask_landmark": "door",
     "completion_criteria": {{
-        "Object_Detection": "Door detected in Front view",
-        "Location": "Exercise Room Entrance - doorway centered in front",
-        "Spatial_relationship": "Door directly ahead < 0.5m. Restroom is behind."
+        "Panoramic_Detection": "Door detected in Front view centered ahead.",
+        "Spatial_relationship": "Door ahead < 0.5m (map shows doorway at Red arrow). Restroom far behind (map shows away from last waypoint). Orange trajectory shows approach to doorway",
+        "Location": "Exercise Room Entrance - doorway ahead < 0.5m, restroom far behind"
     }},
     "is_final_subtask": false,
     "reasoning": "Agent currently in Restroom (toilet and washbasin visible from right view, bookshelf at far front). Exercise room door visible at left 120° (left portion of Left-View). Map: Left 90° is wall obstacle (black), green floor path clear after turning left 120° leading to doorway, no black obstacles blocking approach to doorway. Global task requires passing through exercise room to reach living room table, so first waypoint is exercise room entrance."
@@ -93,15 +95,15 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 **Global Task**: Walk to the kitchen, stop at the refrigerator.
 **Current Observation:** Living Room visible with Bar in front. Kitchen visible beyond Bar. Chair and sofa nearby.
 {{
-    "waypoint": "Living Room - near chair, sofa and Bar",
+    "waypoint": "Living Room - near chair, sofa and Bar, kitchen far ahead.",
     "waypoint_sequence": "Living Room(Current) → Bar → Kitchen → Kitchen's Refrigerator(Goal)",
     "subtask_destination": "Bar area",
     "subtask_instruction": "Turn right 30° to avoid Bar obstacle, move forward 1.5m to pass by Bar",
     "subtask_landmark": "Bar",
     "completion_criteria": {{
-        "Object_Detection": "Bar detected in Left view. Kitchen entrance visible ahead",
-        "Location": "Bar Area - Bar at left, path to kitchen clear ahead",
-        "Spatial_relationship": "Bar at Left < 0.5m. Kitchen in front. Sofa and chair behind."
+        "Panoramic_Detection": "Kitchen entrance detected in Front view ahead. Bar detected in Left view. Sofa and chair detected far away in Back view",
+        "Spatial_relationship": "Bar at left < 0.5m (map shows bar landmark is on left and at Red arrow). Kitchen entrance ahead (map shows green path leading to kitchen). Sofa and chair far behind (map shows starting position). Orange trajectory shows right turn to bypass bar",
+        "Location": "Bar Area - Bar at left < 0.5m, kitchen entrance ahead, living room far behind"
     }},
     "is_final_subtask": false,
     "reasoning": "Agent currently in Living Room (chair and sofa visible). Bar blocking front path, kitchen entrance visible beyond at right 30° (right portion of Front-View). Map: Front direction blocked by black Bar obstacle, green floor path clear at right 30° leading around Bar toward kitchen. Global task requires passing through living room to kitchen and reaching refrigerator, so first waypoint is Bar area."
@@ -111,6 +113,7 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 - **Panoramic View Content**: Detect each portion of panoramic view for comprehensive spatial understanding and precise directional descriptions.
 - **Planing**: Start all actions from Front view (0°).
 - **Map**: Use maps to identify your location, landmarks, obstacles and plan safe paths.
+- **Distance Judgment**: Use dark green circle on local map to determine if destination/landmark is nearby - objects within the circle are < 0.5m from current position
 - **Landmark Selection**: Choose common furniture items with simple nouns for easy detection (e.g., door, chair, table, bed, cabinet, refrigerator, sofa)
 - **Logical Analysis**: Ensure reasoning and output aligns with inputs - All the content must not contain any contradictions.
 """
@@ -149,7 +152,7 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 - **Black**: Obstacles (walls, furniture, barriers) - **MUST AVOID in next planning**
 - **Green**: Confirmed floor areas (safe to navigate)
 - **Orange line**: Trajectory from previous subtask start to current position
-- **Red circle with arrow**: Current position, arrow points to Front direction
+- **Red arrow**: Current position, arrow points to Front direction
 - **Purple markers with labels**: Previous Detected Landmark: {detected_landmarks}
 - **Blue circles with white numbers**: Historical waypoints (see below)
 
@@ -159,6 +162,8 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
   
 **Local Map** (zoomed view around agent, same color legend as Global Map):
 - Shows finer details in immediate vicinity for precise navigation
+- **Red arrow**: Current position, arrow points to Front direction
+- **Dark green circle**: 0.5m radius nearby area around current position
 - **Blue semi-circle**: Agent's current field of view (Front direction visibility range)
   - The opening of the semi-circle indicates Front view direction
   - Objects within this blue region are currently visible in IMAGE 1 (Front View)
@@ -183,15 +188,15 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 
 {{
     "is_completed": <true if previous subtask completed, false if not>,
-    "waypoint": "<Current Area Type> - <Key Surrounding Landmarks>",
+    "waypoint": "<Current Area Type> - <Key Surrounding Landmarks and Relationships>",
     "waypoint_sequence": "<Completed Waypoints(✓)> → <Current> → <Remaining Waypoints> → <Final Waypoints>",
     "subtask_destination": "<Next waypoint if completed, same waypoint if not>",
     "subtask_instruction": "<Step-by-step navigation instructions from Front view>",
     "subtask_landmark": "<Single landmark name for map marking>",
     "completion_criteria": {{
-        "Object_Detection": "<What landmark should be detected in 4-directional views>",
-        "Location": "<Current Area Type> - <Key Surrounding Landmarks>",
-        "Spatial_relationship": "<Destination should be directly ahead. Distance. Other Objects Relationships>"
+        "Panoramic_Detection": "<Destination detected in which view>. <Other objects detected in which view>",(from panoramic view detection)
+        "Spatial_relationship": "<Destination position and distance> (map verification). <Other objects relationships> (map verification). <Trajectory description>",
+        "Location": "<Current Area Type> - <relative position descriptions>"
     }},
     "is_final_subtask": <true if next destination is final goal, false otherwise>,
     "reasoning": "<Brief explanation of completion verification, progress, and next plan>"
@@ -204,15 +209,15 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 
 {{
     "is_completed": true,
-    "waypoint": "Exercise Room - near entrance, exercise equipment at left",
+    "waypoint": "Exercise Room - exercise equipment nearby, living room and bathroom in far away",
     "waypoint_sequence": "Restroom(✓) → Exercise Room Entrance(✓) → Exercise Room(Current) → Living Room Arched Doorway → Living Room's Table(Goal)",
     "subtask_destination": "living room arched doorway",
     "subtask_instruction": "Move forward to bypass exercise equipment, then turn left to face arched doorway when left side is no obstacle, move forward and stop in front of sofa",
     "subtask_landmark": "sofa",
     "completion_criteria": {{
-        "Object_Detection": "Sofa detected in Front view. Arched doorway visible ahead",
-        "Location": "Living Room Arched Doorway - arched doorway and sofa centered ahead",
-        "Spatial_relationship": "Sofa directly ahead < 0.5m. Arched doorway frames view. Exercise equipment behind."
+        "Panoramic_Detection": "Sofa and arched doorway detected in Front view ahead. Exercise equipment detected far away in Back view",
+        "Spatial_relationship": "Sofa ahead < 0.5m (map shows sofa landmark is at Red arrow). Exercise equipment far behind (map shows black obstacles at previous waypoint). Orange trajectory shows forward movement then turn to living room",
+        "Location": "Living Room Arched Doorway - sofa and doorway ahead < 0.5m, exercise room far behind"
     }},
     "is_final_subtask": false,
     "reasoning": "Previous subtask completed: reached exercise room entrance, orange trajectory confirms entry. Current position: inside exercise room near entrance, exercise equipment visible at left blocking direct path. Living room visible at left 30°-60° (right portion of Left-View + left portion of Front-View) through arched doorway. Map: exercise equipment is black obstacle at left, green floor path clear straight ahead to bypass equipment, then green path clear at left 30° after bypass leading to arched doorway. Global task requires passing through exercise room to reach living room table, so next waypoint is living room arched doorway area with sofa."
@@ -226,43 +231,44 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 {{
     "is_completed": true,
     "waypoint": "Kitchen Center - between refrigerator and counter",
-    "waypoint_sequence": "Bedroom(✓) → Doorway(✓) → Hallway(✓) → Kitchen Center(Current) → Refrigerator(Goal)",
+    "waypoint_sequence": "Bedroom(✓) → Hallway(✓) → Kitchen Center(Current) → Refrigerator(Goal)",
     "subtask_destination": "refrigerator in kitchen",
     "subtask_instruction": "Turn left 30° to face refrigerator directly, move forward 1.0m to approach refrigerator",
     "subtask_landmark": "refrigerator",
     "completion_criteria": {{
-        "Object_Detection": "Refrigerator detected in Front view center",
-        "Location": "Refrigerator Area - refrigerator ahead, counter at right",
-        "Spatial_relationship": "Refrigerator directly ahead < 1.0m. Counter at right. Orange trajectory shows left turn and approach"
+        "Panoramic_Detection": "Refrigerator detected centred in Front view ahead. Counter detected in Right view. Kitchen detected far away in Back view",
+        "Spatial_relationship": "Refrigerator ahead < 0.5m (map shows refrigerator landmark is at Red arrow). Counter at right (map shows black obstacle). Kitchen center far behind. Orange trajectory shows approach to refrigerator",
+        "Location": "Refrigerator Area - refrigerator ahead < 0.5m, counter at right, kitchen center far behind"
     }},
     "is_final_subtask": true,
     "reasoning": "Previous subtask completed: orange trajectory shows entered kitchen center. Current position: kitchen center, refrigerator visible at left 30° (left portion of Front view). Map: green floor path clear between agent and refrigerator, no black obstacles blocking path. Global task requires reaching refrigerator (final destination), so next waypoint is refrigerator itself."
 }}
 
 ## Example 3:
-**Global Task**: Enter the bedroom through the doorway
-**Previous Subtask**: Approach bedroom doorway
-**Current Observation:** Agent facing slightly left of doorway, distance still > 1.0m, trajectory shows movement but orientation misaligned
+**Global Task**: Walk toward the oven.  Go through the archway on your right that is past the painting of the girl in a blue bonnet.  Go through the doorway on your left.  Stop in front of the small sink, before you reach the grill. 
+**Previous Subtask**: Approach oven area
+**Current Observation:** Oven visible in Front view but distance still > 1.0m. Kitchen island visible behind. Orange trajectory shows progress but hasn't reached oven yet.
 
 {{
     "is_completed": false,
-    "waypoint": "Hallway - approaching bedroom doorway",
-    "waypoint_sequence": "Living Room(✓) → Hallway(Current) → Bedroom Doorway → Bedroom(Goal)",
-    "subtask_destination": "bedroom doorway",
-    "subtask_instruction": "First turn right 30° to align with doorway center (currently facing left edge), then move forward 0.75m to reach doorway (target distance < 0.5m)",
-    "subtask_landmark": "door",
+    "waypoint": "Kitchen - Oven is far ahead, kitchen island nearby.",
+    "waypoint_sequence": "Kitchen(Current) → Oven Area → Archway Past Painting → Left Doorway → Small Sink(Goal)",
+    "subtask_destination": "oven area",
+    "subtask_instruction": "Continue moving forward 1.0m to approach oven until oven is directly ahead < 0.5m (target: oven centered in Front view, very close)",
+    "subtask_landmark": "oven",
     "completion_criteria": {{
-        "Object_Detection": "Door detected in Front view center (not left/right portion)",
-        "Location": "Bedroom Doorway - doorway centered ahead",
-        "Spatial_relationship": "Door directly ahead < 0.5m. Orange trajectory shows approach with final alignment. Red arrow centered on doorway"
+        "Panoramic_Detection": "Oven detected in Front view centered ahead occupying large portion. Kitchen island detected far away in Back view",
+        "Spatial_relationship": "Oven ahead < 0.5m (map shows oven landmark is at Red arrow). Kitchen far behind (map shows it away from last waypoint). Orange trajectory shows forward movement toward oven",
+        "Location": "Oven Area - oven ahead < 0.5m, kitchen far behind"
     }},
     "is_final_subtask": false,
-    "reasoning": "Previous subtask NOT completed. Current position: hallway approaching bedroom doorway. Door detected but in Front-Left portion (not centered), orientation misaligned by ~30°. Distance still > 1.0m on map (completion requires < 0.5m), orange trajectory shows progress but insufficient. Local map: red arrow pointing slightly left of doorway. Root cause: narrow hallway caused drift left. Map: clear green path after right turn, no black obstacles blocking corrected path. Corrective subtask: same destination (bedroom doorway) with adjusted instruction."
+    "reasoning": "Previous subtask NOT completed. Current position: kitchen area far from oven. Oven detected in Front view (IMAGE 1) but distance still > 1.0m on map (orange trajectory shows progress but hasn't reached oven yet, waypoint 1 nearby shows previous stop location). Completion criteria requires distance < 0.5m with oven filling Front view. Kitchen visible behind (IMAGE 3, Back 180°). Local map: clear green floor path ahead toward oven, no black obstacles blocking. Root cause: insufficient forward movement. Corrective subtask: same destination (oven area) with instruction to continue forward until very close."
 }}
 
 **Critical Requirements**:
 - **Panoramic View Content**: Detect each portion of panoramic view for comprehensive spatial understanding and precise directional descriptions.
-- **Verification**: Compare current observations against all three completion_criteria fields (Object_Detection, Location, Spatial_relationship)
+- **Verification**: Compare current observations against all three completion_criteria fields (Panoramic_Detection, Spatial_relationship, Location)
+- **Distance Judgment**: Use dark green circle on local map to determine if destination/landmark is nearby - objects within the circle are < 0.5m from current position
 - **Planning**: Start all actions from Front view (0°). If subtask completed, plan NEXT waypoint; if not, adjust CURRENT subtask
 - **Map**: Use maps to verify trajectory, identify obstacles and plan safe paths for next subtask
 - **Landmark Selection**: Choose common furniture items with simple nouns for easy detection (e.g., door, chair, table, bed, cabinet, refrigerator, sofa)

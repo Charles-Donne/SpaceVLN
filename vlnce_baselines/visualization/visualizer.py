@@ -526,6 +526,13 @@ class MapVisualizer:
         cv2.line(local_map, (fov_center_x, fov_center_y), (right_end_x, right_end_y),
                 fov_outline_color, fov_outline_thickness)
         
+        # ===== 绘制0.5m半径圆圈（深绿色，标识当前位置附近区域）=====
+        # 480像素 = 12m，所以1m = 40像素，0.5m = 20像素
+        nearby_radius = 20  # 0.5m半径
+        nearby_color = (0, 100, 0)  # 深绿色BGR
+        nearby_thickness = 2  # 2像素线宽
+        cv2.circle(local_map, (fov_center_x, fov_center_y), nearby_radius, nearby_color, nearby_thickness)
+        
         # ===== 阶段7: 绘制朝上的大箭头（在FOV之上）=====
         arrow_color = (0, 0, 255)  # 亮红色BGR
         arrow_angle = np.deg2rad(-90)  # 朝上
