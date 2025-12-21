@@ -265,6 +265,27 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
     "reasoning": "Previous subtask NOT completed. Current position: kitchen area far from oven. Oven detected in Front view (IMAGE 1) but distance still > 1.0m on map (orange trajectory shows progress but hasn't reached oven yet, waypoint 1 nearby shows previous stop location). Completion criteria requires distance < 0.5m with oven filling Front view. Kitchen visible behind (IMAGE 3, Back 180°). Local map: clear green floor path ahead toward oven, no black obstacles blocking. Root cause: insufficient forward movement. Corrective subtask: same destination (oven area) with instruction to continue forward until very close."
 }}
 
+## Example 4:
+**Global Task**: Walk up to the photo on the wall directly in front of you.
+**Previous Subtask**: Navigate to painting on wall
+**Current Observation:** Painting visible in Front-Left 30° portion but still some distance away. Painting is outside the dark green circle on local map.
+
+{{
+    "is_completed": false,
+    "waypoint": "Dining Area - painting visible at front-left, not yet at destination",
+    "waypoint_sequence": "Dining Area(Current) → Painting on Wall(Goal)",
+    "subtask_destination": "painting on wall",
+    "subtask_instruction": "Continue moving forward until painting is centered in Front view and within 0.5m (target: painting filling entire Front view, inside dark green circle)",
+    "subtask_landmark": "painting",
+    "completion_criteria": {{
+        "Panoramic_Detection": "Painting detected in Front view centered ahead, occupying large portion of the view",
+        "Spatial_relationship": "Painting ahead < 0.5m (map shows painting landmark is within the dark green circle around Red arrow). Orange trajectory shows forward movement to painting",
+        "Location": "In front of Painting - painting ahead < 0.5m filling view"
+    }},
+    "global_task_finish": false,
+    "reasoning": "Previous subtask NOT completed. Current position: painting detected in Front-Left 30° portion (IMAGE 1 left side) but still at a distance. Local map (IMAGE 6) shows painting landmark is outside the dark green circle (0.5m radius), confirming destination not yet reached. The painting does not fill the Front view, indicating insufficient proximity. Orange trajectory shows progress but hasn't reached the painting yet. Completion criteria requires painting to be centered in Front view, within 0.5m (inside dark green circle), and filling the entire screen. Root cause: insufficient forward movement. Corrective subtask: same destination (painting on wall) with instruction to continue forward until painting is very close and centered."
+}}
+
 **Critical Requirements**:
 - **Panoramic View Content**: Detect each portion of panoramic view for comprehensive spatial understanding and precise directional descriptions.
 - **Verification**: Compare current observations against all three completion_criteria fields (Panoramic_Detection, Spatial_relationship, Location)

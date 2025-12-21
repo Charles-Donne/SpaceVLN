@@ -56,6 +56,7 @@ secrets.yaml
 
 # Data (Large datasets - DO NOT COMMIT)
 data/
+!vlnce_baselines/data/
 datasets/
 scene_datasets/
 *.mp4
