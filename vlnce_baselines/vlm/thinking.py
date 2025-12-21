@@ -65,7 +65,7 @@ class LLMPlanner(BaseAPIClient):
                                 observation_images: List[str],
                                 direction_names: List[str],
                                 global_map_image: str,
-                                local_map_image: str = None) -> Optional[Dict]:
+                                local_map_image: str = None) -> Tuple[Optional[Dict], str]:
         """
         生成初始子任务
         
@@ -77,11 +77,11 @@ class LLMPlanner(BaseAPIClient):
             local_map_image: 局部语义地图路径（local_map/step-N.png）- 可选
             
         Returns:
-            LLM响应字典或None
+            (LLM响应字典或None, prompt字符串)
         """
         if not global_map_image:
             print("✗ Error: global_map_image is required")
-            return None
+            return None, ""
         
         prompt = get_initial_planning_prompt(
             instruction, 
@@ -104,7 +104,7 @@ class LLMPlanner(BaseAPIClient):
             response = self.call_api(prompt, images)
             
             if response and self.validate_response(response, mode='initial'):
-                return response
+                return response, prompt
             
             if retry < max_retries - 1:
                 print(f"  ⚠️  初始规划API调用失败，重试 ({retry + 1}/{max_retries - 1})...")
@@ -112,7 +112,7 @@ class LLMPlanner(BaseAPIClient):
                 time.sleep(2)
         
         print(f"  ✗ 初始规划API调用失败，已达最大重试次数")
-        return None
+        return None, prompt
     
     def verify_and_replan(self,
                          instruction: str,
