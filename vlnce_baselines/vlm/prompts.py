@@ -93,20 +93,20 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 
 ## Ex2:
 **Global Task**: Go straight and then turn right into the hallway. Go all the way down the hall until you get to a room on the right. Wait there.
-**Current Observation:** Hallway entrance visible at right-front 60° (left portion of Right-View). Walls blocking direct right path.
+**Current Observation:** Hallway entrance visible at left 60° (right portion of Left-View). Walls blocking direct forward path.
 {{
-    "waypoint": "Room Area - near walls, hallway entrance visible at right-front 60°.",
+    "waypoint": "Room Area - near walls, hallway entrance visible far away.",
     "waypoint_sequence": "Room Area(Current) → Hallway Entrance → Hallway End → Room on Right(Goal)",
     "subtask_destination": "hallway entrance",
     "subtask_instruction": "Turn left 60° to face hallway entrance, then move forward 2.0m straight into the hallway until hallway extends ahead.",
     "subtask_landmark": "hallway entrance",
     "completion_criteria": {{
         "Panoramic_Detection": "Hallway detected in Front view centered ahead, extending forward.",
-        "Spatial_relationship": "Hallway entrance ahead < 0.5m (map shows hallway within dark green circle around Red arrow). Room area behind (map shows previous location far away). Orange trajectory shows right turn and forward movement into hallway",
+        "Spatial_relationship": "Hallway entrance ahead < 0.5m (map shows hallway within dark green circle around Red arrow). Room area behind (map shows previous location far away). Orange trajectory shows forward movement into hallway",
         "Location": "Hallway Entrance - hallway extending ahead < 0.5m, room area far behind"
     }},
     "global_task_finish": false,
-    "reasoning": "Agent currently in room area. Hallway entrance visible at right-front 60° (left portion of Right-View). Map: Right 90° blocked by wall (black), but green floor path clear at right 60° leading to hallway entrance, no black obstacles blocking approach to hallway. Global task requires turning right into hallway then proceeding to end, so first waypoint is hallway entrance."
+    "reasoning": "Agent currently in room area. Hallway entrance visible at left 60° (right portion of Left-View). Map: front and right blocked by wall (black), but green floor path clear at left 60° leading to hallway entrance, no black obstacles blocking approach to hallway. Global task requires turning into hallway then proceeding to end, so first waypoint is hallway entrance."
 }}
 
 **Critical Requirements**:
