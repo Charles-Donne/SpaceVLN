@@ -60,7 +60,7 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 **Previous Progress**: None
 **Current Observation**: Oven is not in front view; need to turn to face it.
 {{
-    "reasoning": "The subtask goal is to face the oven first. RGB: No oven visible in current front view. Map: Purple marker (oven) is to the left, need to rotate. Action: Follow instruction - turn left 90° to align with oven direction.",
+    "reasoning": "The subtask goal is to face the oven first. RGB: No oven visible in current front view. Map: Purple marker (oven) is to the left, far outside the dark green circle (0.5m radius), need to rotate first to face it. Action: Follow instruction - turn left 90° to align with oven direction.",
     "action": "TURN_LEFT",
     "degrees": 90,
     "progress_summary": "Turned left 90° to face oven"
@@ -71,7 +71,7 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 **Previous Progress**: Turned left 90°, moved 0.5m toward oven.
 **Current Observation**: Facing the oven, but the distance is still too far.
 {{
-    "reasoning": "The subtask goal is to stop at the oven. RGB & Detection: The oven is ahead, and there's space to move. Map: Purple marker (oven) ahead, green path clear, no obstacles. Action: Move a little closer to the oven.",
+    "reasoning": "The subtask goal is to stop at the oven. RGB & Detection: The oven is ahead, and there's space to move. Map: Purple marker (oven) is ahead but still outside the dark green circle (0.5m radius), meaning the destination is not yet reached. The path is clear with no obstacles. Action: Continue moving forward to get closer to the oven.",
     "action": "MOVE_FORWARD",
     "meters": 0.5,
     "progress_summary": "Turned left 90°, moved 1.0m (0.5+0.5m) toward oven"
@@ -82,7 +82,7 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 **Previous Progress**: Turned left 90°, moved 1.5m toward oven.
 **Current Observation**: The oven is directly in front, very close (within 0.5m).
 {{
-    "reasoning": "The subtask goal is to stop at the oven. RGB: Oven clearly visible in front view. Detection: Oven detected. Map: Red arrow overlaps purple marker (oven), distance <0.5m, orange trajectory confirms arrival. All key actions completed. Action: STOP.",
+    "reasoning": "The subtask goal is to stop at the oven. RGB: Oven clearly visible in front view. Detection: Oven detected. Map: Purple marker (oven) is now inside the dark green circle (0.5m radius), meaning destination has been reached. Red arrow overlaps with the destination, orange trajectory confirms arrival. All key actions completed. Action: STOP.",
     "action": "STOP",
     "progress_summary": "Turned left 90°, moved 1.5m toward oven, arrived and stopped"
 }}
@@ -92,7 +92,7 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 **Previous Progress**: Turned left 90°.
 **Current Observation**: Oven is at front-left 30°, but straight ahead has a wall (black obstacle on map).
 {{
-    "reasoning": "The subtask goal is to reach the oven. RGB: Wall/obstacle blocking direct path ahead. Detection: Oven detected at left side. Map: Purple marker (oven) at front-left 30°, black obstacle directly ahead, green path to the left. Action: Turn left 30° to avoid obstacle and align toward oven.",
+    "reasoning": "The subtask goal is to reach the oven. RGB: Wall/obstacle blocking direct path ahead. Detection: Oven detected at left side. Map: Purple marker (oven) at front-left 30°, still outside the dark green circle (0.5m radius), black obstacle directly ahead blocking the path, green path to the left. Action: Turn left 30° to avoid obstacle and align toward oven.",
     "action": "TURN_LEFT",
     "degrees": 30,
     "progress_summary": "Turned left 120° (90°+30° detour) to avoid wall and face oven"

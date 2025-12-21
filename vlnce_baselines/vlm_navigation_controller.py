@@ -588,7 +588,7 @@ class VLMNavigationController(InteractiveNavigationController):
         subtask_id = f"{self.subtask_count}{attempt_letter}"  # 当前验证的子任务，如 "1a"
         
         # 计算下一个subtask_id
-        if is_completed and not response.get('is_final_subtask', False):
+        if is_completed and not response.get('global_task_finish', False):
             next_subtask_count = self.subtask_count + 1
             next_attempt = 0
         else:
@@ -602,7 +602,7 @@ class VLMNavigationController(InteractiveNavigationController):
             "subtask_count": self.subtask_count,
             "subtask_attempt": self.subtask_attempt,
             "subtask_id": subtask_id,  # 当前验证的子任务，如 "1a"
-            "next_subtask_id": f"{next_subtask_count}{next_attempt_letter}" if not response.get('is_final_subtask', False) else "final",
+            "next_subtask_id": f"{next_subtask_count}{next_attempt_letter}" if not response.get('global_task_finish', False) else "final",
             "prompt_type": "verification",
             "is_completed": is_completed,
             "response": response,
@@ -632,11 +632,11 @@ class VLMNavigationController(InteractiveNavigationController):
             print(f"  🎯 Subtask Destination: {response.get('subtask_destination', 'N/A')}")
             print(f"  📝 Subtask Instruction: {response.get('subtask_instruction', 'N/A')}")
             
-            # 检查是否是最终子任务
-            is_final = response.get('is_final_subtask', False)
-            print(f"  🎯 is_final_subtask: {is_final}")
-            if is_final:
-                print(f"  🏁 这是最终子任务 - 继续执行直到VLM输出STOP")
+            # 检查是否完成全局任务
+            task_finished = response.get('global_task_finish', False)
+            print(f"  🎯 global_task_finish: {task_finished}")
+            if task_finished:
+                print(f"  🏁 全局任务已完成 - 继续执行直到VLM输出STOP")
                 # 注意：不在这里结束，继续执行直到VLM输出STOP
             else:
                 print(f"  ➡️  继续下一个子任务（#{self.subtask_count + 1}a）")
@@ -1058,15 +1058,24 @@ class VLMNavigationController(InteractiveNavigationController):
                 print("\n[VLM输出STOP] 开始验证子任务...")
                 is_completed, new_subtask, _ = self.verify_and_replan()
                 
-                # 检查是否完成了最终子任务
+                # 检查是否完成了全局任务
                 if is_completed and new_subtask:
-                    is_final = new_subtask.get('is_final_subtask', False)
-                    if is_final:
+                    task_finished = new_subtask.get('global_task_finish', False)
+                    if task_finished:
                         print("\n" + "="*60)
-                        print("🏆 最终子任务完成 - 导航成功！")
+                        print("🏆 全局任务完成 - 导航成功！")
                         print("="*60)
-                        print(f"  📍 最终位置: {new_subtask.get('waypoint', 'N/A')}")
-                        print(f"  📝 Reasoning: {new_subtask.get('reasoning', 'N/A')[:200]}...")
+                        print(f"  📍 Waypoint: {new_subtask.get('waypoint', 'N/A')}")
+                        print(f"  📍 Waypoint Sequence: {new_subtask.get('waypoint_sequence', 'N/A')}")
+                        print(f"  🎯 Subtask Destination: {new_subtask.get('subtask_destination', 'N/A')}")
+                        print(f"  📝 Subtask Instruction: {new_subtask.get('subtask_instruction', 'N/A')}")
+                        print(f"  🔍 Completion Criteria:")
+                        criteria = new_subtask.get('completion_criteria', {})
+                        if isinstance(criteria, dict):
+                            print(f"     - Panoramic_Detection: {criteria.get('Panoramic_Detection', 'N/A')}")
+                            print(f"     - Spatial_relationship: {criteria.get('Spatial_relationship', 'N/A')}")
+                            print(f"     - Location: {criteria.get('Location', 'N/A')}")
+                        print(f"  💭 Reasoning: {new_subtask.get('reasoning', 'N/A')}")
                         print("="*60)
                         navigation_complete = True
                         break
