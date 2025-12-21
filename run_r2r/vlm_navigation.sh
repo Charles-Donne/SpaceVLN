@@ -5,6 +5,8 @@
 #   单个episode: bash run_r2r/vlm_navigation.sh [episode_id] [max_steps]
 #   批量运行:    bash run_r2r/vlm_navigation.sh [start_id] [max_steps] [num_episodes]
 #   随机运行:    bash run_r2r/vlm_navigation.sh random [max_steps] [num_episodes]
+#   指定列表:    bash run_r2r/vlm_navigation.sh list [max_steps] [episode_ids]
+#                例如: bash run_r2r/vlm_navigation.sh list 500 "832,701,231"
 
 set -e
 trap 'echo "❌ 错误：脚本在第 $LINENO 行失败"; exit 1' ERR
@@ -20,10 +22,16 @@ EPISODE_ID=${1:-0}
 MAX_STEPS=${2:-500}
 NUM_EPISODES=${3:-1}
 RANDOM_MODE=""
+EPISODE_IDS_MODE=""
 
-# 检查是否为随机模式
+# 检查是否为随机模式或列表模式
 if [ "$EPISODE_ID" == "random" ]; then
     RANDOM_MODE="--random"
+    EPISODE_ID=0
+elif [ "$EPISODE_ID" == "list" ]; then
+    EPISODE_IDS_MODE="--episode-ids"
+    EPISODE_IDS="$NUM_EPISODES"  # 第3个参数是episode ID列表
+    NUM_EPISODES=1
     EPISODE_ID=0
 fi
 
@@ -80,6 +88,8 @@ echo ""
 
 if [ -n "$RANDOM_MODE" ]; then
     echo "📋 配置: 随机运行 $NUM_EPISODES 个episodes | 最大步数 $MAX_STEPS"
+elif [ -n "$EPISODE_IDS_MODE" ]; then
+    echo "📋 配置: 指定运行 episodes $EPISODE_IDS | 最大步数 $MAX_STEPS"
 else
     if [ "$NUM_EPISODES" -eq 1 ]; then
         echo "📋 配置: Episode $EPISODE_ID | 最大步数 $MAX_STEPS"
@@ -120,6 +130,7 @@ CUDA_VISIBLE_DEVICES=0 python vlm_navigation.py \
     --episode-id "$EPISODE_ID" \
     --num-episodes "$NUM_EPISODES" \
     $RANDOM_MODE \
+    $EPISODE_IDS_MODE ${EPISODE_IDS:+"$EPISODE_IDS"} \
     --max-steps "$MAX_STEPS" \
     --results-dir "$RESULTS_DIR" \
     --llm-config "$LLM_CONFIG" \

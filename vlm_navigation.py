@@ -17,6 +17,7 @@ def main():
     # 基础配置（与interactive_navigation一致）
     parser.add_argument("--exp-config", type=str, required=True, help="Habitat配置文件")
     parser.add_argument("--episode-id", type=int, default=0, help="起始Episode ID")
+    parser.add_argument("--episode-ids", type=str, default=None, help="指定episode ID列表，逗号分隔（如 '832,701,231'）")
     parser.add_argument("--num-episodes", type=int, default=1, help="运行Episode数量（连续或随机）")
     parser.add_argument("--random", action="store_true", help="随机选择episodes而非连续运行")
     parser.add_argument("--results-dir", type=str, default=None, help="结果保存目录")
@@ -46,7 +47,12 @@ def main():
     from vlnce_baselines.config_system import ConfigHelper
     
     # 确定要运行的episode列表
-    if args.random:
+    if args.episode_ids:
+        # 使用指定的episode ID列表
+        episode_ids = [int(x.strip()) for x in args.episode_ids.split(',')]
+        print(f"\n📝 指定运行 {len(episode_ids)} 个episodes")
+        print(f"📊 Episodes: {episode_ids}")
+    elif args.random:
         import random
         import habitat
         # 加载数据集获取总episode数
@@ -58,11 +64,11 @@ def main():
         total_episodes = len(dataset.episodes)
         episode_ids = random.sample(range(total_episodes), min(args.num_episodes, total_episodes))
         print(f"\n🎲 随机选择 {len(episode_ids)} 个episodes (共{total_episodes}个可用)")
+        print(f"📊 Episodes: {episode_ids}")
     else:
         episode_ids = list(range(args.episode_id, args.episode_id + args.num_episodes))
         print(f"\n📋 连续运行 episodes {args.episode_id} 到 {args.episode_id + args.num_episodes - 1}")
-    
-    print(f"📊 Episodes: {episode_ids}")
+        print(f"📊 Episodes: {episode_ids}")
     
     # 统计结果
     results_summary = []
