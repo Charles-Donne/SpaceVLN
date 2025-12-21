@@ -18,7 +18,7 @@ class LLMPlanner(BaseAPIClient):
     REQUIRED_FIELDS_VERIFY = ['is_completed', 'subtask_destination', 'subtask_instruction', 'completion_criteria']
     
     # completion_criteria 子字段（嵌套结构）
-    REQUIRED_CRITERIA_FIELDS = ['Object_Detection', 'Location', 'Spatial_relationship']
+    REQUIRED_CRITERIA_FIELDS = ['Panoramic_Detection', 'Spatial_relationship', 'Location']
     
     def __init__(self, config_path: str = "vlnce_baselines/vlm/llm_config.yaml", 
                  action_space: str = None):

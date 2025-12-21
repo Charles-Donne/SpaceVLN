@@ -176,7 +176,7 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 
 # Your Task
 
-1. **Verify completion**: Compare current visual observations and map with previous subtask completion_criteria (Object_Detection, Location, Spatial_relationship)
+1. **Verify completion**: Compare current visual observations and map with previous subtask completion_criteria (Panoramic_Detection, Spatial_relationship, Location)
 2. **Make decision**: 
    - **is_completed = true**: Subtask finished → plan NEXT waypoint
    - **is_completed = false**: Not finished → continue SAME subtask
