@@ -626,12 +626,18 @@ class VLMNavigationController(InteractiveNavigationController):
             attempt_letter = chr(ord('a') + self.subtask_attempt)
             print(f"\n[子任务完成] #{self.subtask_count}{attempt_letter}")
             
+            # 打印LLM的response关键信息
+            print(f"  📍 Waypoint: {response.get('waypoint', 'N/A')}")
+            print(f"  📍 Waypoint Sequence: {response.get('waypoint_sequence', 'N/A')}")
+            print(f"  🎯 Subtask Destination: {response.get('subtask_destination', 'N/A')}")
+            print(f"  📝 Subtask Instruction: {response.get('subtask_instruction', 'N/A')}")
+            
             # 检查是否是最终子任务
             is_final = response.get('is_final_subtask', False)
             print(f"  🎯 is_final_subtask: {is_final}")
             if is_final:
-                print("  ✅ 到达最终目的地 - 导航完成")
-                return True, response, prompt
+                print(f"  🏁 这是最终子任务 - 继续执行直到VLM输出STOP")
+                # 注意：不在这里结束，继续执行直到VLM输出STOP
             else:
                 print(f"  ➡️  继续下一个子任务（#{self.subtask_count + 1}a）")
             
@@ -1049,12 +1055,21 @@ class VLMNavigationController(InteractiveNavigationController):
             
             # 如果VLM决定停止 → 验证子任务
             if should_stop:
+                print("\n[VLM输出STOP] 开始验证子任务...")
                 is_completed, new_subtask, _ = self.verify_and_replan()
                 
-                if is_completed and new_subtask and new_subtask.get('is_final_subtask', False):
-                    print("\n[导航完成]")
-                    navigation_complete = True
-                    break
+                # 检查是否完成了最终子任务
+                if is_completed and new_subtask:
+                    is_final = new_subtask.get('is_final_subtask', False)
+                    if is_final:
+                        print("\n" + "="*60)
+                        print("🏆 最终子任务完成 - 导航成功！")
+                        print("="*60)
+                        print(f"  📍 最终位置: {new_subtask.get('waypoint', 'N/A')}")
+                        print(f"  📝 Reasoning: {new_subtask.get('reasoning', 'N/A')[:200]}...")
+                        print("="*60)
+                        navigation_complete = True
+                        break
                 
                 subtask_steps = 0
                 continue
