@@ -627,9 +627,13 @@ class VLMNavigationController(InteractiveNavigationController):
             print(f"\n[子任务完成] #{self.subtask_count}{attempt_letter}")
             
             # 检查是否是最终子任务
-            if response.get('is_final_subtask', False):
-                print("到达最终目的地")
+            is_final = response.get('is_final_subtask', False)
+            print(f"  🎯 is_final_subtask: {is_final}")
+            if is_final:
+                print("  ✅ 到达最终目的地 - 导航完成")
                 return True, response, prompt
+            else:
+                print(f"  ➡️  继续下一个子任务（#{self.subtask_count + 1}a）")
             
             # ===== 关键顺序：先添加waypoint（使用当前trajectory），再清空 =====
             
@@ -778,19 +782,25 @@ class VLMNavigationController(InteractiveNavigationController):
         action_phase = f"action{self.subtask_count}{attempt_letter}"
         
         # 智能查找可用的图像：优先使用action phase，回退到verify/initial
-        # 可能的phase顺序: action1a -> verify_1a -> initial (注意verify带下划线)
+        # 可能的phase顺序: action2a -> verify_2a -> verify_1a -> initial (注意verify带下划线)
         possible_phases = [action_phase]
+        
+        # 添加当前子任务的验证phase（验证完成后保存的全景图）
+        current_verify_phase = f"verify_{self.subtask_count}a"
+        possible_phases.append(current_verify_phase)
+        
         if self.subtask_attempt > 0:
-            # 如果是1b, 1c等，可能需要回退到verify_1a
-            verify_phase = f"verify_{self.subtask_count}{chr(ord('a') + self.subtask_attempt - 1)}"
-            possible_phases.append(verify_phase)
-        elif self.subtask_count > 1:
-            # 如果是2a, 3a等，回退到上一个verify
+            # 如果是1b, 1c等，可能需要回退到上一次尝试的verify
+            prev_attempt_verify = f"verify_{self.subtask_count}{chr(ord('a') + self.subtask_attempt - 1)}"
+            possible_phases.append(prev_attempt_verify)
+        
+        if self.subtask_count > 1:
+            # 回退到上一个子任务的verify
             prev_verify_phase = f"verify_{self.subtask_count - 1}a"
             possible_phases.append(prev_verify_phase)
-        else:
-            # 如果是1a，回退到initial
-            possible_phases.append("initial")
+        
+        # 最后回退到initial
+        possible_phases.append("initial")
         
         # 查找RGB图像
         fp_image = None
