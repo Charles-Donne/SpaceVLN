@@ -42,7 +42,8 @@ class SemanticMapper:
         self.resolution = resolution
         
         # 轨迹管理（存储轨迹坐标列表，用于绘制平滑曲线）
-        self.trajectory_points = []  # [(x, y), ...] 像素坐标列表
+        self.trajectory_points = []  # [(x, y), ...] 当前子任务轨迹（用于local map）
+        self.global_trajectory_points = []  # [(x, y), ...] 全局完整轨迹（用于global map，不清空）
         self.enable_trajectory = True  # 轨迹开关
         
         # Waypoint管理（与轨迹系统集成）
@@ -58,7 +59,8 @@ class SemanticMapper:
     
     def reset(self):
         """重置建图器状态"""
-        self.trajectory_points = []  # 清空轨迹点列表
+        self.trajectory_points = []  # 清空当前子任务轨迹
+        self.global_trajectory_points = []  # 清空全局轨迹
         self.waypoint_positions = []  # 清空waypoint位置
         self.waypoint_ids = []  # 清空waypoint ID
         self.waypoint_descriptions = []  # 清空waypoint描述
@@ -129,7 +131,8 @@ class SemanticMapper:
             'full_map': self.full_map,
             'full_pose': self.full_pose,
             'floor': self.floor,
-            'trajectory_points': self.trajectory_points
+            'trajectory_points': self.trajectory_points,  # 当前子任务轨迹（local map）
+            'global_trajectory_points': self.global_trajectory_points  # 全局完整轨迹（global map）
         }
     
     def extract_floor(self, 
@@ -208,7 +211,7 @@ class SemanticMapper:
     
     def update_trajectory(self, full_pose: np.ndarray):
         """
-        更新轨迹坐标列表（记录位置点，稍后绘制平滑曲线）
+        更新轨迹坐标列表（同时更新当前子任务轨迹和全局轨迹）
         
         Args:
             full_pose: [3] (x, y, orientation) 当前位姿（米）
@@ -221,9 +224,13 @@ class SemanticMapper:
         y = int(np.clip(position[0], 0, self.map_shape[0] - 1))
         x = int(np.clip(position[1], 0, self.map_shape[1] - 1))
         
-        # 添加到轨迹点列表（避免重复添加相同位置）
+        # 添加到当前子任务轨迹（local map使用）
         if len(self.trajectory_points) == 0 or self.trajectory_points[-1] != (x, y):
             self.trajectory_points.append((x, y))
+        
+        # 同时添加到全局轨迹（global map使用，不清空）
+        if len(self.global_trajectory_points) == 0 or self.global_trajectory_points[-1] != (x, y):
+            self.global_trajectory_points.append((x, y))
     
     def toggle_trajectory(self):
         """切换轨迹绘制开关"""
@@ -233,17 +240,20 @@ class SemanticMapper:
     
     def clear_trajectory(self):
         """
-        清空当前轨迹
+        清空当前子任务轨迹（用于local map）
         
         使用场景：
         - 子任务完成时：清空上一子任务的轨迹，开始记录新子任务轨迹
-        - 每个子任务都有独立的轨迹显示，不会累积
+        - 每个子任务都有独立的local map轨迹显示，不会累积
         
         注意：
+        - 只清空trajectory_points（local map使用）
+        - global_trajectory_points不清空，保持完整历史轨迹（global map使用）
         - 轨迹是动态绘制在地图上的，不会写入底图
         - landmark标注同样是动态绘制，更新landmark_classes即可替换
         """
-        self.trajectory_points = []
+        self.trajectory_points = []  # 只清空当前子任务轨迹
+        # global_trajectory_points保持不变，继续累积
     
     # ========== Waypoint管理方法 ==========
     

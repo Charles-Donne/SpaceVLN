@@ -853,12 +853,16 @@ class MapVisualizer:
                                waypoint_positions: Optional[List[Tuple[int, int]]] = None,
                                waypoint_ids: Optional[List[int]] = None,
                                masks: Optional[np.ndarray] = None,
-                               phase: str = "action") -> Tuple[Dict[str, str], List]:  # 兼容旧参数
+                               phase: str = "action",
+                               global_trajectory_points: Optional[List[Tuple[int, int]]] = None) -> Tuple[Dict[str, str], List]:  # 兼容旧参数
         """
         一键保存当前步骤的所有可视化（支持新detection渲染 + 平滑轨迹线 + waypoint标记）
         
         Args:
-            trajectory_points: [(x, y), ...] 轨迹坐标列表（像素坐标）
+            trajectory_points: [(x, y), ...] 当前子任务轨迹（用于local map）
+            global_trajectory_points: [(x, y), ...] 完整导航历史轨迹（用于global map，可选）
+                - 如果提供，global map显示此轨迹
+                - 如果未提供，global map回退使用trajectory_points（向后兼容）
             floor: [H, W] floor地图（通过形态学方法计算，像ZS_Evaluator）
             detections: supervision Detections对象（优先使用）
             masks: 检测掩码（向后兼容，已废弃）
@@ -881,15 +885,16 @@ class MapVisualizer:
         # 1. 保存RGB
         paths['rgb'] = self.save_rgb(step, episode_id, rgb, phase)
         
-        # 2. 渲染并保存全局地图（floor通过形态学方法计算 + 平滑轨迹线 + waypoint标记）
+        # 2. 渲染并保存全局地图（使用global_trajectory_points或回退到trajectory_points）
+        global_traj_to_use = global_trajectory_points if global_trajectory_points is not None else trajectory_points
         _, global_map_with_trajectory, landmarks, global_map_clean = self.render_global_map(
-            full_map, trajectory_points, detected_classes, floor,
+            full_map, global_traj_to_use, detected_classes, floor,
             current_pose, landmark_classes, landmark_config,
             waypoint_positions, waypoint_ids
         )
         paths['global_map'] = self.save_global_map(step, episode_id, global_map_with_trajectory, phase)
         
-        # 3. 渲染并保存局部地图（独立渲染，不继承全局地图 + waypoint标记）
+        # 3. 渲染并保存局部地图（使用trajectory_points）
         local_map = self.render_local_map(
             full_map, trajectory_points, detected_classes, current_pose,
             floor, landmark_classes, landmark_config, hfov,

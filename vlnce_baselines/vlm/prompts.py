@@ -30,13 +30,15 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 - **White**: Unexplored/unknown areas
 - **Black**: Obstacles (walls, furniture, barriers) - **MUST AVOID in planning**
 - **Green**: Confirmed floor areas (safe to navigate)
-- **Orange line**: Trajectory from subtask start to current position
+- **Orange line**: Complete trajectory from navigation start to current position (all subtasks)
+  - Shows your entire navigation history - **AVOID revisiting same areas unless necessary**
 - **Red arrow**: Current position, arrow points to Front direction
   
 **Local Map** (zoomed view around agent, same color legend as Global Map):
 - Shows finer details in immediate vicinity for precise navigation
 - **Red arrow**: Current position, arrow points to Front direction
 - **Dark green circle**: 0.5m radius nearby area around current position
+- **Orange line**: Current subtask trajectory (shorter than global map trajectory)
 - **Blue semi-circle**: Agent's current field of view (Front direction visibility range)
   - The opening of the semi-circle indicates Front view direction
   - Objects within this blue region are currently visible in IMAGE 1 Front (Front View)
@@ -151,7 +153,8 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 - **White**: Unexplored/unknown areas
 - **Black**: Obstacles (walls, furniture, barriers) - **MUST AVOID in next planning**
 - **Green**: Confirmed floor areas (safe to navigate)
-- **Orange line**: Trajectory from previous subtask start to current position
+- **Orange line**: Complete trajectory from navigation start to current position (all subtasks)
+  - Shows your entire navigation history - **AVOID revisiting same areas unless necessary**
 - **Red arrow**: Current position, arrow points to Front direction
 - **Purple markers with labels**: Previous Detected Landmark: {detected_landmarks}
 - **Blue circles with white numbers**: Historical waypoints (see below)
@@ -164,6 +167,7 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 - Shows finer details in immediate vicinity for precise navigation
 - **Red arrow**: Current position, arrow points to Front direction
 - **Dark green circle**: 0.5m radius nearby area around current position
+- **Orange line**: Current subtask trajectory (shorter than global map trajectory)
 - **Blue semi-circle**: Agent's current field of view (Front direction visibility range)
   - The opening of the semi-circle indicates Front view direction
   - Objects within this blue region are currently visible in IMAGE 1 (Front View)

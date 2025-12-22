@@ -150,7 +150,8 @@ class InteractiveNavigationController:
                     'min_area_threshold': self.landmark_min_area_threshold
                 },
                 waypoint_positions=wp_positions,
-                waypoint_ids=wp_ids
+                waypoint_ids=wp_ids,
+                global_trajectory_points=map_state['global_trajectory_points']
             )
         
         self.current_step = 12
@@ -221,7 +222,8 @@ class InteractiveNavigationController:
                 },
                 waypoint_positions=wp_positions,
                 waypoint_ids=wp_ids,
-                phase=phase
+                phase=phase,
+                global_trajectory_points=map_state['global_trajectory_points']
             )
             
             # 保存当前step检测到的landmarks（用于action决策）

@@ -253,7 +253,8 @@ class VLMNavigationController(InteractiveNavigationController):
                 },
                 waypoint_positions=wp_positions,
                 waypoint_ids=wp_ids,
-                phase=phase
+                phase=phase,
+                global_trajectory_points=map_state['global_trajectory_points']
             )
             
             # 累积当前step检测到的landmarks
