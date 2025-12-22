@@ -92,21 +92,21 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 }}
 
 ## Ex2:
-**Global Task**: Go straight and then turn right into the hallway. Go all the way down the hall until you get to a room on the right. Wait there.
-**Current Observation:** Hallway entrance visible at left 60° (right portion of Left-View). Walls blocking direct forward path.
+**Global Task**: Exit the room and turn left, head toward the kitchen and turn right. Go through the kitchen and out the door. Wait right at the bathroom door.
+**Current Observation:** Bedroom exit visible ahead. Walls on left side. Hallway visible beyond the exit at left 30°.
 {{
-    "waypoint": "Room Area - near walls, hallway entrance visible far away.",
-    "waypoint_sequence": "Room Area(Current) → Hallway Entrance → Hallway End → Room on Right(Goal)",
-    "subtask_destination": "hallway entrance",
-    "subtask_instruction": "Turn left 60° to face hallway entrance, then move forward 2.0m straight into the hallway until hallway extends ahead.",
-    "subtask_landmark": "hallway entrance",
+    "waypoint": "Bedroom - near exit, walls on left, hallway visible ahead and to the left.",
+    "waypoint_sequence": "Bedroom(Current) → Hallway → Kitchen Entrance → Kitchen → Back Door → Bathroom Door(Goal)",
+    "subtask_destination": "hallway",
+    "subtask_instruction": "Move forward 1.5m to exit bedroom and reach hallway, then turn left 90° when left side is clear (no wall), and move forward 1.5m until kitchen entrance is visible on the right.",
+    "subtask_landmark": "doorway",
     "completion_criteria": {{
-        "Panoramic_Detection": "Hallway detected in Front view centered ahead, extending forward.",
-        "Spatial_relationship": "Hallway entrance ahead < 0.5m (map shows hallway within dark green circle around Red arrow). Room area behind (map shows previous location far away). Orange trajectory shows forward movement into hallway",
-        "Location": "Hallway Entrance - hallway extending ahead < 0.5m, room area far behind"
+        "Panoramic_Detection": "Kitchen entrance detected in Right view. Hallway extending ahead in Front view.",
+        "Spatial_relationship": "Kitchen entrance at right < 0.5m (map shows kitchen entrance within dark green circle to the right of Red arrow). Bedroom far behind (map shows previous location far away). Orange trajectory shows forward movement then left turn in hallway",
+        "Location": "Hallway - kitchen entrance at right < 0.5m, bedroom far behind, hallway extending ahead"
     }},
     "global_task_finish": false,
-    "reasoning": "Agent currently in room area. Hallway entrance visible at left 60° (right portion of Left-View). Map: front and right blocked by wall (black), but green floor path clear at left 60° leading to hallway entrance, no black obstacles blocking approach to hallway. Global task requires turning into hallway then proceeding to end, so first waypoint is hallway entrance."
+    "reasoning": "Agent currently in bedroom (bedroom exit ahead, walls on left blocking direct left turn). Hallway visible beyond exit at left 30°. Map: Front shows green floor path leading to hallway, left side blocked by wall (black) near current position. Global task requires exiting bedroom, turning left in hallway, then heading to kitchen. First subtask: move forward 1.5m to exit bedroom and reach hallway where left side is clear, then turn left 90° and move forward 1.5m until kitchen entrance appears on right."
 }}
 
 **Critical Requirements**:
