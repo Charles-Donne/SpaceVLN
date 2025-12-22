@@ -101,7 +101,8 @@ class ActionExecutor(BaseAPIClient):
                     new_net_turn = current_net_turn + int(degrees)
                 else:  # TURN_RIGHT
                     new_net_turn = current_net_turn - int(degrees)
-                （保持完成时态）
+                
+                # 更新最后一段(保持完成时态)
                 if new_net_turn > 0:
                     new_last_segment = f"had turned left {new_net_turn}°"
                 elif new_net_turn < 0:
@@ -116,27 +117,26 @@ class ActionExecutor(BaseAPIClient):
                 segments[-1] = new_last_segment
                 return ', '.join(segments)
             else:
-                # 最后一段是直行或其他，开始新段（转向打断直行）
+                # 最后一段是直行或其他，开始新段(转向打断直行)
                 if action_name == 'TURN_LEFT':
                     return f"{current_progress}, then turned left {int(degrees)}°"
                 else:
-                    return f"{current_progress}, then
-                    return f"{current_progress}, turned right {int(degrees)}°"
+                    return f"{current_progress}, then turned right {int(degrees)}°"
         
         elif action_name == 'MOVE_FORWARD':
             # 新动作是直行
-            if move_match:（提取数字可能在group(1)或group(2)）
+            if move_match:
+                # 最后一段也是直行，累加距离(提取数字可能在group(1)或group(2))
                 current_distance = float(move_match.group(1) or move_match.group(2))
                 new_distance = current_distance + meters
                 segments[-1] = f"had moved forward {new_distance}m"
                 return ', '.join(segments)
             else:
-                # 最后一段是转向或其他，开始新段（直行打断转向）
+                # 最后一段是转向或其他，开始新段(直行打断转向)
                 return f"{current_progress}, then moved forward {meters}m"
         
         elif action_name == 'STOP':
-            return f"{current_progress}, then
-            return f"{current_progress}, stopped at destination"
+            return f"{current_progress}, then stopped at destination"
         
         return current_progress
 
