@@ -55,11 +55,17 @@ class PanoramaGenerator:
             90°全景图（带方向标注）
         """
         # 使用OpenCV Stitcher拼接
-        stitcher = cv2.Stitcher_create(cv2.Stitcher_PANORAMA)
-        status, panorama = stitcher.stitch(images)
-        
-        if status != cv2.Stitcher_OK:
-            # 拼接失败，返回水平拼接的降级版本
+        try:
+            stitcher = cv2.Stitcher_create(cv2.Stitcher_PANORAMA)
+            status, panorama = stitcher.stitch(images)
+            
+            if status != cv2.Stitcher_OK:
+                # 拼接失败，返回水平拼接的降级版本
+                print(f"  ⚠️  Stitcher failed (status={status}), using fallback horizontal concat")
+                panorama = np.hstack(images)
+        except cv2.error as e:
+            # OpenCV错误（如特征点不足），使用降级方案
+            print(f"  ⚠️  Stitcher error ({str(e)[:50]}...), using fallback horizontal concat")
             panorama = np.hstack(images)
         
         # 添加方向标注
