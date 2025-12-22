@@ -301,6 +301,13 @@ class VLMNavigationController(InteractiveNavigationController):
         
         print(f"  扫描完成: +{total_new_classes}类 | 总计{len(self.detected_classes)}类")
         
+        # 检查是否完成了完整的12步环视
+        if len(lookaround_images) < 12:
+            print(f"\n⚠️ 警告: 环视未完成，只收集到 {len(lookaround_images)}/12 张图像（Episode可能提前结束）")
+            print(f"❌ 无法生成全景图，跳过视觉观察收集")
+            # 返回空列表，调用方需要处理这种情况
+            return [], []
+        
         # 直接为每个方向拼接3张图片生成90°全景图
         panorama_paths = []
         panorama_names = []
@@ -535,8 +542,10 @@ class VLMNavigationController(InteractiveNavigationController):
         image_paths, direction_names = self.look_around_and_collect(phase)
         
         if not image_paths:
-            print("✗ 环视建图失败")
-            return False, None
+            print("❌ 环视建图失败（Episode可能提前结束），无法进行验证")
+            # Episode提前结束，无法继续验证，返回失败
+            return False, None, None
+        
         # 从 vlm/observations/ 获取地图（已在 look_around_and_collect 中保存）
         _, _, global_map, local_map = self.get_observations_and_maps(phase)
         
@@ -1011,7 +1020,19 @@ class VLMNavigationController(InteractiveNavigationController):
         print("="*60 + "\n")
         
         # 1. 环视建图 + 收集观察（占用step 1-12）
-        self.look_around_and_collect()
+        image_paths, direction_names = self.look_around_and_collect()
+        
+        if not image_paths:
+            print("❌ 初始环视建图失败（Episode可能在启动时就结束），无法开始导航")
+            return {
+                'success': False,
+                'total_steps': self.current_step,
+                'subtask_count': 0,
+                'detected_classes': list(self.detected_classes) if hasattr(self, 'detected_classes') else [],
+                'gif_path': None,
+                'result_file': None,
+                'reason': 'initial_lookaround_failed'
+            }
         
         # 2. 生成初始子任务（在step 12完成，下一个action从step 13开始）
         subtask = self.generate_initial_subtask()
