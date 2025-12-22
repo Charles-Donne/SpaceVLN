@@ -1219,7 +1219,7 @@ class VLMNavigationController(InteractiveNavigationController):
         if vlm_response:
             action_data["vlm_response"] = {
                 k: vlm_response.get(k, "") 
-                for k in ['observation', 'reasoning', 'action', 'progress_summary']
+                for k in ['observation', 'reasoning', 'action']  # 移除progress_summary（由系统维护）
             }
         
         # 读取并更新文件

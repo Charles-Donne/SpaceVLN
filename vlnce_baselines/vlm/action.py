@@ -11,7 +11,7 @@ from vlnce_baselines.vlm.action_prompt import get_action_execution_prompt
 class ActionExecutor(BaseAPIClient):
     """VLM动作执行器 - 负责低层动作决策"""
     
-    REQUIRED_FIELDS = ['reasoning', 'action', 'progress_summary']
+    REQUIRED_FIELDS = ['reasoning', 'action']  # 移除progress_summary，由系统自动生成
     
     def __init__(self, config_path: str = "vlnce_baselines/vlm/vlm_config.yaml", 
                  turn_angle: float = 30.0, 
@@ -37,6 +37,44 @@ class ActionExecutor(BaseAPIClient):
     def validate_response(self, response: Dict) -> bool:
         """验证VLM响应是否包含所有必需字段"""
         return self.validate_fields(response, self.REQUIRED_FIELDS)
+    
+    def _generate_progress_update(self, current_progress: str, action_name: str, 
+                                  degrees: float = 0, meters: float = 0) -> str:
+        """
+        系统自动生成progress_summary（根据执行的动作累积更新）
+        
+        Args:
+            current_progress: 当前进度字符串
+            action_name: 动作名称
+            degrees: 转向角度（仅用于TURN）
+            meters: 移动距离（仅用于MOVE_FORWARD）
+            
+        Returns:
+            updated_progress: 更新后的进度字符串
+        """
+        if not current_progress or current_progress == "(Just started - no actions yet)":
+            # 第一步
+            if action_name == 'TURN_LEFT':
+                return f"Turned left {degrees}°"
+            elif action_name == 'TURN_RIGHT':
+                return f"Turned right {degrees}°"
+            elif action_name == 'MOVE_FORWARD':
+                return f"Moved forward {meters}m"
+            elif action_name == 'STOP':
+                return "Stopped at destination"
+        else:
+            # 累积更新
+            if action_name == 'TURN_LEFT':
+                return f"{current_progress}, turned left {degrees}°"
+            elif action_name == 'TURN_RIGHT':
+                return f"{current_progress}, turned right {degrees}°"
+            elif action_name == 'MOVE_FORWARD':
+                return f"{current_progress}, moved forward {meters}m"
+            elif action_name == 'STOP':
+                return f"{current_progress}, stopped at destination"
+        
+        return current_progress
+
     
     def decide_action(self,
                      subtask_destination: str,
@@ -97,7 +135,14 @@ class ActionExecutor(BaseAPIClient):
             return None, None, None, None
         
         action_id = action_mapping[action_name]
-        updated_progress = response['progress_summary']
+        
+        # 自动生成progress_summary（系统维护，不依赖模型输出）
+        updated_progress = self._generate_progress_update(
+            current_progress=progress_summary,
+            action_name=action_name,
+            degrees=response.get('degrees', 0) if action_name in ['TURN_LEFT', 'TURN_RIGHT'] else 0,
+            meters=response.get('meters', 0) if action_name == 'MOVE_FORWARD' else 0
+        )
         
         # 提取degrees/meters参数（用于计算重复次数）
         degrees = response.get('degrees', 0) if action_name in ['TURN_LEFT', 'TURN_RIGHT'] else 0
