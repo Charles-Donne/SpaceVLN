@@ -41,7 +41,17 @@ class ActionExecutor(BaseAPIClient):
     def _generate_progress_update(self, current_progress: str, action_name: str, 
                                   degrees: float = 0, meters: float = 0) -> str:
         """
-        系统自动生成progress_summary（根据执行的动作累积更新）
+        系统自动生成progress_summary（智能合并累积动作）
+        
+        规则：
+        1. 转向累积：左转(+) 右转(-) 相互抵消，只保留净转向
+        2. 直行累积：连续MOVE_FORWARD累加距离
+        3. 动作分段：转向打断直行，直行打断转向
+        
+        示例：
+        - "Turned left 90°" + TURN_RIGHT(30) → "Turned left 60°"
+        - "Turned left 60°" + MOVE_FORWARD(1.5) → "Turned left 60°, moved forward 1.5m"
+        - "Moved forward 1.5m" + MOVE_FORWARD(1.0) → "Moved forward 2.5m"
         
         Args:
             current_progress: 当前进度字符串
@@ -52,26 +62,81 @@ class ActionExecutor(BaseAPIClient):
         Returns:
             updated_progress: 更新后的进度字符串
         """
+        import re
+        
         if not current_progress or current_progress == "(Just started - no actions yet)":
-            # 第一步
+            # 第一步（使用完成时态标识已完成）
             if action_name == 'TURN_LEFT':
-                return f"Turned left {degrees}°"
+                return f"Had turned left {int(degrees)}°"
             elif action_name == 'TURN_RIGHT':
-                return f"Turned right {degrees}°"
+                return f"Had turned right {int(degrees)}°"
             elif action_name == 'MOVE_FORWARD':
-                return f"Moved forward {meters}m"
+                return f"Had moved forward {meters}m"
             elif action_name == 'STOP':
-                return "Stopped at destination"
-        else:
-            # 累积更新
-            if action_name == 'TURN_LEFT':
-                return f"{current_progress}, turned left {degrees}°"
-            elif action_name == 'TURN_RIGHT':
-                return f"{current_progress}, turned right {degrees}°"
-            elif action_name == 'MOVE_FORWARD':
-                return f"{current_progress}, moved forward {meters}m"
-            elif action_name == 'STOP':
-                return f"{current_progress}, stopped at destination"
+                return "Had stopped at destination"
+        
+        # 解析当前进度的最后一段动作
+        segments = [s.strip() for s in current_progress.split(',')]
+        last_segment = segments[-1] if segments else ""
+        
+        # 检测最后一段是什么类型的动作（支持完成时态）
+        turn_left_match = re.search(r'[Hh]ad turned left (\d+)°|[Tt]urned left (\d+)°', last_segment)
+        turn_right_match = re.search(r'[Hh]ad turned right (\d+)°|[Tt]urned right (\d+)°', last_segment)
+        move_match = re.search(r'[Hh]ad moved forward ([\d.]+)m|[Mm]oved forward ([\d.]+)m', last_segment)
+        
+        # 处理新动作
+        if action_name in ['TURN_LEFT', 'TURN_RIGHT']:
+            # 新动作是转向
+            if turn_left_match or turn_right_match:
+                # 最后一段也是转向，合并
+                current_net_turn = 0
+                if turn_left_match:
+                    # 提取数字（可能在group(1)或group(2)）
+                    current_net_turn = int(turn_left_match.group(1) or turn_left_match.group(2))  # 左转为正
+                elif turn_right_match:
+                    current_net_turn = -int(turn_right_match.group(1) or turn_right_match.group(2))  # 右转为负
+                
+                # 计算新的净转向
+                if action_name == 'TURN_LEFT':
+                    new_net_turn = current_net_turn + int(degrees)
+                else:  # TURN_RIGHT
+                    new_net_turn = current_net_turn - int(degrees)
+                （保持完成时态）
+                if new_net_turn > 0:
+                    new_last_segment = f"had turned left {new_net_turn}°"
+                elif new_net_turn < 0:
+                    new_last_segment = f"had turned right {abs(new_net_turn)}°"
+                else:
+                    # 刚好抵消，移除这一段
+                    if len(segments) > 1:
+                        return ', '.join(segments[:-1])
+                    else:
+                        return "(Just started - no actions yet)"
+                
+                segments[-1] = new_last_segment
+                return ', '.join(segments)
+            else:
+                # 最后一段是直行或其他，开始新段（转向打断直行）
+                if action_name == 'TURN_LEFT':
+                    return f"{current_progress}, then turned left {int(degrees)}°"
+                else:
+                    return f"{current_progress}, then
+                    return f"{current_progress}, turned right {int(degrees)}°"
+        
+        elif action_name == 'MOVE_FORWARD':
+            # 新动作是直行
+            if move_match:（提取数字可能在group(1)或group(2)）
+                current_distance = float(move_match.group(1) or move_match.group(2))
+                new_distance = current_distance + meters
+                segments[-1] = f"had moved forward {new_distance}m"
+                return ', '.join(segments)
+            else:
+                # 最后一段是转向或其他，开始新段（直行打断转向）
+                return f"{current_progress}, then moved forward {meters}m"
+        
+        elif action_name == 'STOP':
+            return f"{current_progress}, then
+            return f"{current_progress}, stopped at destination"
         
         return current_progress
 

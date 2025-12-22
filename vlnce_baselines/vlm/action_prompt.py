@@ -66,7 +66,7 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 
 ## Ex2 - Continue with the instruction action:
 **Sub-Instruction**: Turn left 90° to face the oven, then move forward 0.5m, Stop in front of oven.
-**Previous Progress**: Turned left 90°, moved 0.5m toward oven.
+**Previous Progress**: Had turned left 90°, then moved forward 0.5m.
 **Current Observation**: Facing the oven, but the distance is still too far.
 {{
     "reasoning": "The subtask goal is to stop at the oven. RGB & Detection: The oven is ahead, and there's space to move. Map: Purple marker (oven) is ahead but still outside the dark green circle (0.5m radius), meaning the destination is not yet reached. The path is clear with no obstacles. Action: Continue moving forward to get closer to the oven.",
@@ -76,7 +76,7 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 
 ## Ex3 - Arrive at destination and stop:
 **Sub-Instruction**: Turn left 90° to face the oven, then move forward 0.5m, Stop in front of oven.
-**Previous Progress**: Turned left 90°, moved 1.5m toward oven.
+**Previous Progress**: Had turned left 90°, then moved forward 1.5m.
 **Current Observation**: The oven is directly in front, very close (within 0.5m).
 {{
     "reasoning": "The subtask goal is to stop at the oven. RGB: Oven clearly visible in front view. Detection: Oven detected. Map: Purple marker (oven) is now inside the dark green circle (0.5m radius), meaning destination has been reached. Red arrow overlaps with the destination, orange trajectory confirms arrival. All key actions completed. Action: STOP.",
@@ -85,7 +85,7 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 
 ## Ex4 - Detour around obstacle:
 **Sub-Instruction**: Turn left 90° to face the oven, then move forward 0.5m, Stop in front of oven.
-**Previous Progress**: Turned left 90°.
+**Previous Progress**: Had turned left 90°.
 **Current Observation**: Oven is at front-left 30°, but straight ahead has a wall (black obstacle on map).
 {{
     "reasoning": "The subtask goal is to reach the oven. RGB: Wall/obstacle blocking direct path ahead. Detection: Oven detected at left side. Map: Purple marker (oven) at front-left 30°, still outside the dark green circle (0.5m radius), black obstacle directly ahead blocking the path, green path to the left. Action: Turn left 30° to avoid obstacle and align toward oven.",
@@ -117,7 +117,6 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 
 5. **ACTION PARAMETERS**:
    - Specify degrees (30-180) for TURN | meters (0.25-1.5) for MOVE_FORWARD
-   - Progress must be cumulative and precise (track total rotation, distance, status)
 """
 
 
