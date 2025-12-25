@@ -493,7 +493,7 @@ class MapVisualizer:
                 cv2.polylines(local_map, [trajectory_array], isClosed=False,
                              color=(0, 165, 255), thickness=3, lineType=cv2.LINE_8)
         
-        # ===== 阶段6: 绘制FOV扇形（5米视野半径）=====
+        # ===== 阶段6: 绘制FOV可见区域（考虑障碍物遮挡）=====
         # 480像素 = 12m，所以1像素 = 2.5cm
         # 5米 = 500cm ÷ 2.5cm/pixel = 200像素
         fov_center_x, fov_center_y = 240, 240
@@ -504,27 +504,77 @@ class MapVisualizer:
         fov_start_angle = fov_center_angle - hfov / 2
         fov_end_angle = fov_center_angle + hfov / 2
         
-        # 绘制FOV扇形轮廓（深蓝色，粗线）
-        fov_outline_color = (255, 128, 0)  # 深蓝色BGR
-        fov_outline_thickness = 3
-        cv2.ellipse(local_map, (fov_center_x, fov_center_y), (fov_radius, fov_radius),
-                   0, fov_start_angle, fov_end_angle, fov_outline_color, fov_outline_thickness)
-        
-        # 绘制扇形两条边线
         import math
-        # 左边线
-        left_angle_rad = math.radians(fov_start_angle)
-        left_end_x = int(fov_center_x + fov_radius * math.cos(left_angle_rad))
-        left_end_y = int(fov_center_y + fov_radius * math.sin(left_angle_rad))
-        cv2.line(local_map, (fov_center_x, fov_center_y), (left_end_x, left_end_y),
-                fov_outline_color, fov_outline_thickness)
         
-        # 右边线
-        right_angle_rad = math.radians(fov_end_angle)
-        right_end_x = int(fov_center_x + fov_radius * math.cos(right_angle_rad))
-        right_end_y = int(fov_center_y + fov_radius * math.sin(right_angle_rad))
-        cv2.line(local_map, (fov_center_x, fov_center_y), (right_end_x, right_end_y),
-                fov_outline_color, fov_outline_thickness)
+        # 先获取旋转后的障碍物掩码（用于raycasting）
+        obstacle_mask_flipped = np.flipud(obstacle_map > 0.5)
+        obstacle_mask_resized = cv2.resize(
+            obstacle_mask_flipped.astype(np.uint8) * 255,
+            (480, 480),
+            interpolation=cv2.INTER_NEAREST
+        ) > 127
+        obstacle_mask_rotated = cv2.warpAffine(
+            obstacle_mask_resized.astype(np.uint8) * 255,
+            rotation_matrix, (480, 480),
+            flags=cv2.INTER_NEAREST
+        ) > 127
+        obstacle_crop = obstacle_mask_rotated[y1:y2, x1:x2]
+        obstacle_local = cv2.resize(obstacle_crop.astype(np.uint8) * 255, 
+                                   (480, 480), 
+                                   interpolation=cv2.INTER_NEAREST) > 127
+        
+        # 使用raycasting计算可见多边形
+        num_rays = 180  # 每度2条射线，确保精细度
+        angle_step = (fov_end_angle - fov_start_angle) / num_rays
+        
+        visible_points = [(fov_center_x, fov_center_y)]  # 起始点是agent位置
+        
+        for i in range(num_rays + 1):
+            angle = fov_start_angle + i * angle_step
+            angle_rad = math.radians(angle)
+            
+            # 沿射线方向逐步检测
+            max_distance = fov_radius
+            hit_obstacle = False
+            ray_end_x, ray_end_y = fov_center_x, fov_center_y
+            
+            for distance in range(1, max_distance + 1):
+                test_x = fov_center_x + distance * math.cos(angle_rad)
+                test_y = fov_center_y + distance * math.sin(angle_rad)
+                
+                # 检查是否越界
+                if test_x < 0 or test_x >= 480 or test_y < 0 or test_y >= 480:
+                    ray_end_x, ray_end_y = test_x, test_y
+                    break
+                
+                # 检查是否碰到障碍物
+                if obstacle_local[int(test_y), int(test_x)]:
+                    hit_obstacle = True
+                    ray_end_x, ray_end_y = test_x, test_y
+                    break
+                
+                # 未碰到障碍物，继续延伸
+                ray_end_x, ray_end_y = test_x, test_y
+            
+            visible_points.append((int(ray_end_x), int(ray_end_y)))
+        
+        # 绘制可见区域多边形（半透明蓝色填充）
+        if len(visible_points) > 2:
+            visible_polygon = np.array(visible_points, dtype=np.int32)
+            
+            # 创建临时蒙版
+            fov_mask = np.zeros_like(local_map, dtype=np.uint8)
+            cv2.fillPoly(fov_mask, [visible_polygon], color=(255, 128, 0))  # 蓝色
+            
+            # 半透明叠加
+            alpha = 0.3
+            local_map = cv2.addWeighted(local_map, 1.0, fov_mask, alpha, 0)
+            
+            # 绘制可见区域边界（实线，深蓝色）
+            fov_outline_color = (255, 128, 0)  # 深蓝色BGR
+            fov_outline_thickness = 2
+            cv2.polylines(local_map, [visible_polygon], isClosed=True, 
+                         color=fov_outline_color, thickness=fov_outline_thickness)
         
         # ===== 绘制0.5m半径圆圈（深绿色，标识当前位置附近区域）=====
         # 480像素 = 12m，所以1m = 40像素，0.5m = 20像素
@@ -541,26 +591,7 @@ class MapVisualizer:
         cv2.drawContours(local_map, [agent_arrow], 0, arrow_color, -1)
         
         # ===== 阶段8: 叠加黑色障碍物层（覆盖在箭头之上，使障碍物更醒目）=====
-        # ⚠️ 关键修复：障碍物也需要flipud翻转，与semantic_map保持一致
-        obstacle_mask_flipped = np.flipud(obstacle_map > 0.5)
-        # 缩放到480x480
-        obstacle_mask_resized = cv2.resize(
-            obstacle_mask_flipped.astype(np.uint8) * 255,
-            (480, 480),
-            interpolation=cv2.INTER_NEAREST
-        ) > 127
-        # 转换障碍物掩码到旋转后的坐标系
-        obstacle_mask_rotated = cv2.warpAffine(
-            obstacle_mask_resized.astype(np.uint8) * 255,
-            rotation_matrix, (480, 480),
-            flags=cv2.INTER_NEAREST
-        ) > 127
-        # 裁剪中心区域并放大
-        obstacle_crop = obstacle_mask_rotated[y1:y2, x1:x2]
-        obstacle_local = cv2.resize(obstacle_crop.astype(np.uint8) * 255, 
-                                   (480, 480), 
-                                   interpolation=cv2.INTER_NEAREST) > 127
-        # 用黑色覆盖障碍物区域
+        # 用黑色覆盖障碍物区域（obstacle_local已在阶段6计算）
         local_map[obstacle_local] = [0, 0, 0]  # 黑色BGR
         
         # ===== 阶段9: 绘制Landmark标记（紫色圆球，最上层，不被遮挡）=====
