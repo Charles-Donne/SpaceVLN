@@ -1177,34 +1177,49 @@ class VLMNavigationController(InteractiveNavigationController):
         self.save_manager.save_action(action_record)
     
     def _save_navigation_result(self, success: bool, total_steps: int) -> str:
-        """保存导航结果"""
+        """保存导航结果到log/目录"""
+        # 获取所有关键指标
         metrics = {}
         if self.latest_info:
             metrics = {
+                # 核心指标
                 'distance_to_goal': self.latest_info.get('distance_to_goal', -1),
-                'success': self.latest_info.get('success', success),
+                'success': int(self.latest_info.get('success', 0)),  # 0或1
                 'spl': self.latest_info.get('spl', 0.0),
                 'path_length': self.latest_info.get('path_length', 0.0),
-                'oracle_success': self.latest_info.get('oracle_success', False)
+                
+                # Oracle指标
+                'oracle_success': int(self.latest_info.get('oracle_success', 0)),  # 0或1
+                'oracle_navigation_error': self.latest_info.get('oracle_navigation_error', float('inf')),
+                'oracle_spl': self.latest_info.get('oracle_spl', 0.0),
             }
         
         result = {
             'episode_id': self.current_episode_id,
             'instruction': self.current_instruction,
-            'success': success,
             'total_steps': total_steps,
             'subtask_count': self.subtask_count,
+            
+            # 核心导航指标
+            'success': metrics.get('success', 0),
+            'spl': metrics.get('spl', 0.0),
+            'distance_to_goal': metrics.get('distance_to_goal', -1),
+            'path_length': metrics.get('path_length', 0.0),
+            
+            # Oracle指标
+            'oracle_success': metrics.get('oracle_success', 0),
+            'oracle_navigation_error': metrics.get('oracle_navigation_error', float('inf')),
+            'oracle_spl': metrics.get('oracle_spl', 0.0),
+            
+            # 附加信息
             'detected_classes': list(self.detected_classes),
             'subtask_history': self.subtask_history,
             'thinking_count': len(self.thinking_outputs),
             'action_count': len(self.action_outputs),
-            'metrics': metrics,
             'timestamp': datetime.now().isoformat()
         }
         
         return self.save_manager.save_result(result)
-        
-        return filepath
     
     def record_action(self, action_name: str, action_id: int, vlm_response: Dict = None):
         """

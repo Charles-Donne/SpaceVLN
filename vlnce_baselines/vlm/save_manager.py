@@ -180,22 +180,53 @@ class SaveManager:
             json.dump(data, f, indent=2, ensure_ascii=False)
     
     def save_result(self, result: Dict):
-        """保存最终导航结果到records/"""
-        filepath = os.path.join(self.records_dir, 'result.json')
-        with open(filepath, 'w', encoding='utf-8') as f:
+        """
+        保存最终结果到两个位置:
+        1. episode_xxx/records/result.json (详细结果)
+        2. log/episode_xxx.json (用于analyze_results.py分析)
+        """
+        # 保存到records/目录（详细结果）
+        result_path = os.path.join(self.records_dir, "result.json")
+        with open(result_path, 'w', encoding='utf-8') as f:
             json.dump(result, f, indent=2, ensure_ascii=False)
         
+        # 保存到log/目录（用于结果分析）
+        log_dir = os.path.join(self.dump_dir, "log")
+        os.makedirs(log_dir, exist_ok=True)
+        
+        log_path = os.path.join(log_dir, f"episode_{self.episode_id}.json")
+        
+        # 提取关键指标用于分析
+        log_result = {
+            'episode_id': result['episode_id'],
+            'instruction': result.get('instruction', ''),
+            'total_steps': result.get('total_steps', 0),
+            
+            # 核心导航指标（用于analyze_results.py）
+            'success': result.get('success', 0),
+            'spl': result.get('spl', 0.0),
+            'distance_to_goal': result.get('distance_to_goal', -1),
+            'path_length': result.get('path_length', 0.0),
+            
+            # Oracle指标
+            'oracle_success': result.get('oracle_success', 0),
+            'oracle_navigation_error': result.get('oracle_navigation_error', float('inf')),
+            'oracle_spl': result.get('oracle_spl', 0.0),
+        }
+        
+        with open(log_path, 'w', encoding='utf-8') as f:
+            json.dump(log_result, f, indent=2, ensure_ascii=False)
+        
         print(f"\n{'='*60}")
-        print(f"📁 结果已保存: {filepath}")
+        print(f"📁 结果已保存:")
+        print(f"   - 详细结果: {result_path}")
+        print(f"   - 分析日志: {log_path}")
         print(f"   Steps: {result.get('total_steps', 0)} | Subtasks: {result.get('subtask_count', 0)}")
-        print(f"   Detected Classes: {len(result.get('detected_classes', []))}")
-        print(f"   Thinking(LLM): {result.get('thinking_count', 0)} | Action(VLM): {result.get('action_count', 0)}")
-        if result.get('metrics'):
-            metrics = result['metrics']
-            print(f"   Success: {metrics.get('success', False)} | SPL: {metrics.get('spl', 0.0):.4f}")
+        print(f"   Success: {result.get('success', 0)} | SPL: {result.get('spl', 0.0):.4f}")
+        print(f"   Distance to Goal: {result.get('distance_to_goal', -1):.3f}m")
         print(f"{'='*60}")
         
-        return filepath
+        return log_path
     
     def _update_summary_file(self, filename: str, record: Dict, exclude_keys: List[str] = None):
         """

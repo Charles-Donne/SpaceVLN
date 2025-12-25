@@ -473,13 +473,17 @@ class TopDownMapVLNCE(Measure):
             )
 
         if self._config.DRAW_REFERENCE_PATH:
-            maps.draw_reference_path(
-                self._top_down_map,
-                self._sim,
-                episode,
-                self._config.MAP_RESOLUTION,
-                self._meters_per_pixel,
-            )
+            if episode.reference_path is not None and len(episode.reference_path) > 0:
+                maps.draw_reference_path(
+                    self._top_down_map,
+                    self._sim,
+                    episode,
+                    self._config.MAP_RESOLUTION,
+                    self._meters_per_pixel,
+                )
+                # print(f"✅ Ground truth路径已绘制 ({len(episode.reference_path)}个点)")
+            else:
+                print(f"⚠️  Episode {episode.episode_id} 缺少reference_path数据")
 
         # draw source and target points last to avoid overlap
         if self._config.DRAW_SOURCE_AND_TARGET:

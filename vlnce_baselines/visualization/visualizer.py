@@ -567,23 +567,19 @@ class MapVisualizer:
             
             visible_points.append((int(ray_end_x), int(ray_end_y)))
         
-        # 绘制可见区域多边形（半透明天蓝色填充）
+        # 绘制可见区域多边形（蓝色填充，不透明）
         if len(visible_points) > 2:
             visible_polygon = np.array(visible_points, dtype=np.int32)
             
-            # 创建临时蒙版
-            fov_mask = np.zeros_like(local_map, dtype=np.uint8)
-            cv2.fillPoly(fov_mask, [visible_polygon], color=(235, 206, 135))  # 天蓝色 BGR格式 (135, 206, 235)
+            # 直接填充蓝色（不需要透明度，因为后续会叠加障碍物、轨迹等）
+            fill_color = (255, 200, 100)  # 蓝色 BGR格式，明显但不刺眼
+            cv2.fillPoly(local_map, [visible_polygon], color=fill_color)
             
-            # 半透明叠加
-            alpha = 0.4  # 提高透明度让天蓝色更明显
-            local_map = cv2.addWeighted(local_map, 1.0, fov_mask, alpha, 0)
-            
-            # 绘制可见区域边界（实线，深蓝色）
-            fov_outline_color = (180, 130, 70)  # 深蓝色BGR
-            fov_outline_thickness = 2
+            # 绘制可见区域边框（深蓝色实线）
+            border_color = (180, 100, 0)  # 深蓝色 BGR
+            border_thickness = 2
             cv2.polylines(local_map, [visible_polygon], isClosed=True, 
-                         color=fov_outline_color, thickness=fov_outline_thickness)
+                         color=border_color, thickness=border_thickness)
         
         # ===== 绘制0.5m半径圆圈（深绿色，标识当前位置附近区域）=====
         # 480像素 = 12m，所以1m = 40像素，0.5m = 20像素
