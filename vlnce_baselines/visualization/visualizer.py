@@ -695,31 +695,6 @@ class MapVisualizer:
                        font, font_scale, text_color, text_thickness, cv2.LINE_AA)
         
         return labeled_map
-            'LEFT': (20, h // 2),  # 左侧
-            'RIGHT': (w - 20, h // 2)  # 右侧
-        }
-        
-        for text, (x, y) in labels.items():
-            # 计算文字大小
-            (text_width, text_height), baseline = cv2.getTextSize(text, font, font_scale, text_thickness)
-            
-            # 调整位置使文字居中
-            if text in ['FRONT', 'BACK']:
-                text_x = x - text_width // 2
-                text_y = y
-            else:  # LEFT, RIGHT
-                text_x = x - text_width // 2
-                text_y = y + text_height // 2
-            
-            # 先绘制白色描边
-            cv2.putText(labeled_map, text, (text_x, text_y),
-                       font, font_scale, outline_color, outline_thickness, cv2.LINE_AA)
-            
-            # 再绘制黑色文字
-            cv2.putText(labeled_map, text, (text_x, text_y),
-                       font, font_scale, text_color, text_thickness, cv2.LINE_AA)
-        
-        return labeled_map
     
     def render_detection_bbox(self, 
                               rgb: np.ndarray,
