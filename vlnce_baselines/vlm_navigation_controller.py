@@ -96,6 +96,7 @@ class VLMNavigationController(InteractiveNavigationController):
         self.subtask_count = 0
         self.subtask_attempt = 0  # 当前子任务的尝试次数（a, b, c...）
         self.progress_summary = ""
+        self.previous_action_reason = ""  # 上一步的action_analysis
         self.subtask_history = []
         self.current_subtask_file = None
         
@@ -140,6 +141,7 @@ class VLMNavigationController(InteractiveNavigationController):
         self.subtask_count = 0
         self.subtask_attempt = 0  # 重置尝试计数
         self.progress_summary = ""
+        self.previous_action_reason = ""  # 重置上一步action reason
         self.subtask_history = []
         self.current_subtask_file = None
         self.direction_images = {}
@@ -670,6 +672,7 @@ class VLMNavigationController(InteractiveNavigationController):
             self.mapper.clear_trajectory()  # 清空轨迹
             self.landmark_classes = []      # 清空landmark标注（马上会重新设置）
             self.progress_summary = ""      # 重置进度摘要
+            self.previous_action_reason = ""  # 重置上一步action reason（新子任务）
             if hasattr(self, 'current_step_landmarks'):
                 self.current_step_landmarks.clear()  # 清空step landmark记录
             
@@ -724,6 +727,7 @@ class VLMNavigationController(InteractiveNavigationController):
             self.mapper.clear_trajectory()  # 清空轨迹
             self.landmark_classes = []      # 清空landmark标注（马上会重新设置）
             self.progress_summary = ""      # 重置进度摘要
+            self.previous_action_reason = ""  # 重置上一步action reason（重新规划）
             if hasattr(self, 'current_step_landmarks'):
                 self.current_step_landmarks.clear()
             
@@ -884,7 +888,8 @@ class VLMNavigationController(InteractiveNavigationController):
             progress_summary=self.progress_summary,
             detection_image=detection_image,
             local_map_image=local_map,
-            detected_landmarks=detected_landmarks
+            detected_landmarks=detected_landmarks,
+            previous_action_reason=self.previous_action_reason
         )
         
         if len(result) == 7:
@@ -937,6 +942,12 @@ class VLMNavigationController(InteractiveNavigationController):
         
         # 更新进度
         self.progress_summary = updated_progress
+        
+        # 保存当前的action_analysis作为下一次的previous_action_reason
+        if response and 'action_analysis' in response:
+            self.previous_action_reason = response['action_analysis']
+        else:
+            self.previous_action_reason = ""
         
         # 检查是否停止
         should_stop = (action_name == "STOP")

@@ -11,7 +11,7 @@ from vlnce_baselines.vlm.action_prompt import get_action_execution_prompt
 class ActionExecutor(BaseAPIClient):
     """VLM动作执行器 - 负责低层动作决策"""
     
-    REQUIRED_FIELDS = ['reasoning', 'action']  # 移除progress_summary，由系统自动生成
+    REQUIRED_FIELDS = ['reasoning', 'action_analysis', 'action']  # action_analysis从reasoning中独立出来
     
     def __init__(self, config_path: str = "vlnce_baselines/vlm/vlm_config.yaml", 
                  turn_angle: float = 30.0, 
@@ -149,7 +149,8 @@ class ActionExecutor(BaseAPIClient):
                      progress_summary: str = "",
                      detection_image: str = None,
                      local_map_image: str = None,
-                     detected_landmarks: str = None) -> Tuple[Optional[int], Optional[str], Optional[str], Optional[Dict]]:
+                     detected_landmarks: str = None,
+                     previous_action_reason: str = "") -> Tuple[Optional[int], Optional[str], Optional[str], Optional[Dict]]:
         """
         基于第一人称视角、检测结果和局部地图决策下一步动作
         
@@ -161,8 +162,7 @@ class ActionExecutor(BaseAPIClient):
             progress_summary: 当前子任务进度摘要
             detection_image: 目标检测图像路径（可选）
             local_map_image: 局部语义地图路径（可选）
-            detected_landmarks: 已检测landmark类别字符串（可选）
-            
+            detected_landmarks: 已检测landmark类别字符串（可选）            previous_action_reason: 上一步的action_analysis（可选）            
         Returns:
             (action_id, action_name, updated_progress, full_response)
         """
@@ -171,7 +171,8 @@ class ActionExecutor(BaseAPIClient):
             subtask_destination=subtask_destination,
             subtask_instruction=subtask_instruction,
             progress_summary=progress_summary,
-            detected_landmarks=detected_landmarks
+            detected_landmarks=detected_landmarks,
+            previous_action_reason=previous_action_reason
         )
         
         # 组合图像：RGB + Detection + Local Map
@@ -215,6 +216,7 @@ class ActionExecutor(BaseAPIClient):
         
         # 打印推理过程
         print(f"Reasoning: {response['reasoning']}")
+        print(f"Action Analysis: {response['action_analysis']}")
         if action_name == 'TURN_LEFT' or action_name == 'TURN_RIGHT':
             print(f"Action: {action_name} {degrees}°")
         elif action_name == 'MOVE_FORWARD':

@@ -14,6 +14,7 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 **Sub-Destination**: {subtask_destination}
 **Sub-Instruction**: {subtask_instruction}
 **Previous Progress**: {progress_summary}
+**Previous Action Reason**: {previous_action_reason}
 
 # Visual Inputs (Analyze Together)
 
@@ -46,7 +47,8 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 # Output Format (JSON)
 
 {{
-    "reasoning": "<(1) Subtask goal. (2) Finding of observation. (3) Map check: your position, orientation, landmark, obstacles. (4) Action: follow instruction OR adaptive fine-tuning>",
+    "reasoning": "<(1) Subtask goal. (2) Finding of observation. (3) Map check: your position, orientation, landmark, obstacles.>",
+    "action_analysis": "<Action decision: follow instruction OR adaptive fine-tuning with detailed reason>",
     "action": "TURN_LEFT" | "TURN_RIGHT" | "MOVE_FORWARD" | "STOP",
     "degrees": <30-180> (TURN only),
     "meters": <0.25-1.5> (MOVE_FORWARD only)
@@ -57,9 +59,11 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 ## Ex1 - Start turning to face the target:
 **Sub-Instruction**: Turn left 90° to face the oven, then move forward 0.5m, Stop in front of oven.
 **Previous Progress**: None
+**Previous Action Reason**: None
 **Current Observation**: Oven is not in front view; need to turn to face it.
 {{
-    "reasoning": "The subtask goal is to face the oven first. RGB: No oven visible in current front view. Map: Purple marker (oven) is to the left, far outside the dark green circle (0.5m radius), need to rotate first to face it. Action: Follow instruction - turn left 90° to align with oven direction.",
+    "reasoning": "The subtask goal is to face the oven first. RGB: No oven visible in current front view. Map: Purple marker (oven) is to the left, far outside the dark green circle (0.5m radius), need to rotate first to face it.",
+    "action_analysis": "Follow instruction - turn left 90° to align with oven direction.",
     "action": "TURN_LEFT",
     "degrees": 90
 }}
@@ -67,9 +71,11 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 ## Ex2 - Continue with the instruction action:
 **Sub-Instruction**: Turn left 90° to face the oven, then move forward 0.5m, Stop in front of oven.
 **Previous Progress**: Had turned left 90°, then moved forward 0.5m.
+**Previous Action Reason**: Continue moving forward to get closer to the oven.
 **Current Observation**: Facing the oven, but the distance is still too far.
 {{
-    "reasoning": "The subtask goal is to stop at the oven. RGB & Detection: The oven is ahead, and there's space to move. Map: Purple marker (oven) is ahead but still outside the dark green circle (0.5m radius), meaning the destination is not yet reached. The path is clear with no obstacles. Action: Continue moving forward to get closer to the oven.",
+    "reasoning": "The subtask goal is to stop at the oven. RGB & Detection: The oven is ahead, and there's space to move. Map: Purple marker (oven) is ahead but still outside the dark green circle (0.5m radius), meaning the destination is not yet reached. The path is clear with no obstacles.",
+    "action_analysis": "Continue moving forward to get closer to the oven.",
     "action": "MOVE_FORWARD",
     "meters": 0.5
 }}
@@ -77,18 +83,22 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 ## Ex3 - Arrive at destination and stop:
 **Sub-Instruction**: Turn left 90° to face the oven, then move forward 0.5m, Stop in front of oven.
 **Previous Progress**: Had turned left 90°, then moved forward 1.5m.
+**Previous Action Reason**: Continue moving forward to get closer to the oven.
 **Current Observation**: The oven is directly in front, very close (within 0.5m).
 {{
-    "reasoning": "The subtask goal is to stop at the oven. RGB: Oven clearly visible in front view. Detection: Oven detected. Map: Purple marker (oven) is now inside the dark green circle (0.5m radius), meaning destination has been reached. Red arrow overlaps with the destination, orange trajectory confirms arrival. All key actions completed. Action: STOP.",
+    "reasoning": "The subtask goal is to stop at the oven. RGB: Oven clearly visible in front view. Detection: Oven detected. Map: Purple marker (oven) is now inside the dark green circle (0.5m radius), meaning destination has been reached. Red arrow overlaps with the destination, orange trajectory confirms arrival. All key actions completed.",
+    "action_analysis": "All conditions met for STOP: oven detected, within 0.5m radius, visible in front view, and key actions completed.",
     "action": "STOP"
 }}
 
 ## Ex4 - Detour around obstacle:
 **Sub-Instruction**: Turn left 90° to face the oven, then move forward 0.5m, Stop in front of oven.
 **Previous Progress**: Had turned left 90°.
+**Previous Action Reason**: Follow instruction - turn left 90° to align with oven direction.
 **Current Observation**: Oven is at front-left 30°, but straight ahead has a wall (black obstacle on map).
 {{
-    "reasoning": "The subtask goal is to reach the oven. RGB: Wall/obstacle blocking direct path ahead. Detection: Oven detected at left side. Map: Purple marker (oven) at front-left 30°, still outside the dark green circle (0.5m radius), black obstacle directly ahead blocking the path, green path to the left. Action: Turn left 30° to avoid obstacle and align toward oven.",
+    "reasoning": "The subtask goal is to reach the oven. RGB: Wall/obstacle blocking direct path ahead. Detection: Oven detected at left side. Map: Purple marker (oven) at front-left 30°, still outside the dark green circle (0.5m radius), black obstacle directly ahead blocking the path, green path to the left.",
+    "action_analysis": "Adaptive adjustment: Turn left 30° to avoid obstacle and align toward oven, instead of moving forward into wall.",
     "action": "TURN_LEFT",
     "degrees": 30
 }}
@@ -123,7 +133,8 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 def get_action_execution_prompt(subtask_destination: str,
                                 subtask_instruction: str,
                                 progress_summary: str = "",
-                                detected_landmarks: str = None) -> str:
+                                detected_landmarks: str = None,
+                                previous_action_reason: str = "") -> str:
     """
     获取动作执行提示词
     
@@ -132,16 +143,20 @@ def get_action_execution_prompt(subtask_destination: str,
         subtask_instruction: 子任务指令
         progress_summary: 当前子任务进度摘要
         detected_landmarks: 已检测到的landmark类别字符串
+        previous_action_reason: 上一步动作的action_analysis
         
     Returns:
         格式化的提示词字符串
     """
     if not detected_landmarks:
         detected_landmarks = "No landmarks detected yet"
+    if not previous_action_reason:
+        previous_action_reason = "None"
         
     return ACTION_EXECUTION_PROMPT.format(
         subtask_destination=subtask_destination,
         subtask_instruction=subtask_instruction,
         progress_summary=progress_summary if progress_summary else "(Just started - no actions yet)",
-        detected_landmarks=detected_landmarks
+        detected_landmarks=detected_landmarks,
+        previous_action_reason=previous_action_reason
     )
