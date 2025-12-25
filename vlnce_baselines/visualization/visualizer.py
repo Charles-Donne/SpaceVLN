@@ -542,12 +542,7 @@ class MapVisualizer:
             hit_obstacle = False
             ray_end_x, ray_end_y = fov_center_x, fov_center_y
             
-            # 使用更小的步长提高检测精度
-            step_size = 0.5  # 每次移动0.5像素
-            num_steps = int(max_distance / step_size)
-            
-            for step in range(num_steps):
-                distance = step * step_size
+            for distance in range(1, max_distance + 1):
                 test_x = fov_center_x + distance * math.cos(angle_rad)
                 test_y = fov_center_y + distance * math.sin(angle_rad)
                 
@@ -567,17 +562,23 @@ class MapVisualizer:
             
             visible_points.append((int(ray_end_x), int(ray_end_y)))
         
-        # 绘制可见区域多边形（半透明蓝色填充）
+        # 绘制可见区域多边形（半透明浅蓝色填充）
         if len(visible_points) > 2:
             visible_polygon = np.array(visible_points, dtype=np.int32)
             
             # 创建临时蒙版
             fov_mask = np.zeros_like(local_map, dtype=np.uint8)
-            cv2.fillPoly(fov_mask, [visible_polygon], color=(255, 200, 128))  # 浅蓝色
+            cv2.fillPoly(fov_mask, [visible_polygon], color=(230, 180, 100))  # 浅蓝色 BGR格式
             
             # 半透明叠加
-            alpha = 0.3
+            alpha = 0.35  # 稍微提高透明度让蓝色更明显
             local_map = cv2.addWeighted(local_map, 1.0, fov_mask, alpha, 0)
+            
+            # 绘制可见区域边界（实线，深蓝色）
+            fov_outline_color = (200, 100, 0)  # 深蓝色BGR
+            fov_outline_thickness = 2
+            cv2.polylines(local_map, [visible_polygon], isClosed=True, 
+                         color=fov_outline_color, thickness=fov_outline_thickness)
         
         # ===== 绘制0.5m半径圆圈（深绿色，标识当前位置附近区域）=====
         # 480像素 = 12m，所以1m = 40像素，0.5m = 20像素
