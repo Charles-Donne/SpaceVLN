@@ -22,6 +22,7 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 **IMAGE 2 - Detection**: Detected Landmark: {detected_landmarks}
 **IMAGE 3 - Local Map** (Bird's-eye view): Spatial layout around you
 - **Red arrow**: Your position & facing direction (arrow points FRONT, map top = FRONT)
+- **Dark red dashed line**: Extends from red arrow upward, indicating exact Forward direction - **MUST align with destination, NOT obstacles**
 - **Dark green circle**: 0.5m radius nearby area around current position
 - **Purple markers**: Destination landmarks: {detected_landmarks}
 - **Black**: Obstacles - **MUST AVOID**

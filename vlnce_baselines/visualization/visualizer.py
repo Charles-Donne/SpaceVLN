@@ -349,6 +349,32 @@ class MapVisualizer:
                     text_y = int(rotated_point[1]) + text_height // 2
                     cv2.putText(global_map_with_trajectory, text, (text_x, text_y),
                                font, font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
+            
+            # ===== 添加深红色虚线指示正前方（在waypoint之后，agent标签之前）=====
+            forward_line_length = 120  # 延伸120像素（约3米）
+            forward_color = (0, 0, 180)  # 深红色 BGR
+            forward_thickness = 2
+            agent_center = (240, 240)  # agent在旋转后地图的中心
+            
+            # 绘制从agent中心向正上方延伸的虚线
+            # 虚线：每段10像素，间隙5像素
+            dash_length = 10
+            gap_length = 5
+            num_dashes = int(forward_line_length / (dash_length + gap_length))
+            
+            for i in range(num_dashes):
+                dash_start_y = 240 - i * (dash_length + gap_length)
+                dash_end_y = dash_start_y - dash_length
+                if dash_end_y < 240 - forward_line_length:
+                    dash_end_y = 240 - forward_line_length
+                cv2.line(global_map_with_trajectory, (240, int(dash_start_y)), 
+                        (240, int(dash_end_y)), forward_color, forward_thickness)
+            
+            # ===== 裁剪到440×440（中心区域）=====
+            # 从480x480裁剪中心440x440区域
+            crop_offset = (480 - 440) // 2  # = 20
+            global_map_with_trajectory = global_map_with_trajectory[crop_offset:crop_offset+440, crop_offset:crop_offset+440].copy()
+            global_map_rotated = global_map_rotated[crop_offset:crop_offset+440, crop_offset:crop_offset+440].copy()
         
         # 添加方位标签到global map
         global_map_with_trajectory = self.add_orientation_labels(global_map_with_trajectory)
@@ -581,6 +607,48 @@ class MapVisualizer:
             cv2.polylines(local_map, [visible_polygon], isClosed=True, 
                          color=border_color, thickness=border_thickness)
         
+        # ===== 绘制轨迹（在FOV之上，箭头之下）=====
+        if len(trajectory_points) >= 2:
+            rotated_trajectory = []
+            for x, y in trajectory_points:
+                display_x = y * 480 / w
+                display_y = (h - 1 - x) * 480 / h
+                point = np.array([display_x, display_y, 1])
+                rotated_point = rotation_matrix @ point
+                
+                # 转换到local坐标系（裁剪区域是120-360，映射到0-480）
+                local_x = (rotated_point[0] - 120) * 2
+                local_y = (rotated_point[1] - 120) * 2
+                rotated_trajectory.append([int(round(local_x)), int(round(local_y))])
+            
+            if len(rotated_trajectory) >= 2:
+                trajectory_array = np.array(rotated_trajectory, dtype=np.int32)
+                cv2.polylines(local_map, [trajectory_array], isClosed=False,
+                            color=(0, 140, 255), thickness=3, lineType=cv2.LINE_AA)  # 橙色轨迹
+        
+        # ===== 绘制深红色虚线指示正前方（在箭头下层）=====
+        forward_line_length = 120  # 延伸120像素（约3米）
+        forward_color = (0, 0, 180)  # 深红色 BGR
+        forward_thickness = 2
+        
+        # 绘制从agent中心向正上方延伸的虚线
+        start_point = (fov_center_x, fov_center_y)
+        end_point = (fov_center_x, fov_center_y - forward_line_length)  # 朝上是Y减小
+        
+        # 虚线：每段10像素，间隙5像素
+        dash_length = 10
+        gap_length = 5
+        total_length = forward_line_length
+        num_dashes = int(total_length / (dash_length + gap_length))
+        
+        for i in range(num_dashes):
+            dash_start_y = fov_center_y - i * (dash_length + gap_length)
+            dash_end_y = dash_start_y - dash_length
+            if dash_end_y < fov_center_y - forward_line_length:
+                dash_end_y = fov_center_y - forward_line_length
+            cv2.line(local_map, (fov_center_x, int(dash_start_y)), 
+                    (fov_center_x, int(dash_end_y)), forward_color, forward_thickness)
+        
         # ===== 绘制0.5m半径圆圈（深绿色，标识当前位置附近区域）=====
         # 480像素 = 12m，所以1m = 40像素，0.5m = 20像素
         nearby_radius = 20  # 0.5m半径
@@ -588,7 +656,7 @@ class MapVisualizer:
         nearby_thickness = 2  # 2像素线宽
         cv2.circle(local_map, (fov_center_x, fov_center_y), nearby_radius, nearby_color, nearby_thickness)
         
-        # ===== 阶段7: 绘制朝上的大箭头（在FOV之上）=====
+        # ===== 阶段7: 绘制朝上的大箭头（在轨迹和虚线之上）=====
         arrow_color = (0, 0, 255)  # 亮红色BGR
         arrow_angle = np.deg2rad(-90)  # 朝上
         agent_pos = (fov_center_x, fov_center_y, arrow_angle)
@@ -632,8 +700,10 @@ class MapVisualizer:
                               local_landmark_radius, 
                               landmark_marker_border, 1)
         
-        # ===== 阶段10: 最终裁剪到400×400 =====
-        local_map_cropped = local_map[40:440, 40:440].copy()
+        # ===== 阶段10: 最终裁剪到440×440（中心区域）=====
+        # 从480x480裁剪中心440x440区域
+        crop_offset = (480 - 440) // 2  # = 20
+        local_map_cropped = local_map[crop_offset:crop_offset+440, crop_offset:crop_offset+440].copy()
         
         # 添加方位标签
         local_map_cropped = self.add_orientation_labels(local_map_cropped)
@@ -643,9 +713,10 @@ class MapVisualizer:
     def add_orientation_labels(self, map_image: np.ndarray) -> np.ndarray:
         """
         在地图四周添加方位标签（俯视图）- 深红字+白底
+        地图尺寸：440x440
         
         Args:
-            map_image: 地图图像 (H, W, 3) BGR格式
+            map_image: 地图图像 (440, 440, 3) BGR格式
         
         Returns:
             带方位标签的地图

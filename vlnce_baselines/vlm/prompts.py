@@ -33,10 +33,12 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 - **Orange line**: Complete trajectory from navigation start to current position (all subtasks)
   - Shows your entire navigation history - **AVOID revisiting same areas unless necessary**
 - **Red arrow**: Current position, arrow points to Front direction
+- **Dark red dashed line**: Extends upward from red arrow, indicating exact Forward direction - should align with destination/safe paths
   
 **Local Map** (zoomed view around agent, same color legend as Global Map):
 - Shows finer details in immediate vicinity for precise navigation
 - **Red arrow**: Current position, arrow points to Front direction
+- **Dark red dashed line**: Extends upward from red arrow, indicating exact Forward direction
 - **Dark green circle**: 0.5m radius nearby area around current position
 - **Orange line**: Current subtask trajectory (shorter than global map trajectory)
 - **Blue filled area**: Current visible navigable area (90° FOV, blocked by obstacles)
@@ -118,9 +120,9 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 - **Panoramic View Content**: Detect each portion of panoramic view for comprehensive spatial understanding and precise directional descriptions.
 - **Planing**: Start all actions from Front view (0°).
 - **Map**: Use maps to identify your location, landmarks, obstacles and plan safe paths.
+- **Forward Direction Alignment**: Dark red dashed line shows exact Forward direction - must align with destination/safe paths, NOT obstacles. Turn immediately if misaligned.
 - **Path Alignment**: Keep agent centered in corridors/paths, parallel to walls/boundaries with equal distance to both sides
-- **Target Alignment**: Keep destination/landmark centered in Front view (0°), face it directly without angular deviation
-- **Distance Judgment**: Use dark green circle on local map to determine if destination/landmark is nearby - objects within the circle are < 0.5m from current position
+- **Target Alignment**: Keep destination/landmark centered in Front view (0°), face it directly without angular deviation- **Distance Judgment**: Use dark green circle on local map to determine if destination/landmark is nearby - objects within the circle are < 0.5m from current position
 - **Landmark Selection**: Choose common furniture items with simple nouns for easy detection (e.g., door, chair, table, bed, cabinet, refrigerator, sofa)
 - **Logical Analysis**: Ensure reasoning and output aligns with inputs - All the content must not contain any contradictions.
 """
@@ -161,6 +163,8 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 - **Orange line**: Complete trajectory from navigation start to current position (all subtasks)
   - Shows your entire navigation history - **AVOID revisiting same areas unless necessary**
 - **Red arrow**: Current position, arrow points to Front direction
+- **Dark red dashed line**: Extends from red arrow upward, indicating exact Forward direction
+  - **Should align with destination and safe paths**, **NOT face obstacles**
 - **Purple markers with labels**: Previous Detected Landmark: {detected_landmarks}
 - **Blue circles with white numbers**: Historical waypoints (see below)
 
@@ -171,6 +175,7 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 **Local Map** (zoomed view around agent, same color legend as Global Map):
 - Shows finer details in immediate vicinity for precise navigation
 - **Red arrow**: Current position, arrow points to Front direction
+- **Dark red dashed line**: Extends from red arrow upward, indicating exact Forward direction
 - **Dark green circle**: 0.5m radius nearby area around current position
 - **Orange line**: Current subtask trajectory (shorter than global map trajectory)
 - **Blue filled area**: Current visible navigable area (90° FOV, blocked by obstacles)
@@ -243,7 +248,7 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 {{
     "is_completed": true,
     "waypoint": "Kitchen Center - refrigerator ahead, counter to right, kitchen island behind",
-    "waypoint_sequence": "Bedroom(✓) → Hallway(✓) → Kitchen Center(✓) → Refrigerator(Current, Goal)",
+    "waypoint_sequence": "Bedroom(✓) → Hallway(✓) → Kitchen Center(✓) → Refrigerator(Current + Goal)",
     "subtask_destination": "refrigerator in kitchen",
     "subtask_instruction": "Stop. The refrigerator is directly ahead within 0.5m.",
     "subtask_landmark": "refrigerator",
@@ -301,6 +306,7 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 **Critical Requirements**:
 - **Panoramic View Content**: Detect each portion of panoramic view for comprehensive spatial understanding and precise directional descriptions.
 - **Verification**: Compare current observations against all three completion_criteria fields (Panoramic_Detection, Spatial_relationship, Location)
+- **Forward Direction Alignment**: Dark red dashed line shows exact Forward direction - must align with destination/safe paths, NOT obstacles. Turn immediately if misaligned.
 - **Path Alignment**: Keep agent centered in corridors/paths, parallel to walls/boundaries with equal distance to both sides
 - **Target Alignment**: Keep destination/landmark centered in Front view (0°), face it directly without angular deviation
 - **Distance Judgment**: Use dark green circle on local map to determine if destination/landmark is nearby - objects within the circle are < 0.5m from current position

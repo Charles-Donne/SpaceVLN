@@ -665,8 +665,18 @@ class VLMNavigationController(InteractiveNavigationController):
                 print(f"  💭 Reasoning: {response.get('reasoning', 'N/A')}")
                 print("="*60)
                 
+                # 在结束前保存最终waypoint
+                waypoint_desc = response.get('waypoint', 'Final destination')
+                waypoint_id = self.mapper.add_waypoint(waypoint_desc)
+                final_waypoint_summary = self._get_waypoint_summary()
+                self.save_manager.save_waypoint_memory(
+                    final_waypoint_summary,
+                    self.current_instruction,
+                    self.current_step
+                )
+                
                 # 直接结束导航，不再执行action
-                return (True, response, waypoint_summary)
+                return (True, response, final_waypoint_summary)
             else:
                 print(f"  ➡️  继续下一个子任务（#{self.subtask_count + 1}a）")
             
@@ -1106,20 +1116,20 @@ class VLMNavigationController(InteractiveNavigationController):
             # 如果VLM决定停止 → 验证子任务
             if should_stop:
                 print("\n[VLM输出STOP] 开始验证子任务...")
+                
+                # verify_and_replan会调用thinking模型检查任务是否完成
+                # 返回值：(is_completed, new_subtask, waypoint_summary)
                 is_completed, new_subtask, _ = self.verify_and_replan()
                 
-                # verify_and_replan内部已经检查global_task_finish
-                # 如果全局任务完成，它会return (True, response, summary)
-                # 这里不会再执行到，因为verify_and_replan已经return了
-                # 但为了健壮性，再次检查（实际上是冗余的）
+                # 检查是否完成全局任务
                 if is_completed and new_subtask:
                     task_finished = new_subtask.get('global_task_finish', False)
                     if task_finished:
-                        # verify_and_replan已经打印完成信息并提前返回了
-                        # 这里直接结束导航循环
+                        print("\n🛑 全局任务完成 - 立即终止导航循环")
                         navigation_complete = True
                         break
                 
+                # 子任务完成或重新规划，重置步数计数
                 subtask_steps = 0
                 continue
             

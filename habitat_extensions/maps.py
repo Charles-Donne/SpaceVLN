@@ -197,10 +197,7 @@ def draw_reference_path(
     map_resolution: int,
     meters_per_px: float,
 ) -> None:
-    """Draws lines between each waypoint in the reference path (ground truth)."""
-    if episode.reference_path is None or len(episode.reference_path) == 0:
-        return  # 没有ground truth路径则跳过
-    
+    """Draws lines between each waypoint in the reference path."""
     shortest_path_points = [
         habitat_maps.to_grid(
             p[2],
@@ -219,17 +216,16 @@ def draw_reference_path(
                 img,
                 (pt_from[0], pt_from[1]),
                 (pt_to[0], pt_to[1]),
-                MAP_MP3D_REFERENCE_PATH,  # 使用黑色显示ground truth
-                thickness=int(0.8 * map_resolution / MAP_THICKNESS_SCALAR),  # 加粗线条
-                style="dashed",  # 虚线样式
-                gap=8,
+                MAP_SHORTEST_PATH_WAYPOINT,
+                thickness=int(0.4 * map_resolution / MAP_THICKNESS_SCALAR),
+                style="dashed",
+                gap=10,
             )
         pt_from = pt_to
 
-    # 绘制路径点
     for pt in shortest_path_points:
         drawpoint(
-            img, (pt[1], pt[0]), MAP_MP3D_REFERENCE_PATH, meters_per_px
+            img, (pt[1], pt[0]), MAP_SHORTEST_PATH_WAYPOINT, meters_per_px, pad=0.3
         )
 
 
