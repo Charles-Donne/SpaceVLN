@@ -120,6 +120,8 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
    - If trapped by black: Turn toward nearest green floor area to escape, then re-orient toward destination
 
 3. **ALIGNMENT REQUIREMENTS**:
+   - **Map Forward Direction**: Dark red dashed line shows exact Forward direction - must point toward open paths/destination on map, NOT obstacles/walls.
+   - **View Direction**: RGB view (Front view) should face toward visible destinations, NOT blocked by obstacles/walls. If facing blocked view, turn immediately to align toward destination using map guidance.
    - **Path Alignment**: Keep agent centered in corridors/paths, parallel to walls/boundaries with equal distance to both sides
    - **Target Alignment**: Keep destination/landmark centered in Front view (0°), face it directly without angular deviation
 
