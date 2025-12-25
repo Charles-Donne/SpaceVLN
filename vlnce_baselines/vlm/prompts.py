@@ -100,20 +100,20 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 
 ## Ex2:
 **Global Task**: Exit the room and turn left, head toward the kitchen and turn right. Go through the kitchen and out the door. Wait right at the bathroom door.
-**Current Observation:** Bedroom exit visible at left 30°. Walls on left side. Hallway visible beyond the exit at left 30°.
+**Current Observation:** Bedroom exit door visible at left 30°. Walls on left side. Corridor visible beyond the exit at left 30°.
 {{
-    "waypoint": "Bedroom - near a doorway to hallway.",
-    "waypoint_sequence": "Bedroom(Current) → Hallway → Kitchen Entrance → Kitchen → Kitchen Exit → Bathroom Door(Goal)",
-    "subtask_destination": "hallway",
-    "subtask_instruction": "Turn left 30° to face the bedroom exit toward the hallway, move forward to enter the hallway, then turn left 90° to face along the hallway direction.",
+    "waypoint": "Bedroom - near exit door.",
+    "waypoint_sequence": "Bedroom(Current) → Bedroom Exit → Kitchen Entrance → Kitchen → Kitchen Exit → Bathroom Door(Goal)",
+    "subtask_destination": "bedroom exit",
+    "subtask_instruction": "Turn left 30° to face the bedroom exit door, move forward to reach the exit doorway, then turn left 90° to face along the corridor.",
     "subtask_landmark": "door",
     "completion_criteria": {{
-        "Panoramic_Detection": "Hallway extending ahead in Front view. Bedroom exit/doorway detected in Back view.",
-        "Spatial_relationship": "In hallway with clear path ahead (map shows agent position in green hallway area). Bedroom exit far behind (map shows previous bedroom location away from current position). Orange trajectory shows left turn 60°, forward 1.5m into hallway, then left turn 90°.",
-        "Location": "Hallway - clear path ahead, bedroom exit behind, facing along hallway direction"
+        "Panoramic_Detection": "Exit doorway and corridor visible ahead in Front view. Bedroom interior detected in Back view.",
+        "Spatial_relationship": "At bedroom exit doorway < 0.5m (map shows agent at doorway threshold with corridor ahead). Bedroom interior far behind (map shows previous bedroom area away from current position). Orange trajectory shows left turn 30°, forward 1.5m to exit, then left turn 90°.",
+        "Location": "Bedroom Exit - at doorway threshold, corridor ahead, bedroom behind"
     }},
     "global_task_finish": false,
-    "reasoning": "Agent currently in bedroom near exit. Bedroom exit visible at left 30° leading to hallway. Map: Left side has wall obstacle (black) near current position, but left 30° shows clear green floor path through bedroom exit leading to hallway. Global task requires exiting bedroom and turning left in hallway. First subtask: turn left 30° to face bedroom exit, move forward 1.5m to enter hallway, then turn left 90° to orient along hallway direction for next subtask (heading toward kitchen)."
+    "reasoning": "Agent currently in bedroom near exit. Bedroom exit door visible at left 30° leading to corridor. Map: Left side has wall obstacle (black) near current position, but left 30° shows clear green floor path through bedroom exit door. Global task requires exiting bedroom then navigating to kitchen. First subtask: turn left 30° to face bedroom exit door, move forward 1.5m to reach exit doorway threshold, then turn left 90° to orient along corridor for next subtask (heading toward kitchen)."
 }}
 
 **Critical Requirements**:

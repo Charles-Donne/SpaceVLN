@@ -260,8 +260,27 @@ class MapVisualizer:
                     cv2.polylines(global_map_with_trajectory, [trajectory_array], isClosed=False,
                                  color=(0, 165, 255), thickness=2, lineType=cv2.LINE_8)
             
-            # ===== 阶段5.5: 在中心绘制箭头（先绘制）=====
+            # ===== 阶段5.3: 绘制深红色虚线指示正前方（在轨迹之后，箭头之前）=====
             center_x, center_y = 240, 240
+            forward_line_length = 120  # 延伸120像素（约3米）
+            forward_color = (0, 0, 180)  # 深红色 BGR
+            forward_thickness = 2
+            
+            # 绘制从agent中心向正上方延伸的虚线
+            # 虚线：每段10像素，间隙5像素
+            dash_length = 10
+            gap_length = 5
+            num_dashes = int(forward_line_length / (dash_length + gap_length))
+            
+            for i in range(num_dashes):
+                dash_start_y = 240 - i * (dash_length + gap_length)
+                dash_end_y = dash_start_y - dash_length
+                if dash_end_y < 240 - forward_line_length:
+                    dash_end_y = 240 - forward_line_length
+                cv2.line(global_map_with_trajectory, (240, int(dash_start_y)), 
+                        (240, int(dash_end_y)), forward_color, forward_thickness)
+            
+            # ===== 阶段5.5: 在中心绘制箭头（在虚线之后）=====
             arrow_angle = np.deg2rad(-90)  # 朝上
             agent_pos = (center_x, center_y, arrow_angle)
             agent_arrow = vu.get_contour_points(agent_pos, origin=(0, 0), size=12)
@@ -349,26 +368,6 @@ class MapVisualizer:
                     text_y = int(rotated_point[1]) + text_height // 2
                     cv2.putText(global_map_with_trajectory, text, (text_x, text_y),
                                font, font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
-            
-            # ===== 添加深红色虚线指示正前方（在waypoint之后，agent标签之前）=====
-            forward_line_length = 120  # 延伸120像素（约3米）
-            forward_color = (0, 0, 180)  # 深红色 BGR
-            forward_thickness = 2
-            agent_center = (240, 240)  # agent在旋转后地图的中心
-            
-            # 绘制从agent中心向正上方延伸的虚线
-            # 虚线：每段10像素，间隙5像素
-            dash_length = 10
-            gap_length = 5
-            num_dashes = int(forward_line_length / (dash_length + gap_length))
-            
-            for i in range(num_dashes):
-                dash_start_y = 240 - i * (dash_length + gap_length)
-                dash_end_y = dash_start_y - dash_length
-                if dash_end_y < 240 - forward_line_length:
-                    dash_end_y = 240 - forward_line_length
-                cv2.line(global_map_with_trajectory, (240, int(dash_start_y)), 
-                        (240, int(dash_end_y)), forward_color, forward_thickness)
             
             # ===== 裁剪到440×440（中心区域）=====
             # 从480x480裁剪中心440x440区域
@@ -734,8 +733,8 @@ class MapVisualizer:
         labels = {
             'FRONT': (w // 2, 20),  # 上方
             'BACK': (w // 2, h - 8),  # 下方
-            'LEFT': (20, h // 2),  # 左侧
-            'RIGHT': (w - 20, h // 2)  # 右侧
+            'LEFT': (25, h // 2),  # 左侧（向右移动，避免被裁剪）
+            'RIGHT': (w - 25, h // 2)  # 右侧（向左移动，避免被裁剪）
         }
         
         for text, (x, y) in labels.items():
@@ -750,11 +749,13 @@ class MapVisualizer:
                 text_x = x - text_width // 2
                 text_y = y + text_height // 2
             
-            # 绘制白色背景矩形
-            padding = 3
+            # 绘制白色背景矩形（底部间距更小）
+            padding_top = 3
+            padding_side = 3
+            padding_bottom = 1
             cv2.rectangle(labeled_map,
-                         (text_x - padding, text_y - text_height - padding),
-                         (text_x + text_width + padding, text_y + baseline + padding),
+                         (text_x - padding_side, text_y - text_height - padding_top),
+                         (text_x + text_width + padding_side, text_y + baseline + padding_bottom),
                          bg_color, -1)
             
             # 绘制深红色文字
@@ -881,13 +882,10 @@ class MapVisualizer:
         if global_map is None:
             return None
         
-        # 裁剪中心400×400
-        global_map_cropped = global_map[40:440, 40:440]
-        
-        # 简化路径：data/manual_navigation/episode_X/global_map/step-Y.png
+        # 直接保存440×440图像（已包含方位标签，无需再裁剪）
         episode_dir = self._create_episode_directories(episode_id)
         save_path = os.path.join(episode_dir, 'global_map', f'step_{step:04d}_{phase}.png')
-        cv2.imwrite(save_path, global_map_cropped, [cv2.IMWRITE_PNG_COMPRESSION, 1])
+        cv2.imwrite(save_path, global_map, [cv2.IMWRITE_PNG_COMPRESSION, 1])
         return save_path
     
     def save_local_map(self,
