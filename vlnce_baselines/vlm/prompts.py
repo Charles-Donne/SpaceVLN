@@ -39,9 +39,7 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 - **Red arrow**: Current position, arrow points to Front direction
 - **Dark green circle**: 0.5m radius nearby area around current position
 - **Orange line**: Current subtask trajectory (shorter than global map trajectory)
-- **Blue semi-circle**: Agent's current field of view (Front direction visibility range)
-  - The opening of the semi-circle indicates Front view direction
-  - Objects within this blue region are currently visible in IMAGE 1 Front (Front View)
+- **Blue filled area**: Current visible navigable area (90° FOV, blocked by obstacles)
 - Better for planning nearby movements and obstacle avoidance
 
 **Use Maps for Planning**:
@@ -168,9 +166,7 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 - **Red arrow**: Current position, arrow points to Front direction
 - **Dark green circle**: 0.5m radius nearby area around current position
 - **Orange line**: Current subtask trajectory (shorter than global map trajectory)
-- **Blue semi-circle**: Agent's current field of view (Front direction visibility range)
-  - The opening of the semi-circle indicates Front view direction
-  - Objects within this blue region are currently visible in IMAGE 1 (Front View)
+- **Blue filled area**: Current visible navigable area (90° FOV, blocked by obstacles)
 - Better for planning nearby movements and obstacle avoidance
 
 **Use Maps for Verification & Planning**:

@@ -25,9 +25,10 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 - **Dark green circle**: 0.5m radius nearby area around current position
 - **Purple markers**: Destination landmarks: {detected_landmarks}
 - **Black**: Obstacles - **MUST AVOID**
-- **Green/White**: Safe paths
+- **Green areas**: Floor (Safe to move)
+- **White areas**: Unexplored space
 - **Orange line**: Trajectory history
-- **Blue arc**: Current field of view (90° HFOV)
+- **Blue filled area**: Current visible navigable area (90° FOV, blocked by obstacles)
 - **Orientation labels**: FRONT (top) / BACK (bottom) / LEFT / RIGHT marked on map edges
 
 

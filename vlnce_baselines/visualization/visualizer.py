@@ -523,6 +523,10 @@ class MapVisualizer:
                                    (480, 480), 
                                    interpolation=cv2.INTER_NEAREST) > 127
         
+        # 对障碍物掩码进行形态学膨胀，填补小缺口，减少突出的射线
+        kernel = np.ones((3, 3), np.uint8)
+        obstacle_local_dilated = cv2.dilate(obstacle_local.astype(np.uint8), kernel, iterations=1).astype(bool)
+        
         # 使用raycasting计算可见多边形
         num_rays = 180  # 每度2条射线，确保精细度
         angle_step = (fov_end_angle - fov_start_angle) / num_rays
@@ -538,7 +542,12 @@ class MapVisualizer:
             hit_obstacle = False
             ray_end_x, ray_end_y = fov_center_x, fov_center_y
             
-            for distance in range(1, max_distance + 1):
+            # 使用更小的步长提高检测精度
+            step_size = 0.5  # 每次移动0.5像素
+            num_steps = int(max_distance / step_size)
+            
+            for step in range(num_steps):
+                distance = step * step_size
                 test_x = fov_center_x + distance * math.cos(angle_rad)
                 test_y = fov_center_y + distance * math.sin(angle_rad)
                 
@@ -547,8 +556,8 @@ class MapVisualizer:
                     ray_end_x, ray_end_y = test_x, test_y
                     break
                 
-                # 检查是否碰到障碍物
-                if obstacle_local[int(test_y), int(test_x)]:
+                # 检查是否碰到障碍物（使用膨胀后的障碍物掩码）
+                if obstacle_local_dilated[int(test_y), int(test_x)]:
                     hit_obstacle = True
                     ray_end_x, ray_end_y = test_x, test_y
                     break
@@ -564,17 +573,11 @@ class MapVisualizer:
             
             # 创建临时蒙版
             fov_mask = np.zeros_like(local_map, dtype=np.uint8)
-            cv2.fillPoly(fov_mask, [visible_polygon], color=(255, 128, 0))  # 蓝色
+            cv2.fillPoly(fov_mask, [visible_polygon], color=(255, 200, 128))  # 浅蓝色
             
             # 半透明叠加
             alpha = 0.3
             local_map = cv2.addWeighted(local_map, 1.0, fov_mask, alpha, 0)
-            
-            # 绘制可见区域边界（实线，深蓝色）
-            fov_outline_color = (255, 128, 0)  # 深蓝色BGR
-            fov_outline_thickness = 2
-            cv2.polylines(local_map, [visible_polygon], isClosed=True, 
-                         color=fov_outline_color, thickness=fov_outline_thickness)
         
         # ===== 绘制0.5m半径圆圈（深绿色，标识当前位置附近区域）=====
         # 480像素 = 12m，所以1m = 40像素，0.5m = 20像素
