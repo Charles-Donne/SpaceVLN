@@ -542,7 +542,12 @@ class MapVisualizer:
             hit_obstacle = False
             ray_end_x, ray_end_y = fov_center_x, fov_center_y
             
-            for distance in range(1, max_distance + 1):
+            # 使用0.5像素步长提高检测精度
+            step_size = 0.5
+            num_steps = int(max_distance / step_size)
+            
+            for step in range(num_steps):
+                distance = step * step_size
                 test_x = fov_center_x + distance * math.cos(angle_rad)
                 test_y = fov_center_y + distance * math.sin(angle_rad)
                 
@@ -562,20 +567,20 @@ class MapVisualizer:
             
             visible_points.append((int(ray_end_x), int(ray_end_y)))
         
-        # 绘制可见区域多边形（半透明浅蓝色填充）
+        # 绘制可见区域多边形（半透明天蓝色填充）
         if len(visible_points) > 2:
             visible_polygon = np.array(visible_points, dtype=np.int32)
             
             # 创建临时蒙版
             fov_mask = np.zeros_like(local_map, dtype=np.uint8)
-            cv2.fillPoly(fov_mask, [visible_polygon], color=(230, 180, 100))  # 浅蓝色 BGR格式
+            cv2.fillPoly(fov_mask, [visible_polygon], color=(235, 206, 135))  # 天蓝色 BGR格式 (135, 206, 235)
             
             # 半透明叠加
-            alpha = 0.35  # 稍微提高透明度让蓝色更明显
+            alpha = 0.4  # 提高透明度让天蓝色更明显
             local_map = cv2.addWeighted(local_map, 1.0, fov_mask, alpha, 0)
             
             # 绘制可见区域边界（实线，深蓝色）
-            fov_outline_color = (200, 100, 0)  # 深蓝色BGR
+            fov_outline_color = (180, 130, 70)  # 深蓝色BGR
             fov_outline_thickness = 2
             cv2.polylines(local_map, [visible_polygon], isClosed=True, 
                          color=fov_outline_color, thickness=fov_outline_thickness)
@@ -641,7 +646,7 @@ class MapVisualizer:
     
     def add_orientation_labels(self, map_image: np.ndarray) -> np.ndarray:
         """
-        在地图四周添加方位标签（俯视图）
+        在地图四周添加方位标签（俯视图）- 深红字+白底
         
         Args:
             map_image: 地图图像 (H, W, 3) BGR格式
@@ -653,16 +658,43 @@ class MapVisualizer:
         labeled_map = map_image.copy()
         
         font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 0.5
-        text_thickness = 1
-        outline_thickness = 3
-        text_color = (0, 0, 0)  # 黑色文字
-        outline_color = (255, 255, 255)  # 白色描边
+        font_scale = 0.7  # 加粗字体
+        text_thickness = 2  # 加粗
+        text_color = (0, 0, 139)  # 深红色BGR
+        bg_color = (255, 255, 255)  # 白色背景
         
         # 定义方位标签
         labels = {
             'FRONT': (w // 2, 20),  # 上方
             'BACK': (w // 2, h - 8),  # 下方
+            'LEFT': (20, h // 2),  # 左侧
+            'RIGHT': (w - 20, h // 2)  # 右侧
+        }
+        
+        for text, (x, y) in labels.items():
+            # 计算文字大小
+            (text_width, text_height), baseline = cv2.getTextSize(text, font, font_scale, text_thickness)
+            
+            # 调整位置使文字居中
+            if text in ['FRONT', 'BACK']:
+                text_x = x - text_width // 2
+                text_y = y
+            else:  # LEFT, RIGHT
+                text_x = x - text_width // 2
+                text_y = y + text_height // 2
+            
+            # 绘制白色背景矩形
+            padding = 3
+            cv2.rectangle(labeled_map,
+                         (text_x - padding, text_y - text_height - padding),
+                         (text_x + text_width + padding, text_y + baseline + padding),
+                         bg_color, -1)
+            
+            # 绘制深红色文字
+            cv2.putText(labeled_map, text, (text_x, text_y),
+                       font, font_scale, text_color, text_thickness, cv2.LINE_AA)
+        
+        return labeled_map
             'LEFT': (20, h // 2),  # 左侧
             'RIGHT': (w - 20, h // 2)  # 右侧
         }

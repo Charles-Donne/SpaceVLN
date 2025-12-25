@@ -93,12 +93,12 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 
 ## Ex2:
 **Global Task**: Exit the room and turn left, head toward the kitchen and turn right. Go through the kitchen and out the door. Wait right at the bathroom door.
-**Current Observation:** Bedroom exit visible at left 60°. Walls on left side. Hallway visible beyond the exit at left 60°.
+**Current Observation:** Bedroom exit visible at left 30°. Walls on left side. Hallway visible beyond the exit at left 30°.
 {{
     "waypoint": "Bedroom - near a doorway to hallway.",
-    "waypoint_sequence": "Bedroom(Current) → Hallway → Kitchen Entrance → Kitchen → Back Door → Bathroom Door(Goal)",
+    "waypoint_sequence": "Bedroom(Current) → Hallway → Kitchen Entrance → Kitchen → Kitchen Exit → Bathroom Door(Goal)",
     "subtask_destination": "hallway",
-    "subtask_instruction": "Turn left 60° to face the bedroom exit toward the hallway, move forward 1.5m to enter the hallway, then turn left 90° to face along the hallway direction.",
+    "subtask_instruction": "Turn left 30° to face the bedroom exit toward the hallway, move forward 1.5m to enter the hallway, then turn left 90° to face along the hallway direction.",
     "subtask_landmark": "door",
     "completion_criteria": {{
         "Panoramic_Detection": "Hallway extending ahead in Front view. Bedroom exit/doorway detected in Back view.",
@@ -106,13 +106,15 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
         "Location": "Hallway - clear path ahead, bedroom exit behind, facing along hallway direction"
     }},
     "global_task_finish": false,
-    "reasoning": "Agent currently in bedroom near exit. Bedroom exit visible at left 60° leading to hallway. Map: Left side has wall obstacle (black) near current position, but left 60° shows clear green floor path through bedroom exit leading to hallway. Global task requires exiting bedroom and turning left in hallway. First subtask: turn left 60° to face bedroom exit, move forward 1.5m to enter hallway, then turn left 90° to orient along hallway direction for next subtask (heading toward kitchen)."
+    "reasoning": "Agent currently in bedroom near exit. Bedroom exit visible at left 30° leading to hallway. Map: Left side has wall obstacle (black) near current position, but left 30° shows clear green floor path through bedroom exit leading to hallway. Global task requires exiting bedroom and turning left in hallway. First subtask: turn left 30° to face bedroom exit, move forward 1.5m to enter hallway, then turn left 90° to orient along hallway direction for next subtask (heading toward kitchen)."
 }}
 
 **Critical Requirements**:
 - **Panoramic View Content**: Detect each portion of panoramic view for comprehensive spatial understanding and precise directional descriptions.
 - **Planing**: Start all actions from Front view (0°).
 - **Map**: Use maps to identify your location, landmarks, obstacles and plan safe paths.
+- **Path Alignment**: Keep agent centered in corridors/paths, parallel to walls/boundaries with equal distance to both sides
+- **Target Alignment**: Keep destination/landmark centered in Front view (0°), face it directly without angular deviation
 - **Distance Judgment**: Use dark green circle on local map to determine if destination/landmark is nearby - objects within the circle are < 0.5m from current position
 - **Landmark Selection**: Choose common furniture items with simple nouns for easy detection (e.g., door, chair, table, bed, cabinet, refrigerator, sofa)
 - **Logical Analysis**: Ensure reasoning and output aligns with inputs - All the content must not contain any contradictions.
@@ -289,6 +291,8 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 **Critical Requirements**:
 - **Panoramic View Content**: Detect each portion of panoramic view for comprehensive spatial understanding and precise directional descriptions.
 - **Verification**: Compare current observations against all three completion_criteria fields (Panoramic_Detection, Spatial_relationship, Location)
+- **Path Alignment**: Keep agent centered in corridors/paths, parallel to walls/boundaries with equal distance to both sides
+- **Target Alignment**: Keep destination/landmark centered in Front view (0°), face it directly without angular deviation
 - **Distance Judgment**: Use dark green circle on local map to determine if destination/landmark is nearby - objects within the circle are < 0.5m from current position
 - **Planning**: Start all actions from Front view (0°). If subtask completed, plan NEXT waypoint; if not, adjust CURRENT subtask
 - **Map**: Use maps to verify trajectory, identify obstacles and plan safe paths for next subtask
