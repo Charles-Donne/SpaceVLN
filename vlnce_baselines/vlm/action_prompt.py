@@ -13,8 +13,8 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 # Current Sub-Task
 **Sub-Destination**: {subtask_destination}
 **Sub-Instruction**: {subtask_instruction}
-**Previous Progress**: {progress_summary}
-**Previous Action Reason**: {previous_action_reason}
+**Previous Total Progress**: {progress_summary}
+**Last One Action Reason**: {previous_action_reason}
 
 # Visual Inputs (Analyze Together)
 

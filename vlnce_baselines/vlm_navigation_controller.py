@@ -647,9 +647,26 @@ class VLMNavigationController(InteractiveNavigationController):
             # 检查是否完成全局任务
             task_finished = response.get('global_task_finish', False)
             print(f"  🎯 global_task_finish: {task_finished}")
+            
             if task_finished:
-                print(f"  🏁 全局任务已完成 - 继续执行直到VLM输出STOP")
-                # 注意：不在这里结束，继续执行直到VLM输出STOP
+                print("\n" + "="*60)
+                print("🏆 全局任务完成 - 导航成功！")
+                print("="*60)
+                print(f"  📍 Waypoint: {response.get('waypoint', 'N/A')}")
+                print(f"  📍 Waypoint Sequence: {response.get('waypoint_sequence', 'N/A')}")
+                print(f"  🎯 Subtask Destination: {response.get('subtask_destination', 'N/A')}")
+                print(f"  📝 Subtask Instruction: {response.get('subtask_instruction', 'N/A')}")
+                print(f"  🔍 Completion Criteria:")
+                criteria = response.get('completion_criteria', {})
+                if isinstance(criteria, dict):
+                    print(f"     - Panoramic_Detection: {criteria.get('Panoramic_Detection', 'N/A')}")
+                    print(f"     - Spatial_relationship: {criteria.get('Spatial_relationship', 'N/A')}")
+                    print(f"     - Location: {criteria.get('Location', 'N/A')}")
+                print(f"  💭 Reasoning: {response.get('reasoning', 'N/A')}")
+                print("="*60)
+                
+                # 直接结束导航，不再执行action
+                return (True, response, waypoint_summary)
             else:
                 print(f"  ➡️  继续下一个子任务（#{self.subtask_count + 1}a）")
             
@@ -1091,25 +1108,15 @@ class VLMNavigationController(InteractiveNavigationController):
                 print("\n[VLM输出STOP] 开始验证子任务...")
                 is_completed, new_subtask, _ = self.verify_and_replan()
                 
-                # 检查是否完成了全局任务
+                # verify_and_replan内部已经检查global_task_finish
+                # 如果全局任务完成，它会return (True, response, summary)
+                # 这里不会再执行到，因为verify_and_replan已经return了
+                # 但为了健壮性，再次检查（实际上是冗余的）
                 if is_completed and new_subtask:
                     task_finished = new_subtask.get('global_task_finish', False)
                     if task_finished:
-                        print("\n" + "="*60)
-                        print("🏆 全局任务完成 - 导航成功！")
-                        print("="*60)
-                        print(f"  📍 Waypoint: {new_subtask.get('waypoint', 'N/A')}")
-                        print(f"  📍 Waypoint Sequence: {new_subtask.get('waypoint_sequence', 'N/A')}")
-                        print(f"  🎯 Subtask Destination: {new_subtask.get('subtask_destination', 'N/A')}")
-                        print(f"  📝 Subtask Instruction: {new_subtask.get('subtask_instruction', 'N/A')}")
-                        print(f"  🔍 Completion Criteria:")
-                        criteria = new_subtask.get('completion_criteria', {})
-                        if isinstance(criteria, dict):
-                            print(f"     - Panoramic_Detection: {criteria.get('Panoramic_Detection', 'N/A')}")
-                            print(f"     - Spatial_relationship: {criteria.get('Spatial_relationship', 'N/A')}")
-                            print(f"     - Location: {criteria.get('Location', 'N/A')}")
-                        print(f"  💭 Reasoning: {new_subtask.get('reasoning', 'N/A')}")
-                        print("="*60)
+                        # verify_and_replan已经打印完成信息并提前返回了
+                        # 这里直接结束导航循环
                         navigation_complete = True
                         break
                 

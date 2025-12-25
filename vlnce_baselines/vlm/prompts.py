@@ -52,7 +52,12 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 2. **Plan subtask**: Break down global task into achievable intermediate waypoints
 3. **Provide instructions**: Action instructionn starting from Front view using concrete landmarks
 
-**Available Actions**: {action_space}
+# Actions Available
+
+**Turn**: TURN_LEFT/RIGHT (30°, 60°, 90°, 120°, 150°, 180°)
+**Move**: MOVE_FORWARD (0.25m, 0.5m, 0.75m, 1.0m, 1.25m, 1.5m)
+**Arrive**: STOP (when <0.5m from destination)
+- Use key actions (turn/move/stop) to navigate, but use fewer precise parameters (meters/degrees)
 
 # Output Format (JSON only)
 
@@ -80,7 +85,7 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
     "waypoint": "Restroom - beside exercise room door, toilet and washbasin nearby.",
     "waypoint_sequence": "Restroom(Current) → Exercise Room Entrance → Exercise Room → Living Room → Living Room's Table(Goal)",
     "subtask_destination": "exercise room entrance",
-    "subtask_instruction": "Turn left 120° to face doorway, then move forward 0.5m to stop at gym's entrance.",
+    "subtask_instruction": "Turn left 120° to face doorway, then move forward to stop at gym's entrance.",
     "subtask_landmark": "door",
     "completion_criteria": {{
         "Panoramic_Detection": "Door detected in Front view centered ahead.",
@@ -98,7 +103,7 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
     "waypoint": "Bedroom - near a doorway to hallway.",
     "waypoint_sequence": "Bedroom(Current) → Hallway → Kitchen Entrance → Kitchen → Kitchen Exit → Bathroom Door(Goal)",
     "subtask_destination": "hallway",
-    "subtask_instruction": "Turn left 30° to face the bedroom exit toward the hallway, move forward 1.5m to enter the hallway, then turn left 90° to face along the hallway direction.",
+    "subtask_instruction": "Turn left 30° to face the bedroom exit toward the hallway, move forward to enter the hallway, then turn left 90° to face along the hallway direction.",
     "subtask_landmark": "door",
     "completion_criteria": {{
         "Panoramic_Detection": "Hallway extending ahead in Front view. Bedroom exit/doorway detected in Back view.",
@@ -184,7 +189,12 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
    - **is_completed = false**: Not finished → continue SAME subtask
 3. **Plan next step**: If completed, update waypoint_sequence and define new subtask; if not, adjust current subtask instruction
 
-**Available Actions**: {action_space}
+# Actions Available
+
+**Turn**: TURN_LEFT/RIGHT (30°, 60°, 90°, 120°, 150°, 180°)
+**Move**: MOVE_FORWARD (0.25m, 0.5m, 0.75m, 1.0m, 1.25m, 1.5m)
+**Arrive**: STOP (when <0.5m from destination)
+- Use key actions (turn/move/stop) to navigate, but use fewer precise parameters (meters/degrees)
 
 # Output Format (JSON only)
 
@@ -256,7 +266,7 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
     "waypoint": "Kitchen - Oven is far ahead, kitchen island nearby.",
     "waypoint_sequence": "Kitchen(Current) → Oven Area → Archway Past Painting → Left Doorway → Small Sink(Goal)",
     "subtask_destination": "oven area",
-    "subtask_instruction": "Continue moving forward 1.0m to approach oven until oven is directly ahead < 0.5m (target: oven centered in Front view, very close)",
+    "subtask_instruction": "Continue moving forward to approach oven until oven is directly ahead < 0.5m (target: oven centered in Front view, very close)",
     "subtask_landmark": "oven",
     "completion_criteria": {{
         "Panoramic_Detection": "Oven detected in Front view centered ahead occupying large portion. Kitchen island detected far away in Back view",
