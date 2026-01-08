@@ -235,7 +235,7 @@ class VLMNavigationController(InteractiveNavigationController):
             # 自动从mapper获取waypoint并渲染（忽略descriptions，可视化不需要）
             wp_positions, wp_ids, _ = self.mapper.get_waypoints()
             rgb_bgr = cv2.cvtColor(obs[0]['rgb'], cv2.COLOR_RGB2BGR)
-            paths, detected_landmarks_step = self.visualizer.save_step_visualization(
+            paths, detected_landmarks_step, obstacle_distances = self.visualizer.save_step_visualization(
                 step=look_step,
                 episode_id=self.current_episode_id,
                 rgb=rgb_bgr,
@@ -264,6 +264,9 @@ class VLMNavigationController(InteractiveNavigationController):
                 if not hasattr(self, 'current_step_landmarks'):
                     self.current_step_landmarks = {}
                 self.current_step_landmarks[look_step] = detected_landmarks_step
+            
+            # 保存最后一次的距离信息（用于后续的planning）
+            self.latest_obstacle_distances = obstacle_distances
             
             # 保存导航可视化（RGB+俯视图拼接）
             if self.nav_visualizer:
@@ -433,11 +436,14 @@ class VLMNavigationController(InteractiveNavigationController):
         # 地图已包含waypoint标记（在visualizer.save_step_visualization中渲染）
         global_map_for_llm = global_map
         
-        # 计算障碍物距离（只计算一次，避免传递大地图）
-        from vlnce_baselines.mapping.distance_utils import calculate_obstacle_distances
-        full_map = self.mapper.full_map if hasattr(self.mapper, 'full_map') else None
-        full_pose = self.mapper.full_pose if hasattr(self.mapper, 'full_pose') else None
-        obstacle_distances = calculate_obstacle_distances(full_map, full_pose)
+        # 使用最近的障碍物距离（在look_around_and_collect中由visualizer计算）
+        obstacle_distances = getattr(self, 'latest_obstacle_distances', {
+            'front': 'Unknown',
+            'left_30': 'Unknown',
+            'right_30': 'Unknown',
+            'left_90': 'Unknown',
+            'right_90': 'Unknown'
+        })
         
         # 调用LLM生成初始子任务（传递轻量的距离字典 ~75 bytes，而非地图 ~18 MB）
         response, prompt = self.planner.generate_initial_subtask(
@@ -583,11 +589,14 @@ class VLMNavigationController(InteractiveNavigationController):
         # 获取waypoint摘要
         waypoint_summary = self._get_waypoint_summary()
         
-        # 计算障碍物距离（只计算一次，避免传递大地图）
-        from vlnce_baselines.mapping.distance_utils import calculate_obstacle_distances
-        full_map = self.mapper.full_map if hasattr(self.mapper, 'full_map') else None
-        full_pose = self.mapper.full_pose if hasattr(self.mapper, 'full_pose') else None
-        obstacle_distances = calculate_obstacle_distances(full_map, full_pose)
+        # 使用最近的障碍物距离（在look_around_and_collect中由visualizer计算）
+        obstacle_distances = getattr(self, 'latest_obstacle_distances', {
+            'front': 'Unknown',
+            'left_30': 'Unknown',
+            'right_30': 'Unknown',
+            'left_90': 'Unknown',
+            'right_90': 'Unknown'
+        })
         
         # 调用LLM验证（全局地图必需，局部地图可选，传递实际检测到的类别）
         response, is_completed, prompt = self.planner.verify_and_replan(
@@ -920,13 +929,16 @@ class VLMNavigationController(InteractiveNavigationController):
             else:
                 detected_landmarks = "No landmarks detected"
         
-        # 计算障碍物距离（只计算一次，避免传递大地图）
-        from vlnce_baselines.mapping.distance_utils import calculate_obstacle_distances
-        full_map = self.mapper.full_map if hasattr(self.mapper, 'full_map') else None
-        full_pose = self.mapper.full_pose if hasattr(self.mapper, 'full_pose') else None
-        obstacle_distances = calculate_obstacle_distances(full_map, full_pose)
+        # 使用最新的障碍物距离（在step_with_vlm中已更新）
+        obstacle_distances = getattr(self, 'latest_obstacle_distances', {
+            'front': 'Unknown',
+            'left_30': 'Unknown',
+            'right_30': 'Unknown',
+            'left_90': 'Unknown',
+            'right_90': 'Unknown'
+        })
         
-        # 调用VLM决策（传递轻量的距离字典 ~75 bytes，而非地图 ~18 MB）
+        # 调用VLM决策
         result = self.action_executor.decide_action(
             subtask_destination=self.current_subtask.get('subtask_destination', ''),
             subtask_instruction=self.current_subtask.get('subtask_instruction', ''),
@@ -1034,6 +1046,9 @@ class VLMNavigationController(InteractiveNavigationController):
         self.latest_obs = result.get('obs', None)
         self.latest_info = result.get('info', None)
         
+        # 地图已更新，立即计算当前位置的障碍物距离
+        self._update_obstacle_distances()
+        
         # 保存RGB+俯视图拼接可视化
         if save_vis and self.nav_visualizer and self.latest_obs is not None:
             subtask_text = None
@@ -1059,6 +1074,56 @@ class VLMNavigationController(InteractiveNavigationController):
             )
         
         return result
+    
+    def _update_obstacle_distances(self):
+        """更新当前位置的障碍物距离（复用visualizer的旋转逻辑）"""
+        try:
+            full_map = self.mapper.full_map
+            full_pose = self.mapper.full_pose
+            obstacle_map = full_map[0, ...]
+            h, w = obstacle_map.shape
+            current_x, current_y, current_o = full_pose
+            
+            # 与visualizer相同的处理流程
+            obstacle_mask_display = np.flipud(obstacle_map > 0.5)
+            obstacle_mask_display = cv2.resize(
+                obstacle_mask_display.astype(np.uint8) * 255,
+                (480, 480), interpolation=cv2.INTER_NEAREST
+            ) > 127
+            
+            # 计算agent位置
+            if len(self.mapper.trajectory_points) > 0:
+                last_traj_x, last_traj_y = self.mapper.trajectory_points[-1]
+                agent_x = last_traj_y * 480 / w
+                agent_y = (h - 1 - last_traj_x) * 480 / h
+            else:
+                position = np.array([current_x, current_y]) * 100.0 / self.config.MAP.MAP_RESOLUTION
+                agent_x = position[1] * 480 / w
+                agent_y = (h - 1 - position[0]) * 480 / h
+            
+            # 旋转地图
+            rotation_angle = 90 - current_o
+            rotation_matrix = cv2.getRotationMatrix2D((agent_x, agent_y), rotation_angle, 1.0)
+            target_center = np.array([240, 240, 1])
+            rotated_center = rotation_matrix @ np.array([agent_x, agent_y, 1])
+            rotation_matrix[0, 2] += target_center[0] - rotated_center[0]
+            rotation_matrix[1, 2] += target_center[1] - rotated_center[1]
+            
+            obstacle_mask_rotated = cv2.warpAffine(
+                obstacle_mask_display.astype(np.uint8) * 255,
+                rotation_matrix, (480, 480), flags=cv2.INTER_NEAREST
+            ) > 127
+            
+            # 计算距离
+            self.latest_obstacle_distances = self.visualizer.calculate_obstacle_distances_from_rotated_map(
+                obstacle_mask_rotated, 240, 240, debug=False
+            )
+        except Exception as e:
+            print(f"  ⚠️  距离更新失败: {e}")
+            self.latest_obstacle_distances = {
+                'front': 'Unknown', 'left_30': 'Unknown', 'right_30': 'Unknown',
+                'left_90': 'Unknown', 'right_90': 'Unknown'
+            }
     
     def run_vlm_navigation(self, max_steps: int = 500, 
                           max_subtask_steps: int = 10) -> Dict[str, Any]:

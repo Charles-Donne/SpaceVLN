@@ -59,6 +59,159 @@ class MapVisualizer:
             os.makedirs(os.path.join(episode_dir, dir_name), exist_ok=True)
         return episode_dir
     
+    # ========== 距离计算方法 ==========
+    
+    def calculate_obstacle_distances_from_rotated_map(
+        self,
+        obstacle_mask_rotated: np.ndarray,
+        center_x: int = 240,
+        center_y: int = 240,
+        debug: bool = False
+    ) -> Dict[str, str]:
+        """
+        在旋转后的obstacle map上计算障碍物距离
+        
+        ⚠️ 关键优势：
+        - 地图已经旋转，箭头朝上（-90°），agent在(240, 240)
+        - 直接在像素坐标系中测距，无需复杂的Habitat角度转换
+        - 上方 = FRONT, 左上30° = LEFT_30, 右上30° = RIGHT_30
+        
+        Args:
+            obstacle_mask_rotated: [480, 480] 旋转后的障碍物掩码（bool或0/1）
+            center_x: Agent中心X坐标（默认240）
+            center_y: Agent中心Y坐标（默认240）
+            debug: 是否输出12方向调试信息
+            
+        Returns:
+            距离字典 {
+                'front': "X.XXm" | ">2.0m open" | "<0.5m WARNING",
+                'left_30': ...,
+                'right_30': ...,
+                'left_90': ...,
+                'right_90': ...
+            }
+        """
+        # 确保是bool mask
+        if obstacle_mask_rotated.dtype != bool:
+            obstacle_mask_rotated = obstacle_mask_rotated > 127
+        
+        # 定义5个方向（在旋转后的地图上，箭头朝上=-90°）
+        # 图像坐标系：X向右，Y向下，角度从+X轴逆时针
+        # 箭头朝上 = -90° = 270° = 正北
+        directions = {
+            'front': -90,      # 上方
+            'left_30': -120,   # 左上30°
+            'right_30': -60,   # 右上30°
+            'left_90': -180,   # 左方
+            'right_90': 0      # 右方
+        }
+        
+        distances = {}
+        
+        if debug:
+            print(f"\n🧭 [Distance Debug] 旋转后地图测距 Agent@({center_x}, {center_y})")
+            print("=" * 60)
+            # 测试12个方向
+            debug_angles = list(range(0, 360, 30))
+            for angle in debug_angles:
+                dist_m = self._raycast_on_rotated_map(
+                    obstacle_mask_rotated, center_x, center_y, angle
+                )
+                dist_str = self._format_distance(dist_m)
+                direction_label = {
+                    0: "RIGHT", 30: "右下30°", 60: "下方60°", 90: "DOWN",
+                    120: "左下30°", 150: "下方150°", 180: "LEFT", 210: "左上30°",
+                    240: "上方120°", 270: "UP", 300: "右上30°", 330: "上方30°"
+                }.get(angle, f"{angle}°")
+                print(f"  {direction_label:12s} ({angle:3d}°): {dist_str}")
+            print("=" * 60)
+        
+        # 计算5个关键方向
+        for key, angle in directions.items():
+            # 多光线扫描（5条光线，±5°范围）
+            ray_distances = []
+            for offset in [-5, -2.5, 0, 2.5, 5]:
+                test_angle = angle + offset
+                dist_m = self._raycast_on_rotated_map(
+                    obstacle_mask_rotated, center_x, center_y, test_angle
+                )
+                if dist_m is not None:
+                    ray_distances.append(dist_m)
+            
+            # 使用中位数距离
+            if ray_distances:
+                median_dist = np.median(ray_distances)
+                distances[key] = self._format_distance(median_dist)
+            else:
+                distances[key] = "Unknown"
+        
+        return distances
+    
+    def _raycast_on_rotated_map(
+        self,
+        obstacle_mask: np.ndarray,
+        start_x: int,
+        start_y: int,
+        angle_deg: float
+    ) -> Optional[float]:
+        """
+        在旋转后的地图上进行光线投射
+        
+        图像坐标系：
+        - X向右（列），Y向下（行）
+        - 角度从+X轴逆时针：0°=右，90°=下，180°=左，270°=上
+        
+        Args:
+            obstacle_mask: [H, W] bool数组
+            start_x, start_y: 起始位置（像素）
+            angle_deg: 方向角度（度，图像坐标系）
+            
+        Returns:
+            距离（米），如果超出2.0m返回2.1
+        """
+        h, w = obstacle_mask.shape
+        angle_rad = np.deg2rad(angle_deg)
+        
+        # 方向向量（图像坐标系）
+        dx = np.cos(angle_rad)  # X方向（列）
+        dy = np.sin(angle_rad)  # Y方向（行）
+        
+        max_distance_m = 2.0
+        step_size = 0.5  # 0.5像素 = 2.5cm
+        resolution_cm = 5  # 5cm/pixel
+        
+        # 光线步进
+        distance_px = 0.0
+        max_steps = int(max_distance_m * 100 / resolution_cm / step_size)  # 2m / 0.025m = 80步
+        
+        for _ in range(max_steps):
+            distance_px += step_size
+            current_x = start_x + dx * distance_px
+            current_y = start_y + dy * distance_px
+            
+            # 边界检查
+            ix, iy = int(round(current_x)), int(round(current_y))
+            if not (0 <= ix < w and 0 <= iy < h):
+                return 2.1  # 超出地图
+            
+            # 障碍物检测
+            if obstacle_mask[iy, ix]:
+                distance_m = distance_px * resolution_cm / 100.0
+                return distance_m
+        
+        return 2.1  # 超过最大范围
+    
+    def _format_distance(self, distance_m: Optional[float]) -> str:
+        """格式化距离字符串"""
+        if distance_m is None:
+            return "Unknown"
+        elif distance_m > 2.0:
+            return ">2.0m open"
+        elif distance_m < 0.5:
+            return f"{distance_m:.2f}m WARNING"
+        else:
+            return f"{distance_m:.2f}m"
+    
     # ========== 渲染方法 ==========
     
     def render_global_map(self,
@@ -70,7 +223,7 @@ class MapVisualizer:
                          landmark_classes: Optional[List[str]] = None,
                          landmark_config: Optional[Dict] = None,
                          waypoint_positions: Optional[List[Tuple[int, int]]] = None,
-                         waypoint_ids: Optional[List[int]] = None) -> Tuple[np.ndarray, np.ndarray, List, np.ndarray]:
+                         waypoint_ids: Optional[List[int]] = None) -> Tuple[np.ndarray, np.ndarray, List, np.ndarray, Dict[str, str]]:
         """
         渲染全局地图（严格按照ZS_Evaluator的渲染逻辑 + 平滑轨迹线）
         
@@ -89,10 +242,12 @@ class MapVisualizer:
             landmark_config: landmark配置 {min_total_pixels, min_area_threshold}
         
         Returns:
-            (sem_map_vis, global_map_rotated, landmarks)
+            (sem_map_vis, global_map_with_trajectory, landmarks, global_map_rotated, obstacle_distances)
             - sem_map_vis: 基础渲染地图 (480×480)
-            - global_map_rotated: 旋转调整后的地图 (480×480)，箭头朝上
+            - global_map_with_trajectory: 带轨迹的旋转地图 (440×440)
             - landmarks: [(x, y, class_name), ...] 标注列表
+            - global_map_rotated: 旋转地图（无轨迹，440×440）
+            - obstacle_distances: {'front': "X.XXm", 'left_30': ..., ...} 5方向距离
         
         渲染层次（严格按照ZS_Evaluator）:
             - 白色(0): 未探索区域
@@ -303,6 +458,15 @@ class MapVisualizer:
                 rotation_matrix, (480, 480),
                 flags=cv2.INTER_NEAREST
             ) > 127
+            
+            # ===== 🎯 在旋转后立即计算距离（与渲染逻辑完全一致）=====
+            obstacle_distances = self.calculate_obstacle_distances_from_rotated_map(
+                obstacle_mask_rotated,
+                center_x=240,
+                center_y=240,
+                debug=True  # 开启12方向调试
+            )
+            
             # 用黑色覆盖障碍物区域（会覆盖箭头，使障碍物更醒目）
             global_map_with_trajectory[obstacle_mask_rotated] = [0, 0, 0]  # 黑色BGR
             global_map_rotated[obstacle_mask_rotated] = [0, 0, 0]  # 无轨迹版本也叠加
@@ -379,8 +543,18 @@ class MapVisualizer:
         global_map_with_trajectory = self.add_orientation_labels(global_map_with_trajectory)
         global_map_rotated = self.add_orientation_labels(global_map_rotated)
         
-        # 返回：基础地图 + 显示副本（带轨迹和landmark+waypoint） + 无轨迹的旋转地图（供local_map裁剪）
-        return sem_map_vis, global_map_with_trajectory, landmarks, global_map_rotated
+        # 初始化obstacle_distances（如果没有current_pose则无法计算）
+        if 'obstacle_distances' not in locals():
+            obstacle_distances = {
+                'front': 'Unknown',
+                'left_30': 'Unknown',
+                'right_30': 'Unknown',
+                'left_90': 'Unknown',
+                'right_90': 'Unknown'
+            }
+        
+        # 返回：基础地图 + 显示副本（带轨迹和landmark+waypoint） + 无轨迹的旋转地图（供local_map裁剪） + 距离信息
+        return sem_map_vis, global_map_with_trajectory, landmarks, global_map_rotated, obstacle_distances
     
     def render_local_map(self, 
                         full_map: np.ndarray,
@@ -961,7 +1135,7 @@ class MapVisualizer:
                                waypoint_ids: Optional[List[int]] = None,
                                masks: Optional[np.ndarray] = None,
                                phase: str = "action",
-                               global_trajectory_points: Optional[List[Tuple[int, int]]] = None) -> Tuple[Dict[str, str], List]:  # 兼容旧参数
+                               global_trajectory_points: Optional[List[Tuple[int, int]]] = None) -> Tuple[Dict[str, str], List, Dict[str, str]]:  # 兼容旧参数
         """
         一键保存当前步骤的所有可视化（支持新detection渲染 + 平滑轨迹线 + waypoint标记）
         
@@ -980,8 +1154,10 @@ class MapVisualizer:
             phase: 阶段标识 ("initial", "action1a", "verify1a" 等)
         
         Returns:
-            paths: 保存路径字典 {'rgb', 'global_map', 'local_map', 'detection'}
-            landmarks: Landmark列表
+            (paths, landmarks, obstacle_distances)
+            - paths: 保存路径字典 {'rgb', 'global_map', 'local_map', 'detection'}
+            - landmarks: Landmark列表
+            - obstacle_distances: {'front': "X.XXm", 'left_30': ..., ...} 5方向距离
             
         注意：
         1. floor通过形态学方法计算（像ZS_Evaluator._process_map）
@@ -994,7 +1170,7 @@ class MapVisualizer:
         
         # 2. 渲染并保存全局地图（使用global_trajectory_points或回退到trajectory_points）
         global_traj_to_use = global_trajectory_points if global_trajectory_points is not None else trajectory_points
-        _, global_map_with_trajectory, landmarks, global_map_clean = self.render_global_map(
+        _, global_map_with_trajectory, landmarks, global_map_clean, obstacle_distances = self.render_global_map(
             full_map, global_traj_to_use, detected_classes, floor,
             current_pose, landmark_classes, landmark_config,
             waypoint_positions, waypoint_ids
@@ -1016,7 +1192,7 @@ class MapVisualizer:
             )
             paths['detection'] = self.save_detection(step, episode_id, detection_vis, phase)
         
-        return paths, detected_landmarks_step
+        return paths, detected_landmarks_step, obstacle_distances
     
     # ========== 辅助方法 ==========
     
