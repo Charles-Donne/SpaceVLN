@@ -212,6 +212,15 @@ class MapVisualizer:
         else:
             return f"{distance_m:.2f}m"
     
+    @staticmethod
+    def get_distance_summary(distances: Dict[str, str]) -> str:
+        """生成距离摘要字符串（供日志打印）"""
+        return (f"FRONT={distances.get('front', 'Unknown')}, "
+                f"L30={distances.get('left_30', 'Unknown')}, "
+                f"R30={distances.get('right_30', 'Unknown')}, "
+                f"L90={distances.get('left_90', 'Unknown')}, "
+                f"R90={distances.get('right_90', 'Unknown')}")
+    
     # ========== 渲染方法 ==========
     
     def render_global_map(self,

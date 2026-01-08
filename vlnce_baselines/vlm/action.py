@@ -6,7 +6,7 @@ VLM动作执行模块
 from typing import Dict, Tuple, Optional
 from vlnce_baselines.vlm.api_client import APIConfig, BaseAPIClient
 from vlnce_baselines.vlm.action_prompt import get_action_execution_prompt
-from vlnce_baselines.mapping.distance_utils import calculate_obstacle_distances, get_distance_summary
+from vlnce_baselines.visualization.visualizer import MapVisualizer
 
 
 class ActionExecutor(BaseAPIClient):
@@ -266,8 +266,7 @@ class ActionExecutor(BaseAPIClient):
                 'right_90': 'Unknown'
             }
         
-        from vlnce_baselines.mapping.distance_utils import get_distance_summary
-        distance_summary = get_distance_summary(obstacle_distances)
+        distance_summary = MapVisualizer.get_distance_summary(obstacle_distances)
         print(f"📏 Obstacle Distances: {distance_summary}")
         
         # 构建prompt

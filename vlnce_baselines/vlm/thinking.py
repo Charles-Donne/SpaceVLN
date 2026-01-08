@@ -9,7 +9,7 @@ from vlnce_baselines.vlm.prompts import (
     get_initial_planning_prompt,
     get_verification_replanning_prompt
 )
-from vlnce_baselines.mapping.distance_utils import calculate_obstacle_distances, get_distance_summary
+from vlnce_baselines.visualization.visualizer import MapVisualizer
 
 
 class LLMPlanner(BaseAPIClient):
@@ -96,8 +96,7 @@ class LLMPlanner(BaseAPIClient):
                 'right_90': 'Unknown'
             }
         
-        from vlnce_baselines.mapping.distance_utils import get_distance_summary
-        distance_summary = get_distance_summary(obstacle_distances)
+        distance_summary = MapVisualizer.get_distance_summary(obstacle_distances)
         print(f"📏 [Initial Planning] Obstacle Distances: {distance_summary}")
         
         prompt = get_initial_planning_prompt(
@@ -188,8 +187,7 @@ class LLMPlanner(BaseAPIClient):
                 'right_90': 'Unknown'
             }
         
-        from vlnce_baselines.mapping.distance_utils import get_distance_summary
-        distance_summary = get_distance_summary(obstacle_distances)
+        distance_summary = MapVisualizer.get_distance_summary(obstacle_distances)
         print(f"📏 [Verification] Obstacle Distances: {distance_summary}")
         
         prompt = get_verification_replanning_prompt(
