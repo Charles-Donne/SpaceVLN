@@ -31,7 +31,8 @@ def calculate_obstacle_distances(
     full_map: np.ndarray,
     full_pose: np.ndarray,
     resolution: int = 5,
-    max_distance: float = 2.0
+    max_distance: float = 2.0,
+    debug: bool = True
 ) -> Dict[str, str]:
     """
     计算五个方向到最近障碍物的距离
@@ -41,6 +42,7 @@ def calculate_obstacle_distances(
         full_pose: 当前位姿 [c(m), r(m), orientation(°)]
         resolution: 地图分辨率 cm/pixel，默认5
         max_distance: 最大检测距离(m)，默认2.0m
+        debug: 是否打印12方向调试信息
     
     Returns:
         distances: 字典包含5个方向的距离字符串
@@ -79,6 +81,47 @@ def calculate_obstacle_distances(
             'left_90': 'Out of map',
             'right_90': 'Out of map'
         }
+    
+    # === 调试：打印12个方向的距离 ===
+    if debug:
+        print(f"\n🧭 [Distance Debug] Position: row={pixel_row}, col={pixel_col}, orientation={orientation_deg:.1f}°")
+        print("=" * 80)
+        print("12方向距离检测 (每30°一个方向):")
+        print("-" * 80)
+        
+        # 计算12个方向（0°, 30°, 60°, ..., 330°）
+        for angle_offset in range(0, 360, 30):
+            absolute_angle = orientation_deg + angle_offset
+            angle_rad = math.radians(absolute_angle)
+            
+            # 单条射线检测（不用多射线扫描，用于调试）
+            distance_m = _raycast_distance(
+                obstacle_map,
+                pixel_row,
+                pixel_col,
+                angle_rad,
+                resolution,
+                max_distance
+            )
+            
+            # 方向名称
+            direction_name = f"+{angle_offset:3d}°"
+            if angle_offset == 0:
+                direction_name += " (应该是FRONT)"
+            elif angle_offset == 30:
+                direction_name += " (应该是LEFT-30)"
+            elif angle_offset == 330:  # -30
+                direction_name += " (应该是RIGHT-30)"
+            elif angle_offset == 90:
+                direction_name += " (应该是LEFT-90)"
+            elif angle_offset == 270:  # -90
+                direction_name += " (应该是RIGHT-90)"
+            
+            print(f"  {direction_name:25s} → {_format_distance(distance_m):15s} (absolute: {absolute_angle:.1f}°)")
+        
+        print("=" * 80)
+        print(f"提示: 箭头朝向 = orientation = {orientation_deg:.1f}°")
+        print(f"      0°方向应该与箭头方向完全一致（这是FRONT）\n")
     
     # 定义五个方向（相对于agent当前朝向）
     # orientation在Habitat中: 0°=东, 90°=北, 180°=西, 270°=南
