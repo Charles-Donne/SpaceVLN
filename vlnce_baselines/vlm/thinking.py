@@ -9,6 +9,7 @@ from vlnce_baselines.vlm.prompts import (
     get_initial_planning_prompt,
     get_verification_replanning_prompt
 )
+from vlnce_baselines.mapping.distance_utils import calculate_obstacle_distances, get_distance_summary
 
 
 class LLMPlanner(BaseAPIClient):
@@ -65,7 +66,9 @@ class LLMPlanner(BaseAPIClient):
                                 observation_images: List[str],
                                 direction_names: List[str],
                                 global_map_image: str,
-                                local_map_image: str = None) -> Tuple[Optional[Dict], str]:
+                                local_map_image: str = None,
+                                full_map: 'np.ndarray' = None,
+                                full_pose: 'np.ndarray' = None) -> Tuple[Optional[Dict], str]:
         """
         生成初始子任务
         
@@ -75,6 +78,8 @@ class LLMPlanner(BaseAPIClient):
             direction_names: 方向名称列表 ['Front (0°)', 'Left (90°)', 'Back (180°)', 'Right (270°)']
             global_map_image: 全局语义地图路径（global_map/step-N.png）- 必需
             local_map_image: 局部语义地图路径（local_map/step-N.png）- 可选
+            full_map: 全局地图 [C, H, W] 用于计算障碍物距离（可选）
+            full_pose: 当前位姿 [x, y, orientation] 用于计算障碍物距离（可选）
             
         Returns:
             (LLM响应字典或None, prompt字符串)
@@ -83,9 +88,19 @@ class LLMPlanner(BaseAPIClient):
             print("✗ Error: global_map_image is required")
             return None, ""
         
+        # 计算五个方向的障碍物距离（360°扫描后）
+        obstacle_distances = calculate_obstacle_distances(full_map, full_pose)
+        distance_summary = get_distance_summary(obstacle_distances)
+        print(f"📏 [Initial Planning] Obstacle Distances: {distance_summary}")
+        
         prompt = get_initial_planning_prompt(
             instruction, 
-            self.action_space
+            self.action_space,
+            distance_front=obstacle_distances['front'],
+            distance_left_30=obstacle_distances['left_30'],
+            distance_right_30=obstacle_distances['right_30'],
+            distance_left_90=obstacle_distances['left_90'],
+            distance_right_90=obstacle_distances['right_90']
         )
         
         # 组合图像：4方向观察 + 全局地图 + 局部地图（如果有）
@@ -122,7 +137,9 @@ class LLMPlanner(BaseAPIClient):
                          global_map_image: str,
                          local_map_image: str = None,
                          detected_landmarks: List[str] = None,
-                         waypoint_summary: str = None) -> Tuple[Optional[Dict], bool]:
+                         waypoint_summary: str = None,
+                         full_map: 'np.ndarray' = None,
+                         full_pose: 'np.ndarray' = None) -> Tuple[Optional[Dict], bool]:
         """
         验证子任务完成并规划下一步
         
@@ -134,6 +151,9 @@ class LLMPlanner(BaseAPIClient):
             global_map_image: 更新后的全局语义地图路径 - 必需
             local_map_image: 更新后的局部语义地图路径 - 可选
             detected_landmarks: 已检测到的landmark类别列表 - 可选
+            waypoint_summary: 路径点历史记录 - 可选
+            full_map: 全局地图 [C, H, W] 用于计算障碍物距离（可选）
+            full_pose: 当前位姿 [x, y, orientation] 用于计算障碍物距离（可选）
             
         Returns:
             (response字典, is_completed标志)
@@ -153,6 +173,11 @@ class LLMPlanner(BaseAPIClient):
         if detected_landmarks:
             landmarks_str = f"Detected landmarks: {', '.join(sorted(detected_landmarks))}"
         
+        # 计算五个方向的障碍物距离（360°扫描后）
+        obstacle_distances = calculate_obstacle_distances(full_map, full_pose)
+        distance_summary = get_distance_summary(obstacle_distances)
+        print(f"📏 [Verification] Obstacle Distances: {distance_summary}")
+        
         prompt = get_verification_replanning_prompt(
             instruction,
             waypoint_sequence,
@@ -161,7 +186,12 @@ class LLMPlanner(BaseAPIClient):
             completion_criteria,
             self.action_space,
             detected_landmarks=landmarks_str,
-            waypoint_summary=waypoint_summary
+            waypoint_summary=waypoint_summary,
+            distance_front=obstacle_distances['front'],
+            distance_left_30=obstacle_distances['left_30'],
+            distance_right_30=obstacle_distances['right_30'],
+            distance_left_90=obstacle_distances['left_90'],
+            distance_right_90=obstacle_distances['right_90']
         )
         
         # 组合图像：当前位置4方向 + 全局地图 + 局部地图（如果有）

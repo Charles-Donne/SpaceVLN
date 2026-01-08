@@ -32,6 +32,22 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 - **Blue filled area**: Current visible navigable area (90° FOV, blocked by obstacles)
 - **Orientation labels**: FRONT (top) / BACK (bottom) / LEFT / RIGHT marked on map edges
 
+# Obstacle Distances (5 Directions)
+
+**Measured from your current position to nearest obstacles:**
+- **FRONT (0°)**: {distance_front}
+- **FRONT-LEFT (30°)**: {distance_left_30}
+- **FRONT-RIGHT (30°)**: {distance_right_30}
+- **LEFT (90°)**: {distance_left_90}
+- **RIGHT (90°)**: {distance_right_90}
+
+**Distance Rules:**
+- ">2.0m open" = Safe, spacious area ahead
+- "X.XXm" = Specific distance when <2m (e.g., "1.25m", "0.85m")
+- "<0.5m WARNING" = Very close obstacle, MUST turn immediately
+
+**Critical:** Use these distances to avoid collisions. If FRONT <0.5m, you MUST turn instead of moving forward.
+
 
 # Execution Strategy
 
@@ -62,22 +78,24 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 **Sub-Instruction**: Turn left 90° to face the oven, then move forward 0.5m, Stop in front of oven.
 **Previous Progress**: None
 **Previous Action Reason**: None
+**Obstacle Distances**: FRONT: >2.0m open | LEFT-30: >2.0m open | RIGHT-30: 1.5m | LEFT-90: 0.8m | RIGHT-90: >2.0m open
 **Current Observation**: Oven is not in front view; need to turn to face it.
 {{
-    "reasoning": "The subtask goal is to face the oven first. RGB: No oven visible in current front view. Map: Purple marker (oven) is to the left, far outside the dark green circle (0.5m radius), need to rotate first to face it.",
-    "action_analysis": "Follow instruction - turn left 90° to align with oven direction.",
+    "reasoning": "The subtask goal is to face the oven first. RGB: No oven visible in current front view. Map: Purple marker (oven) is to the left, far outside the dark green circle (0.5m radius), need to rotate first to face it. Distances: Front is open (>2m), safe to turn left.",
+    "action_analysis": "Follow instruction - turn left 90° to align with oven direction. Front path clear.",
     "action": "TURN_LEFT",
     "degrees": 90
 }}
 
 ## Ex2 - Continue with the instruction action:
 **Sub-Instruction**: Turn left 90° to face the oven, then move forward 0.5m, Stop in front of oven.
-**Previous Progress**: Had turned left 90°, then moved forward 0.5m.
+**Previous Progress**: Had turned left 88°, then moved forward 0.47m.
 **Previous Action Reason**: Continue moving forward to get closer to the oven.
+**Obstacle Distances**: FRONT: 1.8m | LEFT-30: >2.0m open | RIGHT-30: 1.2m | LEFT-90: 0.9m | RIGHT-90: 1.5m
 **Current Observation**: Facing the oven, but the distance is still too far.
 {{
-    "reasoning": "The subtask goal is to stop at the oven. RGB & Detection: The oven is ahead, and there's space to move. Map: Purple marker (oven) is ahead but still outside the dark green circle (0.5m radius), meaning the destination is not yet reached. The path is clear with no obstacles.",
-    "action_analysis": "Continue moving forward to get closer to the oven.",
+    "reasoning": "The subtask goal is to stop at the oven. RGB & Detection: The oven is ahead, and there's space to move. Map: Purple marker (oven) is ahead but still outside the dark green circle (0.5m radius), meaning the destination is not yet reached. The path is clear with no obstacles. Previous movement was successful. Distances: Front 1.8m is sufficient for 0.5m movement.",
+    "action_analysis": "Continue moving forward to get closer to the oven. Front distance 1.8m allows safe 0.5m movement.",
     "action": "MOVE_FORWARD",
     "meters": 0.5
 }}
@@ -95,14 +113,28 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 
 ## Ex4 - Detour around obstacle:
 **Sub-Instruction**: Turn left 90° to face the oven, then move forward 0.5m, Stop in front of oven.
-**Previous Progress**: Had turned left 90°.
+**Previous Progress**: Had turned left 88°.
 **Previous Action Reason**: Follow instruction - turn left 90° to align with oven direction.
+**Obstacle Distances**: FRONT: 0.3m (<0.5m WARNING) | LEFT-30: 1.5m | RIGHT-30: 0.4m (<0.5m WARNING) | LEFT-90: 1.8m | RIGHT-90: 0.6m
 **Current Observation**: Oven is at front-left 30°, but straight ahead has a wall (black obstacle on map).
 {{
-    "reasoning": "The subtask goal is to reach the oven. RGB: Wall/obstacle blocking direct path ahead. Detection: Oven detected at left side. Map: Purple marker (oven) at front-left 30°, still outside the dark green circle (0.5m radius), black obstacle directly ahead blocking the path, green path to the left.",
-    "action_analysis": "Adaptive adjustment: Turn left 30° to avoid obstacle and align toward oven, instead of moving forward into wall.",
+    "reasoning": "The subtask goal is to reach the oven. RGB: Wall/obstacle blocking direct path ahead. Detection: Oven detected at left side. Map: Purple marker (oven) at front-left 30°, still outside the dark green circle (0.5m radius), black obstacle directly ahead blocking the path, green path to the left. CRITICAL: Front distance 0.3m (<0.5m WARNING) - cannot move forward safely. Left-30 has 1.5m clearance.",
+    "action_analysis": "Adaptive adjustment: Turn left 30° to avoid obstacle and align toward oven. Front obstacle too close (0.3m), left path has 1.5m clearance.",
     "action": "TURN_LEFT",
     "degrees": 30
+}}
+
+## Ex5 - Action failed due to collision (stuck/blocked):
+**Sub-Instruction**: Move forward 1.5m toward the doorway.
+**Previous Progress**: Had tried to move 0.5m but only moved 0.02m (collision).
+**Previous Action Reason**: Move toward doorway following instruction.
+**Obstacle Distances**: FRONT: <0.5m WARNING | LEFT-30: 0.3m (<0.5m WARNING) | RIGHT-30: 1.2m | LEFT-90: 0.4m (<0.5m WARNING) | RIGHT-90: >2.0m open
+**Current Observation**: Position barely changed on map - orange trajectory shows minimal movement. Wall/obstacle in front.
+{{
+    "reasoning": "The subtask goal is to reach the doorway. Previous action FAILED: tried 0.5m but only moved 0.02m (4% success rate), indicating collision/blockage. RGB: Obstacle/wall directly ahead blocking path. Map: Red arrow position almost unchanged from previous step, confirming collision. Purple marker (doorway) still far away. Black obstacle ahead. CRITICAL: Front <0.5m WARNING, Left-30 0.3m, Left-90 0.4m all blocked. Only Right-90 >2m open and Right-30 1.2m available.",
+    "action_analysis": "Previous forward movement failed due to collision. Must detour: turn RIGHT toward open space (Right-90 >2m, Right-30 1.2m) instead of left which is also blocked.",
+    "action": "TURN_RIGHT",
+    "degrees": 60
 }}
 
 
@@ -142,7 +174,12 @@ def get_action_execution_prompt(subtask_destination: str,
                                 subtask_instruction: str,
                                 progress_summary: str = "",
                                 detected_landmarks: str = None,
-                                previous_action_reason: str = "") -> str:
+                                previous_action_reason: str = "",
+                                distance_front: str = "Unknown",
+                                distance_left_30: str = "Unknown",
+                                distance_right_30: str = "Unknown",
+                                distance_left_90: str = "Unknown",
+                                distance_right_90: str = "Unknown") -> str:
     """
     获取动作执行提示词
     
@@ -152,6 +189,11 @@ def get_action_execution_prompt(subtask_destination: str,
         progress_summary: 当前子任务进度摘要
         detected_landmarks: 已检测到的landmark类别字符串
         previous_action_reason: 上一步动作的action_analysis
+        distance_front: 前方(0°)障碍物距离
+        distance_left_30: 左前方(30°)障碍物距离
+        distance_right_30: 右前方(30°)障碍物距离
+        distance_left_90: 左侧(90°)障碍物距离
+        distance_right_90: 右侧(90°)障碍物距离
         
     Returns:
         格式化的提示词字符串
@@ -166,5 +208,10 @@ def get_action_execution_prompt(subtask_destination: str,
         subtask_instruction=subtask_instruction,
         progress_summary=progress_summary if progress_summary else "(Just started - no actions yet)",
         detected_landmarks=detected_landmarks,
-        previous_action_reason=previous_action_reason
+        previous_action_reason=previous_action_reason,
+        distance_front=distance_front,
+        distance_left_30=distance_left_30,
+        distance_right_30=distance_right_30,
+        distance_left_90=distance_left_90,
+        distance_right_90=distance_right_90
     )

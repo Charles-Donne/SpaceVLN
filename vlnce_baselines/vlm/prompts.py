@@ -18,6 +18,23 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 
 **Action Origin**: All actions start from Front (IMAGE 1 center)
 
+# Obstacle Distances (5 Directions)
+
+Distance to nearest obstacles from current position (calculated from map):
+
+- **FRONT (0°)**: {distance_front}
+- **LEFT-30 (30°)**: {distance_left_30}
+- **RIGHT-30 (-30°)**: {distance_right_30}
+- **LEFT-90 (90°)**: {distance_left_90}
+- **RIGHT-90 (-90°)**: {distance_right_90}
+
+**Distance Rules**:
+- ">2.0m open": Safe distance, no immediate obstacles
+- "X.XXm": Specific distance < 2m, caution needed
+- "<0.5m WARNING": Critical proximity, immediate turn/stop required
+
+**Use distances for safe planning**: Choose turns/moves that avoid obstacles in travel direction
+
 **IMAGE 5: Global Map** - Full explored area
 **IMAGE 6: Local Map** - Nearby region (agent-centered, FOV cone shown)
 
@@ -82,7 +99,8 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 
 ## Ex1: 
 **Global Task**: Turn around walk through the exercise room into the living room. Wait by the Table.
-**Current Observation: Far front is a bookshelf. Toilet and Sink can be seen from right view. Left is a wall but left 120° is doorway to gym. 
+**Current Observation**: Far front is a bookshelf. Toilet and Sink can be seen from right view. Left is a wall but left 120° is doorway to gym.
+**Obstacle Distances**: FRONT: >2.0m open | LEFT-30: 0.8m | RIGHT-30: >2.0m open | LEFT-90: 0.3m (<0.5m WARNING) | RIGHT-90: >2.0m open
 {{
     "waypoint": "Restroom - beside exercise room door, toilet and washbasin nearby.",
     "waypoint_sequence": "Restroom(Current) → Exercise Room Entrance → Exercise Room → Living Room → Living Room's Table(Goal)",
@@ -95,12 +113,13 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
         "Location": "Exercise Room Entrance - doorway ahead < 0.5m, restroom far behind"
     }},
     "global_task_finish": false,
-    "reasoning": "Agent currently in Restroom (toilet and washbasin visible from right view, bookshelf at far front). Exercise room door visible at left 120° (left portion of Left-View). Map: Left 90° is wall obstacle (black), green floor path clear after turning left 120° leading to doorway, no black obstacles blocking approach to doorway. Global task requires passing through exercise room to reach living room table, so first waypoint is exercise room entrance."
+    "reasoning": "Agent currently in Restroom (toilet and washbasin visible from right view, bookshelf at far front). Exercise room door visible at left 120° (left portion of Left-View). Distances: LEFT-90 has wall WARNING (0.3m), must turn more than 90° to clear obstacle. Map: Left 90° is wall obstacle (black), green floor path clear after turning left 120° leading to doorway, no black obstacles blocking approach to doorway. Global task requires passing through exercise room to reach living room table, so first waypoint is exercise room entrance."
 }}
 
 ## Ex2:
 **Global Task**: Exit the room and turn left, head toward the kitchen and turn right. Go through the kitchen and out the door. Wait right at the bathroom door.
-**Current Observation:** Bedroom exit door visible at left 30°. Walls on left side. Corridor visible beyond the exit at left 30°.
+**Current Observation**: Bedroom exit door visible at left 30°. Walls on left side. Corridor visible beyond the exit at left 30°.
+**Obstacle Distances**: FRONT: >2.0m open | LEFT-30: >2.0m open | RIGHT-30: 1.5m | LEFT-90: 0.6m | RIGHT-90: >2.0m open
 {{
     "waypoint": "Bedroom - near exit door.",
     "waypoint_sequence": "Bedroom(Current) → Bedroom Exit → Kitchen Entrance → Kitchen → Kitchen Exit → Bathroom Door(Goal)",
@@ -113,7 +132,7 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
         "Location": "Bedroom Exit - at doorway threshold, corridor ahead, bedroom behind"
     }},
     "global_task_finish": false,
-    "reasoning": "Agent currently in bedroom near exit. Bedroom exit door visible at left 30° leading to corridor. Map: Left side has wall obstacle (black) near current position, but left 30° shows clear green floor path through bedroom exit door. Global task requires exiting bedroom then navigating to kitchen. First subtask: turn left 30° to face bedroom exit door, move forward 1.5m to reach exit doorway threshold, then turn left 90° to orient along corridor for next subtask (heading toward kitchen)."
+    "reasoning": "Agent currently in bedroom near exit. Bedroom exit door visible at left 30° leading to corridor. Distances: LEFT-30 >2m open (safe to turn), LEFT-90 0.6m (wall nearby, explains left side wall observation). Map: Left side has wall obstacle (black) near current position, but left 30° shows clear green floor path through bedroom exit door. Global task requires exiting bedroom then navigating to kitchen. First subtask: turn left 30° to face bedroom exit door, move forward 1.5m to reach exit doorway threshold, then turn left 90° to orient along corridor for next subtask (heading toward kitchen)."
 }}
 
 **Critical Requirements**:
@@ -147,6 +166,23 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 - Determine the location and orientation of next subtask-destination using orientation indicated on panoramic view.
 
 **Action Origin**: All actions start from Front (IMAGE 1 center)
+
+# Obstacle Distances (5 Directions)
+
+Distance to nearest obstacles from current position (calculated from map after 360° scan):
+
+- **FRONT (0°)**: {distance_front}
+- **LEFT-30 (30°)**: {distance_left_30}
+- **RIGHT-30 (-30°)**: {distance_right_30}
+- **LEFT-90 (90°)**: {distance_left_90}
+- **RIGHT-90 (-90°)**: {distance_right_90}
+
+**Distance Rules**:
+- ">2.0m open": Safe distance, no immediate obstacles
+- "X.XXm": Specific distance < 2m, caution needed
+- "<0.5m WARNING": Critical proximity, immediate turn/stop required
+
+**Use distances for safe planning**: Choose turns/moves that avoid obstacles in travel direction
 
 **IMAGE 5: Global Map** - Full explored area (updated trajectory, waypoints, landmarks)
 **IMAGE 6: Local Map** - Nearby region (agent-centered, FOV cone shown)
@@ -319,20 +355,35 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 
 
 def get_initial_planning_prompt(instruction: str, 
-                               action_space: str) -> str:
+                               action_space: str,
+                               distance_front: str = "Unknown",
+                               distance_left_30: str = "Unknown",
+                               distance_right_30: str = "Unknown",
+                               distance_left_90: str = "Unknown",
+                               distance_right_90: str = "Unknown") -> str:
     """
     获取初始规划提示词
     
     Args:
         instruction: 完整导航指令
         action_space: 动作空间描述
+        distance_front: 前方障碍物距离
+        distance_left_30: 左前30°障碍物距离
+        distance_right_30: 右前30°障碍物距离
+        distance_left_90: 左侧90°障碍物距离
+        distance_right_90: 右侧90°障碍物距离
         
     Returns:
         格式化的提示词字符串
     """
     return INITIAL_PLANNING_PROMPT.format(
         instruction=instruction,
-        action_space=action_space
+        action_space=action_space,
+        distance_front=distance_front,
+        distance_left_30=distance_left_30,
+        distance_right_30=distance_right_30,
+        distance_left_90=distance_left_90,
+        distance_right_90=distance_right_90
     )
 
 def get_verification_replanning_prompt(instruction: str,
@@ -342,7 +393,12 @@ def get_verification_replanning_prompt(instruction: str,
                                        completion_criteria: str,
                                        action_space: str,
                                        detected_landmarks: str = None,
-                                       waypoint_summary: str = None) -> str:
+                                       waypoint_summary: str = None,
+                                       distance_front: str = "Unknown",
+                                       distance_left_30: str = "Unknown",
+                                       distance_right_30: str = "Unknown",
+                                       distance_left_90: str = "Unknown",
+                                       distance_right_90: str = "Unknown") -> str:
     """
     获取验证和重规划提示词
     
@@ -355,6 +411,11 @@ def get_verification_replanning_prompt(instruction: str,
         action_space: 动作空间描述
         detected_landmarks: 已检测到的landmark类别字符串
         waypoint_summary: 路径点历史记录字符串
+        distance_front: 前方障碍物距离
+        distance_left_30: 左前30°障碍物距离
+        distance_right_30: 右前30°障碍物距离
+        distance_left_90: 左侧90°障碍物距离
+        distance_right_90: 右侧90°障碍物距离
         
     Returns:
         格式化的提示词字符串
@@ -372,5 +433,10 @@ def get_verification_replanning_prompt(instruction: str,
         completion_criteria=completion_criteria,
         action_space=action_space,
         detected_landmarks=detected_landmarks,
-        waypoint_summary=waypoint_summary
+        waypoint_summary=waypoint_summary,
+        distance_front=distance_front,
+        distance_left_30=distance_left_30,
+        distance_right_30=distance_right_30,
+        distance_left_90=distance_left_90,
+        distance_right_90=distance_right_90
     )

@@ -6,6 +6,7 @@ VLM动作执行模块
 from typing import Dict, Tuple, Optional
 from vlnce_baselines.vlm.api_client import APIConfig, BaseAPIClient
 from vlnce_baselines.vlm.action_prompt import get_action_execution_prompt
+from vlnce_baselines.mapping.distance_utils import calculate_obstacle_distances, get_distance_summary
 
 
 class ActionExecutor(BaseAPIClient):
@@ -39,25 +40,34 @@ class ActionExecutor(BaseAPIClient):
         return self.validate_fields(response, self.REQUIRED_FIELDS)
     
     def _generate_progress_update(self, current_progress: str, action_name: str, 
-                                  degrees: float = 0, meters: float = 0) -> str:
+                                  degrees: float = 0, meters: float = 0,
+                                  actual_degrees: float = None, actual_meters: float = None) -> str:
         """
-        系统自动生成progress_summary（智能合并累积动作）
+        系统自动生成progress_summary（只记录实际值 + 失败检测）
         
         规则：
-        1. 转向累积：左转(+) 右转(-) 相互抵消，只保留净转向
-        2. 直行累积：连续MOVE_FORWARD累加距离
-        3. 动作分段：转向打断直行，直行打断转向
+        1. 正常执行：只记录实际值 "Turned left 88°", "Moved forward 0.47m"
+        2. 失败检测：显示预期vs实际 "Tried to move 0.5m but only moved 0.02m (collision)"
+        3. 转向累积：左转(+) 右转(-) 相互抵消，只保留净转向
+        4. 直行累积：连续MOVE_FORWARD累加距离
+        5. 动作分段：转向打断直行，直行打断转向
+        
+        失败判断标准：
+        - 转向失败：|planned - actual| > 15°
+        - 移动失败：actual/planned < 0.5 (移动成功率<50%)
         
         示例：
-        - "Turned left 90°" + TURN_RIGHT(30) → "Turned left 60°"
-        - "Turned left 60°" + MOVE_FORWARD(1.5) → "Turned left 60°, moved forward 1.5m"
-        - "Moved forward 1.5m" + MOVE_FORWARD(1.0) → "Moved forward 2.5m"
+        - 正常："Turned left 88°, moved forward 0.47m"
+        - 失败："Tried to move 0.5m but only moved 0.02m (collision)"
+        - 累加："Moved 0.5m, then moved 0.3m" → "Moved 0.8m"
         
         Args:
             current_progress: 当前进度字符串
             action_name: 动作名称
-            degrees: 转向角度（仅用于TURN）
-            meters: 移动距离（仅用于MOVE_FORWARD）
+            degrees: 计划转向角度（仅用于TURN，用于失败检测）
+            meters: 计划移动距离（仅用于MOVE_FORWARD，用于失败检测）
+            actual_degrees: 实际转向角度（必需，记录实际值）
+            actual_meters: 实际移动距离（必需，记录实际值）
             
         Returns:
             updated_progress: 更新后的进度字符串
@@ -65,12 +75,27 @@ class ActionExecutor(BaseAPIClient):
         import re
         
         if not current_progress or current_progress == "(Just started - no actions yet)":
-            # 第一步（使用完成时态标识已完成）
+            # 第一步（使用完成时态 Had）
             if action_name == 'TURN_LEFT':
-                return f"Had turned left {int(degrees)}°"
+                if actual_degrees is not None:
+                    # 检查是否失败
+                    if abs(degrees - actual_degrees) > 15:
+                        return f"Had tried to turn left {int(degrees)}° but only turned {int(actual_degrees)}° (turn failed)"
+                    return f"Had turned left {int(actual_degrees)}°"
+                return f"Had turned left {int(degrees)}°"  # 无验证数据，用计划值
             elif action_name == 'TURN_RIGHT':
+                if actual_degrees is not None:
+                    if abs(degrees - actual_degrees) > 15:
+                        return f"Had tried to turn right {int(degrees)}° but only turned {int(actual_degrees)}° (turn failed)"
+                    return f"Had turned right {int(actual_degrees)}°"
                 return f"Had turned right {int(degrees)}°"
             elif action_name == 'MOVE_FORWARD':
+                if actual_meters is not None:
+                    # 检查是否碰撞
+                    ratio = actual_meters / meters if meters > 0 else 0
+                    if ratio < 0.5:
+                        return f"Had tried to move {meters}m but only moved {actual_meters:.2f}m (collision)"
+                    return f"Had moved forward {actual_meters:.2f}m"
                 return f"Had moved forward {meters}m"
             elif action_name == 'STOP':
                 return "Had stopped at destination"
@@ -79,34 +104,55 @@ class ActionExecutor(BaseAPIClient):
         segments = [s.strip() for s in current_progress.split(',')]
         last_segment = segments[-1] if segments else ""
         
-        # 检测最后一段是什么类型的动作（支持完成时态）
-        turn_left_match = re.search(r'[Hh]ad turned left (\d+)°|[Tt]urned left (\d+)°', last_segment)
-        turn_right_match = re.search(r'[Hh]ad turned right (\d+)°|[Tt]urned right (\d+)°', last_segment)
-        move_match = re.search(r'[Hh]ad moved forward ([\d.]+)m|[Mm]oved forward ([\d.]+)m', last_segment)
+        # 检测最后一段是什么类型的动作（只匹配实际值格式）
+        # 匹配格式: "had turned left 88°" 或 "then turned left 88°" 或 "had tried to turn left 90° but only turned 10° (turn failed)"
+        turn_left_match = re.search(r'(?:[Hh]ad )?[Tt](?:ried to t)?urned left (\d+)°', last_segment)
+        turn_right_match = re.search(r'(?:[Hh]ad )?[Tt](?:ried to t)?urned right (\d+)°', last_segment)
+        move_match = re.search(r'(?:[Hh]ad )?[Mm](?:oved forward|tried to move) ([\d.]+)m', last_segment)
+        
+        # 检测失败状态
+        turn_failed = 'turn failed' in last_segment or 'tried to turn' in last_segment
+        move_failed = 'collision' in last_segment or 'tried to move' in last_segment
         
         # 处理新动作
         if action_name in ['TURN_LEFT', 'TURN_RIGHT']:
             # 新动作是转向
-            if turn_left_match or turn_right_match:
-                # 最后一段也是转向，合并
+            if (turn_left_match or turn_right_match) and not turn_failed:
+                # 最后一段也是成功的转向，可以合并
                 current_net_turn = 0
                 if turn_left_match:
-                    # 提取数字（可能在group(1)或group(2)）
-                    current_net_turn = int(turn_left_match.group(1) or turn_left_match.group(2))  # 左转为正
+                    current_net_turn = int(turn_left_match.group(1))  # 左转为正
                 elif turn_right_match:
-                    current_net_turn = -int(turn_right_match.group(1) or turn_right_match.group(2))  # 右转为负
+                    current_net_turn = -int(turn_right_match.group(1))  # 右转为负
                 
-                # 计算新的净转向
+                # 计算新的净转向（使用实际值）
                 if action_name == 'TURN_LEFT':
-                    new_net_turn = current_net_turn + int(degrees)
+                    if actual_degrees is not None:
+                        new_net_turn = current_net_turn + int(actual_degrees)
+                    else:
+                        new_net_turn = current_net_turn + int(degrees)
                 else:  # TURN_RIGHT
-                    new_net_turn = current_net_turn - int(degrees)
+                    if actual_degrees is not None:
+                        new_net_turn = current_net_turn - int(actual_degrees)
+                    else:
+                        new_net_turn = current_net_turn - int(degrees)
                 
-                # 更新最后一段(保持完成时态)
+                # 检查新动作是否失败
+                is_failed = actual_degrees is not None and abs(degrees - actual_degrees) > 15
+                
+                if is_failed:
+                    # 失败不合并，开始新段
+                    if action_name == 'TURN_LEFT':
+                        new_segment = f"then tried to turn left {int(degrees)}° but only turned {int(actual_degrees)}° (turn failed)"
+                    else:
+                        new_segment = f"then tried to turn right {int(degrees)}° but only turned {int(actual_degrees)}° (turn failed)"
+                    return f"{current_progress}, {new_segment}"
+                
+                # 更新最后一段（成功的合并）
                 if new_net_turn > 0:
-                    new_last_segment = f"had turned left {new_net_turn}°"
+                    segments[-1] = f"had turned left {new_net_turn}°"
                 elif new_net_turn < 0:
-                    new_last_segment = f"had turned right {abs(new_net_turn)}°"
+                    segments[-1] = f"had turned right {abs(new_net_turn)}°"
                 else:
                     # 刚好抵消，移除这一段
                     if len(segments) > 1:
@@ -114,26 +160,62 @@ class ActionExecutor(BaseAPIClient):
                     else:
                         return "(Just started - no actions yet)"
                 
-                segments[-1] = new_last_segment
                 return ', '.join(segments)
             else:
-                # 最后一段是直行或其他，开始新段(转向打断直行)
-                if action_name == 'TURN_LEFT':
-                    return f"{current_progress}, then turned left {int(degrees)}°"
+                # 最后一段是失败的转向或直行，开始新段
+                if actual_degrees is not None:
+                    is_failed = abs(degrees - actual_degrees) > 15
+                    if is_failed:
+                        if action_name == 'TURN_LEFT':
+                            new_segment = f"then tried to turn left {int(degrees)}° but only turned {int(actual_degrees)}° (turn failed)"
+                        else:
+                            new_segment = f"then tried to turn right {int(degrees)}° but only turned {int(actual_degrees)}° (turn failed)"
+                    else:
+                        if action_name == 'TURN_LEFT':
+                            new_segment = f"then turned left {int(actual_degrees)}°"
+                        else:
+                            new_segment = f"then turned right {int(actual_degrees)}°"
                 else:
-                    return f"{current_progress}, then turned right {int(degrees)}°"
+                    if action_name == 'TURN_LEFT':
+                        new_segment = f"then turned left {int(degrees)}°"
+                    else:
+                        new_segment = f"then turned right {int(degrees)}°"
+                return f"{current_progress}, {new_segment}"
         
         elif action_name == 'MOVE_FORWARD':
             # 新动作是直行
-            if move_match:
-                # 最后一段也是直行，累加距离(提取数字可能在group(1)或group(2))
-                current_distance = float(move_match.group(1) or move_match.group(2))
-                new_distance = current_distance + meters
-                segments[-1] = f"had moved forward {new_distance}m"
+            if move_match and not move_failed:
+                # 最后一段也是成功的直行，累加距离
+                current_distance = float(move_match.group(1))
+                
+                # 使用实际值累加
+                if actual_meters is not None:
+                    new_distance = current_distance + actual_meters
+                else:
+                    new_distance = current_distance + meters
+                
+                # 检查新动作是否失败
+                is_failed = actual_meters is not None and meters > 0 and (actual_meters / meters < 0.5)
+                
+                if is_failed:
+                    # 失败不合并，开始新段
+                    new_segment = f"then tried to move {meters}m but only moved {actual_meters:.2f}m (collision)"
+                    return f"{current_progress}, {new_segment}"
+                
+                # 成功合并
+                segments[-1] = f"had moved forward {new_distance:.2f}m"
                 return ', '.join(segments)
             else:
-                # 最后一段是转向或其他，开始新段(直行打断转向)
-                return f"{current_progress}, then moved forward {meters}m"
+                # 最后一段是失败的移动或转向，开始新段
+                if actual_meters is not None:
+                    is_failed = meters > 0 and (actual_meters / meters < 0.5)
+                    if is_failed:
+                        new_segment = f"then tried to move {meters}m but only moved {actual_meters:.2f}m (collision)"
+                    else:
+                        new_segment = f"then moved forward {actual_meters:.2f}m"
+                else:
+                    new_segment = f"then moved forward {meters}m"
+                return f"{current_progress}, {new_segment}"
         
         elif action_name == 'STOP':
             return f"{current_progress}, then stopped at destination"
@@ -150,7 +232,11 @@ class ActionExecutor(BaseAPIClient):
                      detection_image: str = None,
                      local_map_image: str = None,
                      detected_landmarks: str = None,
-                     previous_action_reason: str = "") -> Tuple[Optional[int], Optional[str], Optional[str], Optional[Dict]]:
+                     previous_action_reason: str = "",
+                     pose_before: tuple = None,
+                     pose_after: tuple = None,
+                     full_map: 'np.ndarray' = None,
+                     full_pose: 'np.ndarray' = None) -> Tuple[Optional[int], Optional[str], Optional[str], Optional[Dict]]:
         """
         基于第一人称视角、检测结果和局部地图决策下一步动作
         
@@ -162,17 +248,33 @@ class ActionExecutor(BaseAPIClient):
             progress_summary: 当前子任务进度摘要
             detection_image: 目标检测图像路径（可选）
             local_map_image: 局部语义地图路径（可选）
-            detected_landmarks: 已检测landmark类别字符串（可选）            previous_action_reason: 上一步的action_analysis（可选）            
+            detected_landmarks: 已检测landmark类别字符串（可选）
+            previous_action_reason: 上一步的action_analysis（可选）
+            pose_before: 上一个动作执行前的位姿 (x, y, orientation) 单位：米和度（可选）
+            pose_after: 上一个动作执行后的位姿 (x, y, orientation) 单位：米和度（可选）
+            full_map: 全局地图 [C, H, W] 用于计算障碍物距离（可选）
+            full_pose: 当前位姿 [x, y, orientation] 用于计算障碍物距离（可选）
+            
         Returns:
-            (action_id, action_name, updated_progress, full_response)
+            (action_id, action_name, updated_progress, full_response, degrees, meters, prompt)
         """
+        # 计算五个方向的障碍物距离
+        obstacle_distances = calculate_obstacle_distances(full_map, full_pose)
+        distance_summary = get_distance_summary(obstacle_distances)
+        print(f"📏 Obstacle Distances: {distance_summary}")
+        
         # 构建prompt
         prompt = get_action_execution_prompt(
             subtask_destination=subtask_destination,
             subtask_instruction=subtask_instruction,
             progress_summary=progress_summary,
             detected_landmarks=detected_landmarks,
-            previous_action_reason=previous_action_reason
+            previous_action_reason=previous_action_reason,
+            distance_front=obstacle_distances['front'],
+            distance_left_30=obstacle_distances['left_30'],
+            distance_right_30=obstacle_distances['right_30'],
+            distance_left_90=obstacle_distances['left_90'],
+            distance_right_90=obstacle_distances['right_90']
         )
         
         # 组合图像：RGB + Detection + Local Map
@@ -202,26 +304,79 @@ class ActionExecutor(BaseAPIClient):
         
         action_id = action_mapping[action_name]
         
-        # 自动生成progress_summary（系统维护，不依赖模型输出）
-        updated_progress = self._generate_progress_update(
-            current_progress=progress_summary,
-            action_name=action_name,
-            degrees=response.get('degrees', 0) if action_name in ['TURN_LEFT', 'TURN_RIGHT'] else 0,
-            meters=response.get('meters', 0) if action_name == 'MOVE_FORWARD' else 0
-        )
-        
         # 提取degrees/meters参数（用于计算重复次数）
         degrees = response.get('degrees', 0) if action_name in ['TURN_LEFT', 'TURN_RIGHT'] else 0
         meters = response.get('meters', 0) if action_name == 'MOVE_FORWARD' else 0
         
-        # 打印推理过程
+        # 计算实际位姿变化（如果提供了pose信息）
+        actual_degrees = None
+        actual_meters = None
+        if pose_before is not None and pose_after is not None:
+            x_before, y_before, ori_before = pose_before
+            x_after, y_after, ori_after = pose_after
+            
+            # 计算实际转向角度变化
+            # ori_before和ori_after都是角度制（degree），范围[-180, 180]
+            angle_diff = ori_after - ori_before
+            # 归一化到 [-180, 180]，处理跨越±180°边界的情况
+            # 例如：从170°转到-170° = -340° → 归一化为20°
+            while angle_diff > 180:
+                angle_diff -= 360
+            while angle_diff < -180:
+                angle_diff += 360
+            actual_degrees = abs(angle_diff)  # 取绝对值，因为记录的是转向幅度
+            
+            # 计算实际移动距离（2D欧氏距离）
+            # x, y都是米制（meter）
+            import math
+            actual_meters = math.sqrt((x_after - x_before)**2 + (y_after - y_before)**2)
+        
+        # 自动生成progress_summary（系统维护，包含坐标验证）
+        updated_progress = self._generate_progress_update(
+            current_progress=progress_summary,
+            action_name=action_name,
+            degrees=degrees,
+            meters=meters,
+            actual_degrees=actual_degrees,
+            actual_meters=actual_meters
+        )
+        
+        # 打印推理过程（包含位姿验证信息）
         print(f"Reasoning: {response['reasoning']}")
         print(f"Action Analysis: {response['action_analysis']}")
+        
+        # 打印动作决策和执行结果
         if action_name == 'TURN_LEFT' or action_name == 'TURN_RIGHT':
-            print(f"Action: {action_name} {degrees}°")
+            print(f"Planned Action: {action_name} {degrees}°", end="")
+            if actual_degrees is not None:
+                diff = abs(degrees - actual_degrees)
+                ratio = actual_degrees / degrees if degrees > 0 else 0
+                if diff < 5:
+                    status = "✓ Success"
+                elif diff < 15:
+                    status = f"⚠ Partial ({ratio*100:.0f}%)"
+                else:
+                    status = f"✗ Failed ({ratio*100:.0f}%)"
+                print(f" → Actual: {actual_degrees:.1f}° [{status}]")
+            else:
+                print()
         elif action_name == 'MOVE_FORWARD':
-            print(f"Action: {action_name} {meters}m")
+            print(f"Planned Action: {action_name} {meters}m", end="")
+            if actual_meters is not None:
+                ratio = actual_meters / meters if meters > 0 else 0
+                if ratio > 0.9:
+                    status = "✓ Success"
+                elif ratio > 0.5:
+                    status = f"⚠ Partial ({ratio*100:.0f}%)"
+                else:
+                    status = f"✗ COLLISION ({ratio*100:.0f}%)"
+                print(f" → Actual: {actual_meters:.2f}m [{status}]")
+            else:
+                print()
         else:
             print(f"Action: {action_name}")
+        
+        # 打印更新后的进度
+        print(f"Updated Progress: {updated_progress}")
         
         return action_id, action_name, updated_progress, response, degrees, meters, prompt
