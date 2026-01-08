@@ -88,12 +88,13 @@ def calculate_obstacle_distances(
         }
     
     # 定义五个方向（相对于当前朝向）
+    # 注意：TURN_LEFT是逆时针（正角度），但相对于forward的left是右手边
     directions = {
-        'front': 0,       # 正前方
-        'left_30': 30,    # 左前方30°
-        'right_30': -30,  # 右前方30°
-        'left_90': 90,    # 左侧90°
-        'right_90': -90   # 右侧90°
+        'front': 0,        # 正前方
+        'left_30': -30,    # 左前方30°（逆时针，agent左手边）
+        'right_30': 30,    # 右前方30°（顺时针，agent右手边）
+        'left_90': -90,    # 左侧90°
+        'right_90': 90     # 右侧90°
     }
     
     distances = {}
@@ -102,21 +103,35 @@ def calculate_obstacle_distances(
         # 计算绝对角度（世界坐标系）
         absolute_angle = orientation_deg + angle_offset
         
-        # 转换为弧度
-        angle_rad = math.radians(absolute_angle)
+        # 在±5°范围内扫描多条射线，避免单点误判
+        # 例如：front扫描-5°到+5°共5条射线
+        scan_range = 5  # ±5度范围
+        num_rays = 5    # 扫描5条射线
+        ray_distances = []
         
-        # 计算该方向的距离
-        distance_m = _raycast_distance(
-            obstacle_map,
-            pixel_x,
-            pixel_y,
-            angle_rad,
-            resolution,
-            max_distance
-        )
+        for i in range(num_rays):
+            # 在范围内均匀分布射线
+            scan_offset = -scan_range + (2 * scan_range * i / (num_rays - 1)) if num_rays > 1 else 0
+            scan_angle = absolute_angle + scan_offset
+            angle_rad = math.radians(scan_angle)
+            
+            # 计算该方向的距离
+            distance_m = _raycast_distance(
+                obstacle_map,
+                pixel_x,
+                pixel_y,
+                angle_rad,
+                resolution,
+                max_distance
+            )
+            ray_distances.append(distance_m)
+        
+        # 取中位数距离（更鲁棒，避免极值影响）
+        ray_distances.sort()
+        median_distance = ray_distances[len(ray_distances) // 2]
         
         # 格式化输出
-        distances[direction_name] = _format_distance(distance_m)
+        distances[direction_name] = _format_distance(median_distance)
     
     return distances
 
