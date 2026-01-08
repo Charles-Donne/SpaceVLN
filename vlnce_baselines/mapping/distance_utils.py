@@ -204,15 +204,6 @@ def _raycast_distance(
     
     # 未遇到障碍物
     return max_distance
-        # 检查是否遇到障碍物（障碍物值>0.5）
-        if obstacle_map[iy, ix] > 0.5:
-            # 计算距离（米）
-            distance_pixels = step * step_pixels
-            distance_m = distance_pixels * resolution / 100.0
-            return distance_m
-    
-    # 未遇到障碍物，返回最大距离
-    return max_distance
 
 
 def _format_distance(distance_m: float) -> str:
