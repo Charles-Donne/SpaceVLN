@@ -235,8 +235,7 @@ class ActionExecutor(BaseAPIClient):
                      previous_action_reason: str = "",
                      pose_before: tuple = None,
                      pose_after: tuple = None,
-                     full_map: 'np.ndarray' = None,
-                     full_pose: 'np.ndarray' = None) -> Tuple[Optional[int], Optional[str], Optional[str], Optional[Dict]]:
+                     obstacle_distances: Dict[str, str] = None) -> Tuple[Optional[int], Optional[str], Optional[str], Optional[Dict]]:
         """
         基于第一人称视角、检测结果和局部地图决策下一步动作
         
@@ -252,14 +251,22 @@ class ActionExecutor(BaseAPIClient):
             previous_action_reason: 上一步的action_analysis（可选）
             pose_before: 上一个动作执行前的位姿 (x, y, orientation) 单位：米和度（可选）
             pose_after: 上一个动作执行后的位姿 (x, y, orientation) 单位：米和度（可选）
-            full_map: 全局地图 [C, H, W] 用于计算障碍物距离（可选）
-            full_pose: 当前位姿 [x, y, orientation] 用于计算障碍物距离（可选）
+            obstacle_distances: 预计算的障碍物距离字典 {'front': 'X.XXm', 'left_30': ..., ...}
             
         Returns:
             (action_id, action_name, updated_progress, full_response, degrees, meters, prompt)
         """
-        # 计算五个方向的障碍物距离
-        obstacle_distances = calculate_obstacle_distances(full_map, full_pose)
+        # 使用预计算的距离（如果没有则设为Unknown）
+        if not obstacle_distances:
+            obstacle_distances = {
+                'front': 'Unknown',
+                'left_30': 'Unknown',
+                'right_30': 'Unknown',
+                'left_90': 'Unknown',
+                'right_90': 'Unknown'
+            }
+        
+        from vlnce_baselines.mapping.distance_utils import get_distance_summary
         distance_summary = get_distance_summary(obstacle_distances)
         print(f"📏 Obstacle Distances: {distance_summary}")
         
@@ -268,6 +275,14 @@ class ActionExecutor(BaseAPIClient):
             subtask_destination=subtask_destination,
             subtask_instruction=subtask_instruction,
             progress_summary=progress_summary,
+            detected_landmarks=detected_landmarks,
+            previous_action_reason=previous_action_reason,
+            distance_front=obstacle_distances['front'],
+            distance_left_30=obstacle_distances['left_30'],
+            distance_right_30=obstacle_distances['right_30'],
+            distance_left_90=obstacle_distances['left_90'],
+            distance_right_90=obstacle_distances['right_90']
+        )
             detected_landmarks=detected_landmarks,
             previous_action_reason=previous_action_reason,
             distance_front=obstacle_distances['front'],

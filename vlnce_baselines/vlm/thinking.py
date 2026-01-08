@@ -67,8 +67,7 @@ class LLMPlanner(BaseAPIClient):
                                 direction_names: List[str],
                                 global_map_image: str,
                                 local_map_image: str = None,
-                                full_map: 'np.ndarray' = None,
-                                full_pose: 'np.ndarray' = None) -> Tuple[Optional[Dict], str]:
+                                obstacle_distances: Dict[str, str] = None) -> Tuple[Optional[Dict], str]:
         """
         生成初始子任务
         
@@ -78,8 +77,7 @@ class LLMPlanner(BaseAPIClient):
             direction_names: 方向名称列表 ['Front (0°)', 'Left (90°)', 'Back (180°)', 'Right (270°)']
             global_map_image: 全局语义地图路径（global_map/step-N.png）- 必需
             local_map_image: 局部语义地图路径（local_map/step-N.png）- 可选
-            full_map: 全局地图 [C, H, W] 用于计算障碍物距离（可选）
-            full_pose: 当前位姿 [x, y, orientation] 用于计算障碍物距离（可选）
+            obstacle_distances: 预计算的障碍物距离字典 {'front': 'X.XXm', 'left_30': ..., ...}
             
         Returns:
             (LLM响应字典或None, prompt字符串)
@@ -88,8 +86,17 @@ class LLMPlanner(BaseAPIClient):
             print("✗ Error: global_map_image is required")
             return None, ""
         
-        # 计算五个方向的障碍物距离（360°扫描后）
-        obstacle_distances = calculate_obstacle_distances(full_map, full_pose)
+        # 使用预计算的距离（如果没有则设为Unknown）
+        if not obstacle_distances:
+            obstacle_distances = {
+                'front': 'Unknown',
+                'left_30': 'Unknown',
+                'right_30': 'Unknown',
+                'left_90': 'Unknown',
+                'right_90': 'Unknown'
+            }
+        
+        from vlnce_baselines.mapping.distance_utils import get_distance_summary
         distance_summary = get_distance_summary(obstacle_distances)
         print(f"📏 [Initial Planning] Obstacle Distances: {distance_summary}")
         
@@ -138,8 +145,7 @@ class LLMPlanner(BaseAPIClient):
                          local_map_image: str = None,
                          detected_landmarks: List[str] = None,
                          waypoint_summary: str = None,
-                         full_map: 'np.ndarray' = None,
-                         full_pose: 'np.ndarray' = None) -> Tuple[Optional[Dict], bool]:
+                         obstacle_distances: Dict[str, str] = None) -> Tuple[Optional[Dict], bool]:
         """
         验证子任务完成并规划下一步
         
@@ -152,8 +158,7 @@ class LLMPlanner(BaseAPIClient):
             local_map_image: 更新后的局部语义地图路径 - 可选
             detected_landmarks: 已检测到的landmark类别列表 - 可选
             waypoint_summary: 路径点历史记录 - 可选
-            full_map: 全局地图 [C, H, W] 用于计算障碍物距离（可选）
-            full_pose: 当前位姿 [x, y, orientation] 用于计算障碍物距离（可选）
+            obstacle_distances: 预计算的障碍物距离字典 {'front': 'X.XXm', 'left_30': ..., ...}
             
         Returns:
             (response字典, is_completed标志)
@@ -173,8 +178,17 @@ class LLMPlanner(BaseAPIClient):
         if detected_landmarks:
             landmarks_str = f"Detected landmarks: {', '.join(sorted(detected_landmarks))}"
         
-        # 计算五个方向的障碍物距离（360°扫描后）
-        obstacle_distances = calculate_obstacle_distances(full_map, full_pose)
+        # 使用预计算的距离（如果没有则设为Unknown）
+        if not obstacle_distances:
+            obstacle_distances = {
+                'front': 'Unknown',
+                'left_30': 'Unknown',
+                'right_30': 'Unknown',
+                'left_90': 'Unknown',
+                'right_90': 'Unknown'
+            }
+        
+        from vlnce_baselines.mapping.distance_utils import get_distance_summary
         distance_summary = get_distance_summary(obstacle_distances)
         print(f"📏 [Verification] Obstacle Distances: {distance_summary}")
         

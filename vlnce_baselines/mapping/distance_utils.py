@@ -59,23 +59,26 @@ def calculate_obstacle_distances(
     # 提取障碍物层
     obstacle_map = full_map[0, :, :]  # [H, W]
     
-    # 当前位姿
-    x_m, y_m, orientation_deg = full_pose
+    # 当前位姿：full_pose = [c, r, orientation]
+    # 注意：semantic_mapping.py中 r=full_pose[1], c=full_pose[0]
+    # r对应x方向（行），c对应y方向（列）
+    c_m, r_m, orientation_deg = full_pose
     
     # 转换为像素坐标
-    # full_pose的x对应地图的列(W)，y对应地图的行(H)
     map_h, map_w = obstacle_map.shape
     
-    # 位姿到像素坐标的转换（注意full_pose的原点在地图中心）
+    # 地图中心（agent初始位置）
     center_x = map_w // 2
     center_y = map_h // 2
     
-    # x_m对应地图的y轴，y_m对应地图的x轴（Habitat坐标系）
-    pixel_x = int(center_x + y_m * 100 / resolution)  # y_m → x pixel
-    pixel_y = int(center_y - x_m * 100 / resolution)  # x_m → y pixel (反向)
+    # full_pose单位是米，地图中心是(12m, 12m)
+    # c对应列(x方向)，r对应行(y方向)
+    pixel_x = int(c_m * 100 / resolution)  # c(米) → 像素列
+    pixel_y = int(r_m * 100 / resolution)  # r(米) → 像素行
     
     # 检查边界
     if not (0 <= pixel_x < map_w and 0 <= pixel_y < map_h):
+        print(f"⚠️  [Distance] Position out of map: pixel=({pixel_x}, {pixel_y}), map_size=({map_w}, {map_h}), pose=({c_m:.2f}, {r_m:.2f}, {orientation_deg:.1f}°)")
         return {
             'front': 'Out of map',
             'left_30': 'Out of map',
