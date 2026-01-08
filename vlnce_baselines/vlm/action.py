@@ -283,14 +283,6 @@ class ActionExecutor(BaseAPIClient):
             distance_left_90=obstacle_distances['left_90'],
             distance_right_90=obstacle_distances['right_90']
         )
-            detected_landmarks=detected_landmarks,
-            previous_action_reason=previous_action_reason,
-            distance_front=obstacle_distances['front'],
-            distance_left_30=obstacle_distances['left_30'],
-            distance_right_30=obstacle_distances['right_30'],
-            distance_left_90=obstacle_distances['left_90'],
-            distance_right_90=obstacle_distances['right_90']
-        )
         
         # 组合图像：RGB + Detection + Local Map
         images = [first_person_image]
