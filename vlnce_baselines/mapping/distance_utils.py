@@ -47,6 +47,7 @@ def calculate_obstacle_distances(
             }
     """
     if full_map is None or full_pose is None:
+        print(f"⚠️  [Distance Calculation] Missing data: full_map={'None' if full_map is None else f'shape={full_map.shape}'}, full_pose={'None' if full_pose is None else f'{full_pose}'}")
         return {
             'front': 'Unknown',
             'left_30': 'Unknown',

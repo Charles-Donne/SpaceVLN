@@ -433,13 +433,19 @@ class VLMNavigationController(InteractiveNavigationController):
         # 地图已包含waypoint标记（在visualizer.save_step_visualization中渲染）
         global_map_for_llm = global_map
         
+        # 获取当前地图状态用于距离计算
+        full_map = self.mapper.full_map if hasattr(self.mapper, 'full_map') else None
+        full_pose = self.mapper.full_pose if hasattr(self.mapper, 'full_pose') else None
+        
         # 调用LLM生成初始子任务
         response, prompt = self.planner.generate_initial_subtask(
             instruction=self.current_instruction,
             observation_images=image_paths,
             direction_names=direction_names,
             global_map_image=global_map_for_llm,  # 使用带waypoint标注的版本
-            local_map_image=local_map
+            local_map_image=local_map,
+            full_map=full_map,
+            full_pose=full_pose
         )
         
         if not response:
@@ -576,6 +582,10 @@ class VLMNavigationController(InteractiveNavigationController):
         # 获取waypoint摘要
         waypoint_summary = self._get_waypoint_summary()
         
+        # 获取当前地图状态用于距离计算
+        full_map = self.mapper.full_map if hasattr(self.mapper, 'full_map') else None
+        full_pose = self.mapper.full_pose if hasattr(self.mapper, 'full_pose') else None
+        
         # 调用LLM验证（全局地图必需，局部地图可选，传递实际检测到的类别）
         response, is_completed, prompt = self.planner.verify_and_replan(
             instruction=self.current_instruction,
@@ -585,7 +595,9 @@ class VLMNavigationController(InteractiveNavigationController):
             global_map_image=global_map_for_llm,  # 使用带waypoint标注的版本
             local_map_image=local_map if os.path.exists(local_map) else None,
             detected_landmarks=detected_landmarks,
-            waypoint_summary=waypoint_summary
+            waypoint_summary=waypoint_summary,
+            full_map=full_map,
+            full_pose=full_pose
         )
         
         print(f"  🏷️  Detected landmarks: {detected_landmarks if detected_landmarks else 'None'}")
