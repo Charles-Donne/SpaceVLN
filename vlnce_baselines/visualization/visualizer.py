@@ -65,8 +65,7 @@ class MapVisualizer:
         self,
         obstacle_mask_rotated: np.ndarray,
         center_x: int = 240,
-        center_y: int = 240,
-        debug: bool = False
+        center_y: int = 240
     ) -> Dict[str, str]:
         """
         在旋转后的obstacle map上计算障碍物距离
@@ -80,7 +79,6 @@ class MapVisualizer:
             obstacle_mask_rotated: [480, 480] 旋转后的障碍物掩码（bool或0/1）
             center_x: Agent中心X坐标（默认240）
             center_y: Agent中心Y坐标（默认240）
-            debug: 是否输出12方向调试信息
             
         Returns:
             距离字典 {
@@ -96,35 +94,15 @@ class MapVisualizer:
             obstacle_mask_rotated = obstacle_mask_rotated > 127
         
         # 定义5个方向（在旋转后的地图上，箭头朝上=-90°）
-        # 图像坐标系：X向右，Y向下，角度从+X轴逆时针
-        # 箭头朝上 = -90° = 270° = 正北
         directions = {
-            'front': -90,      # 上方
-            'left_30': -120,   # 左上30°
-            'right_30': -60,   # 右上30°
-            'left_90': -180,   # 左方
-            'right_90': 0      # 右方
+            'front': -90,
+            'left_30': -120,
+            'right_30': -60,
+            'left_90': -180,
+            'right_90': 0
         }
         
         distances = {}
-        
-        if debug:
-            print(f"\n🧭 [Distance Debug] 旋转后地图测距 Agent@({center_x}, {center_y})")
-            print("=" * 60)
-            # 测试12个方向
-            debug_angles = list(range(0, 360, 30))
-            for angle in debug_angles:
-                dist_m = self._raycast_on_rotated_map(
-                    obstacle_mask_rotated, center_x, center_y, angle
-                )
-                dist_str = self._format_distance(dist_m)
-                direction_label = {
-                    0: "RIGHT", 30: "右下30°", 60: "下方60°", 90: "DOWN",
-                    120: "左下30°", 150: "下方150°", 180: "LEFT", 210: "左上30°",
-                    240: "上方120°", 270: "UP", 300: "右上30°", 330: "上方30°"
-                }.get(angle, f"{angle}°")
-                print(f"  {direction_label:12s} ({angle:3d}°): {dist_str}")
-            print("=" * 60)
         
         # 计算5个关键方向
         for key, angle in directions.items():
@@ -470,10 +448,7 @@ class MapVisualizer:
             
             # ===== 🎯 在旋转后立即计算距离（与渲染逻辑完全一致）=====
             obstacle_distances = self.calculate_obstacle_distances_from_rotated_map(
-                obstacle_mask_rotated,
-                center_x=240,
-                center_y=240,
-                debug=True  # 开启12方向调试
+                obstacle_mask_rotated, 240, 240
             )
             
             # 用黑色覆盖障碍物区域（会覆盖箭头，使障碍物更醒目）
@@ -1222,6 +1197,10 @@ class MapVisualizer:
         6. 连通域分析，过滤面积 < min_area_threshold
         7. 空间合并（距离 < landmark_merge_distance）
         
+        Args:
+            min_total_pixels: 总像素数阈值（已弃用，为兼容保留参数）
+            min_area_threshold: 单个连通域最小面积
+        
         Returns:
             List of (cx, cy, class_name)
         """
@@ -1244,7 +1223,8 @@ class MapVisualizer:
             cls_mask = full_map[semantic_channel_idx, ...] > 0.5
             num_pixels = cls_mask.sum()
             
-            if num_pixels < min_total_pixels:
+            # 移除min_total_pixels检查，允许标记远处小像素区域
+            if num_pixels == 0:
                 continue
             
             # 形态学闭运算：填补间隙，合并相近区域

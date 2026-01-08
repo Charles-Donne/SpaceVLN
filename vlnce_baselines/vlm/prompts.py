@@ -102,37 +102,37 @@ Distance to nearest obstacles from current position (calculated from map):
 **Current Observation**: Far front is a bookshelf. Toilet and Sink can be seen from right view. Left is a wall but left 120° is doorway to gym.
 **Obstacle Distances**: FRONT: >2.0m open | LEFT-30: 0.8m | RIGHT-30: >2.0m open | LEFT-90: 0.3m (<0.5m WARNING) | RIGHT-90: >2.0m open
 {{
-    "waypoint": "Restroom - beside exercise room door, toilet and washbasin nearby.",
+    "waypoint": "Restroom - beside exercise room doorway, toilet and washbasin nearby.",
     "waypoint_sequence": "Restroom(Current) → Exercise Room Entrance → Exercise Room → Living Room → Living Room's Table(Goal)",
     "subtask_destination": "exercise room entrance",
-    "subtask_instruction": "Turn left 120° to face doorway, then move forward to stop at gym's entrance.",
-    "subtask_landmark": "door",
+    "subtask_instruction": "Turn left 120° to face doorway opening, then move forward to enter the gym area.",
+    "subtask_landmark": "treadmill",
     "completion_criteria": {{
-        "Panoramic_Detection": "Door detected in Front view centered ahead.",
-        "Spatial_relationship": "Door ahead < 0.5m (map shows doorway at Red arrow). Restroom far behind (map shows away from last waypoint). Orange trajectory shows approach to doorway",
-        "Location": "Exercise Room Entrance - doorway ahead < 0.5m, restroom far behind"
+        "Panoramic_Detection": "Treadmill detected ahead in Front view. Restroom fixtures (toilet, sink) detected in Back view.",
+        "Spatial_relationship": "Treadmill ahead < 1.0m (map shows exercise equipment near current position). Restroom far behind (map shows away from last waypoint). Orange trajectory shows left turn and approach into gym area",
+        "Location": "Exercise Room Entrance - treadmill ahead < 1.0m, restroom behind"
     }},
     "global_task_finish": false,
-    "reasoning": "Agent currently in Restroom (toilet and washbasin visible from right view, bookshelf at far front). Exercise room door visible at left 120° (left portion of Left-View). Distances: LEFT-90 has wall WARNING (0.3m), must turn more than 90° to clear obstacle. Map: Left 90° is wall obstacle (black), green floor path clear after turning left 120° leading to doorway, no black obstacles blocking approach to doorway. Global task requires passing through exercise room to reach living room table, so first waypoint is exercise room entrance."
+    "reasoning": "Agent currently in Restroom (toilet and washbasin visible from right view, bookshelf at far front). Exercise room doorway visible at left 120° (left portion of Left-View). Distances: LEFT-90 has wall WARNING (0.3m), must turn more than 90° to clear obstacle. Map: Left 90° is wall obstacle (black), green floor path clear after turning left 120° leading to doorway opening, no black obstacles blocking approach. Global task requires: 1) pass through exercise room (use treadmill as landmark), 2) enter living room, 3) reach table (final goal landmark). First waypoint is entering exercise room, using treadmill as specific, unambiguous landmark (better than generic 'door')."
 }}
 
 ## Ex2:
-**Global Task**: Exit the room and turn left, head toward the kitchen and turn right. Go through the kitchen and out the door. Wait right at the bathroom door.
-**Current Observation**: Bedroom exit door visible at left 30°. Walls on left side. Corridor visible beyond the exit at left 30°.
+**Global Task**: Exit the room and turn left, head toward the kitchen and turn right. Go through the kitchen and out. Wait right at the bathroom.
+**Current Observation**: Bedroom exit visible at left 30°. Walls on left side. Corridor with pictures visible beyond the exit at left 30°.
 **Obstacle Distances**: FRONT: >2.0m open | LEFT-30: >2.0m open | RIGHT-30: 1.5m | LEFT-90: 0.6m | RIGHT-90: >2.0m open
 {{
-    "waypoint": "Bedroom - near exit door.",
-    "waypoint_sequence": "Bedroom(Current) → Bedroom Exit → Kitchen Entrance → Kitchen → Kitchen Exit → Bathroom Door(Goal)",
-    "subtask_destination": "bedroom exit",
-    "subtask_instruction": "Turn left 30° to face the bedroom exit door, move forward to reach the exit doorway, then turn left 90° to face along the corridor.",
-    "subtask_landmark": "door",
+    "waypoint": "Bedroom - near exit.",
+    "waypoint_sequence": "Bedroom(Current) → Corridor → Kitchen Entrance → Kitchen → Kitchen Exit → Bathroom(Goal)",
+    "subtask_destination": "corridor with pictures",
+    "subtask_instruction": "Turn left 30° to face the bedroom exit, move forward 1.5m to reach the corridor, then turn left 90° to face along the corridor toward pictures.",
+    "subtask_landmark": "picture",
     "completion_criteria": {{
-        "Panoramic_Detection": "Exit doorway and corridor visible ahead in Front view. Bedroom interior detected in Back view.",
-        "Spatial_relationship": "At bedroom exit doorway < 0.5m (map shows agent at doorway threshold with corridor ahead). Bedroom interior far behind (map shows previous bedroom area away from current position). Orange trajectory shows left turn 30°, forward 1.5m to exit, then left turn 90°.",
-        "Location": "Bedroom Exit - at doorway threshold, corridor ahead, bedroom behind"
+        "Panoramic_Detection": "Pictures visible on corridor wall in Front view. Bedroom bed visible in Back view.",
+        "Spatial_relationship": "Pictures on corridor wall < 1.0m (map shows decorative objects along corridor near current position). Bedroom interior far behind (map shows previous bedroom area away from current position). Orange trajectory shows left turn 30°, forward 1.5m to corridor, then left turn 90°.",
+        "Location": "Corridor - pictures on wall < 1.0m, bedroom behind"
     }},
     "global_task_finish": false,
-    "reasoning": "Agent currently in bedroom near exit. Bedroom exit door visible at left 30° leading to corridor. Distances: LEFT-30 >2m open (safe to turn), LEFT-90 0.6m (wall nearby, explains left side wall observation). Map: Left side has wall obstacle (black) near current position, but left 30° shows clear green floor path through bedroom exit door. Global task requires exiting bedroom then navigating to kitchen. First subtask: turn left 30° to face bedroom exit door, move forward 1.5m to reach exit doorway threshold, then turn left 90° to orient along corridor for next subtask (heading toward kitchen)."
+    "reasoning": "Agent currently in bedroom near exit. Bedroom exit at left 30° leading to corridor with pictures on walls (distinctive visual landmark). Distances: LEFT-30 >2m open (safe to turn), LEFT-90 0.6m (wall nearby, explains left side wall observation). Map: Left side has wall obstacle (black) near current position, but left 30° shows clear green floor path through bedroom exit. Global task requires: 1) exit to corridor, 2) navigate to kitchen, 3) reach bathroom (final goal). First subtask: turn left 30° to face bedroom exit, move forward 1.5m to reach corridor threshold, then turn left 90° to orient along corridor. Use 'picture' as landmark (specific visual feature on corridor wall, better than ambiguous 'door/doorway')."
 }}
 
 **Critical Requirements**:
@@ -141,8 +141,13 @@ Distance to nearest obstacles from current position (calculated from map):
 - **Map**: Use maps to identify your location, landmarks, obstacles and plan safe paths.
 - **Forward Direction Alignment**: Dark red dashed line shows exact Forward direction - must align with destination/safe paths, NOT obstacles. Turn immediately if misaligned.
 - **Path Alignment**: Keep agent centered in corridors/paths, parallel to walls/boundaries with equal distance to both sides
-- **Target Alignment**: Keep destination/landmark centered in Front view (0°), face it directly without angular deviation- **Distance Judgment**: Use dark green circle on local map to determine if destination/landmark is nearby - objects within the circle are < 0.5m from current position
-- **Landmark Selection**: Choose common furniture items with simple nouns for easy detection (e.g., door, chair, table, bed, cabinet, refrigerator, sofa)
+- **Target Alignment**: Keep destination/landmark centered in Front view (0°), face it directly without angular deviation
+- **Distance Judgment**: Use dark green circle on local map to determine if destination/landmark is nearby - objects within the circle are < 0.5m from current position
+- **Landmark Selection**: 
+  - **Priority**: Choose landmarks explicitly mentioned in Global Task instruction (e.g., "Wait by the Table" → use "table")
+  - **Characteristics**: Use specific, unambiguous objects with clear visual features (e.g., chair, table, bed, cabinet, refrigerator, sofa, painting, plant)
+  - **Avoid**: Generic/ambiguous landmarks like "door", "doorway", "entrance", "wall" - these lack distinctive features and are difficult to uniquely identify
+  - Use simple nouns for easy detection by vision models
 - **Logical Analysis**: Ensure reasoning and output aligns with inputs - All the content must not contain any contradictions.
 """
 
@@ -348,7 +353,11 @@ Distance to nearest obstacles from current position (calculated from map after 3
 - **Distance Judgment**: Use dark green circle on local map to determine if destination/landmark is nearby - objects within the circle are < 0.5m from current position
 - **Planning**: Start all actions from Front view (0°). If subtask completed, plan NEXT waypoint; if not, adjust CURRENT subtask
 - **Map**: Use maps to verify trajectory, identify obstacles and plan safe paths for next subtask
-- **Landmark Selection**: Choose common furniture items with simple nouns for easy detection (e.g., door, chair, table, bed, cabinet, refrigerator, sofa)
+- **Landmark Selection**: 
+  - **Priority**: Choose landmarks explicitly mentioned in Global Task instruction (e.g., "Wait by the Table" → use "table")
+  - **Characteristics**: Use specific, unambiguous objects with clear visual features (e.g., chair, table, bed, cabinet, refrigerator, sofa, painting, plant)
+  - **Avoid**: Generic/ambiguous landmarks like "door", "doorway", "entrance", "wall" - these lack distinctive features and are difficult to uniquely identify
+  - Use simple nouns for easy detection by vision models
 - **Logical Analysis**: Ensure reasoning and output aligns with inputs - All the content must not contain any contradictions.
 - **Explore Unseen Areas**: If the destination is invisible, explore more places but avoiding areas with too many history waypoints, and understand the spatial relationships.
 """

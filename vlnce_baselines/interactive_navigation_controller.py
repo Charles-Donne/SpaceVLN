@@ -131,7 +131,7 @@ class InteractiveNavigationController:
             # 获取waypoint数据（忽略descriptions，可视化不需要）
             wp_positions, wp_ids, _ = self.mapper.get_waypoints()
             rgb_bgr = cv2.cvtColor(obs[0]['rgb'], cv2.COLOR_RGB2BGR)
-            _, landmarks = self.visualizer.save_step_visualization(
+            _, landmarks, _ = self.visualizer.save_step_visualization(
                 step=step,
                 episode_id=self.current_episode_id,
                 rgb=rgb_bgr,
@@ -202,7 +202,7 @@ class InteractiveNavigationController:
             # 获取waypoint数据（忽略descriptions，可视化不需要）
             wp_positions, wp_ids, _ = self.mapper.get_waypoints()
             rgb_bgr = cv2.cvtColor(obs[0]['rgb'], cv2.COLOR_RGB2BGR)
-            _, detected_landmarks_step = self.visualizer.save_step_visualization(
+            _, detected_landmarks_step, _ = self.visualizer.save_step_visualization(
                 step=self.current_step,
                 episode_id=self.current_episode_id,
                 rgb=rgb_bgr,

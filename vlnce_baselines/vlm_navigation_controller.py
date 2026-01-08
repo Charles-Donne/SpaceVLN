@@ -1076,47 +1076,40 @@ class VLMNavigationController(InteractiveNavigationController):
         return result
     
     def _update_obstacle_distances(self):
-        """更新当前位置的障碍物距离（复用visualizer的旋转逻辑）"""
+        """更新当前位置的障碍物距离"""
         try:
-            full_map = self.mapper.full_map
-            full_pose = self.mapper.full_pose
-            obstacle_map = full_map[0, ...]
+            obstacle_map = self.mapper.full_map[0, ...]
             h, w = obstacle_map.shape
-            current_x, current_y, current_o = full_pose
+            current_x, current_y, current_o = self.mapper.full_pose
             
-            # 与visualizer相同的处理流程
-            obstacle_mask_display = np.flipud(obstacle_map > 0.5)
-            obstacle_mask_display = cv2.resize(
-                obstacle_mask_display.astype(np.uint8) * 255,
-                (480, 480), interpolation=cv2.INTER_NEAREST
+            # 预处理obstacle mask
+            obstacle_mask = np.flipud(obstacle_map > 0.5)
+            obstacle_mask = cv2.resize(
+                obstacle_mask.astype(np.uint8) * 255, (480, 480), 
+                interpolation=cv2.INTER_NEAREST
             ) > 127
             
             # 计算agent位置
             if len(self.mapper.trajectory_points) > 0:
-                last_traj_x, last_traj_y = self.mapper.trajectory_points[-1]
-                agent_x = last_traj_y * 480 / w
-                agent_y = (h - 1 - last_traj_x) * 480 / h
+                last_x, last_y = self.mapper.trajectory_points[-1]
+                agent_x, agent_y = last_y * 480 / w, (h - 1 - last_x) * 480 / h
             else:
-                position = np.array([current_x, current_y]) * 100.0 / self.config.MAP.MAP_RESOLUTION
-                agent_x = position[1] * 480 / w
-                agent_y = (h - 1 - position[0]) * 480 / h
+                pos = np.array([current_x, current_y]) * 100.0 / self.config.MAP.MAP_RESOLUTION
+                agent_x, agent_y = pos[1] * 480 / w, (h - 1 - pos[0]) * 480 / h
             
-            # 旋转地图
-            rotation_angle = 90 - current_o
-            rotation_matrix = cv2.getRotationMatrix2D((agent_x, agent_y), rotation_angle, 1.0)
-            target_center = np.array([240, 240, 1])
+            # 旋转地图使箭头朝上
+            rotation_matrix = cv2.getRotationMatrix2D((agent_x, agent_y), 90 - current_o, 1.0)
             rotated_center = rotation_matrix @ np.array([agent_x, agent_y, 1])
-            rotation_matrix[0, 2] += target_center[0] - rotated_center[0]
-            rotation_matrix[1, 2] += target_center[1] - rotated_center[1]
+            rotation_matrix[0:2, 2] += [240, 240] - rotated_center[:2]
             
             obstacle_mask_rotated = cv2.warpAffine(
-                obstacle_mask_display.astype(np.uint8) * 255,
+                obstacle_mask.astype(np.uint8) * 255,
                 rotation_matrix, (480, 480), flags=cv2.INTER_NEAREST
             ) > 127
             
             # 计算距离
             self.latest_obstacle_distances = self.visualizer.calculate_obstacle_distances_from_rotated_map(
-                obstacle_mask_rotated, 240, 240, debug=False
+                obstacle_mask_rotated, 240, 240
             )
         except Exception as e:
             print(f"  ⚠️  距离更新失败: {e}")

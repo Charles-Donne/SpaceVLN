@@ -43,7 +43,7 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 
 **Distance Rules:**
 - ">2.0m open" = Safe, spacious area ahead
-- "X.XXm" = Specific distance when <2m (e.g., "1.25m", "0.85m")
+- "X.XXm" = Specific distance when <2m
 - "<0.5m WARNING" = Very close obstacle, MUST turn immediately
 
 **Critical:** Use these distances to avoid collisions. If FRONT <0.5m, you MUST turn instead of moving forward.
@@ -78,7 +78,6 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 **Sub-Instruction**: Turn left 90° to face the oven, then move forward 0.5m, Stop in front of oven.
 **Previous Progress**: None
 **Previous Action Reason**: None
-**Obstacle Distances**: FRONT: >2.0m open | LEFT-30: >2.0m open | RIGHT-30: 1.5m | LEFT-90: 0.8m | RIGHT-90: >2.0m open
 **Current Observation**: Oven is not in front view; need to turn to face it.
 {{
     "reasoning": "The subtask goal is to face the oven first. RGB: No oven visible in current front view. Map: Purple marker (oven) is to the left, far outside the dark green circle (0.5m radius), need to rotate first to face it. Distances: Front is open (>2m), safe to turn left.",
@@ -91,7 +90,6 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 **Sub-Instruction**: Turn left 90° to face the oven, then move forward 0.5m, Stop in front of oven.
 **Previous Progress**: Had turned left 88°, then moved forward 0.47m.
 **Previous Action Reason**: Continue moving forward to get closer to the oven.
-**Obstacle Distances**: FRONT: 1.8m | LEFT-30: >2.0m open | RIGHT-30: 1.2m | LEFT-90: 0.9m | RIGHT-90: 1.5m
 **Current Observation**: Facing the oven, but the distance is still too far.
 {{
     "reasoning": "The subtask goal is to stop at the oven. RGB & Detection: The oven is ahead, and there's space to move. Map: Purple marker (oven) is ahead but still outside the dark green circle (0.5m radius), meaning the destination is not yet reached. The path is clear with no obstacles. Previous movement was successful. Distances: Front 1.8m is sufficient for 0.5m movement.",
@@ -115,7 +113,6 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 **Sub-Instruction**: Turn left 90° to face the oven, then move forward 0.5m, Stop in front of oven.
 **Previous Progress**: Had turned left 88°.
 **Previous Action Reason**: Follow instruction - turn left 90° to align with oven direction.
-**Obstacle Distances**: FRONT: 0.3m (<0.5m WARNING) | LEFT-30: 1.5m | RIGHT-30: 0.4m (<0.5m WARNING) | LEFT-90: 1.8m | RIGHT-90: 0.6m
 **Current Observation**: Oven is at front-left 30°, but straight ahead has a wall (black obstacle on map).
 {{
     "reasoning": "The subtask goal is to reach the oven. RGB: Wall/obstacle blocking direct path ahead. Detection: Oven detected at left side. Map: Purple marker (oven) at front-left 30°, still outside the dark green circle (0.5m radius), black obstacle directly ahead blocking the path, green path to the left. CRITICAL: Front distance 0.3m (<0.5m WARNING) - cannot move forward safely. Left-30 has 1.5m clearance.",
@@ -128,11 +125,10 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 **Sub-Instruction**: Move forward 1.5m toward the doorway.
 **Previous Progress**: Had tried to move 0.5m but only moved 0.02m (collision).
 **Previous Action Reason**: Move toward doorway following instruction.
-**Obstacle Distances**: FRONT: <0.5m WARNING | LEFT-30: 0.3m (<0.5m WARNING) | RIGHT-30: 1.2m | LEFT-90: 0.4m (<0.5m WARNING) | RIGHT-90: >2.0m open
 **Current Observation**: Position barely changed on map - orange trajectory shows minimal movement. Wall/obstacle in front.
 {{
-    "reasoning": "The subtask goal is to reach the doorway. Previous action FAILED: tried 0.5m but only moved 0.02m (4% success rate), indicating collision/blockage. RGB: Obstacle/wall directly ahead blocking path. Map: Red arrow position almost unchanged from previous step, confirming collision. Purple marker (doorway) still far away. Black obstacle ahead. CRITICAL: Front <0.5m WARNING, Left-30 0.3m, Left-90 0.4m all blocked. Only Right-90 >2m open and Right-30 1.2m available.",
-    "action_analysis": "Previous forward movement failed due to collision. Must detour: turn RIGHT toward open space (Right-90 >2m, Right-30 1.2m) instead of left which is also blocked.",
+    "reasoning": "Goal: reach doorway. Previous FAILED: 0.5m→0.02m. Map: Position unchanged, black ahead. Front <0.5m WARNING, Right-90 >2m open.",
+    "action_analysis": "Collision detected - turn RIGHT toward open space (Right-90 >2m).",
     "action": "TURN_RIGHT",
     "degrees": 60
 }}
