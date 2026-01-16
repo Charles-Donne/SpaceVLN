@@ -76,7 +76,7 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 
 ## Ex1 - Start turning to face the target:
 **Sub-Instruction**: Turn left 90° to face the oven, then move forward 0.5m, Stop in front of oven.
-**Previous Progress**: None
+**Previous Progress**: (Just started - no actions executed yet. Please execute the FIRST key action from the sub-instruction.)
 **Previous Action Reason**: None
 **Current Observation**: Oven is not in front view; need to turn to face it.
 {{
@@ -142,7 +142,7 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
    - Check Previous Progress to see which actions completed
    - Execute next uncompleted action in sequence
    - Example: Instruction "Turn right then go straight" + Progress "turned right 90°" → Do: MOVE_FORWARD
-   - Example: Instruction "Turn right then go straight" + Progress "None" → Do: TURN_RIGHT
+   - Example: Instruction "Turn right then go straight" + Progress "(Just started...)" → Do: TURN_RIGHT (first action)
    - Can adjust parameters (angles/meters) for obstacles, but MUST keep action type (turn/move/stop)
    - Check if destination reached → STOP immediately
 
@@ -211,6 +211,10 @@ def get_action_execution_prompt(subtask_destination: str,
         detected_landmarks = "No landmarks detected yet"
     if not previous_action_reason:
         previous_action_reason = "None"
+    
+    # 如果progress_summary为空，说明是刚开始，需要明确指示
+    if not progress_summary:
+        progress_summary = "(Just started - no actions executed yet. Please execute the FIRST key action from the sub-instruction.)"
         
     return ACTION_EXECUTION_PROMPT.format(
         subtask_destination=subtask_destination,

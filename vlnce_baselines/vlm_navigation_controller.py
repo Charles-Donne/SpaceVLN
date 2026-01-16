@@ -149,6 +149,9 @@ class VLMNavigationController(InteractiveNavigationController):
         self.direction_images = {}
         self.latest_map_image = None
         self.pose_before_action = None  # 重置pose追踪
+        self.last_planned_degrees = 0  # 记录计划转向角度
+        self.last_planned_meters = 0   # 记录计划移动距离
+        self.last_action_name = ""      # 记录上次动作名称
         
         # waypoint已集成到mapper中，mapper.reset()会自动清空
         
@@ -737,6 +740,9 @@ class VLMNavigationController(InteractiveNavigationController):
             self.progress_summary = ""      # 重置进度摘要
             self.previous_action_reason = ""  # 重置上一步action reason（新子任务）
             self.pose_before_action = None   # 重置pose追踪（新子任务从当前位置开始）
+            self.last_planned_degrees = 0    # 重置计划角度
+            self.last_planned_meters = 0     # 重置计划距离
+            self.last_action_name = ""        # 重置动作名称
             if hasattr(self, 'current_step_landmarks'):
                 self.current_step_landmarks.clear()  # 清空step landmark记录
             
@@ -952,39 +958,28 @@ class VLMNavigationController(InteractiveNavigationController):
             'right_90': 'Unknown'
         })
         
-        # 获取动作前的pose（如果有之前的pose_after，使用它；否则获取当前pose）
-        if self.pose_before_action is None:
-            # 第一次调用，获取当前pose
-            self.pose_before_action = self._get_agent_pose()
-        pose_before = self.pose_before_action
-        
-        # 获取动作后的pose（当前位置）
-        pose_after = self._get_agent_pose()
-        
-        # 调用VLM决策
+        # 调用VLM决策（不传递pose，使用当前progress_summary）
         result = self.action_executor.decide_action(
             subtask_destination=self.current_subtask.get('subtask_destination', ''),
             subtask_instruction=self.current_subtask.get('subtask_instruction', ''),
             first_person_image=fp_image,
             action_mapping=ACTION_MAPPING,
-            progress_summary=self.progress_summary,
+            progress_summary=self.progress_summary,  # 使用上次动作的progress
             detection_image=detection_image,
             local_map_image=local_map,
             detected_landmarks=detected_landmarks,
             previous_action_reason=self.previous_action_reason,
-            pose_before=pose_before,
-            pose_after=pose_after,
             obstacle_distances=obstacle_distances
         )
         
         if len(result) == 7:
-            action_id, action_name, updated_progress, response, degrees, meters, prompt = result
+            action_id, action_name, _, response, degrees, meters, prompt = result  # 忽略updated_progress
         elif len(result) == 6:
-            action_id, action_name, updated_progress, response, degrees, meters = result
+            action_id, action_name, _, response, degrees, meters = result  # 忽略updated_progress
             prompt = None
         else:
             # 兼容旧版本返回（没有degrees/meters）
-            action_id, action_name, updated_progress, response = result
+            action_id, action_name, _, response = result  # 忽略updated_progress
             degrees, meters = 0, 0
             prompt = None
         
@@ -1025,8 +1020,10 @@ class VLMNavigationController(InteractiveNavigationController):
         }
         self.save_manager.save_action(action_record, subtask_info)
         
-        # 更新进度
-        self.progress_summary = updated_progress
+        # 保存planned action参数，供后续计算actual progress使用
+        self.last_planned_degrees = degrees
+        self.last_planned_meters = meters
+        self.last_action_name = action_name
         
         # 保存当前的action_analysis作为下一次的previous_action_reason
         if response and 'action_analysis' in response:
@@ -1071,8 +1068,47 @@ class VLMNavigationController(InteractiveNavigationController):
         self.latest_obs = result.get('obs', None)
         self.latest_info = result.get('info', None)
         
-        # 更新pose_before_action为当前pose（动作执行后的位置），供下一次VLM决策使用
-        self.pose_before_action = self._get_agent_pose()
+        # 动作执行后：计算actual pose change并更新progress_summary
+        if hasattr(self, 'last_action_name') and self.last_action_name:
+            pose_after = self._get_agent_pose()
+            
+            # 如果是第一次执行动作，初始化pose_before
+            if self.pose_before_action is None:
+                # 没有pose_before，说明是第一次执行，无法计算变化，直接记录当前pose
+                self.pose_before_action = pose_after
+                print(f"[Pose] 初始化pose_before: {pose_after}")
+            else:
+                # 计算实际位姿变化
+                x_before, y_before, ori_before = self.pose_before_action
+                x_after, y_after, ori_after = pose_after
+                
+                # 计算实际转向角度变化
+                import math
+                angle_diff = ori_after - ori_before
+                # 归一化到 [-pi, pi]
+                while angle_diff > math.pi:
+                    angle_diff -= 2 * math.pi
+                while angle_diff < -math.pi:
+                    angle_diff += 2 * math.pi
+                actual_degrees = abs(math.degrees(angle_diff))  # 转换为角度并取绝对值
+                
+                # 计算实际移动距离（2D欧氏距离）
+                actual_meters = math.sqrt((x_after - x_before)**2 + (y_after - y_before)**2)
+                
+                # 调用_generate_progress_update更新progress
+                self.progress_summary = self.action_executor._generate_progress_update(
+                    current_progress=self.progress_summary,
+                    action_name=self.last_action_name,
+                    degrees=self.last_planned_degrees,
+                    meters=self.last_planned_meters,
+                    actual_degrees=actual_degrees,
+                    actual_meters=actual_meters
+                )
+                
+                print(f"[Progress] {self.last_action_name} planned:{self.last_planned_degrees}°/{self.last_planned_meters}m, actual:{actual_degrees:.1f}°/{actual_meters:.2f}m → {self.progress_summary}")
+                
+                # 更新pose_before为当前pose（供下次计算使用）
+                self.pose_before_action = pose_after
         
         # 地图已更新，立即计算当前位置的障碍物距离
         self._update_obstacle_distances()
