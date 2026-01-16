@@ -44,3 +44,11 @@ class VLNCEZeroShotEnv(habitat.RLEnv):
     
     def _get_sensor_pose(self):
         pass
+    
+    def get_agent_pose(self) -> tuple:
+        """获取agent当前pose (x, y, orientation)
+        
+        Returns:
+            tuple: (x, y, o) where x, y are coordinates and o is orientation in radians
+        """
+        return get_sim_location(self.habitat_env.sim)

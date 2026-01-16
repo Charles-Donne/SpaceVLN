@@ -168,6 +168,15 @@ class VLMNavigationController(InteractiveNavigationController):
         """获取当前episode的输出目录（动态属性，自动根据current_episode_id生成）"""
         return os.path.join(self.config.RESULTS_DIR, f'episode_{self.current_episode_id}')
     
+    def _get_agent_pose(self) -> tuple:
+        """获取agent当前pose (x, y, orientation)
+        
+        Returns:
+            tuple: (x, y, o) where x, y are coordinates and o is orientation in radians
+        """
+        # 通过call_at调用environment 0的get_agent_pose方法
+        return self.envs.call_at(0, "get_agent_pose")
+    
     def look_around_and_collect(self, phase: str = "initial") -> Tuple[List[str], List[str]]:
         """
         360°环视建图 + 生成4方向全景图
@@ -946,13 +955,11 @@ class VLMNavigationController(InteractiveNavigationController):
         # 获取动作前的pose（如果有之前的pose_after，使用它；否则获取当前pose）
         if self.pose_before_action is None:
             # 第一次调用，获取当前pose
-            sim = self.envs.current_episodes()[0]._sim
-            self.pose_before_action = get_sim_location(sim)
+            self.pose_before_action = self._get_agent_pose()
         pose_before = self.pose_before_action
         
         # 获取动作后的pose（当前位置）
-        sim = self.envs.current_episodes()[0]._sim
-        pose_after = get_sim_location(sim)
+        pose_after = self._get_agent_pose()
         
         # 调用VLM决策
         result = self.action_executor.decide_action(
@@ -1065,8 +1072,7 @@ class VLMNavigationController(InteractiveNavigationController):
         self.latest_info = result.get('info', None)
         
         # 更新pose_before_action为当前pose（动作执行后的位置），供下一次VLM决策使用
-        sim = self.envs.current_episodes()[0]._sim
-        self.pose_before_action = get_sim_location(sim)
+        self.pose_before_action = self._get_agent_pose()
         
         # 地图已更新，立即计算当前位置的障碍物距离
         self._update_obstacle_distances()
