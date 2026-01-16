@@ -34,6 +34,7 @@ from vlnce_baselines.visualization import PanoramaGenerator
 from vlnce_baselines.vlm.navigation_config import (
     DIRECTION_STEPS, DIRECTION_NAMES, PANORAMA_CONFIG, ACTION_MAPPING
 )
+from habitat_extensions.pose_utils import get_sim_location
 
 
 class VLMNavigationController(InteractiveNavigationController):
@@ -107,6 +108,7 @@ class VLMNavigationController(InteractiveNavigationController):
         # 观察缓存
         self.latest_obs = None  # 缓存最新的观察
         self.latest_info = None  # 缓存最新的info（包含top_down_map_vlnce）
+        self.pose_before_action = None  # 记录动作前的pose (x, y, orientation)
         
         # 观察缓存（环视时收集的4方向图像）
         self.direction_images = {}  # {direction_name: image_path}
@@ -146,6 +148,7 @@ class VLMNavigationController(InteractiveNavigationController):
         self.current_subtask_file = None
         self.direction_images = {}
         self.latest_map_image = None
+        self.pose_before_action = None  # 重置pose追踪
         
         # waypoint已集成到mapper中，mapper.reset()会自动清空
         
@@ -490,6 +493,7 @@ class VLMNavigationController(InteractiveNavigationController):
         self.subtask_count = 1  # 初始化为第1个子任务
         self.subtask_attempt = 0  # 第a次尝试
         self.progress_summary = ""
+        self.pose_before_action = None  # 重置pose追踪（新子任务从当前位置开始）
         
         # 记录当前位置信息（用于后续验证参考）
         self.current_position_info = {
@@ -723,6 +727,7 @@ class VLMNavigationController(InteractiveNavigationController):
             self.landmark_classes = []      # 清空landmark标注（马上会重新设置）
             self.progress_summary = ""      # 重置进度摘要
             self.previous_action_reason = ""  # 重置上一步action reason（新子任务）
+            self.pose_before_action = None   # 重置pose追踪（新子任务从当前位置开始）
             if hasattr(self, 'current_step_landmarks'):
                 self.current_step_landmarks.clear()  # 清空step landmark记录
             
@@ -938,6 +943,17 @@ class VLMNavigationController(InteractiveNavigationController):
             'right_90': 'Unknown'
         })
         
+        # 获取动作前的pose（如果有之前的pose_after，使用它；否则获取当前pose）
+        if self.pose_before_action is None:
+            # 第一次调用，获取当前pose
+            sim = self.envs.current_episodes()[0]._sim
+            self.pose_before_action = get_sim_location(sim)
+        pose_before = self.pose_before_action
+        
+        # 获取动作后的pose（当前位置）
+        sim = self.envs.current_episodes()[0]._sim
+        pose_after = get_sim_location(sim)
+        
         # 调用VLM决策
         result = self.action_executor.decide_action(
             subtask_destination=self.current_subtask.get('subtask_destination', ''),
@@ -949,6 +965,8 @@ class VLMNavigationController(InteractiveNavigationController):
             local_map_image=local_map,
             detected_landmarks=detected_landmarks,
             previous_action_reason=self.previous_action_reason,
+            pose_before=pose_before,
+            pose_after=pose_after,
             obstacle_distances=obstacle_distances
         )
         
@@ -1045,6 +1063,10 @@ class VLMNavigationController(InteractiveNavigationController):
         # 缓存最新观察和info用于下次VLM决策和可视化
         self.latest_obs = result.get('obs', None)
         self.latest_info = result.get('info', None)
+        
+        # 更新pose_before_action为当前pose（动作执行后的位置），供下一次VLM决策使用
+        sim = self.envs.current_episodes()[0]._sim
+        self.pose_before_action = get_sim_location(sim)
         
         # 地图已更新，立即计算当前位置的障碍物距离
         self._update_obstacle_distances()

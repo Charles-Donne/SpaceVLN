@@ -66,7 +66,7 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 
 {{
     "reasoning": "<(1) Subtask goal. (2) Finding of observation. (3) Map check: your position, orientation, landmark, obstacles.>",
-    "action_analysis": "<Action decision: follow instruction OR adaptive fine-tuning with detailed reason>",
+    "action_analysis": "<Execute next key action OR adaptive adjustment with reason>",
     "action": "TURN_LEFT" | "TURN_RIGHT" | "MOVE_FORWARD" | "STOP",
     "degrees": <30-180> (TURN only),
     "meters": <0.25-1.5> (MOVE_FORWARD only)
@@ -137,35 +137,39 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 
 **CRITICAL EXECUTION RULES** (MUST FOLLOW):
 
-1. **POSITION AWARENESS & ARRIVAL CHECK** (ALWAYS FIRST):
-   - **Identify Current Position**: Use map (red arrow position), landmarks, observations to determine where you are NOW
-   - **Identify Destination**: Know where the subtask destination is located
-   - **Check Arrival Status**: Have I reached the destination?
-     * Destination visible in FRONT RGB view (IMAGE 1)
-     * Distance <0.5m (destination inside dark green circle on map IMAGE 3)
-     * Orange trajectory confirms movement to destination area
-   - **Decision**: If ALL arrival conditions met → STOP immediately. If NOT → continue toward destination
+1. **STRICTLY FOLLOW INSTRUCTION KEY ACTIONS** (HIGHEST PRIORITY):
+   - Parse key actions from sub-instruction (e.g., "Turn right 90° then move 1m" → [TURN_RIGHT 90°, MOVE_FORWARD 1m])
+   - Check Previous Progress to see which actions completed
+   - Execute next uncompleted action in sequence
+   - Example: Instruction "Turn right then go straight" + Progress "turned right 90°" → Do: MOVE_FORWARD
+   - Example: Instruction "Turn right then go straight" + Progress "None" → Do: TURN_RIGHT
+   - Can adjust parameters (angles/meters) for obstacles, but MUST keep action type (turn/move/stop)
+   - Check if destination reached → STOP immediately
 
-2. **MULTIMODAL UNDERSTANDING** - Combine all 3 images for every decision:
+2. **POSITION & ARRIVAL CHECK**:
+   - Identify current position (map red arrow, landmarks, observations)
+   - Know destination location
+   - Check if arrived: (1) visible in FRONT view + (2) <0.5m (inside dark green circle) + (3) trajectory confirms
+   - If ALL met → STOP. If NOT → continue
+
+3. **MULTIMODAL UNDERSTANDING** - Combine all 3 images for every decision:
    - **RGB (IMAGE 1)**: Observe visible environment, landmarks, obstacles
    - **Detection (IMAGE 2)**: Confirm which landmarks detected and positions
    - **Map (IMAGE 3)**: Your position (red arrow), instruction-related landmarks (purple), safe areas (green floor), obstacles (black)
 
-3. **MAP NAVIGATION**:
+4. **MAP NAVIGATION**:
    - Locate instruction landmarks: Purple markers show instruction-related objects, estimate distance/angle from red arrow
    - Plan safe path: Avoid black obstacles
    - If trapped by black: Turn toward nearest green floor area to escape, then re-orient toward destination
 
-4. **ALIGNMENT REQUIREMENTS**:
-   - **Map Forward Direction**: Dark red dashed line shows exact Forward direction - must point toward open paths/destination on map, NOT obstacles/walls.
-   - **View Direction**: RGB view (Front view) should face toward visible destinations, NOT blocked by obstacles/walls. If facing blocked view, turn immediately to align toward destination using map guidance.
-   - **Path Alignment**: Keep agent centered in corridors/paths, parallel to walls/boundaries with equal distance to both sides
-   - **Target Alignment**: Keep destination/landmark centered in Front view (0°), face it directly without angular deviation
-
-5. **Strictly FOLLOW INSTRUCTION & ADAPT**: Complete key actions (turn/move) specified in sub-instruction, but you can fine-tune angles/distances based on map and RGB - not rigidly bound to exact values
+5. **ALIGNMENT REQUIREMENTS**:
+   - Map Forward Direction: Dark red dashed line must point toward destination/safe paths, NOT obstacles
+   - View Direction: Front view should face destinations, NOT blocked by obstacles
+   - Path Alignment: Stay centered in corridors/paths, parallel to walls
+   - Target Alignment: Keep destination centered in Front view (0°)
 
 6. **STOP CONDITIONS** - Only STOP when ALL met:
-   - Completed key actions in sub-instruction
+   - Completed ALL key actions in sub-instruction
    - Destination landmark detected in View + within <0.5m(destination is within map dark green circle) + visible in FRONT RGB view (maximized proximity before stop)
    - Arrived at destination area (destination is within map dark green circle)
    - Must have moved - orange trajectory on map confirms arrival at destination area
