@@ -1068,48 +1068,6 @@ class VLMNavigationController(InteractiveNavigationController):
         self.latest_obs = result.get('obs', None)
         self.latest_info = result.get('info', None)
         
-        # 动作执行后：计算actual pose change并更新progress_summary
-        if hasattr(self, 'last_action_name') and self.last_action_name:
-            pose_after = self._get_agent_pose()
-            
-            # 如果是第一次执行动作，初始化pose_before
-            if self.pose_before_action is None:
-                # 没有pose_before，说明是第一次执行，无法计算变化，直接记录当前pose
-                self.pose_before_action = pose_after
-                print(f"[Pose] 初始化pose_before: {pose_after}")
-            else:
-                # 计算实际位姿变化
-                x_before, y_before, ori_before = self.pose_before_action
-                x_after, y_after, ori_after = pose_after
-                
-                # 计算实际转向角度变化
-                import math
-                angle_diff = ori_after - ori_before
-                # 归一化到 [-pi, pi]
-                while angle_diff > math.pi:
-                    angle_diff -= 2 * math.pi
-                while angle_diff < -math.pi:
-                    angle_diff += 2 * math.pi
-                actual_degrees = abs(math.degrees(angle_diff))  # 转换为角度并取绝对值
-                
-                # 计算实际移动距离（2D欧氏距离）
-                actual_meters = math.sqrt((x_after - x_before)**2 + (y_after - y_before)**2)
-                
-                # 调用_generate_progress_update更新progress
-                self.progress_summary = self.action_executor._generate_progress_update(
-                    current_progress=self.progress_summary,
-                    action_name=self.last_action_name,
-                    degrees=self.last_planned_degrees,
-                    meters=self.last_planned_meters,
-                    actual_degrees=actual_degrees,
-                    actual_meters=actual_meters
-                )
-                
-                print(f"[Progress] {self.last_action_name} planned:{self.last_planned_degrees}°/{self.last_planned_meters}m, actual:{actual_degrees:.1f}°/{actual_meters:.2f}m → {self.progress_summary}")
-                
-                # 更新pose_before为当前pose（供下次计算使用）
-                self.pose_before_action = pose_after
-        
         # 地图已更新，立即计算当前位置的障碍物距离
         self._update_obstacle_distances()
         
@@ -1279,6 +1237,12 @@ class VLMNavigationController(InteractiveNavigationController):
             # VLM决策计数（每次调用action模型算1步）
             subtask_steps += 1
             
+            # 执行动作前记录pose（用于后续计算实际变化）
+            if self.pose_before_action is None:
+                self.pose_before_action = self._get_agent_pose()
+                print(f"[Pose] 初始化pose_before: {self.pose_before_action}")
+            pose_before_action_batch = self._get_agent_pose()
+            
             # 执行动作（可能需要重复多次）
             for i in range(repeat_count):
                 result = self.step_with_vlm(action_id, action_name=action_name, save_vis=True)
@@ -1295,6 +1259,42 @@ class VLMNavigationController(InteractiveNavigationController):
                     print("\nEpisode自动完成")
                     navigation_complete = True
                     break
+            
+            # 所有重复执行完成后，计算总的progress（一次性）
+            if hasattr(self, 'last_action_name') and self.last_action_name and not navigation_complete:
+                pose_after_action_batch = self._get_agent_pose()
+                
+                # 计算实际位姿变化
+                x_before, y_before, ori_before = pose_before_action_batch
+                x_after, y_after, ori_after = pose_after_action_batch
+                
+                # 计算实际转向角度变化
+                import math
+                angle_diff = ori_after - ori_before
+                # 归一化到 [-pi, pi]
+                while angle_diff > math.pi:
+                    angle_diff -= 2 * math.pi
+                while angle_diff < -math.pi:
+                    angle_diff += 2 * math.pi
+                actual_degrees = abs(math.degrees(angle_diff))  # 转换为角度并取绝对值
+                
+                # 计算实际移动距离（2D欧氏距离）
+                actual_meters = math.sqrt((x_after - x_before)**2 + (y_after - y_before)**2)
+                
+                # 调用_generate_progress_update更新progress
+                self.progress_summary = self.action_executor._generate_progress_update(
+                    current_progress=self.progress_summary,
+                    action_name=self.last_action_name,
+                    degrees=self.last_planned_degrees,
+                    meters=self.last_planned_meters,
+                    actual_degrees=actual_degrees,
+                    actual_meters=actual_meters
+                )
+                
+                print(f"[Progress] {self.last_action_name} planned:{self.last_planned_degrees}°/{self.last_planned_meters}m, actual:{actual_degrees:.1f}°/{actual_meters:.2f}m → {self.progress_summary}")
+                
+                # 更新pose_before为当前pose（供下次计算使用）
+                self.pose_before_action = pose_after_action_batch
             
             if navigation_complete:
                 break
