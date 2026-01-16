@@ -137,31 +137,40 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 
 **CRITICAL EXECUTION RULES** (MUST FOLLOW):
 
-1. **MULTIMODAL UNDERSTANDING** - Combine all 3 images for every decision:
+1. **POSITION AWARENESS & ARRIVAL CHECK** (ALWAYS FIRST):
+   - **Identify Current Position**: Use map (red arrow position), landmarks, observations to determine where you are NOW
+   - **Identify Destination**: Know where the subtask destination is located
+   - **Check Arrival Status**: Have I reached the destination?
+     * Destination visible in FRONT RGB view (IMAGE 1)
+     * Distance <0.5m (destination inside dark green circle on map IMAGE 3)
+     * Orange trajectory confirms movement to destination area
+   - **Decision**: If ALL arrival conditions met → STOP immediately. If NOT → continue toward destination
+
+2. **MULTIMODAL UNDERSTANDING** - Combine all 3 images for every decision:
    - **RGB (IMAGE 1)**: Observe visible environment, landmarks, obstacles
    - **Detection (IMAGE 2)**: Confirm which landmarks detected and positions
    - **Map (IMAGE 3)**: Your position (red arrow), instruction-related landmarks (purple), safe areas (green floor), obstacles (black)
 
-2. **MAP NAVIGATION**:
+3. **MAP NAVIGATION**:
    - Locate instruction landmarks: Purple markers show instruction-related objects, estimate distance/angle from red arrow
    - Plan safe path: Avoid black obstacles
    - If trapped by black: Turn toward nearest green floor area to escape, then re-orient toward destination
 
-3. **ALIGNMENT REQUIREMENTS**:
+4. **ALIGNMENT REQUIREMENTS**:
    - **Map Forward Direction**: Dark red dashed line shows exact Forward direction - must point toward open paths/destination on map, NOT obstacles/walls.
    - **View Direction**: RGB view (Front view) should face toward visible destinations, NOT blocked by obstacles/walls. If facing blocked view, turn immediately to align toward destination using map guidance.
    - **Path Alignment**: Keep agent centered in corridors/paths, parallel to walls/boundaries with equal distance to both sides
    - **Target Alignment**: Keep destination/landmark centered in Front view (0°), face it directly without angular deviation
 
-4. **Strictly FOLLOW INSTRUCTION & ADAPT**: Complete key actions (turn/move) specified in sub-instruction, but you can fine-tune angles/distances based on map and RGB - not rigidly bound to exact values
+5. **Strictly FOLLOW INSTRUCTION & ADAPT**: Complete key actions (turn/move) specified in sub-instruction, but you can fine-tune angles/distances based on map and RGB - not rigidly bound to exact values
 
-5. **STOP CONDITIONS** - Only STOP when ALL met:
+6. **STOP CONDITIONS** - Only STOP when ALL met:
    - Completed key actions in sub-instruction
    - Destination landmark detected in View + within <0.5m(destination is within map dark green circle) + visible in FRONT RGB view (maximized proximity before stop)
    - Arrived at destination area (destination is within map dark green circle)
    - Must have moved - orange trajectory on map confirms arrival at destination area
 
-6. **ACTION PARAMETERS**:
+7. **ACTION PARAMETERS**:
    - Specify degrees (30-180) for TURN | meters (0.25-1.5) for MOVE_FORWARD
 """
 
