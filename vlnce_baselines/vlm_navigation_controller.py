@@ -1268,7 +1268,7 @@ class VLMNavigationController(InteractiveNavigationController):
                 x_before, y_before, ori_before = pose_before_action_batch
                 x_after, y_after, ori_after = pose_after_action_batch
                 
-                # 计算实际转向角度变化
+                # 计算实际转向角度变化（保留符号）
                 import math
                 angle_diff = ori_after - ori_before
                 # 归一化到 [-pi, pi]
@@ -1276,7 +1276,18 @@ class VLMNavigationController(InteractiveNavigationController):
                     angle_diff -= 2 * math.pi
                 while angle_diff < -math.pi:
                     angle_diff += 2 * math.pi
-                actual_degrees = abs(math.degrees(angle_diff))  # 转换为角度并取绝对值
+                
+                # 判断实际转向方向（正=左转，负=右转）
+                actual_degrees = abs(math.degrees(angle_diff))
+                
+                # 根据实际方向校正action_name（处理转过头的情况）
+                actual_action_name = self.last_action_name
+                if self.last_action_name == 'TURN_LEFT' and angle_diff < -0.1:  # 计划左转但实际右转
+                    actual_action_name = 'TURN_RIGHT'
+                    print(f"[Warning] Planned TURN_LEFT but actually turned RIGHT by {actual_degrees:.1f}°")
+                elif self.last_action_name == 'TURN_RIGHT' and angle_diff > 0.1:  # 计划右转但实际左转
+                    actual_action_name = 'TURN_LEFT'
+                    print(f"[Warning] Planned TURN_RIGHT but actually turned LEFT by {actual_degrees:.1f}°")
                 
                 # 计算实际移动距离（2D欧氏距离）
                 actual_meters = math.sqrt((x_after - x_before)**2 + (y_after - y_before)**2)
@@ -1284,7 +1295,7 @@ class VLMNavigationController(InteractiveNavigationController):
                 # 调用_generate_progress_update更新progress
                 self.progress_summary = self.action_executor._generate_progress_update(
                     current_progress=self.progress_summary,
-                    action_name=self.last_action_name,
+                    action_name=actual_action_name,  # 使用校正后的方向
                     degrees=self.last_planned_degrees,
                     meters=self.last_planned_meters,
                     actual_degrees=actual_degrees,

@@ -79,14 +79,22 @@ class ActionExecutor(BaseAPIClient):
             if action_name == 'TURN_LEFT':
                 if actual_degrees is not None:
                     # 检查是否失败
-                    if abs(degrees - actual_degrees) > 15:
-                        return f"Had tried to turn left {int(degrees)}° but only turned {int(actual_degrees)}° (turn failed)"
+                    diff = abs(degrees - actual_degrees)
+                    if diff > 15:
+                        if actual_degrees < degrees:
+                            return f"Had tried to turn left {int(degrees)}° but only turned {int(actual_degrees)}° (turn failed)"
+                        else:
+                            return f"Had tried to turn left {int(degrees)}° but overturned to {int(actual_degrees)}° (turn failed)"
                     return f"Had turned left {int(actual_degrees)}°"
                 return f"Had turned left {int(degrees)}°"  # 无验证数据，用计划值
             elif action_name == 'TURN_RIGHT':
                 if actual_degrees is not None:
-                    if abs(degrees - actual_degrees) > 15:
-                        return f"Had tried to turn right {int(degrees)}° but only turned {int(actual_degrees)}° (turn failed)"
+                    diff = abs(degrees - actual_degrees)
+                    if diff > 15:
+                        if actual_degrees < degrees:
+                            return f"Had tried to turn right {int(degrees)}° but only turned {int(actual_degrees)}° (turn failed)"
+                        else:
+                            return f"Had tried to turn right {int(degrees)}° but overturned to {int(actual_degrees)}° (turn failed)"
                     return f"Had turned right {int(actual_degrees)}°"
                 return f"Had turned right {int(degrees)}°"
             elif action_name == 'MOVE_FORWARD':
@@ -143,9 +151,15 @@ class ActionExecutor(BaseAPIClient):
                 if is_failed:
                     # 失败不合并，开始新段
                     if action_name == 'TURN_LEFT':
-                        new_segment = f"then tried to turn left {int(degrees)}° but only turned {int(actual_degrees)}° (turn failed)"
+                        if actual_degrees < degrees:
+                            new_segment = f"then tried to turn left {int(degrees)}° but only turned {int(actual_degrees)}° (turn failed)"
+                        else:
+                            new_segment = f"then tried to turn left {int(degrees)}° but overturned to {int(actual_degrees)}° (turn failed)"
                     else:
-                        new_segment = f"then tried to turn right {int(degrees)}° but only turned {int(actual_degrees)}° (turn failed)"
+                        if actual_degrees < degrees:
+                            new_segment = f"then tried to turn right {int(degrees)}° but only turned {int(actual_degrees)}° (turn failed)"
+                        else:
+                            new_segment = f"then tried to turn right {int(degrees)}° but overturned to {int(actual_degrees)}° (turn failed)"
                     return f"{current_progress}, {new_segment}"
                 
                 # 更新最后一段（成功的合并）
@@ -167,9 +181,15 @@ class ActionExecutor(BaseAPIClient):
                     is_failed = abs(degrees - actual_degrees) > 15
                     if is_failed:
                         if action_name == 'TURN_LEFT':
-                            new_segment = f"then tried to turn left {int(degrees)}° but only turned {int(actual_degrees)}° (turn failed)"
+                            if actual_degrees < degrees:
+                                new_segment = f"then tried to turn left {int(degrees)}° but only turned {int(actual_degrees)}° (turn failed)"
+                            else:
+                                new_segment = f"then tried to turn left {int(degrees)}° but overturned to {int(actual_degrees)}° (turn failed)"
                         else:
-                            new_segment = f"then tried to turn right {int(degrees)}° but only turned {int(actual_degrees)}° (turn failed)"
+                            if actual_degrees < degrees:
+                                new_segment = f"then tried to turn right {int(degrees)}° but only turned {int(actual_degrees)}° (turn failed)"
+                            else:
+                                new_segment = f"then tried to turn right {int(degrees)}° but overturned to {int(actual_degrees)}° (turn failed)"
                     else:
                         if action_name == 'TURN_LEFT':
                             new_segment = f"then turned left {int(actual_degrees)}°"
