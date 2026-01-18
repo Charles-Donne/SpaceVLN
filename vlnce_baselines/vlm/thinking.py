@@ -16,7 +16,7 @@ class LLMPlanner(BaseAPIClient):
     """LLM规划器 - 负责子任务生成和验证"""
     
     REQUIRED_FIELDS_INITIAL = ['subtask_destination', 'subtask_instruction', 'completion_criteria']
-    REQUIRED_FIELDS_VERIFY = ['is_completed', 'subtask_destination', 'subtask_instruction', 'completion_criteria']
+    REQUIRED_FIELDS_VERIFY = ['subtask_destination', 'subtask_instruction', 'completion_criteria']
     
     # completion_criteria 子字段（嵌套结构）
     REQUIRED_CRITERIA_FIELDS = ['Panoramic_Detection', 'Spatial_relationship', 'Location']
@@ -222,8 +222,8 @@ class LLMPlanner(BaseAPIClient):
             response = self.call_api(prompt, images)
             
             if response and self.validate_response(response, mode='verify'):
-                is_completed = response.get('is_completed', False)
-                return response, is_completed, prompt
+                # 连续导航模式：始终推进到下一个waypoint，不需要is_completed判断
+                return response, True, prompt
             
             if retry < max_retries - 1:
                 print(f"  ⚠️  验证API调用失败，重试 ({retry + 1}/{max_retries - 1})...")

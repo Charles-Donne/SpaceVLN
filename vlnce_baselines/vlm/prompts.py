@@ -262,21 +262,21 @@ Distance to nearest obstacles from current position (calculated from map after 3
 ## Example 1:
 **Global Task**: Turn around walk through the exercise room into the living room. Wait by the Table.
 **Previous Subtask**: Navigate to exercise room entrance
-**Current Observation:** Treadmill directly ahead in Front view. Already turned 120° and facing exercise room doorway. Restroom visible behind in Back view.
+**Current Observation:** Exercise equipment directly ahead in Front view. Already turned 120° and facing exercise room doorway. Restroom visible behind in Back view.
 
 {{
-    "waypoint": "Exercise Room Entrance - facing treadmill ahead, restroom behind",
+    "waypoint": "Exercise Room Entrance - facing gym equipment ahead, restroom behind",
     "waypoint_sequence": "Restroom(✓) → Exercise Room Entrance(Current) → Exercise Room(Next) → Living Room Arched Doorway → Living Room's Table(Goal)",
     "subtask_destination": "exercise room interior",
     "subtask_instruction": "Move forward into exercise room, continue until exercise equipment visible around agent",
-    "subtask_landmark": "treadmill",
+    "subtask_landmark": "exercise equipment",
     "completion_criteria": {{
-        "Panoramic_Detection": "Exercise equipment (treadmill, weights) detected surrounding agent in multiple views. Restroom far behind in Back view.",
+        "Panoramic_Detection": "Exercise equipment detected surrounding agent in multiple views. Restroom far behind in Back view.",
         "Spatial_relationship": "Exercise equipment surrounding agent < 1.0m in multiple directions (map shows inside gym area). Restroom far behind (map shows previous waypoint far back). Orange trajectory shows entered gym room interior",
         "Location": "Exercise Room Interior - exercise equipment surrounding agent, restroom far behind"
     }},
     "global_task_finish": false,
-    "reasoning": "Progress Check: Current - Exercise Room Entrance, facing treadmill after 120° left turn (treadmill ahead in Front view, restroom behind in Back view). Target - Exercise Room Entrance (previous subtask). Waypoint Position: AT target - already at entrance facing doorway, completion criteria met (treadmill ahead < 1.0m, restroom behind). Evidence: Map shows orange trajectory reached entrance position, panoramic view matches. Decision: Mark completed - entrance reached. Next Action: Plan NEXT waypoint to enter exercise room interior."
+    "reasoning": "Progress Check: Current - Exercise Room Entrance, facing gym equipment after 120° left turn (exercise equipment ahead in Front view, restroom behind in Back view). Target - Exercise Room Entrance (previous subtask). Waypoint Position: AT target - already at entrance facing doorway, completion criteria met (gym equipment ahead < 1.0m, restroom behind). Evidence: Map shows orange trajectory reached entrance position, panoramic view matches. Decision: Mark completed - entrance reached. Next Action: Plan NEXT waypoint to enter exercise room interior."
 }}
 
 ## Example 2:
