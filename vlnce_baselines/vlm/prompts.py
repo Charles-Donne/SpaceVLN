@@ -225,15 +225,21 @@ Distance to nearest obstacles from current position (calculated from map after 3
 
 # Your Task
 
-1. **Identify Positions**: 
-   - **Current Position**: Analyze surroundings to determine where you are now
-   - **Target Position**: Identify where the subtask destination is located
+1. **Identify Current Position in Waypoint Sequence**: 
+   - **Current Position**: Analyze surroundings, map trajectory, and landmarks to determine where you are now
+   - **Target Position**: Identify where the previous subtask destination is located
+   - **Progress Check**: Determine current position relative to waypoint_sequence - are you BEFORE, AT, or BEYOND the target?
    - **CRITICAL**: Complete position identification BEFORE making any is_completed decision
-2. **Verify Completion**: Compare observations and map with previous subtask completion_criteria (Panoramic_Detection, Spatial_relationship, Location)
-3. **Make Decision**: 
-   - **is_completed = true**: Current position matches target position → plan NEXT waypoint
-   - **is_completed = false**: Current position ≠ target position → continue SAME subtask
-4. **Plan next step**: If completed, update waypoint_sequence and define new subtask; if not, adjust current subtask instruction
+   
+2. **Verify Completion (Consider "Passed Through")**: 
+   - **AT Target**: Current position matches target → is_completed = true
+   - **BEYOND Target**: Already passed through and progressed further (e.g., target was "entrance" but now inside the room) → is_completed = true, do NOT turn back
+   - **BEFORE Target**: Haven't reached target yet → is_completed = false
+   - Compare observations and map trajectory with completion_criteria to determine relationship
+   
+3. **Plan Next Step**: 
+   - **If completed (AT or BEYOND)**: Plan NEXT waypoint in sequence, update waypoint_sequence
+   - **If not completed (BEFORE)**: Continue working toward SAME subtask destination
 
 # Actions Available
 
@@ -278,7 +284,7 @@ Distance to nearest obstacles from current position (calculated from map after 3
         "Location": "Living Room Arched Doorway - sofa and doorway ahead < 0.5m, exercise room far behind"
     }},
     "global_task_finish": false,
-    "reasoning": "Position Analysis: Current - Exercise Room near entrance (exercise equipment visible at left, living room arched doorway visible at left 30°-60° through Front-View and Left-View). Target - Exercise room entrance (previous subtask destination). Arrival Status: YES, reached exercise room entrance - orange trajectory shows entered room, exercise equipment now nearby inside room (was outside before). Evidence: Treadmill/equipment now at left side blocking direct path (map shows black obstacles), living room visible beyond through arched doorway. Next Action: Previous subtask (reach exercise room entrance) completed. New subtask: navigate to living room arched doorway, bypassing equipment via forward then left turn."
+    "reasoning": "Progress Check: Current - Exercise Room Interior (equipment surrounding agent, living room doorway visible ahead-left). Target - Exercise Room Entrance (previous subtask). Waypoint Position: BEYOND target - orange trajectory shows entered through entrance and now inside room. Evidence: Map shows trajectory passed through entrance area and continued into room interior, exercise equipment now immediately around agent (was outside entrance before). Decision: Mark completed - already passed through entrance, no need to turn back. Next Action: Plan next waypoint toward living room arched doorway."
 }}
 
 ## Example 2:
@@ -299,7 +305,7 @@ Distance to nearest obstacles from current position (calculated from map after 3
         "Location": "Refrigerator Area - refrigerator ahead < 0.5m, counter at right, kitchen island behind"
     }},
     "global_task_finish": true,
-    "reasoning": "Position Analysis: Current - Kitchen Center, standing directly in front of refrigerator (refrigerator centered in Front view IMAGE 1, counter at right IMAGE 4, kitchen island behind IMAGE 3). Target - Refrigerator in kitchen (final goal). Arrival Status: YES, reached target - refrigerator is within dark green circle on local map (IMAGE 6), confirming distance < 0.5m. Evidence: Refrigerator fills Front view, orange trajectory shows movement through hallway → kitchen center → refrigerator, spatial relationships match completion criteria. Next Action: Global task complete - target was 'navigate to refrigerator in kitchen', now at refrigerator < 0.5m. Execute STOP."
+    "reasoning": "Progress Check: Current - Kitchen Center in front of refrigerator (refrigerator centered in Front view IMAGE 1, counter at right IMAGE 4, kitchen island behind IMAGE 3). Target - Kitchen Center (previous subtask). Waypoint Position: AT target - refrigerator within 0.5m (inside dark green circle on local map IMAGE 6). Evidence: Refrigerator fills Front view, orange trajectory shows movement through hallway → kitchen center → refrigerator, spatial relationships match completion criteria. Decision: Mark completed - at kitchen center near refrigerator. Next Action: Global task complete - this is final destination. Execute STOP."
 }}
 
 ## Example 3:
@@ -309,45 +315,24 @@ Distance to nearest obstacles from current position (calculated from map after 3
 
 {{
     "is_completed": false,
-    "waypoint": "Kitchen - Oven is far ahead, kitchen island nearby.",
-    "waypoint_sequence": "Kitchen(Current) → Oven Area → Archway Past Painting → Left Doorway → Small Sink(Goal)",
+    "waypoint": "Kitchen - Oven ahead but still distant, kitchen island behind",
+    "waypoint_sequence": "Starting Point(✓) → Kitchen(Current) → Oven Area → Archway Past Painting → Left Doorway → Small Sink(Goal)",
     "subtask_destination": "oven area",
     "subtask_instruction": "Continue moving forward to approach oven until oven is directly ahead < 0.5m (target: oven centered in Front view, very close)",
     "subtask_landmark": "oven",
     "completion_criteria": {{
         "Panoramic_Detection": "Oven detected in Front view centered ahead occupying large portion. Kitchen island detected far away in Back view",
-        "Spatial_relationship": "Oven ahead < 0.5m (map shows oven landmark is at Red arrow). Kitchen far behind (map shows it away from last waypoint). Orange trajectory shows forward movement toward oven",
-        "Location": "Oven Area - oven ahead < 0.5m, kitchen far behind"
+        "Spatial_relationship": "Oven ahead < 0.5m (map shows oven landmark near Red arrow within dark green circle). Kitchen island far behind (map shows it away from last waypoint). Orange trajectory shows forward movement toward oven",
+        "Location": "Oven Area - oven ahead < 0.5m, kitchen island far behind"
     }},
     "global_task_finish": false,
-    "reasoning": "Position Analysis: Current - Kitchen area, some distance from oven (oven visible in Front view IMAGE 1 but not filling screen, kitchen island visible behind IMAGE 3). Target - Oven area (subtask destination). Arrival Status: NO, not yet reached - oven detected but distance > 1.0m on map, outside dark green circle. Evidence: Oven visible but small in Front view, orange trajectory shows forward progress but waypoint 1 nearby indicates previous stop location, haven't advanced enough. Completion criteria requires oven < 0.5m filling Front view. Next Action: Continue SAME subtask (oven area), move forward until oven is very close (< 0.5m, inside dark green circle, filling entire Front view)."
-}}
-
-## Example 4:
-**Global Task**: Walk up to the photo on the wall directly in front of you.
-**Previous Subtask**: Navigate to painting on wall
-**Current Observation:** Painting visible in Front-Left 30° portion but still some distance away. Painting is outside the dark green circle on local map.
-
-{{
-    "is_completed": false,
-    "waypoint": "Dining Area - painting visible at front-left, not yet at destination",
-    "waypoint_sequence": "Dining Area(Current) → Painting on Wall(Goal)",
-    "subtask_destination": "painting on wall",
-    "subtask_instruction": "Continue moving forward until painting is centered in Front view and within 0.5m (target: painting filling entire Front view, inside dark green circle)",
-    "subtask_landmark": "painting",
-    "completion_criteria": {{
-        "Panoramic_Detection": "Painting detected in Front view centered ahead, occupying large portion of the view",
-        "Spatial_relationship": "Painting ahead < 0.5m (map shows painting landmark is within the dark green circle around Red arrow). Orange trajectory shows forward movement to painting",
-        "Location": "In front of Painting - painting ahead < 0.5m filling view"
-    }},
-    "global_task_finish": false,
-    "reasoning": "Position Analysis: Current - Dining Area, standing some distance from wall painting (painting visible in Front-Left 30° portion IMAGE 1 left side, not centered or filling view). Target - Painting on wall (subtask destination). Arrival Status: NO, not yet reached - painting is outside dark green circle on local map (IMAGE 6), distance > 0.5m. Evidence: Painting appears small in left portion of Front view, not centered or close. Orange trajectory shows progress toward painting but hasn't reached it yet. Completion criteria requires painting centered in Front view, < 0.5m (inside dark green circle), filling entire screen. Next Action: Continue SAME subtask (painting on wall), move forward until painting is very close and centered."
+    "reasoning": "Progress Check: Current - Kitchen area approaching oven (oven visible in Front view IMAGE 1 but not filling screen, kitchen island visible behind IMAGE 3). Target - Oven area (subtask destination). Waypoint Position: BEFORE target - oven detected but distance > 1.0m on map, outside dark green circle. Evidence: Oven visible but small in Front view, orange trajectory shows forward progress but waypoint marker nearby indicates previous stop location, haven't reached oven area yet. Completion criteria requires oven < 0.5m filling Front view. Decision: Mark NOT completed - still approaching target. Next Action: Continue SAME subtask (oven area), move forward until oven is very close (< 0.5m, inside dark green circle, filling entire Front view)."
 }}
 
 **Critical Requirements**:
 - **Panoramic View Content**: Detect each portion of panoramic view for comprehensive spatial understanding and precise directional descriptions.
-- **Verification**: Compare current observations against all three completion_criteria fields (Panoramic_Detection, Spatial_relationship, Location)
-- **Position Identification FIRST**: MUST identify current position clearly before making is_completed decision. Analyze surroundings, landmarks, and trajectory to determine exact location. Then identify previous target position. Only after confirming both positions can you judge if target is reached.
+- **Progress-Based Verification**: Check if BEFORE (not reached → continue SAME subtask), AT (reached → plan NEXT), or BEYOND target (passed through, e.g., target was entrance but now inside → plan NEXT, do NOT turn back) using waypoint_sequence.
+- **Position Identification FIRST**: Identify current position in waypoint_sequence before is_completed decision using surroundings, landmarks, and trajectory.
 - **Forward Direction Alignment**: Dark red dashed line shows exact Forward direction - must align with destination/safe paths, NOT obstacles. Turn immediately if misaligned.
 - **Path Alignment**: Keep agent centered in corridors/paths, parallel to walls/boundaries with equal distance to both sides
 - **Target Alignment**: Keep destination/landmark centered in Front view (0°), face it directly without angular deviation
