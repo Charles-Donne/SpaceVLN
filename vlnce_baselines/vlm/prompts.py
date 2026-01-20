@@ -298,7 +298,7 @@ Distance to nearest obstacles from current position (calculated from map after 3
     "subtask_instruction": "Move forward into the interior of the gym",
     "subtask_landmark": "exercise equipment",
     "completion_criteria": {{
-        "Surrounding_Detection": "Exercise equipment detected surrounding agent in multiple views. Restroom far behind in Back view.",
+        "Directional_Detection": "Exercise equipment detected surrounding agent in multiple IMAGEs (1, 2, 12). Restroom detected in IMAGE 7 (Back 180°)",
         "Spatial_relationship": "Exercise equipment surrounding agent < 1.0m in multiple directions (map shows inside gym area). Restroom far behind (map shows previous waypoint far back). Orange trajectory shows entered gym room interior",
         "Location": "Exercise Room Interior - exercise equipment surrounding agent, restroom far behind"
     }},
