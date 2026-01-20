@@ -97,7 +97,7 @@ Distance to nearest obstacles from current position (calculated from map):
     "subtask_instruction": "<Step-by-step navigation instructions starting from Front view>",
     "subtask_landmark": "<Single landmark to detect (common, e.g. door, table, painting, cabinet)>",
     "completion_criteria": {{
-        "Panoramic_Detection": "<Destination detected in which view>. <Other objects detected in which view>",
+        "Surrounding_Detection": "<Destination detected in which view>. <Other objects detected in which view>",
         "Spatial_relationship": "<Destination position and distance> (map verification). <Other objects relationships> (map verification). <Trajectory description>",
         "Location": "<Current Area Type> - <relative position descriptions>"
     }},
@@ -120,7 +120,7 @@ Distance to nearest obstacles from current position (calculated from map):
     "subtask_instruction": "Turn left 120° to face exercise room doorway, then move forward to enter the exercise room",
     "subtask_landmark": "exercise equipment",
     "completion_criteria": {{
-        "Panoramic_Detection": "Exercise equipment detected in Front. Restroom fixtures detected in Back",
+        "Surrounding_Detection": "Exercise equipment detected in Front. Restroom fixtures detected in Back",
         "Spatial_relationship": "Exercise equipment ahead < 0.5m (map shows gym equipment at entrance position). Restroom far behind (map shows previous location). Orange trajectory shows left turn 120° and forward movement into gym entrance",
         "Location": "Exercise Room Entrance - exercise equipment ahead < 0.5m, restroom behind"
     }},
@@ -141,7 +141,7 @@ Distance to nearest obstacles from current position (calculated from map):
     "subtask_instruction": "Turn left 30° to face bedroom exit, then move forward through doorway to reach corridor",
     "subtask_landmark": "picture",
     "completion_criteria": {{
-        "Directional_Detection": "Pictures detected on corridor wall in Front. Bedroom interior detected in Back",
+        "Surrounding_Detection": "Pictures detected on corridor wall in Front. Bedroom interior detected in Back",
         "Spatial_relationship": "Pictures on corridor wall < 0.5m (map shows decorative objects along corridor). Bedroom interior far behind (map shows previous area). Orange trajectory shows left turn 30° and forward 1.5m movement to corridor",
         "Location": "Corridor - pictures on wall < 1.0m, bedroom behind"
     }},
@@ -277,7 +277,7 @@ Distance to nearest obstacles from current position (calculated from map after 3
     "subtask_instruction": "<Step-by-step navigation instructions from current position to next waypoint>",
     "subtask_landmark": "<Single landmark name at next waypoint for detection>",
     "completion_criteria": {{
-        "Panoramic_Detection": "<Next waypoint detected in which view>. <Other objects detected in which view>",
+        "Surrounding_Detection": "<Next waypoint detected in which view>. <Other objects detected in which view>",
         "Spatial_relationship": "<Next waypoint position and distance> (map verification). <Other objects relationships> (map verification). <Trajectory description>",
         "Location": "<Next Waypoint Area> - <relative position descriptions>"
     }},
@@ -298,7 +298,7 @@ Distance to nearest obstacles from current position (calculated from map after 3
     "subtask_instruction": "Move forward into the interior of the gym",
     "subtask_landmark": "exercise equipment",
     "completion_criteria": {{
-        "Directional_Detection": "Exercise equipment detected surrounding agent in multiple IMAGEs (1, 2, 12). Restroom detected in IMAGE 7 (Back 180°)",
+        "Surrounding_Detection": "Exercise equipment detected surrounding agent in multiple IMAGEs (1, 2, 12). Restroom detected in IMAGE 7 (Back 180°)",
         "Spatial_relationship": "Exercise equipment surrounding agent < 1.0m in multiple directions (map shows inside gym area). Restroom far behind (map shows previous waypoint far back). Orange trajectory shows entered gym room interior",
         "Location": "Exercise Room Interior - exercise equipment surrounding agent, restroom far behind"
     }},
@@ -319,7 +319,7 @@ Distance to nearest obstacles from current position (calculated from map after 3
     "subtask_instruction": "Stop. The refrigerator is directly ahead within 0.5m",
     "subtask_landmark": "refrigerator",
     "completion_criteria": {{
-        "Directional_Detection": "Refrigerator detected in Front centered ahead. Counter detected in Right. Kitchen island detected in Back",
+        "Surrounding_Detection": "Refrigerator detected in Front centered ahead. Counter detected in Right. Kitchen island detected in Back",
         "Spatial_relationship": "Refrigerator ahead < 0.5m (map shows refrigerator landmark within dark green circle). Counter at right. Kitchen island behind. Orange trajectory shows direct forward movement through kitchen to refrigerator",
         "Location": "Refrigerator Area - refrigerator ahead < 0.5m, counter at right, kitchen island behind"
     }},
@@ -340,7 +340,7 @@ Distance to nearest obstacles from current position (calculated from map after 3
     "subtask_instruction": "Continue moving forward to approach oven until oven is directly ahead < 0.5m (target: oven centered in Front view, very close)",
     "subtask_landmark": "oven",
     "completion_criteria": {{
-        "Directional_Detection": "Oven detected in Front centered ahead occupying large portion. Kitchen island detected far away in Back",
+        "Surrounding_Detection": "Oven detected in Front centered ahead occupying large portion. Kitchen island detected far away in Back",
         "Spatial_relationship": "Oven ahead < 0.5m (map shows oven landmark within dark green circle). Kitchen island far behind. Orange trajectory shows forward movement toward oven",
         "Location": "Oven Area - oven ahead < 0.5m, kitchen island far behind"
     }},
