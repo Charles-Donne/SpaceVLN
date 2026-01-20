@@ -1026,7 +1026,7 @@ class MapVisualizer:
                        global_map: np.ndarray,
                        phase: str = "action") -> str:
         """
-        保存全局地图（裁剪为400×400）
+        保存全局地图（添加标签）
         
         Args:
             step: 步数
@@ -1040,10 +1040,34 @@ class MapVisualizer:
         if global_map is None:
             return None
         
-        # 直接保存440×440图像（已包含方位标签，无需再裁剪）
+        # 添加 "IMAGE 13: Global Map" 标签
+        label_text = "IMAGE 13: Global Map"
+        
+        # 创建白色标签背景（高度40像素）
+        label_height = 40
+        label_bg = np.ones((label_height, global_map.shape[1], 3), dtype=np.uint8) * 255
+        
+        # 绘制红色文字
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.8
+        font_thickness = 2
+        text_color = (0, 0, 255)  # BGR: 红色
+        
+        # 计算文字位置（居中）
+        text_size = cv2.getTextSize(label_text, font, font_scale, font_thickness)[0]
+        text_x = (label_bg.shape[1] - text_size[0]) // 2
+        text_y = (label_height + text_size[1]) // 2
+        
+        # 在标签背景上绘制文字
+        cv2.putText(label_bg, label_text, (text_x, text_y), font, font_scale, text_color, font_thickness)
+        
+        # 垂直拼接：地图在上，标签在下
+        labeled_map = np.vstack([global_map, label_bg])
+        
+        # 保存带标签的地图
         episode_dir = self._create_episode_directories(episode_id)
         save_path = os.path.join(episode_dir, 'global_map', f'step_{step:04d}_{phase}.png')
-        cv2.imwrite(save_path, global_map, [cv2.IMWRITE_PNG_COMPRESSION, 1])
+        cv2.imwrite(save_path, labeled_map, [cv2.IMWRITE_PNG_COMPRESSION, 1])
         return save_path
     
     def save_local_map(self,
@@ -1052,7 +1076,7 @@ class MapVisualizer:
                       local_map: np.ndarray,
                       phase: str = "action") -> str:
         """
-        保存局部地图
+        保存局部地图（添加标签）
         
         Args:
             step: 步数
@@ -1066,10 +1090,34 @@ class MapVisualizer:
         if local_map is None:
             return None
         
-        # 简化路径：data/manual_navigation/episode_X/local_map/step_XXXX.png
+        # 添加 "IMAGE 14: Local Map" 标签
+        label_text = "IMAGE 14: Local Map"
+        
+        # 创建白色标签背景（高度40像素）
+        label_height = 40
+        label_bg = np.ones((label_height, local_map.shape[1], 3), dtype=np.uint8) * 255
+        
+        # 绘制红色文字
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.8
+        font_thickness = 2
+        text_color = (0, 0, 255)  # BGR: 红色
+        
+        # 计算文字位置（居中）
+        text_size = cv2.getTextSize(label_text, font, font_scale, font_thickness)[0]
+        text_x = (label_bg.shape[1] - text_size[0]) // 2
+        text_y = (label_height + text_size[1]) // 2
+        
+        # 在标签背景上绘制文字
+        cv2.putText(label_bg, label_text, (text_x, text_y), font, font_scale, text_color, font_thickness)
+        
+        # 垂直拼接：地图在上，标签在下
+        labeled_map = np.vstack([local_map, label_bg])
+        
+        # 保存带标签的地图
         episode_dir = self._create_episode_directories(episode_id)
         save_path = os.path.join(episode_dir, 'local_map', f'step_{step:04d}_{phase}.png')
-        cv2.imwrite(save_path, local_map, [cv2.IMWRITE_PNG_COMPRESSION, 1])
+        cv2.imwrite(save_path, labeled_map, [cv2.IMWRITE_PNG_COMPRESSION, 1])
         return save_path
     
     def save_detection(self,

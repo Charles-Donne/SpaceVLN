@@ -15,11 +15,11 @@ from vlnce_baselines.visualization.visualizer import MapVisualizer
 class LLMPlanner(BaseAPIClient):
     """LLM规划器 - 负责子任务生成和验证"""
     
-    REQUIRED_FIELDS_INITIAL = ['subtask_destination', 'subtask_instruction', 'completion_criteria']
-    REQUIRED_FIELDS_VERIFY = ['subtask_destination', 'subtask_instruction', 'completion_criteria']
+    REQUIRED_FIELDS_INITIAL = ['waypoint_direction', 'subtask_destination', 'subtask_instruction', 'completion_criteria']
+    REQUIRED_FIELDS_VERIFY = ['waypoint_direction', 'subtask_destination', 'subtask_instruction', 'completion_criteria']
     
     # completion_criteria 子字段（嵌套结构）
-    REQUIRED_CRITERIA_FIELDS = ['Panoramic_Detection', 'Spatial_relationship', 'Location']
+    REQUIRED_CRITERIA_FIELDS = ['Directional_Detection', 'Spatial_relationship', 'Location']
     
     def __init__(self, config_path: str = "vlnce_baselines/vlm/llm_config.yaml", 
                  action_space: str = None):

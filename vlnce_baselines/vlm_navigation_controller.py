@@ -32,7 +32,7 @@ from vlnce_baselines.vlm import (
 )
 from vlnce_baselines.visualization import PanoramaGenerator
 from vlnce_baselines.vlm.navigation_config import (
-    DIRECTION_STEPS, DIRECTION_NAMES, PANORAMA_CONFIG, ACTION_MAPPING
+    DIRECTION_STEPS, DIRECTION_NAMES, DIRECTION_CONFIG, ACTION_MAPPING
 )
 from habitat_extensions.pose_utils import get_sim_location
 
@@ -325,36 +325,60 @@ class VLMNavigationController(InteractiveNavigationController):
         # 检查是否完成了完整的12步环视
         if len(lookaround_images) < 12:
             print(f"\n⚠️ 警告: 环视未完成，只收集到 {len(lookaround_images)}/12 张图像（Episode可能提前结束）")
-            print(f"❌ 无法生成全景图，跳过视觉观察收集")
+            print(f"❌ 无法生成观察图片，跳过视觉观察收集")
             # 返回空列表，调用方需要处理这种情况
             return [], []
         
-        # 直接为每个方向拼接3张图片生成90°全景图
-        panorama_paths = []
-        panorama_names = []
-        panorama_dir = os.path.join(self.config.RESULTS_DIR, f"episode_{self.current_episode_id}", "panoramas")
-        os.makedirs(panorama_dir, exist_ok=True)
+        # 保存12张独立图片（不拼接），每张图片添加角度标注
+        from .vlm.navigation_config import DIRECTION_CONFIG
         
-        for config in PANORAMA_CONFIG:
-            direction_name = config["name"]
-            steps = config["steps"]  # 3张图片的索引（如[1,12,11]）
-            
-            # 获取该方向的3张图片（steps是1-based，需要转为0-based索引）
-            direction_images = [lookaround_images[step-1] for step in steps]
-            
-            # 使用PanoramaGenerator拼接3张图片并添加方向标注
-            panorama = self.panorama_generator.create_panorama(direction_images, direction_name)
-            
-            # 保存全景图（统一使用PNG格式）
-            panorama_filename = f"{phase}_panorama_{direction_name.split()[0].lower()}.png"
-            panorama_path = os.path.join(panorama_dir, panorama_filename)
-            cv2.imwrite(panorama_path, panorama)
-            
-            panorama_paths.append(panorama_path)
-            panorama_names.append(direction_name)
-            self.direction_images[direction_name] = panorama_path
+        direction_paths = []
+        direction_names = []
+        directions_dir = os.path.join(self.config.RESULTS_DIR, f"episode_{self.current_episode_id}", "directions")
+        os.makedirs(directions_dir, exist_ok=True)
         
-        # 保存全局地图和局部地图到 vlm/observations/
+        for config in DIRECTION_CONFIG:
+            step_idx = config["step"]  # 1-12
+            angle = config["angle"]
+            direction_name = config["name"]  # 如 "IMAGE 1: Front (0°)"
+            
+            # 获取该step的图像（step是1-based，但step 12对应index 11，step 1对应index 0）
+            # lookaround_images[0] = step 1 (30°)
+            # lookaround_images[11] = step 12 (0°)
+            image = lookaround_images[step_idx - 1].copy()
+            
+            # 在图片顶部添加白色背景的角度标注
+            h, w = image.shape[:2]
+            label_height = 50
+            label_img = np.ones((label_height, w, 3), dtype=np.uint8) * 255  # 白色背景
+            
+            # 添加文字标注（使用OpenCV）
+            label_text = direction_name  # 如 "IMAGE 1: Front (0°)"
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = 0.8
+            font_thickness = 2
+            text_color = (0, 0, 255)  # 红色
+            
+            # 计算文字位置（居中）
+            (text_width, text_height), baseline = cv2.getTextSize(label_text, font, font_scale, font_thickness)
+            text_x = (w - text_width) // 2
+            text_y = (label_height + text_height) // 2
+            
+            # 绘制文字
+            cv2.putText(label_img, label_text, (text_x, text_y), font, font_scale, text_color, font_thickness)
+            
+            # 拼接标注和图像
+            labeled_image = np.vstack([label_img, image])
+            
+            # 保存图像
+            direction_filename = f"{phase}_direction_{angle:03d}.png"  # 如 initial_direction_000.png
+            direction_path = os.path.join(directions_dir, direction_filename)
+            cv2.imwrite(direction_path, labeled_image)
+            
+            direction_paths.append(direction_path)
+            direction_names.append(direction_name)
+        
+        # 保存全局地图和局部地图到对应目录
         # 使用当前step的地图（环视完成后的最新地图）
         self.latest_global_map = os.path.join(self.episode_dir, 'global_map', f'step_{self.current_step:04d}_{phase}.png')
         self.latest_local_map = os.path.join(self.episode_dir, 'local_map', f'step_{self.current_step:04d}_{phase}.png')
@@ -367,10 +391,10 @@ class VLMNavigationController(InteractiveNavigationController):
             print(f"  ⚠️  Local Map not found: {self.latest_local_map}")
             self.latest_local_map = None
         
-        print(f"  4方向全景图已保存 | Step={self.current_step}")
+        print(f"  12方向独立视图已保存 (每张30°) | Step={self.current_step}")
         print("="*60 + "\n")
         
-        return panorama_paths, panorama_names
+        return direction_paths, direction_names
     
     def _get_current_map_path(self) -> str:
         """
@@ -387,31 +411,34 @@ class VLMNavigationController(InteractiveNavigationController):
 
     def get_observations_and_maps(self, phase: str) -> Tuple[List[str], List[str], str, str]:
         """
-        从 vlm/observations/ 目录获取4方向全景图和地图
+        从directions/目录获取12方向独立视图和地图
         
         Args:
             phase: 阶段名称（如 "initial", "verify_1"）
             
         Returns:
-            (panorama_paths, direction_names, global_map_path, local_map_path)
+            (direction_paths, direction_names, global_map_path, local_map_path)
         """
-        panorama_paths = []
+        from .vlm.navigation_config import DIRECTION_CONFIG
+        
+        direction_paths = []
         direction_names = []
         
-        # 直接从episode的panoramas/目录读取
-        panorama_dir = os.path.join(self.episode_dir, 'panoramas')
+        # 从episode的directions/目录读取12张独立图片
+        directions_dir = os.path.join(self.episode_dir, 'directions')
         
-        # 获取4个全景图
-        for config in PANORAMA_CONFIG:
+        # 获取12个方向的图片
+        for config in DIRECTION_CONFIG:
+            angle = config["angle"]
             direction_name = config["name"]
-            panorama_filename = f"{phase}_panorama_{direction_name.split()[0].lower()}.png"
-            panorama_path = os.path.join(panorama_dir, panorama_filename)
+            direction_filename = f"{phase}_direction_{angle:03d}.png"  # 如 initial_direction_000.png
+            direction_path = os.path.join(directions_dir, direction_filename)
             
-            if os.path.exists(panorama_path):
-                panorama_paths.append(panorama_path)
+            if os.path.exists(direction_path):
+                direction_paths.append(direction_path)
                 direction_names.append(direction_name)
             else:
-                print(f"  ⚠️  {direction_name} 未找到: {panorama_filename}")
+                print(f"  ⚠️  {direction_name} 未找到: {direction_filename}")
         
         # 获取地图（使用当前step的地图，每次环视后current_step已更新）
         # current_step是最后一次环视后的step，地图文件名需要加上phase后缀
@@ -426,7 +453,7 @@ class VLMNavigationController(InteractiveNavigationController):
             print(f"  ⚠️  Local Map 未找到")
             local_map_path = None
         
-        return panorama_paths, direction_names, global_map_path, local_map_path
+        return direction_paths, direction_names, global_map_path, local_map_path
     
     def generate_initial_subtask(self) -> Optional[Dict]:
         """
@@ -487,14 +514,12 @@ class VLMNavigationController(InteractiveNavigationController):
             "prompt": prompt,  # 保存prompt
             "response": response,
             "timestamp": datetime.now().isoformat(),
-            # 保存输入图片路径（与PANORAMA_CONFIG顺序一致：Front, Left, Back, Right）
+            # 保存输入图片路径（12张方向图 + 2张地图）
             "input_images": {
                 "global_map.png": global_map_for_llm,
                 "local_map.png": local_map,
-                "IMAGE 1 - Front (0°).png": image_paths[0] if len(image_paths) > 0 else None,
-                "IMAGE 2 - Left (90°).png": image_paths[1] if len(image_paths) > 1 else None,
-                "IMAGE 3 - Back (180°).png": image_paths[2] if len(image_paths) > 2 else None,
-                "IMAGE 4 - Right (270°).png": image_paths[3] if len(image_paths) > 3 else None,
+                # 12个方向视图（IMAGE 1-12）
+                **{f"IMAGE {i+1}.png": image_paths[i] if len(image_paths) > i else None for i in range(12)}
             }
         }
         self.thinking_outputs.append(thinking_record)
@@ -659,14 +684,12 @@ class VLMNavigationController(InteractiveNavigationController):
             "response": response,
             "timestamp": datetime.now().isoformat(),
             "detected_landmarks": detected_landmarks,  # 记录传递给LLM的landmarks
-            # 保存输入图片路径（与PANORAMA_CONFIG顺序一致：Front, Left, Back, Right）
+            # 保存输入图片路径（12张方向图 + 2张地图）
             "input_images": {
                 "global_map.png": global_map_for_llm,
                 "local_map.png": local_map if os.path.exists(local_map) else None,
-                "IMAGE 1 - Front (0°).png": image_paths[0] if len(image_paths) > 0 else None,
-                "IMAGE 2 - Left (90°).png": image_paths[1] if len(image_paths) > 1 else None,
-                "IMAGE 3 - Back (180°).png": image_paths[2] if len(image_paths) > 2 else None,
-                "IMAGE 4 - Right (270°).png": image_paths[3] if len(image_paths) > 3 else None,
+                # 12个方向视图（IMAGE 1-12）
+                **{f"IMAGE {i+1}.png": image_paths[i] if len(image_paths) > i else None for i in range(12)}
             },
             "prompt": prompt,
         }
