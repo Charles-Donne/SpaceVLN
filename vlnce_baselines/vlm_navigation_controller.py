@@ -474,53 +474,89 @@ class VLMNavigationController(InteractiveNavigationController):
         
         return image
     
-    def _draw_distance_on_view(self, image: np.ndarray, distance_str: str) -> np.ndarray:
+    def _draw_floor_segmentation_on_view(self, image: np.ndarray, view_angle: float) -> np.ndarray:
         """
-        在视图上绘制距离信息（复用统一计算的距离数据）
-        梯形线条：底部中心+两侧往中间延伸，根据距离调整长度和颜色
+        在图像上绘制地面分割（绿色半透明覆盖）
         
         Args:
             image: 图像 (H, W, 3) BGR格式
-            distance_str: 距离字符串，如 "1.2m", ">2.0m open", "<0.5m WARNING"
+            view_angle: 视角角度（相对于agent朝向，0度=正前方）
+            
+        Returns:
+            绘制了地面分割的图像
         """
+        if not hasattr(self, 'mapper') or self.mapper is None or self.mapper.floor is None:
+            return image
+        
+        # 获取agent位姿
+        agent_x, agent_y, agent_o = self._get_agent_pose()
+        
+        # 计算当前视角的绝对方向
+        view_offset_rad = np.deg2rad(view_angle)
+        view_direction = agent_o + view_offset_rad
+        
+        # 相机FOV (79度)
+        camera_fov_half = np.deg2rad(79 / 2)
+        
         h, w = image.shape[:2]
-        center_x = w // 2
-        bottom_y = h - 5  # 从最底部开始
-        side_offset = int(w * 0.15)  # 两侧线距中心15%宽度
+        overlay = image.copy()
         
-        # 解析距离并设置颜色和线长
-        if "WARNING" in distance_str or "<0.5" in distance_str:
-            color = (0, 0, 255)  # 红色
-            line_ratio = 0.3  # 短线（30%）
-        elif ">2.0" in distance_str or "open" in distance_str:
-            color = (0, 255, 0)  # 绿色
-            line_ratio = 1.0  # 长线到中间（100%）
-        else:
-            color = (0, 255, 255)  # 黄色
-            line_ratio = 0.65  # 中等长度（65%）
+        # 获取floor地图
+        floor_map = self.mapper.floor  # [H_map, W_map]
         
-        # 计算终点Y坐标
-        max_length = bottom_y - h // 2
-        end_y = bottom_y - int(max_length * line_ratio)
+        # 将floor投影到图像上
+        max_distance = 5.0  # 最远检测5米
+        num_rays = 50  # 增加射线密度
         
-        # 绘制梯形三条线：中心线 + 左侧线 + 右侧线
-        cv2.line(image, (center_x, bottom_y), (center_x, end_y), color, 3)  # 中心线
-        cv2.line(image, (center_x - side_offset, bottom_y), (center_x - int(side_offset * 0.5), end_y), color, 2)  # 左线
-        cv2.line(image, (center_x + side_offset, bottom_y), (center_x + int(side_offset * 0.5), end_y), color, 2)  # 右线
+        for i in range(num_rays):
+            # 射线角度分布
+            ray_ratio = i / (num_rays - 1) if num_rays > 1 else 0.5
+            ray_angle = view_direction - camera_fov_half + ray_ratio * 2 * camera_fov_half
+            
+            # 沿射线检测floor
+            for dist in np.linspace(0.3, max_distance, 30):
+                # 世界坐标
+                world_x = agent_x + dist * np.cos(ray_angle)
+                world_y = agent_y + dist * np.sin(ray_angle)
+                
+                # 转换到地图坐标
+                map_x = int((world_x - self.mapper.map_min_x) / self.mapper.map_resolution)
+                map_y = int((world_y - self.mapper.map_min_y) / self.mapper.map_resolution)
+                
+                # 检查是否在地图范围内且是floor
+                if 0 <= map_x < floor_map.shape[1] and 0 <= map_y < floor_map.shape[0]:
+                    if floor_map[map_y, map_x] > 0:  # floor区域
+                        # 计算图像坐标
+                        angle_diff = ray_angle - view_direction
+                        angle_diff = np.arctan2(np.sin(angle_diff), np.cos(angle_diff))
+                        
+                        # X坐标映射
+                        x_ratio = (angle_diff + camera_fov_half) / (2 * camera_fov_half)
+                        x_pos = int(x_ratio * w)
+                        x_pos = max(0, min(w - 1, x_pos))
+                        
+                        # Y坐标映射（距离越近越靠下，使用对数映射提高近处分辨率）
+                        if dist < 1.0:
+                            y_pos = int(h * (0.95 - 0.2 * (1.0 - dist)))
+                        elif dist < 2.0:
+                            y_pos = int(h * (0.75 - 0.15 * (2.0 - dist)))
+                        elif dist < 3.5:
+                            y_pos = int(h * (0.6 - 0.1 * (3.5 - dist) / 1.5))
+                        else:
+                            y_pos = int(h * 0.5)
+                        
+                        y_pos = max(0, min(h - 1, y_pos))
+                        
+                        # 绘制绿色半透明点（地面）
+                        cv2.circle(overlay, (x_pos, y_pos), 2, (0, 200, 0), -1)
+                else:
+                    break  # 超出地图范围，停止这条射线
         
-        # 绘制文字（位置固定在中间高度右侧）
-        text_x = center_x + 10
-        text_y = (bottom_y + h // 2) // 2
-        font_scale, thickness = 0.6, 2
-        text_size = cv2.getTextSize(distance_str, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)[0]
-        cv2.rectangle(image, (text_x - 2, text_y - text_size[1] - 1),
-                     (text_x + text_size[0] + 2, text_y + 2), (0, 0, 0), -1)
-        cv2.putText(image, distance_str, (text_x, text_y),
-                   cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, thickness)
+        # 混合原图和覆盖层（25%透明度，让绿色更明显）
+        alpha = 0.25
+        result = cv2.addWeighted(overlay, alpha, image, 1 - alpha, 0)
         
-        return image
-        
-        return image
+        return result
     
     def _draw_distance_rays_on_first_person_view(self, image: np.ndarray, distances: Dict[str, str]) -> np.ndarray:
         """
@@ -643,7 +679,7 @@ class VLMNavigationController(InteractiveNavigationController):
             new_classes = len(self.detected_classes) - prev_class_count
             total_new_classes += new_classes
             
-            # 调用visualizer保存所有数据（RGB、检测、全局地图、局部地图）
+            # 调用visualizer保存所有数据（RGB、检测、全局地图、局部地图、semantic masks）
             # 自动从mapper获取waypoint并渲染（忽略descriptions，可视化不需要）
             wp_positions, wp_ids, _ = self.mapper.get_waypoints()
             rgb_bgr = cv2.cvtColor(obs[0]['rgb'], cv2.COLOR_RGB2BGR)
@@ -659,6 +695,7 @@ class VLMNavigationController(InteractiveNavigationController):
                 hfov=self.config.MAP.HFOV,
                 detections=self.latest_detections_full if hasattr(self, 'latest_detections_full') else None,
                 labels=self.latest_labels_full if hasattr(self, 'latest_labels_full') else None,
+                masks=self.latest_masks_full if hasattr(self, 'latest_masks_full') else None,
                 landmark_classes=self.landmark_classes,
                 mapping_classes=self.mapping_classes,
                 landmark_config={
@@ -768,7 +805,7 @@ class VLMNavigationController(InteractiveNavigationController):
             # 添加文字标注（使用OpenCV）
             label_text = direction_name  # 如 "IMAGE 1: Front (0°)"
             font = cv2.FONT_HERSHEY_SIMPLEX
-            font_scale = 0.7  # 增大字体
+            font_scale = 0.8  # 增大字体
             font_thickness = 2  # 加粗
             text_color = (0, 0, 255)  # 红色
             
@@ -1494,6 +1531,19 @@ class VLMNavigationController(InteractiveNavigationController):
             cv2.imwrite(temp_image, rgb_bgr)
             fp_image = temp_image
         
+        # 查找对应的semantic masks
+        mask_path = None
+        for phase in possible_phases:
+            candidate = os.path.join(self.episode_dir, 'semantic_masks', f'step_{last_step:04d}_{phase}.npy')
+            if os.path.exists(candidate):
+                mask_path = candidate
+                break
+        
+        # 为RGB图像添加地面分割和距离辅助线（调用visualizer）
+        dist_str = self.latest_obstacle_distances.get('front', 'Unknown')
+        fp_image = self.visualizer.prepare_action_image_with_enhancements(
+            fp_image, mask_path, dist_str, self.classes, use_floor=True, use_distance=True)
+        
         # 获取当前地图路径和检测图像
         self._get_current_map_path()
         
@@ -1508,6 +1558,11 @@ class VLMNavigationController(InteractiveNavigationController):
                 break
         if not detection_image:
             print(f"  ⚠️  Detection image not found for step {last_step} (tried phases: {possible_phases})")
+        else:
+            # 为detection图像添加地面分割和距离辅助线（使用相同的mask）
+            dist_str = self.latest_obstacle_distances.get('front', 'Unknown')
+            detection_image = self.visualizer.prepare_action_image_with_enhancements(
+                detection_image, mask_path, dist_str, self.classes, use_floor=True, use_distance=True)
         
         # 查找局部地图（使用相同的回退逻辑）
         local_map = None

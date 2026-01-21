@@ -283,6 +283,7 @@ class InteractiveNavigationController:
         
         self.latest_detections_full = current_detections
         self.latest_labels_full = labels_all.copy()
+        self.latest_masks_full = masks_all.copy()  # 保存原始masks用于地面分割
         self.latest_rgb_original = rgb.copy()
         
         all_masks = []

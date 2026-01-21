@@ -1099,6 +1099,113 @@ class MapVisualizer:
         cv2.imwrite(save_path, rgb)
         return save_path
     
+    def draw_floor_from_saved_mask(self, image: np.ndarray, mask_path: str, classes: List[str]) -> np.ndarray:
+        """
+        使用保存的semantic mask绘制地面分割（直接使用原始检测的floor mask）
+        
+        Args:
+            image: 图像 (H, W, 3) BGR格式
+            mask_path: semantic mask的numpy文件路径
+            classes: 类别列表（用于查找floor索引）
+            
+        Returns:
+            绘制了地面分割的图像
+        """
+        try:
+            masks = np.load(mask_path)
+            floor_idx = None
+            for i, cls in enumerate(classes):
+                if cls.lower() == 'floor':
+                    floor_idx = i
+                    break
+            
+            if floor_idx is None or floor_idx >= masks.shape[0]:
+                return image
+            
+            floor_mask = masks[floor_idx]
+            overlay = image.copy()
+            green_color = np.array([0, 200, 0], dtype=np.uint8)
+            floor_bool = floor_mask > 0.1
+            overlay[floor_bool] = overlay[floor_bool] * 0.7 + green_color * 0.3
+            alpha = 0.6
+            result = cv2.addWeighted(overlay, alpha, image, 1 - alpha, 0)
+            return result
+        except Exception as e:
+            print(f"  ⚠️  Failed to load floor mask from {mask_path}: {e}")
+            return image
+    
+    def draw_distance_on_view(self, image: np.ndarray, distance_str: str) -> np.ndarray:
+        """
+        在视图上绘制距离信息（梯形线条）
+        
+        Args:
+            image: 图像 (H, W, 3) BGR格式
+            distance_str: 距离字符串
+        """
+        h, w = image.shape[:2]
+        center_x = w // 2
+        bottom_y = h - 5
+        side_offset = int(w * 0.15)
+        
+        if "WARNING" in distance_str or "<0.5" in distance_str:
+            color, line_ratio = (0, 0, 255), 0.3
+        elif ">2.0" in distance_str or "open" in distance_str:
+            color, line_ratio = (0, 255, 0), 1.0
+        else:
+            color, line_ratio = (0, 255, 255), 0.65
+        
+        max_length = bottom_y - h // 2
+        end_y = bottom_y - int(max_length * line_ratio)
+        
+        cv2.line(image, (center_x, bottom_y), (center_x, end_y), color, 3)
+        cv2.line(image, (center_x - side_offset, bottom_y), (center_x - int(side_offset * 0.5), end_y), color, 2)
+        cv2.line(image, (center_x + side_offset, bottom_y), (center_x + int(side_offset * 0.5), end_y), color, 2)
+        
+        text_x = center_x + 10
+        text_y = (bottom_y + h // 2) // 2
+        font_scale, thickness = 0.6, 2
+        text_size = cv2.getTextSize(distance_str, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)[0]
+        cv2.rectangle(image, (text_x - 2, text_y - text_size[1] - 1),
+                     (text_x + text_size[0] + 2, text_y + 2), (0, 0, 0), -1)
+        cv2.putText(image, distance_str, (text_x, text_y),
+                   cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, thickness)
+        return image
+    
+    def prepare_action_image_with_enhancements(self, image_path: str, mask_path: str = None, 
+                                               distance_str: str = "Unknown", classes: List[str] = None,
+                                               use_floor: bool = True, use_distance: bool = True) -> str:
+        """
+        为action模式准备增强图像：添加地面分割（绿色）和距离辅助线
+        
+        Args:
+            image_path: 原始图像路径
+            mask_path: semantic mask路径
+            distance_str: 距离字符串
+            classes: 类别列表
+            use_floor: 是否绘制地面分割
+            use_distance: 是否绘制距离辅助线
+            
+        Returns:
+            增强后的图像路径
+        """
+        if not os.path.exists(image_path):
+            return image_path
+        
+        image = cv2.imread(image_path)
+        if image is None:
+            return image_path
+        
+        if use_floor and mask_path and os.path.exists(mask_path) and classes:
+            image = self.draw_floor_from_saved_mask(image, mask_path, classes)
+        
+        if use_distance and distance_str != "Unknown":
+            image = self.draw_distance_on_view(image, distance_str)
+        
+        base_path = os.path.splitext(image_path)[0]
+        enhanced_path = f"{base_path}_enhanced.png"
+        cv2.imwrite(enhanced_path, image)
+        return enhanced_path
+    
     def save_global_map(self, 
                        step: int,
                        episode_id: int,
@@ -1305,6 +1412,10 @@ class MapVisualizer:
             )
             paths['detection'] = self.save_detection(step, episode_id, detection_vis, phase)
         
+        # 5. 保存semantic masks（用于action模式的地面分割）
+        if masks is not None:
+            paths['masks'] = self.save_semantic_masks(step, episode_id, masks, phase)
+        
         return paths, detected_landmarks_step, obstacle_distances
     
     # ========== 辅助方法 ==========
@@ -1397,6 +1508,27 @@ class MapVisualizer:
             print(f"  📍 {dominant_class} @({cx},{cy}) - {area}px")
         
         return landmarks
+    
+    def save_semantic_masks(self, step: int, episode_id: int, masks: np.ndarray, phase: str = "action") -> str:
+        """
+        保存semantic masks到numpy文件
+        
+        Args:
+            step: 当前步数
+            episode_id: episode ID
+            masks: semantic masks [num_classes, H, W]
+            phase: 阶段标识
+            
+        Returns:
+            保存路径
+        """
+        masks_dir = os.path.join(self.output_dir, f'eps_{episode_id}', 'semantic_masks')
+        os.makedirs(masks_dir, exist_ok=True)
+        
+        save_path = os.path.join(masks_dir, f'step_{step:04d}_{phase}.npy')
+        np.save(save_path, masks)
+        
+        return save_path
 
 
 # ========== 便捷函数 ==========
