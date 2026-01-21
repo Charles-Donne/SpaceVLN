@@ -1040,8 +1040,8 @@ class MapVisualizer:
         if global_map is None:
             return None
         
-        # 添加 "IMAGE 13: Global Map" 标签
-        label_text = "IMAGE 13: Global Map"
+        # 添加Global Map标签（不显示IMAGE编号）
+        label_text = "Global Map"
         
         # 创建白色标签背景（高度40像素）
         label_height = 40
@@ -1090,8 +1090,8 @@ class MapVisualizer:
         if local_map is None:
             return None
         
-        # 添加 "IMAGE 14: Local Map" 标签
-        label_text = "IMAGE 14: Local Map"
+        # 添加Local Map标签（不显示IMAGE编号）
+        label_text = "Local Map"
         
         # 创建白色标签背景（高度40像素）
         label_height = 40
@@ -1099,8 +1099,8 @@ class MapVisualizer:
         
         # 绘制红色文字
         font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 0.8
-        font_thickness = 2
+        font_scale = 0.5
+        font_thickness = 1
         text_color = (0, 0, 255)  # BGR: 红色
         
         # 计算文字位置（居中）

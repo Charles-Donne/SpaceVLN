@@ -23,18 +23,18 @@ VLM导航系统配置常量
 
 # 12个方向的配置（每个方向对应一个step）
 DIRECTION_CONFIG = [
-    {"step": 12, "angle": 0, "name": "IMAGE 1: Front 0°"},           # 初始朝向
-    {"step": 1, "angle": 30, "name": "IMAGE 2: Left 30°"},           # 左转30°
-    {"step": 2, "angle": 60, "name": "IMAGE 3: Left 60°"},           # 左转60°
-    {"step": 3, "angle": 90, "name": "IMAGE 4: Left 90°"},           # 左转90°
-    {"step": 4, "angle": 120, "name": "IMAGE 5: Left 120°"},         # 左转120°
-    {"step": 5, "angle": 150, "name": "IMAGE 6: Left 150°"},         # 左转150°
-    {"step": 6, "angle": 180, "name": "IMAGE 7: Back 180°"},         # 左转180°
-    {"step": 7, "angle": 210, "name": "IMAGE 8: Right 150°"},        # 右侧150° (从Back算起右转30°)
-    {"step": 8, "angle": 240, "name": "IMAGE 9: Right 120°"},        # 右侧120°
-    {"step": 9, "angle": 270, "name": "IMAGE 10: Right 90°"},        # 右侧90°
-    {"step": 10, "angle": 300, "name": "IMAGE 11: Right 60°"},       # 右侧60°
-    {"step": 11, "angle": 330, "name": "IMAGE 12: Right 30°"}        # 右侧30°
+    {"step": 12, "angle": 0, "name": "IMAGE 1: Front 0deg"},           # 初始朝向
+    {"step": 1, "angle": 30, "name": "IMAGE 2: Left 30deg"},           # 左转30°
+    {"step": 2, "angle": 60, "name": "IMAGE 3: Left 60deg"},           # 左转60°
+    {"step": 3, "angle": 90, "name": "IMAGE 4: Left 90deg"},           # 左转90°
+    {"step": 4, "angle": 120, "name": "IMAGE 5: Left 120deg"},         # 左转120°
+    {"step": 5, "angle": 150, "name": "IMAGE 6: Left 150deg"},         # 左转150°
+    {"step": 6, "angle": 180, "name": "IMAGE 7: Back 180deg"},         # 左转180°
+    {"step": 7, "angle": 210, "name": "IMAGE 8: Right 150deg"},        # 右侧150° (从Back算起右转30°)
+    {"step": 8, "angle": 240, "name": "IMAGE 9: Right 120deg"},        # 右侧120°
+    {"step": 9, "angle": 270, "name": "IMAGE 10: Right 90deg"},        # 右侧90°
+    {"step": 10, "angle": 300, "name": "IMAGE 11: Right 60deg"},       # 右侧60°
+    {"step": 11, "angle": 330, "name": "IMAGE 12: Right 30deg"}        # 右侧30°
 ]
 
 # 提取方向名称列表（用于API传递）

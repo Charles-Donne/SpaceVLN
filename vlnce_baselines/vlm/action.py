@@ -43,29 +43,23 @@ class ActionExecutor(BaseAPIClient):
                                   degrees: float = 0, meters: float = 0,
                                   actual_degrees: float = None, actual_meters: float = None) -> str:
         """
-        系统自动生成progress_summary（只记录实际值 + 失败检测）
+        系统自动生成progress_summary（只记录实际值）
         
         规则：
-        1. 正常执行：只记录实际值 "Turned left 88°", "Moved forward 0.47m"
-        2. 失败检测：显示预期vs实际 "Tried to move 0.5m but only moved 0.02m (collision)"
-        3. 转向累积：左转(+) 右转(-) 相互抵消，只保留净转向
-        4. 直行累积：连续MOVE_FORWARD累加距离
-        5. 动作分段：转向打断直行，直行打断转向
-        
-        失败判断标准：
-        - 转向失败：|planned - actual| > 15°
-        - 移动失败：actual/planned < 0.5 (移动成功率<50%)
+        1. 只记录实际值 "Turned left 88°", "Moved forward 0.47m"
+        2. 转向累积：左转(+) 右转(-) 相互抵消，只保留净转向
+        3. 直行累积：连续MOVE_FORWARD累加距离
+        4. 动作分段：转向打断直行，直行打断转向
         
         示例：
-        - 正常："Turned left 88°, moved forward 0.47m"
-        - 失败："Tried to move 0.5m but only moved 0.02m (collision)"
-        - 累加："Moved 0.5m, then moved 0.3m" → "Moved 0.8m"
+        - "Turned left 88°, moved forward 0.47m"
+        - "Moved 0.5m, then moved 0.3m" → "Moved 0.8m"
         
         Args:
             current_progress: 当前进度字符串
             action_name: 动作名称
-            degrees: 计划转向角度（仅用于TURN，用于失败检测）
-            meters: 计划移动距离（仅用于MOVE_FORWARD，用于失败检测）
+            degrees: 计划转向角度（不使用）
+            meters: 计划移动距离（不使用）
             actual_degrees: 实际转向角度（必需，记录实际值）
             actual_meters: 实际移动距离（必需，记录实际值）
             
@@ -77,34 +71,11 @@ class ActionExecutor(BaseAPIClient):
         if not current_progress or current_progress == "(Just started - no actions yet)":
             # 第一步（使用完成时态 Had）
             if action_name == 'TURN_LEFT':
-                if actual_degrees is not None:
-                    # 检查是否失败
-                    diff = abs(degrees - actual_degrees)
-                    if diff > 15:
-                        if actual_degrees < degrees:
-                            return f"Had tried to turn left {int(degrees)}° but only turned {int(actual_degrees)}° (turn failed)"
-                        else:
-                            return f"Had tried to turn left {int(degrees)}° but overturned to {int(actual_degrees)}° (turn failed)"
-                    return f"Had turned left {int(actual_degrees)}°"
-                return f"Had turned left {int(degrees)}°"  # 无验证数据，用计划值
+                return f"Had turned left {int(actual_degrees if actual_degrees is not None else degrees)}°"
             elif action_name == 'TURN_RIGHT':
-                if actual_degrees is not None:
-                    diff = abs(degrees - actual_degrees)
-                    if diff > 15:
-                        if actual_degrees < degrees:
-                            return f"Had tried to turn right {int(degrees)}° but only turned {int(actual_degrees)}° (turn failed)"
-                        else:
-                            return f"Had tried to turn right {int(degrees)}° but overturned to {int(actual_degrees)}° (turn failed)"
-                    return f"Had turned right {int(actual_degrees)}°"
-                return f"Had turned right {int(degrees)}°"
+                return f"Had turned right {int(actual_degrees if actual_degrees is not None else degrees)}°"
             elif action_name == 'MOVE_FORWARD':
-                if actual_meters is not None:
-                    # 检查是否碰撞
-                    ratio = actual_meters / meters if meters > 0 else 0
-                    if ratio < 0.5:
-                        return f"Had tried to move {meters}m but only moved {actual_meters:.2f}m (collision)"
-                    return f"Had moved forward {actual_meters:.2f}m"
-                return f"Had moved forward {meters}m"
+                return f"Had moved forward {actual_meters if actual_meters is not None else meters:.2f}m"
             elif action_name == 'STOP':
                 return "Had stopped at destination"
         
@@ -112,21 +83,16 @@ class ActionExecutor(BaseAPIClient):
         segments = [s.strip() for s in current_progress.split(',')]
         last_segment = segments[-1] if segments else ""
         
-        # 检测最后一段是什么类型的动作（只匹配实际值格式）
-        # 匹配格式: "had turned left 88°" 或 "then turned left 88°" 或 "had tried to turn left 90° but only turned 10° (turn failed)"
-        turn_left_match = re.search(r'(?:[Hh]ad )?[Tt](?:ried to t)?urned left (\d+)°', last_segment)
-        turn_right_match = re.search(r'(?:[Hh]ad )?[Tt](?:ried to t)?urned right (\d+)°', last_segment)
-        move_match = re.search(r'(?:[Hh]ad )?[Mm](?:oved forward|tried to move) ([\d.]+)m', last_segment)
-        
-        # 检测失败状态
-        turn_failed = 'turn failed' in last_segment or 'tried to turn' in last_segment
-        move_failed = 'collision' in last_segment or 'tried to move' in last_segment
+        # 检测最后一段是什么类型的动作
+        turn_left_match = re.search(r'[Tt]urned left (\d+)°', last_segment)
+        turn_right_match = re.search(r'[Tt]urned right (\d+)°', last_segment)
+        move_match = re.search(r'[Mm]oved forward ([\d.]+)m', last_segment)
         
         # 处理新动作
         if action_name in ['TURN_LEFT', 'TURN_RIGHT']:
             # 新动作是转向
-            if (turn_left_match or turn_right_match) and not turn_failed:
-                # 最后一段也是成功的转向，可以合并
+            if (turn_left_match or turn_right_match):
+                # 最后一段也是转向，可以合并
                 current_net_turn = 0
                 if turn_left_match:
                     current_net_turn = int(turn_left_match.group(1))  # 左转为正
@@ -145,24 +111,7 @@ class ActionExecutor(BaseAPIClient):
                     else:
                         new_net_turn = current_net_turn - int(degrees)
                 
-                # 检查新动作是否失败
-                is_failed = actual_degrees is not None and abs(degrees - actual_degrees) > 15
-                
-                if is_failed:
-                    # 失败不合并，开始新段
-                    if action_name == 'TURN_LEFT':
-                        if actual_degrees < degrees:
-                            new_segment = f"then tried to turn left {int(degrees)}° but only turned {int(actual_degrees)}° (turn failed)"
-                        else:
-                            new_segment = f"then tried to turn left {int(degrees)}° but overturned to {int(actual_degrees)}° (turn failed)"
-                    else:
-                        if actual_degrees < degrees:
-                            new_segment = f"then tried to turn right {int(degrees)}° but only turned {int(actual_degrees)}° (turn failed)"
-                        else:
-                            new_segment = f"then tried to turn right {int(degrees)}° but overturned to {int(actual_degrees)}° (turn failed)"
-                    return f"{current_progress}, {new_segment}"
-                
-                # 更新最后一段（成功的合并）
+                # 更新最后一段
                 if new_net_turn > 0:
                     segments[-1] = f"had turned left {new_net_turn}°"
                 elif new_net_turn < 0:
@@ -176,25 +125,12 @@ class ActionExecutor(BaseAPIClient):
                 
                 return ', '.join(segments)
             else:
-                # 最后一段是失败的转向或直行，开始新段
+                # 最后一段是直行，开始新段
                 if actual_degrees is not None:
-                    is_failed = abs(degrees - actual_degrees) > 15
-                    if is_failed:
-                        if action_name == 'TURN_LEFT':
-                            if actual_degrees < degrees:
-                                new_segment = f"then tried to turn left {int(degrees)}° but only turned {int(actual_degrees)}° (turn failed)"
-                            else:
-                                new_segment = f"then tried to turn left {int(degrees)}° but overturned to {int(actual_degrees)}° (turn failed)"
-                        else:
-                            if actual_degrees < degrees:
-                                new_segment = f"then tried to turn right {int(degrees)}° but only turned {int(actual_degrees)}° (turn failed)"
-                            else:
-                                new_segment = f"then tried to turn right {int(degrees)}° but overturned to {int(actual_degrees)}° (turn failed)"
+                    if action_name == 'TURN_LEFT':
+                        new_segment = f"then turned left {int(actual_degrees)}°"
                     else:
-                        if action_name == 'TURN_LEFT':
-                            new_segment = f"then turned left {int(actual_degrees)}°"
-                        else:
-                            new_segment = f"then turned right {int(actual_degrees)}°"
+                        new_segment = f"then turned right {int(actual_degrees)}°"
                 else:
                     if action_name == 'TURN_LEFT':
                         new_segment = f"then turned left {int(degrees)}°"
@@ -204,8 +140,8 @@ class ActionExecutor(BaseAPIClient):
         
         elif action_name == 'MOVE_FORWARD':
             # 新动作是直行
-            if move_match and not move_failed:
-                # 最后一段也是成功的直行，累加距离
+            if move_match:
+                # 最后一段也是直行，累加距离
                 current_distance = float(move_match.group(1))
                 
                 # 使用实际值累加
@@ -214,25 +150,13 @@ class ActionExecutor(BaseAPIClient):
                 else:
                     new_distance = current_distance + meters
                 
-                # 检查新动作是否失败
-                is_failed = actual_meters is not None and meters > 0 and (actual_meters / meters < 0.5)
-                
-                if is_failed:
-                    # 失败不合并，开始新段
-                    new_segment = f"then tried to move {meters}m but only moved {actual_meters:.2f}m (collision)"
-                    return f"{current_progress}, {new_segment}"
-                
-                # 成功合并
+                # 合并
                 segments[-1] = f"had moved forward {new_distance:.2f}m"
                 return ', '.join(segments)
             else:
-                # 最后一段是失败的移动或转向，开始新段
+                # 最后一段是转向，开始新段
                 if actual_meters is not None:
-                    is_failed = meters > 0 and (actual_meters / meters < 0.5)
-                    if is_failed:
-                        new_segment = f"then tried to move {meters}m but only moved {actual_meters:.2f}m (collision)"
-                    else:
-                        new_segment = f"then moved forward {actual_meters:.2f}m"
+                    new_segment = f"then moved forward {actual_meters:.2f}m"
                 else:
                     new_segment = f"then moved forward {meters}m"
                 return f"{current_progress}, {new_segment}"

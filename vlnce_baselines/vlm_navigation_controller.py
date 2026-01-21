@@ -180,6 +180,284 @@ class VLMNavigationController(InteractiveNavigationController):
         # 通过call_at调用environment 0的get_agent_pose方法
         return self.envs.call_at(0, "get_agent_pose")
     
+    def _draw_navigable_area_on_view(self, image: np.ndarray, view_angle: float) -> np.ndarray:
+        """
+        在方向视图上绘制可导航区域（绿色覆盖层）
+        
+        Args:
+            image: 当前方向的图像 (H, W, 3) BGR格式
+            view_angle: 当前视角的角度 (0-330, 30度递增)
+            
+        Returns:
+            绘制了导航区域后的图像
+        """
+        if not hasattr(self, 'mapper') or self.mapper is None:
+            return image
+        
+        # 获取当前agent位置和朝向
+        agent_x, agent_y, agent_o = self._get_agent_pose()
+        
+        # 计算当前视角的绝对方向
+        view_offset_rad = np.deg2rad(view_angle)
+        view_direction = agent_o + view_offset_rad
+        
+        # 相机FOV是79度
+        camera_fov_half = np.deg2rad(79 / 2)
+        
+        h, w = image.shape[:2]
+        
+        # 创建半透明绿色覆盖层
+        overlay = image.copy()
+        
+        # 从地图获取可导航区域信息
+        # 使用mapper的occupancy grid判断可导航性
+        if hasattr(self.mapper, 'occupancy_grid'):
+            # 投影可导航点到图像上
+            max_distance = 5.0  # 最远检测5米
+            num_rays = 40  # 检测射线数量（覆盖79度FOV）
+            
+            # 生成检测射线（在79度FOV内均匀分布）
+            for i in range(num_rays):
+                # 射线角度：从view_direction - fov_half 到 view_direction + fov_half
+                ray_ratio = i / (num_rays - 1) if num_rays > 1 else 0.5
+                ray_angle = view_direction - camera_fov_half + ray_ratio * 2 * camera_fov_half
+                
+                # 沿射线检测可导航区域
+                navigable_points = []
+                for dist in np.linspace(0.5, max_distance, 20):
+                    # 计算世界坐标
+                    world_x = agent_x + dist * np.cos(ray_angle)
+                    world_y = agent_y + dist * np.sin(ray_angle)
+                    
+                    # 转换到地图坐标
+                    map_x = int((world_x - self.mapper.map_min_x) / self.mapper.map_resolution)
+                    map_y = int((world_y - self.mapper.map_min_y) / self.mapper.map_resolution)
+                    
+                    # 检查是否在地图范围内
+                    if 0 <= map_x < self.mapper.occupancy_grid.shape[1] and \
+                       0 <= map_y < self.mapper.occupancy_grid.shape[0]:
+                        # 0=未知, 1=可导航, 2=障碍物
+                        if self.mapper.occupancy_grid[map_y, map_x] == 1:
+                            navigable_points.append((dist, ray_angle))
+                        elif self.mapper.occupancy_grid[map_y, map_x] == 2:
+                            # 遇到障碍物，停止这条射线
+                            break
+                    else:
+                        break
+                
+                # 在图像上绘制可导航点
+                for dist, ray_angle in navigable_points:
+                    # 计算相对于视角中心的角度差
+                    angle_diff = ray_angle - view_direction
+                    angle_diff = np.arctan2(np.sin(angle_diff), np.cos(angle_diff))
+                    
+                    # X坐标映射
+                    x_ratio = (angle_diff + camera_fov_half) / (2 * camera_fov_half)
+                    x_pos = int(x_ratio * w)
+                    x_pos = max(0, min(w - 1, x_pos))
+                    
+                    # Y坐标映射（距离 → 垂直位置）
+                    if dist < 1.0:
+                        y_pos = int(h * 0.85)  # 近处，下方
+                    elif dist < 2.0:
+                        y_pos = int(h * 0.75)
+                    elif dist < 3.0:
+                        y_pos = int(h * 0.65)
+                    elif dist < 4.0:
+                        y_pos = int(h * 0.55)
+                    else:
+                        y_pos = int(h * 0.45)  # 远处，上方
+                    
+                    y_pos = max(0, min(h - 1, y_pos))
+                    
+                    # 绘制绿色半透明点（表示可导航区域）
+                    cv2.circle(overlay, (x_pos, y_pos), 3, (0, 255, 0), -1)
+        
+        # 混合原图和覆盖层（30%透明度）
+        alpha = 0.3
+        result = cv2.addWeighted(overlay, alpha, image, 1 - alpha, 0)
+        
+        return result
+    
+    def _draw_waypoints_on_view(self, image: np.ndarray, view_angle: float, waypoint_info: tuple) -> np.ndarray:
+        """
+        在方向视图上绘制waypoint标记和历史轨迹
+        
+        Args:
+            image: 当前方向的图像 (H, W, 3) BGR格式
+            view_angle: 当前视角的角度 (0-330, 30度递增)
+            waypoint_info: (waypoint_positions, waypoint_ids, descriptions) from mapper.get_waypoints()
+            
+        Returns:
+            绘制了waypoint标记和轨迹后的图像
+        """
+        if not waypoint_info or len(waypoint_info[0]) == 0:
+            return image
+        
+        waypoint_positions, waypoint_ids, _ = waypoint_info
+        
+        # 获取当前agent位置和朝向
+        agent_x, agent_y, agent_o = self._get_agent_pose()
+        
+        # 计算当前视角的绝对方向（agent朝向 + 相对角度）
+        view_offset_rad = np.deg2rad(view_angle)
+        view_direction = agent_o + view_offset_rad
+        
+        # 实际相机FOV是79度，但只显示±15度内的waypoint（确保唯一性）
+        display_fov_half = np.deg2rad(15)  # 只显示30度范围内的waypoint
+        camera_fov_half = np.deg2rad(79 / 2)  # 79度用于映射坐标
+        
+        h, w = image.shape[:2]
+        
+        # ========== 1. 绘制历史轨迹投影 ==========
+        if hasattr(self, 'mapper') and self.mapper:
+            trajectory_points = self.mapper.trajectory  # List[(x, y)]
+            if len(trajectory_points) > 1:
+                projected_points = []
+                
+                # 投影轨迹点到当前视角
+                for traj_x, traj_y in trajectory_points:
+                    dx = traj_x - agent_x
+                    dy = traj_y - agent_y
+                    distance = np.sqrt(dx**2 + dy**2)
+                    
+                    if distance < 0.1:
+                        continue
+                    
+                    # 计算角度差
+                    traj_angle = np.arctan2(dy, dx)
+                    angle_diff = traj_angle - view_direction
+                    angle_diff = np.arctan2(np.sin(angle_diff), np.cos(angle_diff))
+                    
+                    # 只绘制在79度FOV内的轨迹点
+                    if abs(angle_diff) <= camera_fov_half:
+                        # X坐标映射（使用79度FOV）
+                        x_ratio = (angle_diff + camera_fov_half) / (2 * camera_fov_half)
+                        x_pos = int(x_ratio * w)
+                        
+                        # Y坐标映射（距离）
+                        if distance < 1.0:
+                            y_pos = int(h * 0.75)
+                        elif distance < 2.0:
+                            y_pos = int(h * 0.65)
+                        elif distance < 3.0:
+                            y_pos = int(h * 0.55)
+                        elif distance < 5.0:
+                            y_pos = int(h * 0.45)
+                        else:
+                            y_pos = int(h * 0.35)
+                        
+                        projected_points.append((x_pos, y_pos))
+                
+                # 绘制轨迹线（橙色虚线）
+                for i in range(len(projected_points) - 1):
+                    pt1 = projected_points[i]
+                    pt2 = projected_points[i + 1]
+                    cv2.line(image, pt1, pt2, (0, 165, 255), 2)  # 橙色线条
+                
+                # 在轨迹点上绘制小圆点
+                for pt in projected_points:
+                    cv2.circle(image, pt, 3, (0, 140, 255), -1)  # 深橙色点
+        
+        # ========== 2. 绘制最近的waypoint标记（仅30度内） ==========
+        # 只显示最近的一个waypoint（上一个waypoint）
+        if len(waypoint_positions) > 0:
+            # 找到最近的waypoint
+            min_distance = float('inf')
+            closest_idx = -1
+            
+            for i, (wp_x, wp_y) in enumerate(waypoint_positions):
+                dx = wp_x - agent_x
+                dy = wp_y - agent_y
+                distance = np.sqrt(dx**2 + dy**2)
+                
+                if distance < min_distance and distance >= 0.1:
+                    min_distance = distance
+                    closest_idx = i
+            
+            # 如果找到最近的waypoint，检查是否在当前视角内
+            if closest_idx >= 0:
+                wp_x, wp_y = waypoint_positions[closest_idx]
+                wp_id = waypoint_ids[closest_idx]
+                wp_desc = waypoint_info[2][closest_idx] if len(waypoint_info[2]) > closest_idx else ""
+                
+                # 计算waypoint相对于agent的向量
+                dx = wp_x - agent_x
+                dy = wp_y - agent_y
+                distance = np.sqrt(dx**2 + dy**2)
+                
+                # 计算waypoint的方向角
+                wp_angle = np.arctan2(dy, dx)
+                angle_diff = wp_angle - view_direction
+                angle_diff = np.arctan2(np.sin(angle_diff), np.cos(angle_diff))
+                
+                # 只显示±15度内的waypoint（确保每个waypoint只出现在一个视图中）
+                if abs(angle_diff) <= display_fov_half:
+                    # X坐标映射：使用79度FOV范围映射到图像宽度
+                    x_ratio = (angle_diff + camera_fov_half) / (2 * camera_fov_half)
+                    x_pos = int(x_ratio * w)
+                    x_pos = max(0, min(w - 1, x_pos))  # 边界检查
+                    
+                    # Y坐标统一在中间位置
+                    y_pos = int(h * 0.5)  # 固定在图像垂直中心
+                    
+                    # 绘制waypoint标记（蓝色外圈 + 白色填充）
+                    cv2.circle(image, (x_pos, y_pos), 22, (255, 0, 0), 3)  # 蓝色边框
+                    cv2.circle(image, (x_pos, y_pos), 19, (255, 255, 255), -1)  # 白色填充
+                    
+                    # 绘制waypoint ID（红色粗体）
+                    text = f"{wp_id}"
+                    font_scale = 0.9
+                    thickness = 2
+                    text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)[0]
+                    text_x = x_pos - text_size[0] // 2
+                    text_y = y_pos + text_size[1] // 2
+                    cv2.putText(image, text, (text_x, text_y), 
+                               cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 255), thickness)
+                    
+                    # 在waypoint下方显示距离（绿色文字）
+                    dist_text = f"{distance:.1f}m"
+                    dist_font_scale = 0.5
+                    dist_thickness = 1
+                    dist_text_size = cv2.getTextSize(dist_text, cv2.FONT_HERSHEY_SIMPLEX, 
+                                                      dist_font_scale, dist_thickness)[0]
+                    dist_x = x_pos - dist_text_size[0] // 2
+                    dist_y = y_pos + 35  # 圆圈下方35像素
+                    
+                    # 距离文字背景（黑色）
+                    cv2.rectangle(image, 
+                                (dist_x - 3, dist_y - dist_text_size[1] - 2),
+                                (dist_x + dist_text_size[0] + 3, dist_y + 4),
+                                (0, 0, 0), -1)
+                    cv2.putText(image, dist_text, (dist_x, dist_y), 
+                               cv2.FONT_HERSHEY_SIMPLEX, dist_font_scale, (0, 255, 0), dist_thickness)
+                    
+                    # 在waypoint上方显示area type（如果有）
+                    if wp_desc:
+                        # 提取waypoint描述中的area type（第一部分，以" - "分隔）
+                        area_type = wp_desc.split(' - ')[0] if ' - ' in wp_desc else wp_desc
+                        area_font_scale = 0.6
+                        area_thickness = 2
+                        area_text_size = cv2.getTextSize(area_type, cv2.FONT_HERSHEY_SIMPLEX, 
+                                                          area_font_scale, area_thickness)[0]
+                        area_x = x_pos - area_text_size[0] // 2
+                        area_y = y_pos - 35  # 圆圈上方35像素
+                        
+                        # Area type背景框（蓝色边框 + 白色填充）
+                        padding = 5
+                        cv2.rectangle(image,
+                                    (area_x - padding, area_y - area_text_size[1] - padding),
+                                    (area_x + area_text_size[0] + padding, area_y + padding),
+                                    (255, 0, 0), 2)  # 蓝色边框
+                        cv2.rectangle(image,
+                                    (area_x - padding + 2, area_y - area_text_size[1] - padding + 2),
+                                    (area_x + area_text_size[0] + padding - 2, area_y + padding - 2),
+                                    (255, 255, 255), -1)  # 白色填充
+                        cv2.putText(image, area_type, (area_x, area_y), 
+                                   cv2.FONT_HERSHEY_SIMPLEX, area_font_scale, (0, 0, 0), area_thickness)  # 黑色文字
+        
+        return image
+    
     def look_around_and_collect(self, phase: str = "initial") -> Tuple[List[str], List[str]]:
         """
         360°环视建图 + 生成4方向全景图
@@ -329,13 +607,16 @@ class VLMNavigationController(InteractiveNavigationController):
             # 返回空列表，调用方需要处理这种情况
             return [], []
         
-        # 保存12张独立图片（不拼接），每张图片添加角度标注
+        # 保存12张独立图片（不拼接），每张图片添加角度标注 + waypoint标记
         from .vlm.navigation_config import DIRECTION_CONFIG
         
         direction_paths = []
         direction_names = []
         directions_dir = os.path.join(self.config.RESULTS_DIR, f"episode_{self.current_episode_id}", "directions")
         os.makedirs(directions_dir, exist_ok=True)
+        
+        # 获取waypoint历史信息（用于在方向视图上绘制）
+        waypoint_info = self.mapper.get_waypoints() if hasattr(self, 'mapper') and self.mapper else None
         
         for config in DIRECTION_CONFIG:
             step_idx = config["step"]  # 1-12
@@ -347,6 +628,13 @@ class VLMNavigationController(InteractiveNavigationController):
             # lookaround_images[11] = step 12 (0°)
             image = lookaround_images[step_idx - 1].copy()
             
+            # 先绘制可导航区域（绿色地面）
+            image = self._draw_navigable_area_on_view(image, angle)
+            
+            # 然后绘制waypoint标记（如果在当前视角范围内）
+            if waypoint_info:
+                image = self._draw_waypoints_on_view(image, angle, waypoint_info)
+            
             # 在图片顶部添加白色背景的角度标注
             h, w = image.shape[:2]
             label_height = 50
@@ -355,8 +643,8 @@ class VLMNavigationController(InteractiveNavigationController):
             # 添加文字标注（使用OpenCV）
             label_text = direction_name  # 如 "IMAGE 1: Front (0°)"
             font = cv2.FONT_HERSHEY_SIMPLEX
-            font_scale = 0.8
-            font_thickness = 2
+            font_scale = 0.5
+            font_thickness = 1
             text_color = (0, 0, 255)  # 红色
             
             # 计算文字位置（居中）
@@ -571,6 +859,67 @@ class VLMNavigationController(InteractiveNavigationController):
         self._print_subtask_info(response, is_initial=True)
         
         return response
+    
+    def auto_rotate_to_waypoint(self, waypoint_direction: str) -> bool:
+        """
+        根据waypoint_direction自动旋转到目标方向
+        
+        Args:
+            waypoint_direction: 如"IMAGE 5 (Left 120°)"
+            
+        Returns:
+            bool: 旋转是否成功
+        """
+        import re
+        
+        # 解析waypoint_direction，提取角度
+        # 格式: "IMAGE X (Direction Angle°)" 或 "IMAGE X"
+        match = re.search(r'Left (\d+)°|Right (\d+)°|Back (\d+)°|Front (\d+)°', waypoint_direction)
+        
+        if not match:
+            print(f"  ⚠️  无法解析waypoint_direction: {waypoint_direction}")
+            return False
+        
+        # 提取方向和角度
+        if 'Left' in waypoint_direction:
+            angle = int(match.group(1))
+            direction = 'LEFT'
+        elif 'Right' in waypoint_direction:
+            angle = int(match.group(2))
+            direction = 'RIGHT'
+        elif 'Back' in waypoint_direction:
+            angle = 180
+            direction = 'LEFT'  # 向左转180度
+        elif 'Front' in waypoint_direction:
+            # 已经面向Front，无需旋转
+            print(f"  ✓ Waypoint已在Front方向，无需旋转")
+            return True
+        else:
+            print(f"  ⚠️  无法识别方向: {waypoint_direction}")
+            return False
+        
+        print(f"\n[自动旋转] 旋转到waypoint方向: {direction} {angle}°")
+        
+        # 执行旋转（使用habitat的原始action）
+        turn_action_id = 2 if direction == 'LEFT' else 3  # TURN_LEFT=2, TURN_RIGHT=3
+        
+        # 计算需要旋转的次数（每次30度）
+        num_turns = angle // 30
+        
+        for i in range(num_turns):
+            print(f"  旋转 {i+1}/{num_turns}: {direction} 30°")
+            
+            # 执行一次30度旋转
+            observations = self.env.step(turn_action_id)
+            self.current_step += 1
+            
+            # 检查episode是否结束
+            if self.env.episode_over:
+                print(f"  ⚠️  Episode在旋转过程中结束")
+                return False
+        
+        print(f"  ✓ 旋转完成，已面向waypoint方向")
+        return True
     
     def verify_and_replan(self) -> Tuple[bool, Optional[Dict], Optional[str]]:
         """
@@ -797,6 +1146,22 @@ class VLMNavigationController(InteractiveNavigationController):
             # ⚠️ 重要：self.classes始终保持为所有mapping_classes，用于完整的语义建图
             
             self._print_subtask_info(response)
+            
+            # 子任务完成后，自动旋转到新的waypoint方向
+            waypoint_direction = response.get('waypoint_direction', '')
+            if waypoint_direction and 'Front' not in waypoint_direction:
+                print(f"\n[两阶段导航] 新子任务 - 阶段1: 旋转到waypoint方向")
+                success = self.auto_rotate_to_waypoint(waypoint_direction)
+                
+                if success:
+                    # 旋转完成后，重新环视确认
+                    print(f"\n[两阶段导航] 新子任务 - 阶段2: 重新环视确认waypoint在Front")
+                    attempt_letter = chr(ord('a') + self.subtask_attempt)
+                    confirm_phase = f"rotate_confirm_{self.subtask_count}{attempt_letter}"
+                    confirm_images, confirm_names = self.look_around_and_collect(confirm_phase)
+                    
+                    if confirm_images:
+                        print(f"  ✓ 环视完成，waypoint应该在IMAGE 1 (Front)")
         else:
             attempt_letter = chr(ord('a') + self.subtask_attempt)
             print(f"\n[子任务未完成] #{self.subtask_count}{attempt_letter} - 重新规划")
@@ -1210,6 +1575,31 @@ class VLMNavigationController(InteractiveNavigationController):
                 'result_file': None,
                 'reason': 'initial_subtask_failed'
             }
+        
+        # 2.5 自动旋转到waypoint方向
+        waypoint_direction = subtask.get('waypoint_direction', '')
+        if waypoint_direction and 'Front' not in waypoint_direction:
+            print(f"\n[两阶段导航] 阶段1: 旋转到waypoint方向")
+            success = self.auto_rotate_to_waypoint(waypoint_direction)
+            
+            if not success:
+                print("  ✗ 自动旋转失败")
+                # 继续执行，让ActionVLM处理
+            else:
+                # 2.6 旋转完成后，重新环视确认waypoint在Front
+                print(f"\n[两阶段导航] 阶段2: 重新环视确认waypoint在Front")
+                confirm_phase = f"rotate_confirm_{self.subtask_count}a"
+                confirm_images, confirm_names = self.look_around_and_collect(confirm_phase)
+                
+                if confirm_images:
+                    print(f"  ✓ 环视完成，waypoint应该在IMAGE 1 (Front)")
+                    # 可选：保存确认记录
+                    self.save_manager.save_rotation_confirmation({
+                        'step': self.current_step,
+                        'phase': confirm_phase,
+                        'original_direction': waypoint_direction,
+                        'confirmed': True
+                    })
         
         # 3. 主导航循环
         total_steps = self.current_step

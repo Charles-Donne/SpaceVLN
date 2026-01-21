@@ -20,30 +20,13 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 **Direction Selection Strategy**:
 - Analyze all 12 views to determine which direction contains the waypoint/landmark
 - Choose the angle where waypoint appears centered in view (or most visible)
-- If waypoint is in Front view (IMAGE 1), no turn needed
-- If waypoint is in other views, instruction must **first turn to face waypoint, then move**
+- **System will automatically rotate to face the waypoint_direction you specify**
+- After rotation, waypoint will be in Front view (IMAGE 1) for step-by-step navigation
 
-**Action Origin**: All actions start from Front (IMAGE 1, 0°)
+**Action Origin**: All actions start from Front (IMAGE 1, 0°) **after automatic rotation**
 
-# Obstacle Distances (5 Directions)
-
-Distance to nearest obstacles from current position (calculated from map):
-
-- **FRONT (0°)**: {distance_front}
-- **LEFT-30 (30°)**: {distance_left_30}
-- **RIGHT-30 (-30°)**: {distance_right_30}
-- **LEFT-90 (90°)**: {distance_left_90}
-- **RIGHT-90 (-90°)**: {distance_right_90}
-
-**Distance Rules**:
-- ">2.0m open": Safe distance, no immediate obstacles
-- "X.XXm": Specific distance < 2m, caution needed
-- "<0.5m WARNING": Critical proximity, immediate turn/stop required
-
-**Use distances for safe planning**: Choose turns/moves that avoid obstacles in travel direction
-
-**IMAGE 13: Global Map** - Full explored area
-**IMAGE 14: Local Map** - Nearby region (agent-centered, FOV cone shown)
+**Global Map** - Full explored area
+**Local Map** - Nearby region (agent-centered, FOV cone shown)
 
 # Map Interpretation Guide
 
@@ -75,10 +58,11 @@ Distance to nearest obstacles from current position (calculated from map):
 # Your Task
 
 1. **Analyze environment**: Use 12 directional views + global and local map to identify your position, related landmarks and obstacles
-2. **Determine waypoint direction**: Analyze which of the 12 views contains the next waypoint/landmark (choose angle where waypoint is most centered/possibleb
+2. **Determine waypoint direction**: Analyze which of the 12 views contains the next waypoint/landmark (choose angle where waypoint is most centered/visible)
 3. **Plan navigation instruction**: 
-   - **If waypoint in Front**: Step by step to Next-Waypoint
-   - **If waypoint in other Views**: **First turn to face Next-Waypoint direction, then step by step to Next-Waypoint**
+   - **System will auto-rotate** to face your specified waypoint_direction
+   - After rotation, waypoint will be in Front view (IMAGE 1)
+   - Write step-by-step instructions assuming agent is already **facing the waypoint**
 
 # Actions Available
 
@@ -110,53 +94,51 @@ Distance to nearest obstacles from current position (calculated from map):
 ## Ex1: 
 **Global Task**: Turn around walk through the exercise room into the living room. Wait by the Table.
 **Current Observation:** IMAGE 1 (Front 0°): Bookshelf visible at distance. IMAGE 5 (Left 120°): Exercise room doorway visible with gym equipment inside. IMAGE 10 (Right 270°): Toilet and washbasin visible
-**Obstacle Distances**: FRONT: >2.0m open | LEFT-30: 0.8m | RIGHT-30: >2.0m open | LEFT-90: 0.3m (<0.5m WARNING) | RIGHT-90: >2.0m open
 
 {{
     "waypoint": "Restroom - beside exercise room doorway, toilet and washbasin nearby.",
     "waypoint_sequence": "Restroom(Current) → Exercise Room Entrance → Exercise Room → Living Room → Living Room's Table(Goal)",
     "waypoint_direction": "IMAGE 5 (Left 120°)",
     "subtask_destination": "exercise room entrance",
-    "subtask_instruction": "Turn left 120° to face exercise room doorway, then move forward to enter the exercise room",
+    "subtask_instruction": "Move forward to enter the exercise room",
     "subtask_landmark": "exercise equipment",
     "completion_criteria": {{
         "Surrounding_Detection": "Exercise equipment detected in Front. Restroom fixtures detected in Back",
-        "Spatial_relationship": "Exercise equipment ahead < 0.5m (map shows gym equipment at entrance position). Restroom far behind (map shows previous location). Orange trajectory shows left turn 120° and forward movement into gym entrance",
+        "Spatial_relationship": "Exercise equipment ahead < 0.5m (map shows gym equipment at entrance position). Restroom far behind (map shows previous location). Orange trajectory shows forward movement into gym entrance",
         "Location": "Exercise Room Entrance - exercise equipment ahead < 0.5m, restroom behind"
     }},
     "global_task_finish": false,
-    "reasoning": "IMAGE 5 (Left 120°) shows exercise room doorway with gym equipment - next waypoint. Since NOT in IMAGE 1, turn left 120° first to align with IMAGE 5 direction, then move forward. Local map shows dark green circle (0.5m range) clear, LEFT-90 obstacle at 0.3m confirms wall nearby. Global map shows red arrow (current position) in small room, orange trajectory shows arrival path, exercise room (larger green area) is to the left. Dark red dashed line currently points away from exercise room, needs 120° left turn to align with doorway. Using 'exercise equipment' as landmark."
+    "reasoning": "IMAGE 5 (Left 120°) shows exercise room doorway with gym equipment - next waypoint. System will auto-rotate 120° left to face this direction. After rotation, move forward through doorway. Local map shows dark green circle (0.5m range) clear. Global map shows red arrow (current position) in small room, orange trajectory shows arrival path, exercise room (larger green area) is to the left. Using 'exercise equipment' as landmark."
 }}
 
 ## Ex2:
 **Global Task**: Exit the room and turn left, head toward the kitchen and turn right. Go through the kitchen and out. Wait right at the bathroom.
 **Current Observation:** IMAGE 1 (Front 0°): Open space ahead. IMAGE 2 (Left 30°): Bedroom exit doorway visible, corridor with pictures beyond. IMAGE 4 (Left 90°): Wall nearby
-**Obstacle Distances**: FRONT: >2.0m open | LEFT-30: >2.0m open | RIGHT-30: 1.5m | LEFT-90: 0.6m | RIGHT-90: >2.0m open
 
 {{
     "waypoint": "Bedroom - near exit",
     "waypoint_sequence": "Bedroom(Current) → Corridor → Kitchen Entrance → Kitchen → Kitchen Exit → Bathroom(Goal)",
     "waypoint_direction": "IMAGE 2 (Left 30°)",
     "subtask_destination": "corridor with pictures",
-    "subtask_instruction": "Turn left 30° to face bedroom exit, then move forward through doorway to reach corridor",
+    "subtask_instruction": "Move forward through doorway to reach corridor",
     "subtask_landmark": "picture",
     "completion_criteria": {{
         "Surrounding_Detection": "Pictures detected on corridor wall in Front. Bedroom interior detected in Back",
-        "Spatial_relationship": "Pictures on corridor wall < 0.5m (map shows decorative objects along corridor). Bedroom interior far behind (map shows previous area). Orange trajectory shows left turn 30° and forward 1.5m movement to corridor",
+        "Spatial_relationship": "Pictures on corridor wall < 0.5m (map shows decorative objects along corridor). Bedroom interior far behind (map shows previous area). Orange trajectory shows forward 1.5m movement to corridor",
         "Location": "Corridor - pictures on wall < 1.0m, bedroom behind"
     }},
     "global_task_finish": false,
-    "reasoning": "IMAGE 2 (Left 30°) shows bedroom exit with corridor and pictures visible - next waypoint. Since NOT in IMAGE 1, turn left 30° first to align with IMAGE 2 direction, then move forward 1.5m. Global map shows red arrow in bedroom (enclosed green area), corridor extends to the left with green floor area. Orange trajectory short (just started). Local map shows dark red dashed line pointing slightly left of doorway, 30° adjustment needed. Blue filled area (90° FOV) shows doorway at left edge. Distances confirm LEFT-30 >2m open, no obstacles blocking path. Using 'picture' as landmark."
+    "reasoning": "IMAGE 2 (Left 30°) shows bedroom exit with corridor and pictures visible - next waypoint. System will auto-rotate 30° left to face this direction. After rotation, move forward 1.5m through doorway. Global map shows red arrow in bedroom (enclosed green area), corridor extends to the left with green floor area. Orange trajectory short (just started). Local map shows doorway ahead. Blue filled area (90° FOV) will show doorway centered after rotation. Using 'picture' as landmark."
 }}
 
 **Critical Requirements**:
 - **12-Direction Analysis**: Analyze all 12 directional views (IMAGE 1-12) to locate current position and next waypoint
-- **Turn-First Strategy**: If Next-Waypoint NOT in IMAGE 1 (Front 0°), turn to face it first; if in IMAGE 1, move forward directly
+- **Auto-Rotation System**: Specify waypoint_direction, system will auto-rotate to face it. Write instructions assuming agent is already facing the waypoint
 - **Sequential Navigation**: Treat waypoint_sequence as a chain to follow progressively. Identify current position → plan to next waypoint. Do NOT turn back to previous waypoints
-- **Off-Path Recovery**: If deviated from sequence, identify current location and plan route to nearest upcoming waypoint, using turn-first strategy if needed
-- **Forward Direction Alignment**: Dark red dashed line shows exact Forward direction - must align with destination/safe paths, NOT obstacles. Turn immediately if misaligned
+- **Off-Path Recovery**: If deviated from sequence, identify current location and plan route to nearest upcoming waypoint
+- **Forward Direction Alignment**: After auto-rotation, agent faces waypoint directly. Verify alignment and move forward
 - **Path Alignment**: Keep agent centered in corridors/paths, parallel to walls/boundaries with equal distance to both sides
-- **Target Alignment**: Keep destination/landmark centered in Front view (0°), face it directly without angular deviation
+- **Target Alignment**: After auto-rotation, destination/landmark will be centered in Front view (0°)
 - **Distance Judgment**: Use dark green circle on local map to determine if destination/landmark is nearby - objects within the circle are < 0.5m from current position
 - **Landmark Selection**: Priority: landmarks from Global Task (e.g., "Wait by the Table" → "table"). Use specific objects (chair, table, bed, cabinet, sofa, painting). Avoid ambiguous terms (door, doorway, entrance, wall).
 - **Logical Analysis**: Ensure reasoning and output aligns with inputs - All the content must not contain any contradictions.
@@ -184,30 +166,13 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 **Direction Selection Strategy**:
 - Analyze all 12 views to determine which direction contains the Next Waypoint
 - Choose the angle where Next Waypoint appears centered in view (or most possible)
-- If waypoint is in IMAGE 1 (Front 0°), no turn needed
-- If waypoint is in other images, instruction must **first turn to face waypoint, then move**
+- **System will automatically rotate to face the waypoint_direction you specify**
+- After rotation, Next Waypoint will be in Front view (IMAGE 1) for step-by-step navigation
 
-**Action Origin**: All actions start from IMAGE 1 (Front 0°)
+**Action Origin**: All actions start from IMAGE 1 (Front 0°) **after automatic rotation**
 
-# Obstacle Distances (5 Directions)
-
-Distance to nearest obstacles from current position (calculated from map after 360° scan):
-
-- **FRONT (0°)**: {distance_front}
-- **LEFT-30 (30°)**: {distance_left_30}
-- **RIGHT-30 (-30°)**: {distance_right_30}
-- **LEFT-90 (90°)**: {distance_left_90}
-- **RIGHT-90 (-90°)**: {distance_right_90}
-
-**Distance Rules**:
-- ">2.0m open": Safe distance, no immediate obstacles
-- "X.XXm": Specific distance < 2m, caution needed
-- "<0.5m WARNING": Critical proximity, immediate turn/stop required
-
-**Use distances for safe planning**: Choose turns/moves that avoid obstacles in travel direction
-
-**IMAGE 13: Global Map** - Full explored area (updated trajectory, waypoints, landmarks)
-**IMAGE 14: Local Map** - Nearby region (agent-centered, FOV cone shown)
+**Global Map** - Full explored area (updated trajectory, waypoints, landmarks)
+**Local Map** - Nearby region (agent-centered, FOV cone shown)
 
 # Map Interpretation Guide
 
@@ -253,9 +218,12 @@ Distance to nearest obstacles from current position (calculated from map after 3
 
 2. **Determine Next Waypoint Direction**:
    - Analyze which of the 12 views (IMAGE 1-12) contains the Next Waypoint
-   - Choose the angle where Next Waypoint is most Centered/Possible
+   - Choose the angle where Next Waypoint is most Centered/Visible
    
 3. **Plan Navigation to Next Waypoint**:
+   - **System will auto-rotate** to face your specified waypoint_direction
+   - After rotation, Next Waypoint will be in Front view (IMAGE 1)
+   - Write step-by-step instructions assuming agent is already **facing the Next Waypoint**
    - **On-path (before/at waypoint)**: Plan instruction to next waypoint in sequence
    - **Off-path (deviated)**: Plan instruction to return to nearest waypoint in sequence, then continue
    - Always move forward in waypoint_sequence chain, do NOT turn back to previous waypoints
@@ -350,14 +318,14 @@ Distance to nearest obstacles from current position (calculated from map after 3
 
 **Critical Requirements**:
 - **12-Direction Analysis**: Analyze all 12 directional views (IMAGE 1-12) to locate current position and next waypoint
-- **Turn-First Strategy**: If Next-Waypoint NOT in IMAGE 1 (Front 0°), turn to face it first; if in IMAGE 1, move forward directly
+- **Auto-Rotation System**: Specify waypoint_direction, system will auto-rotate to face it. Write instructions assuming agent is already facing the Next Waypoint
 - **Sequential Navigation**: Treat waypoint_sequence as a chain to follow progressively. Identify current position → plan to next waypoint. Do NOT turn back to previous waypoints
-- **Off-Path Recovery**: If deviated from sequence, identify current location and plan route to nearest upcoming waypoint, using turn-first strategy if needed
-- **Forward Direction Alignment**: Dark red dashed line shows exact Forward direction - must align with destination/safe paths, NOT obstacles. Turn immediately if misaligned
+- **Off-Path Recovery**: If deviated from sequence, identify current location and plan route to nearest upcoming waypoint
+- **Forward Direction Alignment**: After auto-rotation, agent faces Next Waypoint directly. Verify alignment and move forward
 - **Path Alignment**: Keep agent centered in corridors/paths, parallel to walls/boundaries with equal distance to both sides
-- **Target Alignment**: Keep destination/landmark centered in Front view (0°), face it directly without angular deviation
+- **Target Alignment**: After auto-rotation, destination/landmark will be centered in Front view (0°)
 - **Distance Judgment**: Use dark green circle on local map to determine if destination/landmark is nearby - objects within the circle are < 0.5m from current position
-- **Planning**: Start all actions from Front view (0°). If subtask completed, plan NEXT waypoint; if not, adjust CURRENT subtask
+- **Planning**: Start all actions from Front view (0°) after auto-rotation. If subtask completed, plan NEXT waypoint; if not, adjust CURRENT subtask
 - **Map**: Use maps to verify trajectory, identify obstacles and plan safe paths for next subtask
 - **Landmark Selection**: Priority: landmarks from Global Task (e.g., "Wait by the Table" → "table"). Use specific objects (chair, table, bed, cabinet, sofa, painting). Avoid ambiguous terms (door, doorway, entrance, wall).
 - **Logical Analysis**: Ensure reasoning and output aligns with inputs - All the content must not contain any contradictions.
@@ -366,35 +334,20 @@ Distance to nearest obstacles from current position (calculated from map after 3
 
 
 def get_initial_planning_prompt(instruction: str, 
-                               action_space: str,
-                               distance_front: str = "Unknown",
-                               distance_left_30: str = "Unknown",
-                               distance_right_30: str = "Unknown",
-                               distance_left_90: str = "Unknown",
-                               distance_right_90: str = "Unknown") -> str:
+                               action_space: str) -> str:
     """
     获取初始规划提示词
     
     Args:
         instruction: 完整导航指令
         action_space: 动作空间描述
-        distance_front: 前方障碍物距离
-        distance_left_30: 左前30°障碍物距离
-        distance_right_30: 右前30°障碍物距离
-        distance_left_90: 左侧90°障碍物距离
-        distance_right_90: 右侧90°障碍物距离
         
     Returns:
         格式化的提示词字符串
     """
     return INITIAL_PLANNING_PROMPT.format(
         instruction=instruction,
-        action_space=action_space,
-        distance_front=distance_front,
-        distance_left_30=distance_left_30,
-        distance_right_30=distance_right_30,
-        distance_left_90=distance_left_90,
-        distance_right_90=distance_right_90
+        action_space=action_space
     )
 
 def get_verification_replanning_prompt(instruction: str,
@@ -404,12 +357,7 @@ def get_verification_replanning_prompt(instruction: str,
                                        completion_criteria: str,
                                        action_space: str,
                                        detected_landmarks: str = None,
-                                       waypoint_summary: str = None,
-                                       distance_front: str = "Unknown",
-                                       distance_left_30: str = "Unknown",
-                                       distance_right_30: str = "Unknown",
-                                       distance_left_90: str = "Unknown",
-                                       distance_right_90: str = "Unknown") -> str:
+                                       waypoint_summary: str = None) -> str:
     """
     获取验证和重规划提示词
     
@@ -422,11 +370,6 @@ def get_verification_replanning_prompt(instruction: str,
         action_space: 动作空间描述
         detected_landmarks: 已检测到的landmark类别字符串
         waypoint_summary: 路径点历史记录字符串
-        distance_front: 前方障碍物距离
-        distance_left_30: 左前30°障碍物距离
-        distance_right_30: 右前30°障碍物距离
-        distance_left_90: 左侧90°障碍物距离
-        distance_right_90: 右侧90°障碍物距离
         
     Returns:
         格式化的提示词字符串
@@ -444,10 +387,5 @@ def get_verification_replanning_prompt(instruction: str,
         completion_criteria=completion_criteria,
         action_space=action_space,
         detected_landmarks=detected_landmarks,
-        waypoint_summary=waypoint_summary,
-        distance_front=distance_front,
-        distance_left_30=distance_left_30,
-        distance_right_30=distance_right_30,
-        distance_left_90=distance_left_90,
-        distance_right_90=distance_right_90
+        waypoint_summary=waypoint_summary
     )
