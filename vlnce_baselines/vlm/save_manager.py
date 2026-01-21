@@ -60,32 +60,18 @@ class SaveManager:
         os.makedirs(self.episode_dir, exist_ok=True)
         os.makedirs(self.records_dir, exist_ok=True)
     
-    def save_thinking(self, thinking_record: Dict):
+    def save_thinking_input(self, thinking_record: Dict) -> str:
         """
-        保存LLM思考输出
+        保存LLM思考输入（图片 + prompt）
+        在调用API之前调用，确保输入数据被保存
         
-        结构: thinking/subtask_Xa/
-          - subtask_1a/ - 初始规划
-          - subtask_1b/ - 验证未完成，继续尝试（保存verify_1a的结果到1b）
-          - subtask_2a/ - 验证完成，新子任务（保存verify_1a的结果到2a）
-          
-        每个目录包含:
-            - input_images/ (输入图片)
-            - prompt.txt (prompt)
-            - response.json (响应)
-        
-        同时更新records/thinking_summary.json汇总文件
+        Returns:
+            thinking_dir: 保存目录路径
         """
-        # 关键修复：verify阶段使用next_subtask_id（即将执行的子任务）
-        # - verify_1a完成 → 保存到subtask_2a（下一个子任务）
-        # - verify_1a未完成 → 保存到subtask_1b（重试）
-        # - initial阶段使用subtask_id
         phase = thinking_record.get('phase', '')
         if phase.startswith('verify'):
-            # 验证阶段：保存到下一个子任务的文件夹
             subtask_id = thinking_record.get('next_subtask_id', f"{thinking_record.get('subtask_count', 1)}a")
         else:
-            # 初始规划阶段：保存到当前子任务的文件夹
             subtask_id = thinking_record.get('subtask_id', f"{thinking_record.get('subtask_count', 1)}a")
         
         thinking_dir = os.path.join(self.episode_dir, "thinking", f"subtask_{subtask_id}")
@@ -104,13 +90,54 @@ class SaveManager:
             with open(os.path.join(thinking_dir, "prompt.txt"), 'w', encoding='utf-8') as f:
                 f.write(thinking_record['prompt'])
         
+        return thinking_dir
+    
+    def save_thinking_response(self, thinking_record: Dict, thinking_dir: str = None):
+        """
+        保存LLM思考输出（response）
+        在API调用成功后调用
+        
+        Args:
+            thinking_record: 思考记录（必须包含response）
+            thinking_dir: 保存目录（如果None则重新计算）
+        """
+        if not thinking_dir:
+            phase = thinking_record.get('phase', '')
+            if phase.startswith('verify'):
+                subtask_id = thinking_record.get('next_subtask_id', f"{thinking_record.get('subtask_count', 1)}a")
+            else:
+                subtask_id = thinking_record.get('subtask_id', f"{thinking_record.get('subtask_count', 1)}a")
+            thinking_dir = os.path.join(self.episode_dir, "thinking", f"subtask_{subtask_id}")
+        
         # 保存response
-        with open(os.path.join(thinking_dir, "response.json"), 'w', encoding='utf-8') as f:
-            json.dump(thinking_record['response'], f, ensure_ascii=False, indent=2)
+        if 'response' in thinking_record:
+            with open(os.path.join(thinking_dir, "response.json"), 'w', encoding='utf-8') as f:
+                json.dump(thinking_record['response'], f, ensure_ascii=False, indent=2)
         
         # 更新汇总文件到records/（排除input_images和prompt，避免文件过大）
         self._update_summary_file("thinking_summary.json", thinking_record, 
                                  exclude_keys=['input_images', 'prompt'])
+    
+    def save_thinking(self, thinking_record: Dict):
+        """
+        保存LLM思考输出（完整版本，一次性保存输入+输出）
+        兼容旧代码，新代码应使用 save_thinking_input + save_thinking_response
+        
+        结构: thinking/subtask_Xa/
+          - subtask_1a/ - 初始规划
+          - subtask_1b/ - 验证未完成，继续尝试（保存verify_1a的结果到1b）
+          - subtask_2a/ - 验证完成，新子任务（保存verify_1a的结果到2a）
+          
+        每个目录包含:
+            - input_images/ (输入图片)
+            - prompt.txt (prompt)
+            - response.json (响应)
+        
+        同时更新records/thinking_summary.json汇总文件
+        """
+        thinking_dir = self.save_thinking_input(thinking_record)
+        if 'response' in thinking_record:
+            self.save_thinking_response(thinking_record, thinking_dir)
     
     def save_action(self, action_record: Dict, subtask_info: Optional[Dict] = None):
         """
