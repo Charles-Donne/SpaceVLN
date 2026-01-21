@@ -1002,19 +1002,25 @@ class MapVisualizer:
     
     # ========== 保存方法 ==========
     
-    def save_rgb(self, step: int, episode_id: int, rgb: np.ndarray, phase: str = "action") -> str:
+    def save_rgb(self, step: int, episode_id: int, rgb: np.ndarray, phase: str = "action", controller = None) -> str:
         """
-        保存原始RGB帧
+        保存原始RGB帧（添加距离线）
         
         Args:
             step: 步数
             episode_id: episode ID
             rgb: RGB图像 (H, W, 3) BGR格式
             phase: 阶段标识 ("initial", "action1a", "verify1a" 等)
+            controller: VLMNavigationController实例（用于访问_draw_distance_rays_on_first_person_view）
         
         Returns:
             save_path: 保存路径
         """
+        # 如果是action阶段且提供了controller，绘制距离线
+        if phase.startswith('action') and controller is not None:
+            if hasattr(controller, '_draw_distance_rays_on_first_person_view'):
+                rgb = controller._draw_distance_rays_on_first_person_view(rgb.copy())
+        
         episode_dir = self._create_episode_directories(episode_id)
         save_path = os.path.join(episode_dir, 'rgb', f'step_{step:04d}_{phase}.png')
         cv2.imwrite(save_path, rgb)
@@ -1167,7 +1173,8 @@ class MapVisualizer:
                                waypoint_ids: Optional[List[int]] = None,
                                masks: Optional[np.ndarray] = None,
                                phase: str = "action",
-                               global_trajectory_points: Optional[List[Tuple[int, int]]] = None) -> Tuple[Dict[str, str], List, Dict[str, str]]:  # 兼容旧参数
+                               global_trajectory_points: Optional[List[Tuple[int, int]]] = None,
+                               controller = None) -> Tuple[Dict[str, str], List, Dict[str, str]]:  # 兼容旧参数
         """
         一键保存当前步骤的所有可视化（支持新detection渲染 + 平滑轨迹线 + waypoint标记）
         
@@ -1184,6 +1191,7 @@ class MapVisualizer:
             waypoint_positions: [(map_x, map_y), ...] waypoint位置列表（可选，从mapper.get_waypoints()获取）
             waypoint_ids: [1, 2, 3, ...] waypoint ID列表（可选，从mapper.get_waypoints()获取）
             phase: 阶段标识 ("initial", "action1a", "verify1a" 等)
+            controller: VLMNavigationController实例（用于绘制距离线）
         
         Returns:
             (paths, landmarks, obstacle_distances)
@@ -1191,14 +1199,14 @@ class MapVisualizer:
             - landmarks: Landmark列表
             - obstacle_distances: {'front': "X.XXm", 'left_30': ..., ...} 5方向距离
             
-        注意：
+        注意:
         1. floor通过形态学方法计算（像ZS_Evaluator._process_map）
         2. waypoint数据建议直接从mapper.get_waypoints()传入，无需手动管理
         """
         paths = {}
         
-        # 1. 保存RGB
-        paths['rgb'] = self.save_rgb(step, episode_id, rgb, phase)
+        # 1. 保存RGB（传入controller用于绘制距离线）
+        paths['rgb'] = self.save_rgb(step, episode_id, rgb, phase, controller)
         
         # 2. 渲染并保存全局地图（使用global_trajectory_points或回退到trajectory_points）
         global_traj_to_use = global_trajectory_points if global_trajectory_points is not None else trajectory_points

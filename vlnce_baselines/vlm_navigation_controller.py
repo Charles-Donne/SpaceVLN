@@ -458,6 +458,201 @@ class VLMNavigationController(InteractiveNavigationController):
         
         return image
     
+    def _draw_distance_line_on_view(self, image: np.ndarray, view_angle: float) -> np.ndarray:
+        """
+        在方向视图上绘制一条距离线（从底部中心到中心）
+        
+        Args:
+            image: 当前方向的图像 (H, W, 3) BGR格式
+            view_angle: 当前视角的角度 (0-330, 30度递增)
+            
+        Returns:
+            绘制了距离线后的图像
+        """
+        if not hasattr(self, 'mapper') or self.mapper is None:
+            return image
+        
+        h, w = image.shape[:2]
+        
+        # 获取当前agent位置和朝向
+        agent_x, agent_y, agent_o = self._get_agent_pose()
+        
+        # 计算当前视角的绝对方向
+        view_direction = agent_o + np.radians(view_angle)
+        
+        # 射线检测：从当前视角方向找最近障碍物
+        occupancy_grid = self.mapper.occupancy_grid
+        map_resolution = self.mapper.resolution
+        map_min_x = self.mapper.coordinate_min
+        map_min_y = self.mapper.coordinate_min
+        
+        # 检测距离：从0.5m到5m，步进0.1m
+        max_distance = 5.0
+        obstacle_distance = max_distance
+        
+        for dist in np.arange(0.5, max_distance + 0.1, 0.1):
+            # 计算该距离处的世界坐标
+            world_x = agent_x + dist * np.cos(view_direction)
+            world_y = agent_y + dist * np.sin(view_direction)
+            
+            # 转换到地图坐标
+            map_x = int((world_x - map_min_x) / map_resolution)
+            map_y = int((world_y - map_min_y) / map_resolution)
+            
+            # 检查是否在地图范围内
+            if 0 <= map_y < occupancy_grid.shape[0] and 0 <= map_x < occupancy_grid.shape[1]:
+                # 检查是否是障碍物（2=obstacle）
+                if occupancy_grid[map_y, map_x] == 2:
+                    obstacle_distance = dist
+                    break
+        
+        # 绘制距离线（从底部中心到图像中心）
+        start_x = w // 2
+        start_y = h - 10  # 底部上方10像素
+        end_x = w // 2
+        end_y = h // 2  # 图像中心
+        
+        # 绘制线（黄色，粗线）
+        cv2.line(image, (start_x, start_y), (end_x, end_y), (0, 255, 255), 3)
+        
+        # 在线的中点显示距离文字
+        text_x = end_x + 10
+        text_y = (start_y + end_y) // 2
+        
+        # 根据距离设置颜色
+        if obstacle_distance > 2.0:
+            dist_text = ">2.0m"
+            text_color = (0, 255, 0)  # 绿色 - 安全
+        elif obstacle_distance < 0.5:
+            dist_text = f"{obstacle_distance:.1f}m!"
+            text_color = (0, 0, 255)  # 红色 - 警告
+        else:
+            dist_text = f"{obstacle_distance:.1f}m"
+            text_color = (0, 255, 255)  # 黄色 - 注意
+        
+        # 绘制文字背景
+        font_scale = 0.6
+        thickness = 2
+        text_size = cv2.getTextSize(dist_text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)[0]
+        cv2.rectangle(image,
+                     (text_x - 3, text_y - text_size[1] - 2),
+                     (text_x + text_size[0] + 3, text_y + 4),
+                     (0, 0, 0), -1)
+        
+        # 绘制距离文字
+        cv2.putText(image, dist_text, (text_x, text_y),
+                   cv2.FONT_HERSHEY_SIMPLEX, font_scale, text_color, thickness)
+        
+        return image
+    
+    def _draw_distance_rays_on_first_person_view(self, image: np.ndarray) -> np.ndarray:
+        """
+        在第一人称视图上绘制7条放射状距离线
+        从中心底部放射出去，显示7个方向的距离（-90°, -60°, -30°, 0°, 30°, 60°, 90°）
+        
+        Args:
+            image: 第一人称RGB图像 (H, W, 3) BGR格式
+            
+        Returns:
+            绘制了距离线后的图像
+        """
+        if not hasattr(self, 'mapper') or self.mapper is None:
+            return image
+        
+        h, w = image.shape[:2]
+        
+        # 获取当前agent位置和朝向
+        agent_x, agent_y, agent_o = self._get_agent_pose()
+        
+        # 7个方向：-90°, -60°, -30°, 0°, 30°, 60°, 90°（相对于当前朝向）
+        ray_angles = [-90, -60, -30, 0, 30, 60, 90]
+        
+        occupancy_grid = self.mapper.occupancy_grid
+        map_resolution = self.mapper.resolution
+        map_min_x = self.mapper.coordinate_min
+        map_min_y = self.mapper.coordinate_min
+        
+        # 中心底部起点
+        center_x = w // 2
+        bottom_y = h - 20
+        
+        for ray_angle in ray_angles:
+            # 计算该方向的绝对角度
+            direction = agent_o + np.radians(ray_angle)
+            
+            # 射线检测：找最近障碍物
+            max_distance = 5.0
+            obstacle_distance = max_distance
+            
+            for dist in np.arange(0.5, max_distance + 0.1, 0.1):
+                world_x = agent_x + dist * np.cos(direction)
+                world_y = agent_y + dist * np.sin(direction)
+                
+                map_x = int((world_x - map_min_x) / map_resolution)
+                map_y = int((world_y - map_min_y) / map_resolution)
+                
+                if 0 <= map_y < occupancy_grid.shape[0] and 0 <= map_x < occupancy_grid.shape[1]:
+                    if occupancy_grid[map_y, map_x] == 2:
+                        obstacle_distance = dist
+                        break
+            
+            # 计算线的终点（根据角度和距离映射到图像坐标）
+            # 角度映射到X轴：-90°→左边界，0°→中心，90°→右边界
+            # FOV假设为79度，所以±39.5度内的才显示
+            fov_half = 39.5
+            if abs(ray_angle) <= fov_half:
+                # X坐标：线性映射
+                x_ratio = (ray_angle + fov_half) / (2 * fov_half)
+                end_x = int(x_ratio * w)
+                
+                # Y坐标：距离映射到高度（近的在下面，远的在上面）
+                # 使用对数映射让距离变化更明显
+                if obstacle_distance < 1.0:
+                    y_ratio = 0.7  # 很近
+                elif obstacle_distance < 2.0:
+                    y_ratio = 0.5
+                elif obstacle_distance < 3.0:
+                    y_ratio = 0.3
+                else:
+                    y_ratio = 0.1  # 很远
+                
+                end_y = int(bottom_y - (bottom_y * y_ratio))
+                
+                # 根据距离选择颜色
+                if obstacle_distance > 2.0:
+                    line_color = (0, 255, 0)  # 绿色 - 安全
+                elif obstacle_distance < 0.5:
+                    line_color = (0, 0, 255)  # 红色 - 危险
+                else:
+                    line_color = (0, 255, 255)  # 黄色 - 注意
+                
+                # 绘制线（从底部中心到计算的终点）
+                cv2.line(image, (center_x, bottom_y), (end_x, end_y), line_color, 2)
+                
+                # 在终点显示距离文字
+                if obstacle_distance > 2.0:
+                    dist_text = ">2.0m"
+                else:
+                    dist_text = f"{obstacle_distance:.1f}m"
+                
+                font_scale = 0.4
+                thickness = 1
+                text_size = cv2.getTextSize(dist_text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)[0]
+                text_x = end_x - text_size[0] // 2
+                text_y = end_y - 5
+                
+                # 文字背景
+                cv2.rectangle(image,
+                            (text_x - 2, text_y - text_size[1] - 2),
+                            (text_x + text_size[0] + 2, text_y + 2),
+                            (0, 0, 0), -1)
+                
+                # 绘制距离文字
+                cv2.putText(image, dist_text, (text_x, text_y),
+                           cv2.FONT_HERSHEY_SIMPLEX, font_scale, line_color, thickness)
+        
+        return image
+    
     def look_around_and_collect(self, phase: str = "initial") -> Tuple[List[str], List[str]]:
         """
         360°环视建图 + 生成4方向全景图
@@ -630,6 +825,9 @@ class VLMNavigationController(InteractiveNavigationController):
             
             # 先绘制可导航区域（绿色地面）
             image = self._draw_navigable_area_on_view(image, angle)
+            
+            # 绘制距离线（从底部中心到中心）
+            image = self._draw_distance_line_on_view(image, angle)
             
             # 然后绘制waypoint标记（如果在当前视角范围内）
             if waypoint_info:
@@ -874,27 +1072,31 @@ class VLMNavigationController(InteractiveNavigationController):
         
         return response
     
-    def auto_rotate_to_waypoint(self, waypoint_direction: str) -> bool:
+    def auto_rotate_to_waypoint(self, waypoint_direction: str) -> Tuple[bool, List[Dict]]:
         """
-        根据waypoint_direction自动旋转到目标方向
+        解析waypoint方向并生成旋转动作序列
         
         Args:
-            waypoint_direction: 如"IMAGE 5 (Left 120°)"
+            waypoint_direction: 如 "IMAGE 5 (Left 120deg)"
             
         Returns:
-            bool: 旋转是否成功
+            (success, action_sequence): 
+                - success: 是否成功解析
+                - action_sequence: 动作序列，每个动作为 {"action": "TURN_LEFT/RIGHT", "degrees": 30}
         """
         import re
         
-        # 解析waypoint_direction，提取角度
-        # 格式: "IMAGE X (Direction Angle°)" 或 "IMAGE X"
-        match = re.search(r'Left (\d+)°|Right (\d+)°|Back (\d+)°|Front (\d+)°', waypoint_direction)
+        # 解析方向和角度
+        # 支持格式: "IMAGE 5 (Left 120deg)" 或 "Left 120deg"
+        match = re.search(r'Left (\d+)(?:deg|°)|Right (\d+)(?:deg|°)|Back (\d+)(?:deg|°)?|Front', waypoint_direction)
         
         if not match:
             print(f"  ⚠️  无法解析waypoint_direction: {waypoint_direction}")
-            return False
+            return False, []
         
-        # 提取方向和角度
+        angle = 0
+        direction = None
+        
         if 'Left' in waypoint_direction:
             angle = int(match.group(1))
             direction = 'LEFT'
@@ -907,29 +1109,70 @@ class VLMNavigationController(InteractiveNavigationController):
         elif 'Front' in waypoint_direction:
             # 已经面向Front，无需旋转
             print(f"  ✓ Waypoint已在Front方向，无需旋转")
-            return True
+            return True, []
         else:
             print(f"  ⚠️  无法识别方向: {waypoint_direction}")
-            return False
+            return False, []
         
-        print(f"\n[自动旋转] 旋转到waypoint方向: {direction} {angle}°")
+        print(f"\n[自动旋转] 解析waypoint方向: {direction} {angle}°")
         
-        # 执行旋转（使用habitat的原始action）
-        turn_action_id = 2 if direction == 'LEFT' else 3  # TURN_LEFT=2, TURN_RIGHT=3
-        
-        # 计算需要旋转的次数（每次30度）
+        # 生成动作序列（每次30度）
         num_turns = angle // 30
+        action_sequence = []
         
         for i in range(num_turns):
-            print(f"  旋转 {i+1}/{num_turns}: {direction} 30°")
+            action_sequence.append({
+                "action": f"TURN_{direction}",
+                "degrees": 30
+            })
+        
+        print(f"  生成动作序列: {num_turns}次 TURN_{direction} 30°")
+        return True, action_sequence
+    
+    def execute_rotation_sequence(self, action_sequence: List[Dict]) -> bool:
+        """
+        执行旋转动作序列
+        
+        Args:
+            action_sequence: 动作序列，格式 [{"action": "TURN_LEFT", "degrees": 30}, ...]
             
-            # 执行一次30度旋转
-            observations = self.env.step(turn_action_id)
+        Returns:
+            是否全部执行成功
+        """
+        for i, action_dict in enumerate(action_sequence):
+            action_name = action_dict["action"]
+            degrees = action_dict["degrees"]
+            
+            print(f"  旋转 {i+1}/{len(action_sequence)}: {action_name} {degrees}°")
+            
+            # 转换为habitat action ID
+            if action_name == "TURN_LEFT":
+                action_id = HabitatSimActions.TURN_LEFT
+            elif action_name == "TURN_RIGHT":
+                action_id = HabitatSimActions.TURN_RIGHT
+            else:
+                print(f"    ⚠️  未知动作: {action_name}")
+                continue
+            
+            # 执行动作（通过envs调用）
+            outputs = self.envs.step([action_id])
+            observations = [outputs[i][0] for i in range(self.envs.num_envs)]
             self.current_step += 1
             
+            # 更新mapper
+            if hasattr(self, 'mapper'):
+                obs = observations[0]
+                rgb = obs.get('rgb', None)
+                depth = obs.get('depth', None)
+                
+                if rgb is not None and depth is not None:
+                    agent_pose = self._get_agent_pose()
+                    self.mapper.update(rgb, depth, agent_pose)
+            
             # 检查episode是否结束
-            if self.env.episode_over:
-                print(f"  ⚠️  Episode在旋转过程中结束")
+            done = outputs[0][1]  # (obs, done, info)
+            if done:
+                print(f"    ⚠️  Episode在旋转过程中结束")
                 return False
         
         print(f"  ✓ 旋转完成，已面向waypoint方向")
@@ -1190,17 +1433,21 @@ class VLMNavigationController(InteractiveNavigationController):
             waypoint_direction = response.get('waypoint_direction', '')
             if waypoint_direction and 'Front' not in waypoint_direction:
                 print(f"\n[两阶段导航] 新子任务 - 阶段1: 旋转到waypoint方向")
-                success = self.auto_rotate_to_waypoint(waypoint_direction)
+                success, action_sequence = self.auto_rotate_to_waypoint(waypoint_direction)
                 
-                if success:
-                    # 旋转完成后，重新环视确认
-                    print(f"\n[两阶段导航] 新子任务 - 阶段2: 重新环视确认waypoint在Front")
-                    attempt_letter = chr(ord('a') + self.subtask_attempt)
-                    confirm_phase = f"rotate_confirm_{self.subtask_count}{attempt_letter}"
-                    confirm_images, confirm_names = self.look_around_and_collect(confirm_phase)
+                if success and action_sequence:
+                    # 执行旋转动作序列
+                    rotation_success = self.execute_rotation_sequence(action_sequence)
                     
-                    if confirm_images:
-                        print(f"  ✓ 环视完成，waypoint应该在IMAGE 1 (Front)")
+                    if rotation_success:
+                        # 旋转完成后，重新环视确认
+                        print(f"\n[两阶段导航] 新子任务 - 阶段2: 重新环视确认waypoint在Front")
+                        attempt_letter = chr(ord('a') + self.subtask_attempt)
+                        confirm_phase = f"rotate_confirm_{self.subtask_count}{attempt_letter}"
+                        confirm_images, confirm_names = self.look_around_and_collect(confirm_phase)
+                        
+                        if confirm_images:
+                            print(f"  ✓ 环视完成，waypoint应该在IMAGE 1 (Front)")
         else:
             attempt_letter = chr(ord('a') + self.subtask_attempt)
             print(f"\n[子任务未完成] #{self.subtask_count}{attempt_letter} - 重新规划")
@@ -1619,16 +1866,22 @@ class VLMNavigationController(InteractiveNavigationController):
         waypoint_direction = subtask.get('waypoint_direction', '')
         if waypoint_direction and 'Front' not in waypoint_direction:
             print(f"\n[两阶段导航] 阶段1: 旋转到waypoint方向")
-            success = self.auto_rotate_to_waypoint(waypoint_direction)
+            success, action_sequence = self.auto_rotate_to_waypoint(waypoint_direction)
             
-            if not success:
-                print("  ✗ 自动旋转失败")
+            if not success or not action_sequence:
+                print("  ✗ 自动旋转解析失败")
                 # 继续执行，让ActionVLM处理
             else:
-                # 2.6 旋转完成后，重新环视确认waypoint在Front
-                print(f"\n[两阶段导航] 阶段2: 重新环视确认waypoint在Front")
-                confirm_phase = f"rotate_confirm_{self.subtask_count}a"
-                confirm_images, confirm_names = self.look_around_and_collect(confirm_phase)
+                # 执行旋转动作序列
+                rotation_success = self.execute_rotation_sequence(action_sequence)
+                
+                if not rotation_success:
+                    print("  ✗ 旋转执行失败")
+                else:
+                    # 2.6 旋转完成后，重新环视确认waypoint在Front
+                    print(f"\n[两阶段导航] 阶段2: 重新环视确认waypoint在Front")
+                    confirm_phase = f"rotate_confirm_{self.subtask_count}a"
+                    confirm_images, confirm_names = self.look_around_and_collect(confirm_phase)
                 
                 if confirm_images:
                     print(f"  ✓ 环视完成，waypoint应该在IMAGE 1 (Front)")
