@@ -461,33 +461,48 @@ class VLMNavigationController(InteractiveNavigationController):
     def _draw_distance_on_view(self, image: np.ndarray, distance_str: str) -> np.ndarray:
         """
         在视图上绘制距离信息（复用统一计算的距离数据）
+        梯形线条：底部中心+两侧往中间延伸，根据距离调整长度和颜色
         
         Args:
             image: 图像 (H, W, 3) BGR格式
-            distance_str: 距离字符串，如 "1.2m", ">2.0m", "<0.5m WARNING"
+            distance_str: 距离字符串，如 "1.2m", ">2.0m open", "<0.5m WARNING"
         """
         h, w = image.shape[:2]
-        center_x, bottom_y = w // 2, h - 10
+        center_x = w // 2
+        bottom_y = h - 5  # 从最底部开始
+        side_offset = int(w * 0.15)  # 两侧线距中心15%宽度
         
-        # 绘制距离线
-        cv2.line(image, (center_x, bottom_y), (center_x, h // 2), (0, 255, 255), 3)
-        
-        # 解析距离并设置颜色
+        # 解析距离并设置颜色和线长
         if "WARNING" in distance_str or "<0.5" in distance_str:
             color = (0, 0, 255)  # 红色
+            line_ratio = 0.3  # 短线（30%）
         elif ">2.0" in distance_str or "open" in distance_str:
             color = (0, 255, 0)  # 绿色
+            line_ratio = 1.0  # 长线到中间（100%）
         else:
             color = (0, 255, 255)  # 黄色
+            line_ratio = 0.65  # 中等长度（65%）
         
-        # 绘制文字
-        text_x, text_y = center_x + 10, (bottom_y + h // 2) // 2
+        # 计算终点Y坐标
+        max_length = bottom_y - h // 2
+        end_y = bottom_y - int(max_length * line_ratio)
+        
+        # 绘制梯形三条线：中心线 + 左侧线 + 右侧线
+        cv2.line(image, (center_x, bottom_y), (center_x, end_y), color, 3)  # 中心线
+        cv2.line(image, (center_x - side_offset, bottom_y), (center_x - int(side_offset * 0.5), end_y), color, 2)  # 左线
+        cv2.line(image, (center_x + side_offset, bottom_y), (center_x + int(side_offset * 0.5), end_y), color, 2)  # 右线
+        
+        # 绘制文字（位置固定在中间高度右侧）
+        text_x = center_x + 10
+        text_y = (bottom_y + h // 2) // 2
         font_scale, thickness = 0.6, 2
         text_size = cv2.getTextSize(distance_str, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)[0]
-        cv2.rectangle(image, (text_x - 3, text_y - text_size[1] - 2),
-                     (text_x + text_size[0] + 3, text_y + 4), (0, 0, 0), -1)
+        cv2.rectangle(image, (text_x - 2, text_y - text_size[1] - 1),
+                     (text_x + text_size[0] + 2, text_y + 2), (0, 0, 0), -1)
         cv2.putText(image, distance_str, (text_x, text_y),
                    cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, thickness)
+        
+        return image
         
         return image
     
@@ -572,6 +587,9 @@ class VLMNavigationController(InteractiveNavigationController):
         
         # 注意：不清空landmark，让VLM能看到旧landmark来判断子任务是否完成
         # 轨迹和landmark的清空会在verify_and_replan中VLM输出后进行
+        
+        # 更新距离信息（为Thinking模式的12个方向准备）
+        self._update_obstacle_distances()
         
         # 存储12张环视图像用于合成全景图（step 1-12）
         lookaround_images = []
@@ -728,14 +746,14 @@ class VLMNavigationController(InteractiveNavigationController):
             
             # 在图片顶部添加白色背景的角度标注
             h, w = image.shape[:2]
-            label_height = 50
+            label_height = 35  # 减少白边，刚好够用
             label_img = np.ones((label_height, w, 3), dtype=np.uint8) * 255  # 白色背景
             
             # 添加文字标注（使用OpenCV）
             label_text = direction_name  # 如 "IMAGE 1: Front (0°)"
             font = cv2.FONT_HERSHEY_SIMPLEX
             font_scale = 0.5
-            font_thickness = 1
+            font_thickness = 2  # 加粗IMAGE标题
             text_color = (0, 0, 255)  # 红色
             
             # 计算文字位置（居中）
@@ -1052,15 +1070,8 @@ class VLMNavigationController(InteractiveNavigationController):
             observations = [outputs[i][0] for i in range(self.envs.num_envs)]
             self.current_step += 1
             
-            # 更新mapper
-            if hasattr(self, 'mapper'):
-                obs = observations[0]
-                rgb = obs.get('rgb', None)
-                depth = obs.get('depth', None)
-                
-                if rgb is not None and depth is not None:
-                    agent_pose = self._get_agent_pose()
-                    self.mapper.update(rgb, depth, agent_pose)
+            # 注意：旋转过程中不更新地图，因为位置没变化，只有朝向改变
+            # 地图更新会在下一次环视或移动时统一进行
             
             # 检查episode是否结束
             done = outputs[0][1]  # (obs, done, info)
