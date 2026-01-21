@@ -75,7 +75,7 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 # Examples
 
 ## Ex1 - Start turning to face the target:
-**Sub-Instruction**: Turn left 90° to face the oven, then move forward 0.5m, Stop in front of oven.
+**Sub-Instruction**: Turn left 90° to face the oven, then move forward 1.0m toward the oven
 **Previous Progress**: (Just started - no actions executed yet. Please execute the FIRST key action from the sub-instruction.)
 **Previous Action Reason**: None
 **Current Observation**: Oven is not in front view; need to turn to face it.
@@ -87,30 +87,30 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 }}
 
 ## Ex2 - Continue with the instruction action:
-**Sub-Instruction**: Turn left 90° to face the oven, then move forward 0.5m, Stop in front of oven.
-**Previous Progress**: Had turned left 88°, then moved forward 0.47m.
+**Sub-Instruction**: Turn left 90° to face the oven, then move forward 1.0m toward the oven
+**Previous Progress**: Had turned left 88°, then moved forward 0.5m.
 **Previous Action Reason**: Continue moving forward to get closer to the oven.
 **Current Observation**: Facing the oven, but the distance is still too far.
 {{
-    "reasoning": "The subtask goal is to stop at the oven. RGB & Detection: The oven is ahead, and there's space to move. Map: Purple marker (oven) is ahead but still outside the dark green circle (0.5m radius), meaning the destination is not yet reached. The path is clear with no obstacles. Previous movement was successful. Distances: Front 1.8m is sufficient for 0.5m movement.",
+    "reasoning": "The subtask goal is to reach the oven. RGB & Detection: The oven is ahead, and there's space to move. Map: Purple marker (oven) is ahead but still outside the dark green circle (0.5m radius), meaning the destination is not yet reached. The path is clear with no obstacles. Previous movement was successful. Distances: Front 1.8m is sufficient for 0.5m movement.",
     "action_analysis": "Continue moving forward to get closer to the oven. Front distance 1.8m allows safe 0.5m movement.",
     "action": "MOVE_FORWARD",
     "meters": 0.5
 }}
 
 ## Ex3 - Arrive at destination and stop:
-**Sub-Instruction**: Turn left 90° to face the oven, then move forward 0.5m, Stop in front of oven.
-**Previous Progress**: Had turned left 90°, then moved forward 1.5m.
+**Sub-Instruction**: Turn left 90° to face the oven, then move forward 1.0m toward the oven
+**Previous Progress**: Had turned left 90°, then moved forward 1.0m.
 **Previous Action Reason**: Continue moving forward to get closer to the oven.
 **Current Observation**: The oven is directly in front, very close (within 0.5m).
 {{
-    "reasoning": "The subtask goal is to stop at the oven. RGB: Oven clearly visible in front view. Detection: Oven detected. Map: Purple marker (oven) is now inside the dark green circle (0.5m radius), meaning destination has been reached. Red arrow overlaps with the destination, orange trajectory confirms arrival. All key actions completed.",
+    "reasoning": "The subtask goal is to reach the oven. RGB: Oven clearly visible in front view. Detection: Oven detected. Map: Purple marker (oven) is now inside the dark green circle (0.5m radius), meaning destination has been reached. Red arrow overlaps with the destination, orange trajectory confirms arrival. All key actions completed.",
     "action_analysis": "All conditions met for STOP: oven detected, within 0.5m radius, visible in front view, and key actions completed.",
     "action": "STOP"
 }}
 
 ## Ex4 - Detour around obstacle:
-**Sub-Instruction**: Turn left 90° to face the oven, then move forward 0.5m, Stop in front of oven.
+**Sub-Instruction**: Turn left 90° to face the oven, then move forward 1.0m toward the oven
 **Previous Progress**: Had turned left 88°.
 **Previous Action Reason**: Follow instruction - turn left 90° to align with oven direction.
 **Current Observation**: Oven is at front-left 30°, but straight ahead has a wall (black obstacle on map).

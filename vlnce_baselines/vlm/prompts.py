@@ -97,18 +97,18 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 
 {{
     "waypoint": "Restroom - beside exercise room doorway, toilet and washbasin nearby.",
-    "waypoint_sequence": "Restroom(Current) → Exercise Room Entrance → Exercise Room → Living Room → Living Room's Table(Goal)",
+    "waypoint_sequence": "Restroom(Current) → Exercise Room → Living Room → Living Room's Table(Goal)",
     "waypoint_direction": "IMAGE 5 (Left 120°)",
-    "subtask_destination": "exercise room entrance",
-    "subtask_instruction": "Move forward to enter the exercise room",
+    "subtask_destination": "exercise room",
+    "subtask_instruction": "Move forward through doorway to enter the exercise room",
     "subtask_landmark": "exercise equipment",
     "completion_criteria": {{
-        "Surrounding_Detection": "Exercise equipment detected in Front. Restroom fixtures detected in Back",
-        "Spatial_relationship": "Exercise equipment ahead < 0.5m (map shows gym equipment at entrance position). Restroom far behind (map shows previous location). Orange trajectory shows forward movement into gym entrance",
-        "Location": "Exercise Room Entrance - exercise equipment ahead < 0.5m, restroom behind"
+        "Surrounding_Detection": "Exercise equipment detected surrounding in multiple views. Restroom fixtures detected in Back",
+        "Spatial_relationship": "Exercise equipment surrounding agent < 1.0m (map shows inside gym area). Restroom far behind (map shows previous location). Orange trajectory shows entered exercise room interior",
+        "Location": "Exercise Room - exercise equipment surrounding, restroom behind"
     }},
     "global_task_finish": false,
-    "reasoning": "IMAGE 5 (Left 120°) shows exercise room doorway with gym equipment - next waypoint. System will auto-rotate 120° left to face this direction. After rotation, move forward through doorway. Local map shows dark green circle (0.5m range) clear. Global map shows red arrow (current position) in small room, orange trajectory shows arrival path, exercise room (larger green area) is to the left. Using 'exercise equipment' as landmark."
+    "reasoning": "IMAGE 5 (Left 120°) shows exercise room doorway with gym equipment - next waypoint. System will auto-rotate 120° left to face this direction. After rotation, move forward through doorway into exercise room. Local map shows dark green circle (0.5m range) clear. Global map shows red arrow (current position) in small room, orange trajectory shows arrival path, exercise room (larger green area) is to the left. Using 'exercise equipment' as landmark."
 }}
 
 ## Ex2:
@@ -255,23 +255,23 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 
 ## Example 1:
 **Global Task**: Turn around walk through the exercise room into the living room. Wait by the Table.
-**Previous Subtask**: Navigate to exercise room entrance
-**Current Observation:** IMAGE 1 (Front 0°): Exercise equipment directly ahead. IMAGE 7 (Back 180°): Restroom visible behind
+**Previous Subtask**: Navigate to exercise room
+**Current Observation:** IMAGE 1 (Front 0°): Exercise equipment surrounding. IMAGE 7 (Back 180°): Restroom visible behind
 
 {{
-    "waypoint": "Exercise Room Entrance - facing gym equipment ahead, restroom behind",
-    "waypoint_sequence": "Restroom(✓) → Exercise Room Entrance(Current) → Exercise Room(Next) → Living Room Arched Doorway → Living Room's Table(Goal)",
+    "waypoint": "Exercise Room (entrance area) - gym equipment surrounding, restroom behind",
+    "waypoint_sequence": "Restroom(✓) → Exercise Room(Current) → Living Room → Living Room's Table(Goal)",
     "waypoint_direction": "IMAGE 1 (Front 0°)",
-    "subtask_destination": "exercise room interior",
-    "subtask_instruction": "Move forward into the interior of the gym",
-    "subtask_landmark": "exercise equipment",
+    "subtask_destination": "living room",
+    "subtask_instruction": "Move forward through the exercise room toward the living room exit",
+    "subtask_landmark": "arched doorway",
     "completion_criteria": {{
-        "Surrounding_Detection": "Exercise equipment detected surrounding agent in multiple IMAGEs (1, 2, 12). Restroom detected in IMAGE 7 (Back 180°)",
-        "Spatial_relationship": "Exercise equipment surrounding agent < 1.0m in multiple directions (map shows inside gym area). Restroom far behind (map shows previous waypoint far back). Orange trajectory shows entered gym room interior",
-        "Location": "Exercise Room Interior - exercise equipment surrounding agent, restroom far behind"
+        "Surrounding_Detection": "Arched doorway detected in Front. Exercise equipment detected in Back",
+        "Spatial_relationship": "Arched doorway ahead (map shows exit to living room). Exercise equipment behind (map shows gym area). Orange trajectory shows movement through exercise room toward living room",
+        "Location": "Living Room Entrance - arched doorway ahead, exercise room behind"
     }},
     "global_task_finish": false,
-    "reasoning": "Current at Exercise Room Entrance, gym equipment ahead in IMAGE 1, restroom behind in IMAGE 7. Previous subtask (reach entrance) completed. Global map shows red arrow at entrance threshold between small room (restroom) and larger room (gym), orange trajectory shows 120° turn and forward movement from restroom. Local map shows dark red dashed line aligned with gym interior, dark green circle overlaps gym entrance, blue filled area shows gym equipment visible ahead. Next waypoint is gym interior - in IMAGE 1, no turn needed. Move forward directly into gym."
+    "reasoning": "Current in Exercise Room, gym equipment surrounding in multiple images, restroom behind in IMAGE 7. Previous subtask (enter exercise room) completed. Global map shows red arrow inside gym area, orange trajectory shows entered from restroom. Local map shows inside exercise room with equipment around. Next waypoint is Living Room - need to cross exercise room to find living room exit. Move forward through gym to locate arched doorway leading to living room."
 }}
 
 ## Example 2:
