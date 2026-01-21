@@ -96,17 +96,9 @@ class LLMPlanner(BaseAPIClient):
                 'right_90': 'Unknown'
             }
         
-        distance_summary = MapVisualizer.get_distance_summary(obstacle_distances)
-        print(f"📏 [Initial Planning] Obstacle Distances: {distance_summary}")
-        
         prompt = get_initial_planning_prompt(
             instruction, 
-            self.action_space,
-            distance_front=obstacle_distances['front'],
-            distance_left_30=obstacle_distances['left_30'],
-            distance_right_30=obstacle_distances['right_30'],
-            distance_left_90=obstacle_distances['left_90'],
-            distance_right_90=obstacle_distances['right_90']
+            self.action_space
         )
         
         # 组合图像：4方向观察 + 全局地图 + 局部地图（如果有）
@@ -187,9 +179,6 @@ class LLMPlanner(BaseAPIClient):
                 'right_90': 'Unknown'
             }
         
-        distance_summary = MapVisualizer.get_distance_summary(obstacle_distances)
-        print(f"📏 [Verification] Obstacle Distances: {distance_summary}")
-        
         prompt = get_verification_replanning_prompt(
             instruction,
             waypoint_sequence,
@@ -198,12 +187,7 @@ class LLMPlanner(BaseAPIClient):
             completion_criteria,
             self.action_space,
             detected_landmarks=landmarks_str,
-            waypoint_summary=waypoint_summary,
-            distance_front=obstacle_distances['front'],
-            distance_left_30=obstacle_distances['left_30'],
-            distance_right_30=obstacle_distances['right_30'],
-            distance_left_90=obstacle_distances['left_90'],
-            distance_right_90=obstacle_distances['right_90']
+            waypoint_summary=waypoint_summary
         )
         
         # 组合图像：当前位置4方向 + 全局地图 + 局部地图（如果有）
