@@ -1522,7 +1522,8 @@ class MapVisualizer:
         Returns:
             保存路径
         """
-        masks_dir = os.path.join(self.output_dir, f'eps_{episode_id}', 'semantic_masks')
+        episode_dir = self._create_episode_directories(episode_id)
+        masks_dir = os.path.join(episode_dir, 'semantic_masks')
         os.makedirs(masks_dir, exist_ok=True)
         
         save_path = os.path.join(masks_dir, f'step_{step:04d}_{phase}.npy')
