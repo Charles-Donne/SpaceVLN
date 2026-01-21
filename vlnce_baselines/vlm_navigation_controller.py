@@ -775,8 +775,38 @@ class VLMNavigationController(InteractiveNavigationController):
             'right_90': 'Unknown'
         })
         
-        # 调用LLM生成初始子任务（传递轻量的距离字典 ~75 bytes，而非地图 ~18 MB）
-        response, prompt = self.planner.generate_initial_subtask(
+        # 先构建thinking_record（不含response）
+        thinking_record = {
+            "step": self.current_step,  # 12
+            "phase": "initial_planning",
+            "subtask_count": 1,  # 初始化总是第1个子任务
+            "subtask_attempt": 0,  # 初始规划总是a
+            "subtask_id": "1a",  # 初始化总是1a
+            "prompt_type": "initial",
+            "timestamp": datetime.now().isoformat(),
+            # 保存输入图片路径（12张方向图 + 2张地图）
+            "input_images": {
+                "global_map.png": global_map_for_llm,
+                "local_map.png": local_map,
+                # 12个方向视图（IMAGE 1-12）
+                **{f"IMAGE {i+1}.png": image_paths[i] if len(image_paths) > i else None for i in range(12)}
+            }
+        }
+        
+        # 生成prompt并添加到record
+        from vlnce_baselines.vlm.prompts import get_initial_planning_prompt
+        prompt = get_initial_planning_prompt(
+            self.current_instruction, 
+            "TURN_LEFT/RIGHT (30°, 60°, 90°, 120°, 150°, 180°), MOVE_FORWARD (0.25m, 0.5m, 0.75m, 1.0m, 1.25m, 1.5m), STOP"
+        )
+        thinking_record["prompt"] = prompt
+        
+        # 1️⃣ 先保存输入（图片 + prompt）
+        thinking_dir = self.save_manager.save_thinking_input(thinking_record)
+        print(f"  💾 已保存输入: {thinking_dir}")
+        
+        # 2️⃣ 调用LLM生成初始子任务
+        response, _ = self.planner.generate_initial_subtask(
             instruction=self.current_instruction,
             observation_images=image_paths,
             direction_names=direction_names,
@@ -789,29 +819,13 @@ class VLMNavigationController(InteractiveNavigationController):
             print("✗ LLM未返回有效响应")
             return None
         
-        # 记录thinking输出（包含输入图片和prompt）
-        # 此时current_step=12（环视完成），规划在step 12之后完成
-        # 初始规划的subtask_id为 "1a" (第1个子任务，第a次尝试)
-        thinking_record = {
-            "step": self.current_step,  # 12
-            "phase": "initial_planning",
-            "subtask_count": 1,  # 初始化总是第1个子任务
-            "subtask_attempt": 0,  # 初始规划总是a
-            "subtask_id": "1a",  # 初始化总是1a
-            "prompt_type": "initial",
-            "prompt": prompt,  # 保存prompt
-            "response": response,
-            "timestamp": datetime.now().isoformat(),
-            # 保存输入图片路径（12张方向图 + 2张地图）
-            "input_images": {
-                "global_map.png": global_map_for_llm,
-                "local_map.png": local_map,
-                # 12个方向视图（IMAGE 1-12）
-                **{f"IMAGE {i+1}.png": image_paths[i] if len(image_paths) > i else None for i in range(12)}
-            }
-        }
+        # 3️⃣ 保存response
+        thinking_record["response"] = response
+        self.save_manager.save_thinking_response(thinking_record, thinking_dir)
+        print(f"  💾 已保存响应: {thinking_dir}/response.json")
+        
+        # 记录到内存
         self.thinking_outputs.append(thinking_record)
-        self.save_manager.save_thinking(thinking_record)
         
         # 保存子任务并初始化计数
         self.current_subtask = response
@@ -988,8 +1002,55 @@ class VLMNavigationController(InteractiveNavigationController):
             'right_90': 'Unknown'
         })
         
-        # 调用LLM验证（全局地图必需，局部地图可选，传递实际检测到的类别）
-        response, is_completed, prompt = self.planner.verify_and_replan(
+        # 先构建thinking_record（不含response）
+        attempt_letter = chr(ord('a') + self.subtask_attempt)
+        subtask_id = f"{self.subtask_count}{attempt_letter}"  # 当前验证的子任务，如 "1a"
+        
+        # 计算下一个subtask_id
+        # 注意：此时还不知道is_completed，所以先按未完成准备
+        next_subtask_count = self.subtask_count
+        next_attempt = self.subtask_attempt + 1
+        next_attempt_letter = chr(ord('a') + next_attempt)
+        
+        thinking_record = {
+            "step": self.current_step,  # 验证扫描完成后的step
+            "phase": f"verify_{subtask_id}",  # verify_1a, verify_2b, etc.
+            "subtask_count": self.subtask_count,
+            "subtask_attempt": self.subtask_attempt,
+            "subtask_id": subtask_id,  # 当前验证的子任务，如 "1a"
+            "next_subtask_id": f"{next_subtask_count}{next_attempt_letter}",  # 暂定，后续根据is_completed更新
+            "prompt_type": "verification",
+            "timestamp": datetime.now().isoformat(),
+            "detected_landmarks": detected_landmarks,  # 记录传递给LLM的landmarks
+            # 保存输入图片路径（12张方向图 + 2张地图）
+            "input_images": {
+                "global_map.png": global_map_for_llm,
+                "local_map.png": local_map if os.path.exists(local_map) else None,
+                # 12个方向视图（IMAGE 1-12）
+                **{f"IMAGE {i+1}.png": image_paths[i] if len(image_paths) > i else None for i in range(12)}
+            }
+        }
+        
+        # 生成prompt并添加到record
+        from vlnce_baselines.vlm.prompts import get_verification_replanning_prompt
+        prompt = get_verification_replanning_prompt(
+            self.current_instruction,
+            self.current_subtask.get('waypoint_sequence', 'Unknown'),
+            self.current_subtask.get('subtask_destination', 'Unknown'),
+            self.current_subtask.get('subtask_instruction', 'Unknown'),
+            str(self.current_subtask.get('completion_criteria', {})),
+            "TURN_LEFT/RIGHT (30°, 60°, 90°, 120°, 150°, 180°), MOVE_FORWARD (0.25m, 0.5m, 0.75m, 1.0m, 1.25m, 1.5m), STOP",
+            detected_landmarks=", ".join(detected_landmarks) if detected_landmarks else None,
+            waypoint_summary=waypoint_summary
+        )
+        thinking_record["prompt"] = prompt
+        
+        # 1️⃣ 先保存输入（图片 + prompt）
+        thinking_dir = self.save_manager.save_thinking_input(thinking_record)
+        print(f"  💾 已保存输入: {thinking_dir}")
+        
+        # 2️⃣ 调用LLM验证（全局地图必需，局部地图可选，传递实际检测到的类别）
+        response, is_completed, _ = self.planner.verify_and_replan(
             instruction=self.current_instruction,
             current_subtask=self.current_subtask,
             observation_images=image_paths,
@@ -1007,43 +1068,21 @@ class VLMNavigationController(InteractiveNavigationController):
             print("✗ LLM验证未返回有效响应")
             return False, None, None
         
-        # 记录thinking输出（包含输入图片和prompt）
-        # 此时current_step已经是验证扫描完成后的step（+12）
-        attempt_letter = chr(ord('a') + self.subtask_attempt)
-        subtask_id = f"{self.subtask_count}{attempt_letter}"  # 当前验证的子任务，如 "1a"
-        
-        # 计算下一个subtask_id
+        # 更新next_subtask_id（根据is_completed）
         if is_completed and not response.get('global_task_finish', False):
-            next_subtask_count = self.subtask_count + 1
-            next_attempt = 0
-        else:
-            next_subtask_count = self.subtask_count
-            next_attempt = self.subtask_attempt + 1 if not is_completed else 0
-        next_attempt_letter = chr(ord('a') + next_attempt)
+            thinking_record["next_subtask_id"] = f"{self.subtask_count + 1}a"
+        elif response.get('global_task_finish', False):
+            thinking_record["next_subtask_id"] = "final"
+        # else: 保持原值（未完成，重试）
         
-        thinking_record = {
-            "step": self.current_step,  # 验证扫描完成后的step
-            "phase": f"verify_{subtask_id}",  # verify_1a, verify_2b, etc.
-            "subtask_count": self.subtask_count,
-            "subtask_attempt": self.subtask_attempt,
-            "subtask_id": subtask_id,  # 当前验证的子任务，如 "1a"
-            "next_subtask_id": f"{next_subtask_count}{next_attempt_letter}" if not response.get('global_task_finish', False) else "final",
-            "prompt_type": "verification",
-            "is_completed": is_completed,
-            "response": response,
-            "timestamp": datetime.now().isoformat(),
-            "detected_landmarks": detected_landmarks,  # 记录传递给LLM的landmarks
-            # 保存输入图片路径（12张方向图 + 2张地图）
-            "input_images": {
-                "global_map.png": global_map_for_llm,
-                "local_map.png": local_map if os.path.exists(local_map) else None,
-                # 12个方向视图（IMAGE 1-12）
-                **{f"IMAGE {i+1}.png": image_paths[i] if len(image_paths) > i else None for i in range(12)}
-            },
-            "prompt": prompt,
-        }
+        # 3️⃣ 保存response
+        thinking_record["is_completed"] = is_completed
+        thinking_record["response"] = response
+        self.save_manager.save_thinking_response(thinking_record, thinking_dir)
+        print(f"  💾 已保存响应: {thinking_dir}/response.json")
+        
+        # 记录到内存
         self.thinking_outputs.append(thinking_record)
-        self.save_manager.save_thinking(thinking_record)
         
         if is_completed:
             attempt_letter = chr(ord('a') + self.subtask_attempt)
