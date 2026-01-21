@@ -93,12 +93,14 @@ class MapVisualizer:
         if obstacle_mask_rotated.dtype != bool:
             obstacle_mask_rotated = obstacle_mask_rotated > 127
         
-        # 定义5个方向（在旋转后的地图上，箭头朝上=-90°）
+        # 定义7个方向（在旋转后的地图上，箭头朝上=-90°）
         directions = {
             'front': -90,
             'left_30': -120,
-            'right_30': -60,
+            'left_60': -150,
             'left_90': -180,
+            'right_30': -60,
+            'right_60': -30,
             'right_90': 0
         }
         
@@ -1018,8 +1020,8 @@ class MapVisualizer:
         """
         # 如果是action阶段且提供了controller，绘制距离线
         if phase.startswith('action') and controller is not None:
-            if hasattr(controller, '_draw_distance_rays_on_first_person_view'):
-                rgb = controller._draw_distance_rays_on_first_person_view(rgb.copy())
+            if hasattr(controller, '_draw_distance_rays_on_first_person_view') and hasattr(controller, 'latest_obstacle_distances'):
+                rgb = controller._draw_distance_rays_on_first_person_view(rgb.copy(), controller.latest_obstacle_distances)
         
         episode_dir = self._create_episode_directories(episode_id)
         save_path = os.path.join(episode_dir, 'rgb', f'step_{step:04d}_{phase}.png')

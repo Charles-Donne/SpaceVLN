@@ -458,198 +458,87 @@ class VLMNavigationController(InteractiveNavigationController):
         
         return image
     
-    def _draw_distance_line_on_view(self, image: np.ndarray, view_angle: float) -> np.ndarray:
+    def _draw_distance_on_view(self, image: np.ndarray, distance_str: str) -> np.ndarray:
         """
-        在方向视图上绘制一条距离线（从底部中心到中心）
+        在视图上绘制距离信息（复用统一计算的距离数据）
         
         Args:
-            image: 当前方向的图像 (H, W, 3) BGR格式
-            view_angle: 当前视角的角度 (0-330, 30度递增)
-            
-        Returns:
-            绘制了距离线后的图像
+            image: 图像 (H, W, 3) BGR格式
+            distance_str: 距离字符串，如 "1.2m", ">2.0m", "<0.5m WARNING"
         """
-        if not hasattr(self, 'mapper') or self.mapper is None:
-            return image
-        
         h, w = image.shape[:2]
+        center_x, bottom_y = w // 2, h - 10
         
-        # 获取当前agent位置和朝向
-        agent_x, agent_y, agent_o = self._get_agent_pose()
+        # 绘制距离线
+        cv2.line(image, (center_x, bottom_y), (center_x, h // 2), (0, 255, 255), 3)
         
-        # 计算当前视角的绝对方向
-        view_direction = agent_o + np.radians(view_angle)
-        
-        # 射线检测：从当前视角方向找最近障碍物
-        occupancy_grid = self.mapper.occupancy_grid
-        map_resolution = self.mapper.resolution
-        map_min_x = self.mapper.coordinate_min
-        map_min_y = self.mapper.coordinate_min
-        
-        # 检测距离：从0.5m到5m，步进0.1m
-        max_distance = 5.0
-        obstacle_distance = max_distance
-        
-        for dist in np.arange(0.5, max_distance + 0.1, 0.1):
-            # 计算该距离处的世界坐标
-            world_x = agent_x + dist * np.cos(view_direction)
-            world_y = agent_y + dist * np.sin(view_direction)
-            
-            # 转换到地图坐标
-            map_x = int((world_x - map_min_x) / map_resolution)
-            map_y = int((world_y - map_min_y) / map_resolution)
-            
-            # 检查是否在地图范围内
-            if 0 <= map_y < occupancy_grid.shape[0] and 0 <= map_x < occupancy_grid.shape[1]:
-                # 检查是否是障碍物（2=obstacle）
-                if occupancy_grid[map_y, map_x] == 2:
-                    obstacle_distance = dist
-                    break
-        
-        # 绘制距离线（从底部中心到图像中心）
-        start_x = w // 2
-        start_y = h - 10  # 底部上方10像素
-        end_x = w // 2
-        end_y = h // 2  # 图像中心
-        
-        # 绘制线（黄色，粗线）
-        cv2.line(image, (start_x, start_y), (end_x, end_y), (0, 255, 255), 3)
-        
-        # 在线的中点显示距离文字
-        text_x = end_x + 10
-        text_y = (start_y + end_y) // 2
-        
-        # 根据距离设置颜色
-        if obstacle_distance > 2.0:
-            dist_text = ">2.0m"
-            text_color = (0, 255, 0)  # 绿色 - 安全
-        elif obstacle_distance < 0.5:
-            dist_text = f"{obstacle_distance:.1f}m!"
-            text_color = (0, 0, 255)  # 红色 - 警告
+        # 解析距离并设置颜色
+        if "WARNING" in distance_str or "<0.5" in distance_str:
+            color = (0, 0, 255)  # 红色
+        elif ">2.0" in distance_str or "open" in distance_str:
+            color = (0, 255, 0)  # 绿色
         else:
-            dist_text = f"{obstacle_distance:.1f}m"
-            text_color = (0, 255, 255)  # 黄色 - 注意
+            color = (0, 255, 255)  # 黄色
         
-        # 绘制文字背景
-        font_scale = 0.6
-        thickness = 2
-        text_size = cv2.getTextSize(dist_text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)[0]
-        cv2.rectangle(image,
-                     (text_x - 3, text_y - text_size[1] - 2),
-                     (text_x + text_size[0] + 3, text_y + 4),
-                     (0, 0, 0), -1)
-        
-        # 绘制距离文字
-        cv2.putText(image, dist_text, (text_x, text_y),
-                   cv2.FONT_HERSHEY_SIMPLEX, font_scale, text_color, thickness)
+        # 绘制文字
+        text_x, text_y = center_x + 10, (bottom_y + h // 2) // 2
+        font_scale, thickness = 0.6, 2
+        text_size = cv2.getTextSize(distance_str, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)[0]
+        cv2.rectangle(image, (text_x - 3, text_y - text_size[1] - 2),
+                     (text_x + text_size[0] + 3, text_y + 4), (0, 0, 0), -1)
+        cv2.putText(image, distance_str, (text_x, text_y),
+                   cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, thickness)
         
         return image
     
-    def _draw_distance_rays_on_first_person_view(self, image: np.ndarray) -> np.ndarray:
+    def _draw_distance_rays_on_first_person_view(self, image: np.ndarray, distances: Dict[str, str]) -> np.ndarray:
         """
-        在第一人称视图上绘制7条放射状距离线
-        从中心底部放射出去，显示7个方向的距离（-90°, -60°, -30°, 0°, 30°, 60°, 90°）
+        在第一人称视图上绘制多条距离射线（复用统一计算的距离数据）
         
         Args:
             image: 第一人称RGB图像 (H, W, 3) BGR格式
-            
-        Returns:
-            绘制了距离线后的图像
+            distances: 距离字典，如 {'front': '1.2m', 'left_30': '>2.0m', ...}
         """
-        if not hasattr(self, 'mapper') or self.mapper is None:
-            return image
-        
         h, w = image.shape[:2]
+        center_x, bottom_y = w // 2, h - 20
+        fov_half = 39.5
         
-        # 获取当前agent位置和朝向
-        agent_x, agent_y, agent_o = self._get_agent_pose()
+        # 方向映射：key -> (相对角度, X位置比例)
+        ray_map = {
+            'left_90': -90, 'left_60': -60, 'left_30': -30,
+            'front': 0,
+            'right_30': 30, 'right_60': 60, 'right_90': 90
+        }
         
-        # 7个方向：-90°, -60°, -30°, 0°, 30°, 60°, 90°（相对于当前朝向）
-        ray_angles = [-90, -60, -30, 0, 30, 60, 90]
-        
-        occupancy_grid = self.mapper.occupancy_grid
-        map_resolution = self.mapper.resolution
-        map_min_x = self.mapper.coordinate_min
-        map_min_y = self.mapper.coordinate_min
-        
-        # 中心底部起点
-        center_x = w // 2
-        bottom_y = h - 20
-        
-        for ray_angle in ray_angles:
-            # 计算该方向的绝对角度
-            direction = agent_o + np.radians(ray_angle)
+        for key, angle in ray_map.items():
+            if key not in distances or abs(angle) > fov_half:
+                continue
             
-            # 射线检测：找最近障碍物
-            max_distance = 5.0
-            obstacle_distance = max_distance
+            dist_str = distances[key]
             
-            for dist in np.arange(0.5, max_distance + 0.1, 0.1):
-                world_x = agent_x + dist * np.cos(direction)
-                world_y = agent_y + dist * np.sin(direction)
-                
-                map_x = int((world_x - map_min_x) / map_resolution)
-                map_y = int((world_y - map_min_y) / map_resolution)
-                
-                if 0 <= map_y < occupancy_grid.shape[0] and 0 <= map_x < occupancy_grid.shape[1]:
-                    if occupancy_grid[map_y, map_x] == 2:
-                        obstacle_distance = dist
-                        break
+            # 解析距离和颜色
+            if "WARNING" in dist_str or "<0.5" in dist_str:
+                color, y_ratio = (0, 0, 255), 0.7
+            elif ">2.0" in dist_str or "open" in dist_str:
+                color, y_ratio = (0, 255, 0), 0.1
+            else:
+                try:
+                    dist_val = float(dist_str.replace('m', '').split()[0])
+                    color = (0, 255, 255)
+                    y_ratio = 0.7 if dist_val < 1.0 else (0.5 if dist_val < 2.0 else 0.3)
+                except:
+                    color, y_ratio = (0, 255, 255), 0.5
             
-            # 计算线的终点（根据角度和距离映射到图像坐标）
-            # 角度映射到X轴：-90°→左边界，0°→中心，90°→右边界
-            # FOV假设为79度，所以±39.5度内的才显示
-            fov_half = 39.5
-            if abs(ray_angle) <= fov_half:
-                # X坐标：线性映射
-                x_ratio = (ray_angle + fov_half) / (2 * fov_half)
-                end_x = int(x_ratio * w)
-                
-                # Y坐标：距离映射到高度（近的在下面，远的在上面）
-                # 使用对数映射让距离变化更明显
-                if obstacle_distance < 1.0:
-                    y_ratio = 0.7  # 很近
-                elif obstacle_distance < 2.0:
-                    y_ratio = 0.5
-                elif obstacle_distance < 3.0:
-                    y_ratio = 0.3
-                else:
-                    y_ratio = 0.1  # 很远
-                
-                end_y = int(bottom_y - (bottom_y * y_ratio))
-                
-                # 根据距离选择颜色
-                if obstacle_distance > 2.0:
-                    line_color = (0, 255, 0)  # 绿色 - 安全
-                elif obstacle_distance < 0.5:
-                    line_color = (0, 0, 255)  # 红色 - 危险
-                else:
-                    line_color = (0, 255, 255)  # 黄色 - 注意
-                
-                # 绘制线（从底部中心到计算的终点）
-                cv2.line(image, (center_x, bottom_y), (end_x, end_y), line_color, 2)
-                
-                # 在终点显示距离文字
-                if obstacle_distance > 2.0:
-                    dist_text = ">2.0m"
-                else:
-                    dist_text = f"{obstacle_distance:.1f}m"
-                
-                font_scale = 0.4
-                thickness = 1
-                text_size = cv2.getTextSize(dist_text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)[0]
-                text_x = end_x - text_size[0] // 2
-                text_y = end_y - 5
-                
-                # 文字背景
-                cv2.rectangle(image,
-                            (text_x - 2, text_y - text_size[1] - 2),
-                            (text_x + text_size[0] + 2, text_y + 2),
-                            (0, 0, 0), -1)
-                
-                # 绘制距离文字
-                cv2.putText(image, dist_text, (text_x, text_y),
-                           cv2.FONT_HERSHEY_SIMPLEX, font_scale, line_color, thickness)
+            # 计算终点
+            x_ratio = (angle + fov_half) / (2 * fov_half)
+            end_x, end_y = int(x_ratio * w), int(bottom_y - bottom_y * y_ratio)
+            
+            # 绘制射线和文字
+            cv2.line(image, (center_x, bottom_y), (end_x, end_y), color, 2)
+            text_x = end_x - len(dist_str) * 3
+            text_y = end_y - 5
+            cv2.rectangle(image, (text_x - 2, text_y - 12), (text_x + len(dist_str) * 7, text_y + 2), (0, 0, 0), -1)
+            cv2.putText(image, dist_str, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
         
         return image
     
@@ -826,8 +715,12 @@ class VLMNavigationController(InteractiveNavigationController):
             # 先绘制可导航区域（绿色地面）
             image = self._draw_navigable_area_on_view(image, angle)
             
-            # 绘制距离线（从底部中心到中心）
-            image = self._draw_distance_line_on_view(image, angle)
+            # 绘制距离信息（使用统一计算的距离数据）
+            angle_to_key = {0: 'front', 30: 'right_30', 60: 'right_60', 90: 'right_90',
+                           330: 'left_30', 300: 'left_60', 270: 'left_90'}
+            dist_key = angle_to_key.get(angle, 'front')
+            dist_str = self.latest_obstacle_distances.get(dist_key, 'Unknown')
+            image = self._draw_distance_on_view(image, dist_str)
             
             # 然后绘制waypoint标记（如果在当前视角范围内）
             if waypoint_info:
