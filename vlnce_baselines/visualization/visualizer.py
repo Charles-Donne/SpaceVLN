@@ -1112,6 +1112,10 @@ class MapVisualizer:
             绘制了地面分割的图像
         """
         try:
+            if not os.path.exists(mask_path):
+                print(f"  ⚠️  Mask file not found: {mask_path}")
+                return image
+                
             masks = np.load(mask_path)
             floor_idx = None
             for i, cls in enumerate(classes):
@@ -1119,16 +1123,32 @@ class MapVisualizer:
                     floor_idx = i
                     break
             
-            if floor_idx is None or floor_idx >= masks.shape[0]:
+            if floor_idx is None:
+                print(f"  ⚠️  'floor' not found in classes: {classes}")
+                return image
+            
+            if floor_idx >= masks.shape[0]:
+                print(f"  ⚠️  floor_idx {floor_idx} >= masks.shape[0] {masks.shape[0]}")
                 return image
             
             floor_mask = masks[floor_idx]
+            
+            # 增强可见性：更明显的绿色覆盖
             overlay = image.copy()
-            green_color = np.array([0, 200, 0], dtype=np.uint8)
+            green_color = np.array([0, 255, 0], dtype=np.uint8)  # 纯绿色
             floor_bool = floor_mask > 0.1
-            overlay[floor_bool] = overlay[floor_bool] * 0.7 + green_color * 0.3
-            alpha = 0.6
+            
+            # 如果mask有效像素太少，打印警告
+            if np.sum(floor_bool) < 100:
+                print(f"  ⚠️  Floor mask has too few pixels: {np.sum(floor_bool)}")
+                return image
+            
+            # 绘制半透明绿色覆盖
+            overlay[floor_bool] = overlay[floor_bool] * 0.6 + green_color * 0.4
+            alpha = 0.7  # 增加透明度，让绿色更明显
             result = cv2.addWeighted(overlay, alpha, image, 1 - alpha, 0)
+            
+            print(f"  ✓ Floor mask applied: {np.sum(floor_bool)} pixels")
             return result
         except Exception as e:
             print(f"  ⚠️  Failed to load floor mask from {mask_path}: {e}")
@@ -1136,7 +1156,7 @@ class MapVisualizer:
     
     def draw_distance_on_view(self, image: np.ndarray, distance_str: str) -> np.ndarray:
         """
-        在视图上绘制距离信息（梯形线条）
+        在视图上绘制距离信息（从中心向外7个方向的短线条）
         
         Args:
             image: 图像 (H, W, 3) BGR格式
@@ -1144,25 +1164,34 @@ class MapVisualizer:
         """
         h, w = image.shape[:2]
         center_x = w // 2
-        bottom_y = h - 5
-        side_offset = int(w * 0.15)
+        center_y = h // 2
         
+        # 根据距离确定颜色
         if "WARNING" in distance_str or "<0.5" in distance_str:
-            color, line_ratio = (0, 0, 255), 0.3
+            color = (0, 0, 255)  # 红色
+            line_length = 40
         elif ">2.0" in distance_str or "open" in distance_str:
-            color, line_ratio = (0, 255, 0), 1.0
+            color = (0, 255, 0)  # 绿色
+            line_length = 80
         else:
-            color, line_ratio = (0, 255, 255), 0.65
+            color = (0, 255, 255)  # 黄色
+            line_length = 60
         
-        max_length = bottom_y - h // 2
-        end_y = bottom_y - int(max_length * line_ratio)
+        # 7个方向：-90°(front), -60°, -30°, 0°, 30°, 60°, 90°
+        # 从中心向外辐射
+        angles = [-90, -60, -30, 0, 30, 60, 90]
+        for angle in angles:
+            angle_rad = np.deg2rad(angle)
+            end_x = int(center_x + line_length * np.cos(angle_rad))
+            end_y = int(center_y + line_length * np.sin(angle_rad))
+            
+            # 中心线粗一点
+            thickness = 3 if angle == -90 else 2
+            cv2.line(image, (center_x, center_y), (end_x, end_y), color, thickness)
         
-        cv2.line(image, (center_x, bottom_y), (center_x, end_y), color, 3)
-        cv2.line(image, (center_x - side_offset, bottom_y), (center_x - int(side_offset * 0.5), end_y), color, 2)
-        cv2.line(image, (center_x + side_offset, bottom_y), (center_x + int(side_offset * 0.5), end_y), color, 2)
-        
+        # 绘制距离文本（在上方偏右位置）
         text_x = center_x + 10
-        text_y = (bottom_y + h // 2) // 2
+        text_y = center_y - line_length - 10
         font_scale, thickness = 0.6, 2
         text_size = cv2.getTextSize(distance_str, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)[0]
         cv2.rectangle(image, (text_x - 2, text_y - text_size[1] - 1),
