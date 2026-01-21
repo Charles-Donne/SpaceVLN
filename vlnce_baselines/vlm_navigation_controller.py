@@ -327,7 +327,7 @@ class VLMNavigationController(InteractiveNavigationController):
         
         # ========== 1. 绘制历史轨迹投影 ==========
         if hasattr(self, 'mapper') and self.mapper:
-            trajectory_points = self.mapper.trajectory  # List[(x, y)]
+            trajectory_points = self.mapper.trajectory_points  # List[(x, y)]
             if len(trajectory_points) > 1:
                 projected_points = []
                 
