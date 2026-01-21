@@ -114,6 +114,22 @@ class VLMNavigationController(InteractiveNavigationController):
         self.direction_images = {}  # {direction_name: image_path}
         self.latest_map_image = None
         
+        # 障碍物距离缓存
+        # Thinking模式（环视）：12个方向（360°每30°）
+        self.latest_obstacle_distances_12 = {
+            f'angle_{i}': 'Unknown' for i in range(0, 360, 30)
+        }
+        # Action模式：7个方向（前方扇形）
+        self.latest_obstacle_distances = {
+            'front': 'Unknown',
+            'left_30': 'Unknown',
+            'left_60': 'Unknown',
+            'left_90': 'Unknown',
+            'right_30': 'Unknown',
+            'right_60': 'Unknown',
+            'right_90': 'Unknown'
+        }
+        
         # NavigationVisualizer（用于RGB+俯视图拼接和GIF生成）
         self.nav_visualizer = None
         
@@ -588,8 +604,9 @@ class VLMNavigationController(InteractiveNavigationController):
         # 注意：不清空landmark，让VLM能看到旧landmark来判断子任务是否完成
         # 轨迹和landmark的清空会在verify_and_replan中VLM输出后进行
         
-        # 更新距离信息（为Thinking模式的12个方向准备）
-        self._update_obstacle_distances()
+        # 更新距离信息（仅当地图已初始化时）
+        if hasattr(self, 'mapper') and self.mapper.full_map is not None:
+            self._update_obstacle_distances()
         
         # 存储12张环视图像用于合成全景图（step 1-12）
         lookaround_images = []
@@ -697,10 +714,11 @@ class VLMNavigationController(InteractiveNavigationController):
         # 缓存最后的观察（step 12，回到正前方）
         self.latest_obs = obs[0]
         
-        # 缓存最后的观察（最后一次旋转后）
-        self.latest_obs = obs[0]
-        
         print(f"  扫描完成: +{total_new_classes}类 | 总计{len(self.detected_classes)}类")
+        
+        # 360度环视完成，现在更新距离信息（地图已完整扫描）
+        print(f"  [更新距离] 360度扫描完成，计算12个方向的障碍物距离...")
+        self._update_obstacle_distances_12_directions()
         
         # 检查是否完成了完整的12步环视
         if len(lookaround_images) < 12:
@@ -733,11 +751,11 @@ class VLMNavigationController(InteractiveNavigationController):
             # 先绘制可导航区域（绿色地面）
             image = self._draw_navigable_area_on_view(image, angle)
             
-            # 绘制距离信息（使用统一计算的距离数据）
-            angle_to_key = {0: 'front', 30: 'right_30', 60: 'right_60', 90: 'right_90',
-                           330: 'left_30', 300: 'left_60', 270: 'left_90'}
-            dist_key = angle_to_key.get(angle, 'front')
-            dist_str = self.latest_obstacle_distances.get(dist_key, 'Unknown')
+            # 绘制距离信息（使用统一计算的12方向距离数据）
+            dist_key = f'angle_{angle}'  # 'angle_0', 'angle_30', ..., 'angle_330'
+            dist_str = self.latest_obstacle_distances_12.get(dist_key, 'Unknown')
+            image = self._draw_distance_on_view(image, dist_str)
+            dist_str = self.latest_obstacle_distances_12.get(dist_key, 'Unknown')
             image = self._draw_distance_on_view(image, dist_str)
             
             # 然后绘制waypoint标记（如果在当前视角范围内）
@@ -753,7 +771,7 @@ class VLMNavigationController(InteractiveNavigationController):
             label_text = direction_name  # 如 "IMAGE 1: Front (0°)"
             font = cv2.FONT_HERSHEY_SIMPLEX
             font_scale = 0.5
-            font_thickness = 2  # 加粗IMAGE标题
+            font_thickness = 1  # 清晰但不过于粗重
             text_color = (0, 0, 255)  # 红色
             
             # 计算文字位置（居中）
@@ -1675,9 +1693,71 @@ class VLMNavigationController(InteractiveNavigationController):
         
         return result
     
-    def _update_obstacle_distances(self):
-        """更新当前位置的障碍物距离"""
+    def _update_obstacle_distances_12_directions(self):
+        """更新当前位置的12个方向障碍物距离（用于Thinking模式环视）"""
         try:
+            # 检查地图是否已初始化
+            if not hasattr(self, 'mapper') or self.mapper is None:
+                raise ValueError("Mapper not initialized")
+            
+            if self.mapper.full_map is None:
+                raise ValueError("Map not initialized yet")
+            
+            if self.mapper.full_pose is None:
+                raise ValueError("Pose not initialized yet")
+            
+            obstacle_map = self.mapper.full_map[0, ...]
+            h, w = obstacle_map.shape
+            current_x, current_y, current_o = self.mapper.full_pose
+            
+            # 预处理obstacle mask
+            obstacle_mask = np.flipud(obstacle_map > 0.5)
+            obstacle_mask = cv2.resize(
+                obstacle_mask.astype(np.uint8) * 255, (480, 480), 
+                interpolation=cv2.INTER_NEAREST
+            ) > 127
+            
+            # 计算agent位置
+            if len(self.mapper.trajectory_points) > 0:
+                last_x, last_y = self.mapper.trajectory_points[-1]
+                agent_x, agent_y = last_y * 480 / w, (h - 1 - last_x) * 480 / h
+            else:
+                pos = np.array([current_x, current_y]) * 100.0 / self.config.MAP.MAP_RESOLUTION
+                agent_x, agent_y = pos[1] * 480 / w, (h - 1 - pos[0]) * 480 / h
+            
+            # 旋转地图使箭头朝上
+            rotation_matrix = cv2.getRotationMatrix2D((agent_x, agent_y), 90 - current_o, 1.0)
+            rotated_center = rotation_matrix @ np.array([agent_x, agent_y, 1])
+            rotation_matrix[0:2, 2] += [240, 240] - rotated_center[:2]
+            
+            obstacle_mask_rotated = cv2.warpAffine(
+                obstacle_mask.astype(np.uint8) * 255,
+                rotation_matrix, (480, 480), flags=cv2.INTER_NEAREST
+            ) > 127
+            
+            # 计算12个方向的距离
+            self.latest_obstacle_distances_12 = self.visualizer.calculate_obstacle_distances_12_directions(
+                obstacle_mask_rotated, 240, 240
+            )
+        except Exception as e:
+            print(f"  ⚠️  12方向距离更新失败: {e}")
+            self.latest_obstacle_distances_12 = {
+                f'angle_{i}': 'Unknown' for i in range(0, 360, 30)
+            }
+    
+    def _update_obstacle_distances(self):
+        """更新当前位置的障碍物距离（用于Action模式，7个方向）"""
+        try:
+            # 检查地图是否已初始化
+            if not hasattr(self, 'mapper') or self.mapper is None:
+                raise ValueError("Mapper not initialized")
+            
+            if self.mapper.full_map is None:
+                raise ValueError("Map not initialized yet")
+            
+            if self.mapper.full_pose is None:
+                raise ValueError("Pose not initialized yet")
+            
             obstacle_map = self.mapper.full_map[0, ...]
             h, w = obstacle_map.shape
             current_x, current_y, current_o = self.mapper.full_pose
@@ -1714,8 +1794,13 @@ class VLMNavigationController(InteractiveNavigationController):
         except Exception as e:
             print(f"  ⚠️  距离更新失败: {e}")
             self.latest_obstacle_distances = {
-                'front': 'Unknown', 'left_30': 'Unknown', 'right_30': 'Unknown',
-                'left_90': 'Unknown', 'right_90': 'Unknown'
+                'front': 'Unknown',
+                'left_30': 'Unknown',
+                'left_60': 'Unknown', 
+                'left_90': 'Unknown',
+                'right_30': 'Unknown',
+                'right_60': 'Unknown',
+                'right_90': 'Unknown'
             }
     
     def run_vlm_navigation(self, max_steps: int = 500, 

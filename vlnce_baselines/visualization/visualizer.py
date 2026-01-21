@@ -94,6 +94,7 @@ class MapVisualizer:
             obstacle_mask_rotated = obstacle_mask_rotated > 127
         
         # 定义7个方向（在旋转后的地图上，箭头朝上=-90°）
+        # 用于Action模式（前方扇形视野）
         directions = {
             'front': -90,
             'left_30': -120,
@@ -107,6 +108,75 @@ class MapVisualizer:
         distances = {}
         
         # 计算5个关键方向
+        for key, angle in directions.items():
+            # 多光线扫描（5条光线，±5°范围）
+            ray_distances = []
+            for offset in [-5, -2.5, 0, 2.5, 5]:
+                test_angle = angle + offset
+                dist_m = self._raycast_on_rotated_map(
+                    obstacle_mask_rotated, center_x, center_y, test_angle
+                )
+                if dist_m is not None:
+                    ray_distances.append(dist_m)
+            
+            # 使用中位数距离
+            if ray_distances:
+                median_dist = np.median(ray_distances)
+                distances[key] = self._format_distance(median_dist)
+            else:
+                distances[key] = "Unknown"
+        
+        return distances
+    
+    def calculate_obstacle_distances_12_directions(
+        self,
+        obstacle_mask_rotated: np.ndarray,
+        center_x: int = 240,
+        center_y: int = 240
+    ) -> Dict[str, str]:
+        """
+        在旋转后的obstacle map上计算12个方向的障碍物距离（用于Thinking模式环视）
+        
+        覆盖完整360°：每30°一个方向，对应12张IMAGE
+        
+        Args:
+            obstacle_mask_rotated: [480, 480] 旋转后的障碍物掩码
+            center_x: Agent中心X坐标（默认240）
+            center_y: Agent中心Y坐标（默认240）
+            
+        Returns:
+            距离字典 {
+                'angle_0': "X.XXm",    # IMAGE 1: Front (0°)
+                'angle_30': "X.XXm",   # IMAGE 2: Right (30°)
+                'angle_60': "X.XXm",   # IMAGE 3: Right (60°)
+                ...
+                'angle_330': "X.XXm"   # IMAGE 12: Left (330°)
+            }
+        """
+        # 确保是bool mask
+        if obstacle_mask_rotated.dtype != bool:
+            obstacle_mask_rotated = obstacle_mask_rotated > 127
+        
+        # 定义12个方向（在旋转后的地图上，箭头朝上=-90°）
+        # agent角度 → 旋转后地图角度的映射
+        directions = {
+            'angle_0':   -90,   # Front (0°)
+            'angle_30':  -60,   # Right 30°
+            'angle_60':  -30,   # Right 60°
+            'angle_90':  0,     # Right 90°
+            'angle_120': 30,    # Right 120°
+            'angle_150': 60,    # Right 150°
+            'angle_180': 90,    # Back (180°)
+            'angle_210': 120,   # Left 150°
+            'angle_240': 150,   # Left 120°
+            'angle_270': -180,  # Left 90° (也可以用180)
+            'angle_300': -150,  # Left 60°
+            'angle_330': -120   # Left 30°
+        }
+        
+        distances = {}
+        
+        # 计算12个方向
         for key, angle in directions.items():
             # 多光线扫描（5条光线，±5°范围）
             ray_distances = []
