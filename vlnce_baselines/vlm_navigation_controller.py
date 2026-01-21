@@ -791,7 +791,7 @@ class VLMNavigationController(InteractiveNavigationController):
             # 绘制距离信息（使用统一计算的12方向距离数据）
             dist_key = f'angle_{angle}'  # 'angle_0', 'angle_30', ..., 'angle_330'
             dist_str = self.latest_obstacle_distances_12.get(dist_key, 'Unknown')
-            image = self._draw_distance_on_view(image, dist_str)
+            image = self.visualizer.draw_distance_on_view(image, dist_str)
             
             # 然后绘制waypoint标记（如果在当前视角范围内）
             if waypoint_info:
