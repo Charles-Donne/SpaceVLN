@@ -755,8 +755,6 @@ class VLMNavigationController(InteractiveNavigationController):
             dist_key = f'angle_{angle}'  # 'angle_0', 'angle_30', ..., 'angle_330'
             dist_str = self.latest_obstacle_distances_12.get(dist_key, 'Unknown')
             image = self._draw_distance_on_view(image, dist_str)
-            dist_str = self.latest_obstacle_distances_12.get(dist_key, 'Unknown')
-            image = self._draw_distance_on_view(image, dist_str)
             
             # 然后绘制waypoint标记（如果在当前视角范围内）
             if waypoint_info:
@@ -770,8 +768,8 @@ class VLMNavigationController(InteractiveNavigationController):
             # 添加文字标注（使用OpenCV）
             label_text = direction_name  # 如 "IMAGE 1: Front (0°)"
             font = cv2.FONT_HERSHEY_SIMPLEX
-            font_scale = 0.5
-            font_thickness = 1  # 清晰但不过于粗重
+            font_scale = 0.7  # 增大字体
+            font_thickness = 2  # 加粗
             text_color = (0, 0, 255)  # 红色
             
             # 计算文字位置（居中）
@@ -1060,7 +1058,7 @@ class VLMNavigationController(InteractiveNavigationController):
     
     def execute_rotation_sequence(self, action_sequence: List[Dict]) -> bool:
         """
-        执行旋转动作序列
+        执行旋转动作序列（使用统一的执行器，确保地图更新、步数记录、可视化保存）
         
         Args:
             action_sequence: 动作序列，格式 [{"action": "TURN_LEFT", "degrees": 30}, ...]
@@ -1068,6 +1066,8 @@ class VLMNavigationController(InteractiveNavigationController):
         Returns:
             是否全部执行成功
         """
+        from habitat.sims.habitat_simulator.actions import HabitatSimActions
+        
         for i, action_dict in enumerate(action_sequence):
             action_name = action_dict["action"]
             degrees = action_dict["degrees"]
@@ -1083,17 +1083,15 @@ class VLMNavigationController(InteractiveNavigationController):
                 print(f"    ⚠️  未知动作: {action_name}")
                 continue
             
-            # 执行动作（通过envs调用）
-            outputs = self.envs.step([action_id])
-            observations = [outputs[i][0] for i in range(self.envs.num_envs)]
-            self.current_step += 1
-            
-            # 注意：旋转过程中不更新地图，因为位置没变化，只有朝向改变
-            # 地图更新会在下一次环视或移动时统一进行
+            # 使用统一的执行器（step_with_vlm），确保：
+            # - 更新地图
+            # - 保存可视化（RGB、detection、maps）
+            # - 更新距离信息
+            # - 正确记录步数
+            result = self.step_with_vlm(action_id, action_name, save_vis=True)
             
             # 检查episode是否结束
-            done = outputs[0][1]  # (obs, done, info)
-            if done:
+            if result.get('done', False):
                 print(f"    ⚠️  Episode在旋转过程中结束")
                 return False
         
@@ -1362,14 +1360,7 @@ class VLMNavigationController(InteractiveNavigationController):
                     rotation_success = self.execute_rotation_sequence(action_sequence)
                     
                     if rotation_success:
-                        # 旋转完成后，重新环视确认
-                        print(f"\n[两阶段导航] 新子任务 - 阶段2: 重新环视确认waypoint在Front")
-                        attempt_letter = chr(ord('a') + self.subtask_attempt)
-                        confirm_phase = f"rotate_confirm_{self.subtask_count}{attempt_letter}"
-                        confirm_images, confirm_names = self.look_around_and_collect(confirm_phase)
-                        
-                        if confirm_images:
-                            print(f"  ✓ 环视完成，waypoint应该在IMAGE 1 (Front)")
+                        print(f"  ✓ 旋转完成，waypoint应该在前方，直接开始Action")
         else:
             attempt_letter = chr(ord('a') + self.subtask_attempt)
             print(f"\n[子任务未完成] #{self.subtask_count}{attempt_letter} - 重新规划")
@@ -1867,20 +1858,7 @@ class VLMNavigationController(InteractiveNavigationController):
                 if not rotation_success:
                     print("  ✗ 旋转执行失败")
                 else:
-                    # 2.6 旋转完成后，重新环视确认waypoint在Front
-                    print(f"\n[两阶段导航] 阶段2: 重新环视确认waypoint在Front")
-                    confirm_phase = f"rotate_confirm_{self.subtask_count}a"
-                    confirm_images, confirm_names = self.look_around_and_collect(confirm_phase)
-                
-                if confirm_images:
-                    print(f"  ✓ 环视完成，waypoint应该在IMAGE 1 (Front)")
-                    # 可选：保存确认记录
-                    self.save_manager.save_rotation_confirmation({
-                        'step': self.current_step,
-                        'phase': confirm_phase,
-                        'original_direction': waypoint_direction,
-                        'confirmed': True
-                    })
+                    print(f"  ✓ 旋转完成，waypoint应该在前方，直接开始Action")
         
         # 3. 主导航循环
         total_steps = self.current_step

@@ -158,20 +158,21 @@ class MapVisualizer:
             obstacle_mask_rotated = obstacle_mask_rotated > 127
         
         # 定义12个方向（在旋转后的地图上，箭头朝上=-90°）
+        # 环视是逆时针TURN_LEFT，所以30°是左侧，330°是右侧
         # agent角度 → 旋转后地图角度的映射
         directions = {
             'angle_0':   -90,   # Front (0°)
-            'angle_30':  -60,   # Right 30°
-            'angle_60':  -30,   # Right 60°
-            'angle_90':  0,     # Right 90°
-            'angle_120': 30,    # Right 120°
-            'angle_150': 60,    # Right 150°
+            'angle_30':  -120,  # Left 30° (逆时针)
+            'angle_60':  -150,  # Left 60°
+            'angle_90':  -180,  # Left 90°
+            'angle_120': 150,   # Left 120° (=-210°)
+            'angle_150': 120,   # Left 150° (=-240°)
             'angle_180': 90,    # Back (180°)
-            'angle_210': 120,   # Left 150°
-            'angle_240': 150,   # Left 120°
-            'angle_270': -180,  # Left 90° (也可以用180)
-            'angle_300': -150,  # Left 60°
-            'angle_330': -120   # Left 30°
+            'angle_210': 60,    # Right 150° (顺时针150°)
+            'angle_240': 30,    # Right 120°
+            'angle_270': 0,     # Right 90°
+            'angle_300': -30,   # Right 60°
+            'angle_330': -60    # Right 30°
         }
         
         distances = {}
@@ -963,8 +964,8 @@ class MapVisualizer:
         labels = {
             'FRONT': (w // 2, 20),  # 上方
             'BACK': (w // 2, h - 8),  # 下方
-            'LEFT': (25, h // 2),  # 左侧（向右移动，避免被裁剪）
-            'RIGHT': (w - 25, h // 2)  # 右侧（向左移动，避免被裁剪）
+            'LEFT': (45, h // 2),  # 左侧（更靠近中心，避免被遮挡）
+            'RIGHT': (w - 45, h // 2)  # 右侧（更靠近中心，避免被遮挡）
         }
         
         for text, (x, y) in labels.items():
@@ -1127,8 +1128,8 @@ class MapVisualizer:
         
         # 绘制红色文字
         font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 0.8
-        font_thickness = 2
+        font_scale = 1.0  # 增大字体
+        font_thickness = 2  # 保持加粗
         text_color = (0, 0, 255)  # BGR: 红色
         
         # 计算文字位置（居中）
@@ -1177,8 +1178,8 @@ class MapVisualizer:
         
         # 绘制红色文字
         font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 0.5
-        font_thickness = 1
+        font_scale = 0.7  # 增大字体
+        font_thickness = 2  # 加粗
         text_color = (0, 0, 255)  # BGR: 红色
         
         # 计算文字位置（居中）
