@@ -11,7 +11,7 @@
 ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the sub-instruction guidance while adapting to actual environment.
 
 # Current Sub-Task
-**Sub-Destination**: {subtask_destination}
+**Sub-Destination**: {next_waypoint_destination}
 **Sub-Instruction**: {subtask_instruction}
 **Previous Total Progress**: {progress_summary}
 **Last One Action Reason**: {previous_action_reason}
@@ -179,7 +179,7 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 """
 
 
-def get_action_execution_prompt(subtask_destination: str,
+def get_action_execution_prompt(next_waypoint_destination: str,
                                 subtask_instruction: str,
                                 progress_summary: str = "",
                                 detected_landmarks: str = None,
@@ -193,7 +193,7 @@ def get_action_execution_prompt(subtask_destination: str,
     获取动作执行提示词
     
     Args:
-        subtask_destination: 子任务目的地
+        next_waypoint_destination: 下一个waypoint目的地
         subtask_instruction: 子任务指令
         progress_summary: 当前子任务进度摘要
         detected_landmarks: 已检测到的landmark类别字符串
@@ -217,7 +217,7 @@ def get_action_execution_prompt(subtask_destination: str,
         progress_summary = "(Just started - no actions executed yet. Please execute the FIRST key action from the sub-instruction.)"
         
     return ACTION_EXECUTION_PROMPT.format(
-        subtask_destination=subtask_destination,
+        next_waypoint_destination=next_waypoint_destination,
         subtask_instruction=subtask_instruction,
         progress_summary=progress_summary if progress_summary else "(Just started - no actions yet)",
         detected_landmarks=detected_landmarks,

@@ -160,7 +160,7 @@ class LLMPlanner(BaseAPIClient):
         
         # 获取当前子任务信息
         waypoint_sequence = current_subtask.get('waypoint_sequence', 'Unknown')
-        subtask_destination = current_subtask.get('subtask_destination', 'Unknown')
+        subtask_destination = current_subtask.get('next_waypoint_destination', 'Unknown')
         subtask_instruction = current_subtask.get('subtask_instruction', 'Unknown')
         completion_criteria = current_subtask.get('completion_criteria', 'Unknown')
         

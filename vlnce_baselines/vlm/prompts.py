@@ -74,12 +74,12 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 # Output Format (JSON only)
 
 {{
-    "waypoint": "<Current Area Type> - <Key Surrounding Landmarks and Relationships>",
+    "current_waypoint": "<Current Area Type> - <Key Surrounding Landmarks and Relationships>",
     "waypoint_sequence": "<Current Location> → <Next Waypoint> → ... → <Final Waypoints>",
-    "waypoint_direction": "<IMAGE number where next waypoint appears most centered/visible (1-12)>",
-    "subtask_destination": "<Next immediate waypoint name>",
+    "next_waypoint_direction": "<IMAGE number where next waypoint appears most centered/visible (1-12)>",
+    "next_waypoint_destination": "<Next immediate waypoint name>",
     "subtask_instruction": "<Step-by-step navigation instructions starting from Front view>",
-    "subtask_landmark": "<Single landmark to detect (common, e.g. door, table, painting, cabinet)>",
+    "next_waypoint_landmark": "<Single landmark to detect (common, e.g. door, table, painting, cabinet)>",
     "completion_criteria": {{
         "Surrounding_Detection": "<Destination detected in which view>. <Other objects detected in which view>",
         "Spatial_relationship": "<Destination position and distance> (map verification). <Other objects relationships> (map verification). <Trajectory description>",
@@ -96,12 +96,12 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 **Current Observation:** IMAGE 1 (Front 0°): Bookshelf visible at distance. IMAGE 5 (Left 120°): Exercise room doorway visible with gym equipment inside. IMAGE 10 (Right 270°): Toilet and washbasin visible
 
 {{
-    "waypoint": "Restroom - beside exercise room doorway, toilet and washbasin nearby.",
+    "current_waypoint": "Restroom - beside exercise room doorway, toilet and washbasin nearby.",
     "waypoint_sequence": "Restroom(Current) → Exercise Room → Living Room → Living Room's Table(Goal)",
-    "waypoint_direction": "IMAGE 5 (Left 120°)",
-    "subtask_destination": "exercise room",
+    "next_waypoint_direction": "IMAGE 5 (Left 120°)",
+    "next_waypoint_destination": "exercise room",
     "subtask_instruction": "Move forward through doorway to enter the exercise room",
-    "subtask_landmark": "exercise equipment",
+    "next_waypoint_landmark": "exercise equipment",
     "completion_criteria": {{
         "Surrounding_Detection": "Exercise equipment detected surrounding in multiple views. Restroom fixtures detected in Back",
         "Spatial_relationship": "Exercise equipment surrounding agent < 1.0m (map shows inside gym area). Restroom far behind (map shows previous location). Orange trajectory shows entered exercise room interior",
@@ -116,12 +116,12 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 **Current Observation:** IMAGE 1 (Front 0°): Open space ahead. IMAGE 2 (Left 30°): Bedroom exit doorway visible, corridor with pictures beyond. IMAGE 4 (Left 90°): Wall nearby
 
 {{
-    "waypoint": "Bedroom - near exit",
+    "current_waypoint": "Bedroom - near exit",
     "waypoint_sequence": "Bedroom(Current) → Corridor → Kitchen Entrance → Kitchen → Kitchen Exit → Bathroom(Goal)",
-    "waypoint_direction": "IMAGE 2 (Left 30°)",
-    "subtask_destination": "corridor with pictures",
+    "next_waypoint_direction": "IMAGE 2 (Left 30°)",
+    "next_waypoint_destination": "corridor with pictures",
     "subtask_instruction": "Move forward through doorway to reach corridor",
-    "subtask_landmark": "picture",
+    "next_waypoint_landmark": "picture",
     "completion_criteria": {{
         "Surrounding_Detection": "Pictures detected on corridor wall in Front. Bedroom interior detected in Back",
         "Spatial_relationship": "Pictures on corridor wall < 0.5m (map shows decorative objects along corridor). Bedroom interior far behind (map shows previous area). Orange trajectory shows forward 1.5m movement to corridor",
@@ -238,12 +238,12 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 # Output Format (JSON only)
 
 {{
-    "waypoint": "<Current Area Type> - <Key Surrounding Landmarks and Relationships>",
+    "current_waypoint": "<Current Area Type> - <Key Surrounding Landmarks and Relationships>",
     "waypoint_sequence": "<Completed Waypoints(✓)> → <Current Position> → <Next Waypoint> → <Remaining Waypoints> → <Goal>",
-    "waypoint_direction": "<IMAGE number where next waypoint appears most centered/visible (1-12)>",
-    "subtask_destination": "<Next waypoint in sequence to navigate toward>",
+    "next_waypoint_direction": "<IMAGE number where next waypoint appears most centered/visible (1-12)>",
+    "next_waypoint_destination": "<Next waypoint in sequence to navigate toward>",
     "subtask_instruction": "<Step-by-step navigation instructions from current position to next waypoint>",
-    "subtask_landmark": "<Single landmark name at next waypoint for detection>",
+    "next_waypoint_landmark": "<Single landmark name at next waypoint for detection>",
     "completion_criteria": {{
         "Surrounding_Detection": "<Next waypoint detected in which view>. <Other objects detected in which view>",
         "Spatial_relationship": "<Next waypoint position and distance> (map verification). <Other objects relationships> (map verification). <Trajectory description>",
@@ -259,12 +259,12 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 **Current Observation:** IMAGE 1 (Front 0°): Exercise equipment surrounding. IMAGE 7 (Back 180°): Restroom visible behind
 
 {{
-    "waypoint": "Exercise Room (entrance area) - gym equipment surrounding, restroom behind",
+    "current_waypoint": "Exercise Room (entrance area) - gym equipment surrounding, restroom behind",
     "waypoint_sequence": "Restroom(✓) → Exercise Room(Current) → Living Room → Living Room's Table(Goal)",
-    "waypoint_direction": "IMAGE 1 (Front 0°)",
-    "subtask_destination": "living room",
+    "next_waypoint_direction": "IMAGE 1 (Front 0°)",
+    "next_waypoint_destination": "living room",
     "subtask_instruction": "Move forward through the exercise room toward the living room exit",
-    "subtask_landmark": "arched doorway",
+    "next_waypoint_landmark": "arched doorway",
     "completion_criteria": {{
         "Surrounding_Detection": "Arched doorway detected in Front. Exercise equipment detected in Back",
         "Spatial_relationship": "Arched doorway ahead (map shows exit to living room). Exercise equipment behind (map shows gym area). Orange trajectory shows movement through exercise room toward living room",
@@ -280,12 +280,12 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 **Current Observation:** IMAGE 1 (Front 0°): Refrigerator directly ahead < 0.5m. IMAGE 10 (Right 270°): Counter visible. IMAGE 7 (Back 180°): Kitchen island visible
 
 {{
-    "waypoint": "Kitchen Center - refrigerator ahead < 0.5m, counter to right, kitchen island behind",
+    "current_waypoint": "Kitchen Center - refrigerator ahead < 0.5m, counter to right, kitchen island behind",
     "waypoint_sequence": "Bedroom(✓) → Hallway(✓) → Kitchen Center(✓) → Refrigerator(Current + Goal)",
-    "waypoint_direction": "IMAGE 1 (Front 0°)",
-    "subtask_destination": "refrigerator in kitchen",
+    "next_waypoint_direction": "IMAGE 1 (Front 0°)",
+    "next_waypoint_destination": "refrigerator in kitchen",
     "subtask_instruction": "Stop. The refrigerator is directly ahead within 0.5m",
-    "subtask_landmark": "refrigerator",
+    "next_waypoint_landmark": "refrigerator",
     "completion_criteria": {{
         "Surrounding_Detection": "Refrigerator detected in Front centered ahead. Counter detected in Right. Kitchen island detected in Back",
         "Spatial_relationship": "Refrigerator ahead < 0.5m (map shows refrigerator landmark within dark green circle). Counter at right. Kitchen island behind. Orange trajectory shows direct forward movement through kitchen to refrigerator",
@@ -301,12 +301,12 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 **Current Observation:** IMAGE 1 (Front 0°): Oven visible ahead but distance > 1.0m. IMAGE 7 (Back 180°): Kitchen island visible behind
 
 {{
-    "waypoint": "Kitchen - Oven ahead > 1.0m, kitchen island behind",
+    "current_waypoint": "Kitchen - Oven ahead > 1.0m, kitchen island behind",
     "waypoint_sequence": "Starting Point(✓) → Kitchen(Current) → Oven Area(Next) → Archway Past Painting → Left Doorway → Small Sink(Goal)",
-    "waypoint_direction": "IMAGE 1 (Front 0°)",
-    "subtask_destination": "oven area",
+    "next_waypoint_direction": "IMAGE 1 (Front 0°)",
+    "next_waypoint_destination": "oven area",
     "subtask_instruction": "Continue moving forward to approach oven until oven is directly ahead < 0.5m (target: oven centered in Front view, very close)",
-    "subtask_landmark": "oven",
+    "next_waypoint_landmark": "oven",
     "completion_criteria": {{
         "Surrounding_Detection": "Oven detected in Front centered ahead occupying large portion. Kitchen island detected far away in Back",
         "Spatial_relationship": "Oven ahead < 0.5m (map shows oven landmark within dark green circle). Kitchen island far behind. Orange trajectory shows forward movement toward oven",

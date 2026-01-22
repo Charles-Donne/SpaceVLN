@@ -1206,13 +1206,13 @@ class MapVisualizer:
         # 7个方向：左90°, 左60°, 左30°, 前0°, 右30°, 右60°, 右90°
         # 对应的像素角度（从底部向上，-90°是正上方）
         direction_configs = [
-            {'key': 'left_90', 'angle': -180, 'label': 'L90°'},
-            {'key': 'left_60', 'angle': -150, 'label': 'L60°'},
-            {'key': 'left_30', 'angle': -120, 'label': 'L30°'},
-            {'key': 'front', 'angle': -90, 'label': 'F0°'},
-            {'key': 'right_30', 'angle': -60, 'label': 'R30°'},
-            {'key': 'right_60', 'angle': -30, 'label': 'R60°'},
-            {'key': 'right_90', 'angle': 0, 'label': 'R90°'}
+            {'key': 'left_90', 'angle': -180, 'label': 'Left 90°'},
+            {'key': 'left_60', 'angle': -150, 'label': 'Left 60°'},
+            {'key': 'left_30', 'angle': -120, 'label': 'Left 30°'},
+            {'key': 'front', 'angle': -90, 'label': 'FRONT'},
+            {'key': 'right_30', 'angle': -60, 'label': 'Right 30°'},
+            {'key': 'right_60', 'angle': -30, 'label': 'Right 60°'},
+            {'key': 'right_90', 'angle': 0, 'label': 'Right 90°'}
         ]
         
         for config in direction_configs:
@@ -1242,8 +1242,9 @@ class MapVisualizer:
             
             # 在线条末端绘制标签（角度 + 距离）
             label = f"{config['label']}:{dist_str}"
-            font_scale = 0.4
-            font_thickness = 1
+            # FRONT用大字号，其他用小字号
+            font_scale = 0.6 if config['key'] == 'front' else 0.4
+            font_thickness = 2 if config['key'] == 'front' else 1
             text_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thickness)[0]
             
             # 标签位置：沿着线条方向稍微延伸

@@ -404,13 +404,13 @@ class VLMNavigationController(InteractiveNavigationController):
                     # Y坐标统一在中间位置
                     y_pos = int(h * 0.5)  # 固定在图像垂直中心
                     
-                    # 绘制waypoint标记（蓝色外圈 + 白色填充）
-                    cv2.circle(image, (x_pos, y_pos), 22, (255, 0, 0), 3)  # 蓝色边框
-                    cv2.circle(image, (x_pos, y_pos), 19, (255, 255, 255), -1)  # 白色填充
+                    # 绘制waypoint标记（蓝色外圈 + 白色填充，更小的圆圈）
+                    cv2.circle(image, (x_pos, y_pos), 15, (255, 0, 0), 2)  # 蓝色边框，半径15
+                    cv2.circle(image, (x_pos, y_pos), 13, (255, 255, 255), -1)  # 白色填充
                     
                     # 绘制waypoint ID（红色粗体）
                     text = f"{wp_id}"
-                    font_scale = 0.9
+                    font_scale = 0.7
                     thickness = 2
                     text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)[0]
                     text_x = x_pos - text_size[0] // 2
@@ -418,43 +418,26 @@ class VLMNavigationController(InteractiveNavigationController):
                     cv2.putText(image, text, (text_x, text_y), 
                                cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 255), thickness)
                     
-                    # 在waypoint下方显示距离（绿色文字）
-                    dist_text = f"{distance:.1f}m"
-                    dist_font_scale = 0.5
-                    dist_thickness = 1
-                    dist_text_size = cv2.getTextSize(dist_text, cv2.FONT_HERSHEY_SIMPLEX, 
-                                                      dist_font_scale, dist_thickness)[0]
-                    dist_x = x_pos - dist_text_size[0] // 2
-                    dist_y = y_pos + 35  # 圆圈下方35像素
-                    
-                    # 距离文字背景（黑色）
-                    cv2.rectangle(image, 
-                                (dist_x - 3, dist_y - dist_text_size[1] - 2),
-                                (dist_x + dist_text_size[0] + 3, dist_y + 4),
-                                (0, 0, 0), -1)
-                    cv2.putText(image, dist_text, (dist_x, dist_y), 
-                               cv2.FONT_HERSHEY_SIMPLEX, dist_font_scale, (0, 255, 0), dist_thickness)
-                    
                     # 在waypoint上方显示area type（如果有）
                     if wp_desc:
                         # 提取waypoint描述中的area type（第一部分，以" - "分隔）
                         area_type = wp_desc.split(' - ')[0] if ' - ' in wp_desc else wp_desc
-                        area_font_scale = 0.6
-                        area_thickness = 2
+                        area_font_scale = 0.5
+                        area_thickness = 1
                         area_text_size = cv2.getTextSize(area_type, cv2.FONT_HERSHEY_SIMPLEX, 
                                                           area_font_scale, area_thickness)[0]
                         area_x = x_pos - area_text_size[0] // 2
-                        area_y = y_pos - 35  # 圆圈上方35像素
+                        area_y = y_pos - 25  # 圆圈上方25像素（圆圈变小了）
                         
                         # Area type背景框（蓝色边框 + 白色填充）
-                        padding = 5
+                        padding = 3
                         cv2.rectangle(image,
                                     (area_x - padding, area_y - area_text_size[1] - padding),
                                     (area_x + area_text_size[0] + padding, area_y + padding),
-                                    (255, 0, 0), 2)  # 蓝色边框
+                                    (255, 0, 0), 1)  # 蓝色边框
                         cv2.rectangle(image,
-                                    (area_x - padding + 2, area_y - area_text_size[1] - padding + 2),
-                                    (area_x + area_text_size[0] + padding - 2, area_y + padding - 2),
+                                    (area_x - padding + 1, area_y - area_text_size[1] - padding + 1),
+                                    (area_x + area_text_size[0] + padding - 1, area_y + padding - 1),
                                     (255, 255, 255), -1)  # 白色填充
                         cv2.putText(image, area_type, (area_x, area_y), 
                                    cv2.FONT_HERSHEY_SIMPLEX, area_font_scale, (0, 0, 0), area_thickness)  # 黑色文字
@@ -988,13 +971,13 @@ class VLMNavigationController(InteractiveNavigationController):
         
         # 记录当前位置信息（用于后续验证参考）
         self.current_position_info = {
-            'waypoint': response.get('waypoint', 'Unknown'),
+            'waypoint': response.get('current_waypoint', 'Unknown'),
             'observation': response.get('current_observation', ''),
             'step': self.current_step
         }
         
         # 在mapper中添加waypoint（自动计算地图坐标）
-        waypoint_desc = response.get('waypoint', 'Unknown location')
+        waypoint_desc = response.get('current_waypoint', 'Unknown location')
         waypoint_id = self.mapper.add_waypoint(waypoint_desc)
         
         # 保存waypoint摘要（用于后续LLM提示词）
@@ -1005,13 +988,13 @@ class VLMNavigationController(InteractiveNavigationController):
             self.current_step
         )
         
-        # 动态更新目标landmark（直接使用VLM输出的subtask_landmark）
-        subtask_landmark = response.get('subtask_landmark', None)
+        # 动态更新目标landmark（直接使用VLM输出的next_waypoint_landmark）
+        next_waypoint_landmark = response.get('next_waypoint_landmark', None)
         
         # 直接使用VLM输出，不自动提取
-        if subtask_landmark:
-            self.landmark_classes = [subtask_landmark]
-            self.target_landmark = subtask_landmark
+        if next_waypoint_landmark:
+            self.landmark_classes = [next_waypoint_landmark]
+            self.target_landmark = next_waypoint_landmark
             print(f"  🎯 Target Landmark: {self.target_landmark}")
         else:
             self.target_landmark = None
@@ -1226,7 +1209,7 @@ class VLMNavigationController(InteractiveNavigationController):
         prompt = get_verification_replanning_prompt(
             self.current_instruction,
             self.current_subtask.get('waypoint_sequence', 'Unknown'),
-            self.current_subtask.get('subtask_destination', 'Unknown'),
+            self.current_subtask.get('next_waypoint_destination', 'Unknown'),
             self.current_subtask.get('subtask_instruction', 'Unknown'),
             str(self.current_subtask.get('completion_criteria', {})),
             "TURN_LEFT/RIGHT (30°, 60°, 90°, 120°, 150°, 180°), MOVE_FORWARD (0.25m, 0.5m, 0.75m, 1.0m, 1.25m, 1.5m), STOP",
@@ -1279,9 +1262,9 @@ class VLMNavigationController(InteractiveNavigationController):
             print(f"\n[子任务完成] #{self.subtask_count}{attempt_letter}")
             
             # 打印LLM的response关键信息
-            print(f"  📍 Waypoint: {response.get('waypoint', 'N/A')}")
+            print(f"  📍 Current Waypoint: {response.get('current_waypoint', 'N/A')}")
             print(f"  📍 Waypoint Sequence: {response.get('waypoint_sequence', 'N/A')}")
-            print(f"  🎯 Subtask Destination: {response.get('subtask_destination', 'N/A')}")
+            print(f"  🎯 Next Waypoint Destination: {response.get('next_waypoint_destination', 'N/A')}")
             print(f"  📝 Subtask Instruction: {response.get('subtask_instruction', 'N/A')}")
             
             # 检查是否完成全局任务
@@ -1292,9 +1275,9 @@ class VLMNavigationController(InteractiveNavigationController):
                 print("\n" + "="*60)
                 print("🏆 全局任务完成 - 导航成功！")
                 print("="*60)
-                print(f"  📍 Waypoint: {response.get('waypoint', 'N/A')}")
+                print(f"  📍 Current Waypoint: {response.get('current_waypoint', 'N/A')}")
                 print(f"  📍 Waypoint Sequence: {response.get('waypoint_sequence', 'N/A')}")
-                print(f"  🎯 Subtask Destination: {response.get('subtask_destination', 'N/A')}")
+                print(f"  🎯 Next Waypoint Destination: {response.get('next_waypoint_destination', 'N/A')}")
                 print(f"  📝 Subtask Instruction: {response.get('subtask_instruction', 'N/A')}")
                 print(f"  🔍 Completion Criteria:")
                 criteria = response.get('completion_criteria', {})
@@ -1306,7 +1289,7 @@ class VLMNavigationController(InteractiveNavigationController):
                 print("="*60)
                 
                 # 在结束前保存最终waypoint
-                waypoint_desc = response.get('waypoint', 'Final destination')
+                waypoint_desc = response.get('current_waypoint', 'Final destination')
                 waypoint_id = self.mapper.add_waypoint(waypoint_desc)
                 final_waypoint_summary = self._get_waypoint_summary()
                 self.save_manager.save_waypoint_memory(
@@ -1323,7 +1306,7 @@ class VLMNavigationController(InteractiveNavigationController):
             # ===== 关键顺序：先添加waypoint（使用当前trajectory），再清空 =====
             
             # 1. 先创建waypoint（此时trajectory还存在）
-            waypoint_desc = response.get('waypoint', 'Unknown location')
+            waypoint_desc = response.get('current_waypoint', 'Unknown location')
             waypoint_id = self.mapper.add_waypoint(waypoint_desc)
             
             # 保存waypoint摘要
@@ -1354,18 +1337,18 @@ class VLMNavigationController(InteractiveNavigationController):
             
             # 更新当前位置信息（用于后续参考）
             self.current_position_info = {
-                'waypoint': response.get('waypoint', 'Unknown'),
+                'waypoint': response.get('current_waypoint', 'Unknown'),
                 'observation': response.get('current_observation', ''),
                 'step': self.current_step
             }
             
-            # 动态更新目标landmark（直接使用VLM输出的subtask_landmark）
-            subtask_landmark = response.get('subtask_landmark', None)
+            # 动态更新目标landmark（直接使用VLM输出的next_waypoint_landmark）
+            next_waypoint_landmark = response.get('next_waypoint_landmark', None)
             
             # 直接使用VLM输出，不自动提取
-            if subtask_landmark:
-                self.landmark_classes = [subtask_landmark]
-                self.target_landmark = subtask_landmark
+            if next_waypoint_landmark:
+                self.landmark_classes = [next_waypoint_landmark]
+                self.target_landmark = next_waypoint_landmark
                 print(f"  🎯 New Target Landmark: {self.target_landmark}")
             else:
                 self.target_landmark = None
@@ -1377,10 +1360,10 @@ class VLMNavigationController(InteractiveNavigationController):
             self._print_subtask_info(response)
             
             # 子任务完成后，自动旋转到新的waypoint方向
-            waypoint_direction = response.get('waypoint_direction', '')
-            if waypoint_direction and 'Front' not in waypoint_direction:
+            next_waypoint_direction = response.get('next_waypoint_direction', '')
+            if next_waypoint_direction and 'Front' not in next_waypoint_direction:
                 print(f"\n[两阶段导航] 新子任务 - 阶段1: 旋转到waypoint方向")
-                success, action_sequence = self.auto_rotate_to_waypoint(waypoint_direction)
+                success, action_sequence = self.auto_rotate_to_waypoint(next_waypoint_direction)
                 
                 if success and action_sequence:
                     # 执行旋转动作序列
@@ -1395,7 +1378,7 @@ class VLMNavigationController(InteractiveNavigationController):
             # ===== 关键顺序：先添加waypoint（使用当前trajectory），再清空 =====
             
             # 1. 先创建waypoint（此时trajectory还存在）
-            waypoint_desc = response.get('waypoint', 'Replanning location')
+            waypoint_desc = response.get('current_waypoint', 'Replanning location')
             waypoint_id = self.mapper.add_waypoint(waypoint_desc)
             
             # 保存waypoint摘要
@@ -1422,18 +1405,18 @@ class VLMNavigationController(InteractiveNavigationController):
             # 更新位置观察（用于记录轨迹）
             if 'current_observation' in response:
                 self.current_position_info = {
-                    'waypoint': response.get('waypoint', getattr(self, 'current_position_info', {}).get('waypoint', 'Unknown')),
+                    'waypoint': response.get('current_waypoint', getattr(self, 'current_position_info', {}).get('waypoint', 'Unknown')),
                     'observation': response.get('current_observation', ''),
                     'step': self.current_step
                 }
             
-            # 从新的子任务指令中提取landmark（直接使用VLM输出的subtask_landmark）
-            subtask_landmark = response.get('subtask_landmark', None)
+            # 从新的子任务指令中提取landmark（直接使用VLM输出的next_waypoint_landmark）
+            next_waypoint_landmark = response.get('next_waypoint_landmark', None)
             
             # 直接使用VLM输出，不自动提取
-            if subtask_landmark:
-                self.landmark_classes = [subtask_landmark]
-                self.target_landmark = subtask_landmark
+            if next_waypoint_landmark:
+                self.landmark_classes = [next_waypoint_landmark]
+                self.target_landmark = next_waypoint_landmark
                 print(f"  🎯 Updated Target Landmark: {self.target_landmark}")
             else:
                 self.target_landmark = None
@@ -1590,7 +1573,7 @@ class VLMNavigationController(InteractiveNavigationController):
         
         # 调用VLM决策（不传递pose，使用当前progress_summary）
         result = self.action_executor.decide_action(
-            subtask_destination=self.current_subtask.get('subtask_destination', ''),
+            next_waypoint_destination=self.current_subtask.get('next_waypoint_destination', ''),
             subtask_instruction=self.current_subtask.get('subtask_instruction', ''),
             first_person_image=fp_image,
             action_mapping=ACTION_MAPPING,

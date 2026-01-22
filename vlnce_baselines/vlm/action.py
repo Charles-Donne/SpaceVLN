@@ -168,7 +168,7 @@ class ActionExecutor(BaseAPIClient):
 
     
     def decide_action(self,
-                     subtask_destination: str,
+                     next_waypoint_destination: str,
                      subtask_instruction: str,
                      first_person_image: str,
                      action_mapping: Dict[str, int],
@@ -184,7 +184,7 @@ class ActionExecutor(BaseAPIClient):
         基于第一人称视角、检测结果和局部地图决策下一步动作
         
         Args:
-            subtask_destination: 子任务目的地
+            next_waypoint_destination: 下一个waypoint目的地
             subtask_instruction: 子任务指令
             first_person_image: 第一人称RGB图像路径
             action_mapping: 动作名称到ID的映射
@@ -215,7 +215,7 @@ class ActionExecutor(BaseAPIClient):
         
         # 构建prompt
         prompt = get_action_execution_prompt(
-            subtask_destination=subtask_destination,
+            next_waypoint_destination=next_waypoint_destination,
             subtask_instruction=subtask_instruction,
             progress_summary=progress_summary,
             detected_landmarks=detected_landmarks,
