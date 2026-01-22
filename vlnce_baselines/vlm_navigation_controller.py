@@ -375,40 +375,27 @@ class VLMNavigationController(InteractiveNavigationController):
                 for pt in projected_points:
                     cv2.circle(image, pt, 3, (0, 140, 255), -1)  # 深橙色点
         
-        # ========== 2. 绘制最近的waypoint标记（仅30度内） ==========
-        # 只显示最近的一个waypoint（上一个waypoint）
+        # ========== 2. 绘制last waypoint标记（仅30度内） ==========
+        # 显示最后一个waypoint（last waypoint）
         if len(waypoint_positions) > 0:
-            # 找到最近的waypoint
-            min_distance = float('inf')
-            closest_idx = -1
+            # 获取最后一个waypoint（列表最后一个元素）
+            last_idx = len(waypoint_positions) - 1
+            wp_x, wp_y = waypoint_positions[last_idx]
+            wp_id = waypoint_ids[last_idx]
+            wp_desc = waypoint_info[2][last_idx] if len(waypoint_info[2]) > last_idx else ""
             
-            for i, (wp_x, wp_y) in enumerate(waypoint_positions):
-                dx = wp_x - agent_x
-                dy = wp_y - agent_y
-                distance = np.sqrt(dx**2 + dy**2)
-                
-                if distance < min_distance and distance >= 0.1:
-                    min_distance = distance
-                    closest_idx = i
+            # 计算waypoint相对于agent的向量
+            dx = wp_x - agent_x
+            dy = wp_y - agent_y
+            distance = np.sqrt(dx**2 + dy**2)
             
-            # 如果找到最近的waypoint，检查是否在当前视角内
-            if closest_idx >= 0:
-                wp_x, wp_y = waypoint_positions[closest_idx]
-                wp_id = waypoint_ids[closest_idx]
-                wp_desc = waypoint_info[2][closest_idx] if len(waypoint_info[2]) > closest_idx else ""
-                
-                # 计算waypoint相对于agent的向量
-                dx = wp_x - agent_x
-                dy = wp_y - agent_y
-                distance = np.sqrt(dx**2 + dy**2)
-                
-                # 计算waypoint的方向角
-                wp_angle = np.arctan2(dy, dx)
-                angle_diff = wp_angle - view_direction
-                angle_diff = np.arctan2(np.sin(angle_diff), np.cos(angle_diff))
-                
-                # 只显示±15度内的waypoint（确保每个waypoint只出现在一个视图中）
-                if abs(angle_diff) <= display_fov_half:
+            # 计算waypoint的方向角
+            wp_angle = np.arctan2(dy, dx)
+            angle_diff = wp_angle - view_direction
+            angle_diff = np.arctan2(np.sin(angle_diff), np.cos(angle_diff))
+            
+            # 只显示±15度内的waypoint（确保每个waypoint只出现在一个视图中）
+            if abs(angle_diff) <= display_fov_half:
                     # X坐标映射：使用79度FOV范围映射到图像宽度
                     x_ratio = (angle_diff + camera_fov_half) / (2 * camera_fov_half)
                     x_pos = int(x_ratio * w)
@@ -773,7 +760,10 @@ class VLMNavigationController(InteractiveNavigationController):
         os.makedirs(directions_dir, exist_ok=True)
         
         # 获取waypoint历史信息（用于在方向视图上绘制）
-        waypoint_info = self.mapper.get_waypoints() if hasattr(self, 'mapper') and self.mapper else None
+        # 注意：initial时不显示waypoint（还没有历史），replan时显示上一个waypoint
+        waypoint_info = None
+        if phase != "initial" and hasattr(self, 'mapper') and self.mapper:
+            waypoint_info = self.mapper.get_waypoints()
         
         for config in DIRECTION_CONFIG:
             step_idx = config["step"]  # 1-12
@@ -1540,9 +1530,8 @@ class VLMNavigationController(InteractiveNavigationController):
                 break
         
         # 为RGB图像添加地面分割和距离辅助线（调用visualizer）
-        dist_str = self.latest_obstacle_distances.get('front', 'Unknown')
         fp_image = self.visualizer.prepare_action_image_with_enhancements(
-            fp_image, mask_path, dist_str, self.classes, use_floor=True, use_distance=True)
+            fp_image, mask_path, self.latest_obstacle_distances, self.classes, use_floor=True, use_distance=True)
         
         # 获取当前地图路径和检测图像
         self._get_current_map_path()
@@ -1560,9 +1549,8 @@ class VLMNavigationController(InteractiveNavigationController):
             print(f"  ⚠️  Detection image not found for step {last_step} (tried phases: {possible_phases})")
         else:
             # 为detection图像添加地面分割和距离辅助线（使用相同的mask）
-            dist_str = self.latest_obstacle_distances.get('front', 'Unknown')
             detection_image = self.visualizer.prepare_action_image_with_enhancements(
-                detection_image, mask_path, dist_str, self.classes, use_floor=True, use_distance=True)
+                detection_image, mask_path, self.latest_obstacle_distances, self.classes, use_floor=True, use_distance=True)
         
         # 查找局部地图（使用相同的回退逻辑）
         local_map = None

@@ -1156,7 +1156,7 @@ class MapVisualizer:
     
     def draw_distance_on_view(self, image: np.ndarray, distance_str: str) -> np.ndarray:
         """
-        在视图上绘制距离信息（从中心向外7个方向的短线条）
+        在视图上绘制距离信息（梯形线条 - 用于thinking模式12个方向view）
         
         Args:
             image: 图像 (H, W, 3) BGR格式
@@ -1164,34 +1164,25 @@ class MapVisualizer:
         """
         h, w = image.shape[:2]
         center_x = w // 2
-        center_y = h // 2
+        bottom_y = h - 5
+        side_offset = int(w * 0.15)
         
-        # 根据距离确定颜色
         if "WARNING" in distance_str or "<0.5" in distance_str:
-            color = (0, 0, 255)  # 红色
-            line_length = 40
+            color, line_ratio = (0, 0, 255), 0.3
         elif ">2.0" in distance_str or "open" in distance_str:
-            color = (0, 255, 0)  # 绿色
-            line_length = 80
+            color, line_ratio = (0, 255, 0), 1.0
         else:
-            color = (0, 255, 255)  # 黄色
-            line_length = 60
+            color, line_ratio = (0, 255, 255), 0.65
         
-        # 7个方向：-90°(front), -60°, -30°, 0°, 30°, 60°, 90°
-        # 从中心向外辐射
-        angles = [-90, -60, -30, 0, 30, 60, 90]
-        for angle in angles:
-            angle_rad = np.deg2rad(angle)
-            end_x = int(center_x + line_length * np.cos(angle_rad))
-            end_y = int(center_y + line_length * np.sin(angle_rad))
-            
-            # 中心线粗一点
-            thickness = 3 if angle == -90 else 2
-            cv2.line(image, (center_x, center_y), (end_x, end_y), color, thickness)
+        max_length = bottom_y - h // 2
+        end_y = bottom_y - int(max_length * line_ratio)
         
-        # 绘制距离文本（在上方偏右位置）
+        cv2.line(image, (center_x, bottom_y), (center_x, end_y), color, 3)
+        cv2.line(image, (center_x - side_offset, bottom_y), (center_x - int(side_offset * 0.5), end_y), color, 2)
+        cv2.line(image, (center_x + side_offset, bottom_y), (center_x + int(side_offset * 0.5), end_y), color, 2)
+        
         text_x = center_x + 10
-        text_y = center_y - line_length - 10
+        text_y = (bottom_y + h // 2) // 2
         font_scale, thickness = 0.6, 2
         text_size = cv2.getTextSize(distance_str, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)[0]
         cv2.rectangle(image, (text_x - 2, text_y - text_size[1] - 1),
@@ -1200,16 +1191,83 @@ class MapVisualizer:
                    cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, thickness)
         return image
     
+    def draw_distance_on_action_view(self, image: np.ndarray, distance_dict: Dict[str, str]) -> np.ndarray:
+        """
+        在Action模式视图上绘制7个方向的距离信息（从底部中心引出）
+        
+        Args:
+            image: 图像 (H, W, 3) BGR格式
+            distance_dict: 距离字典，key为方向（'front', 'left_30', 'right_30', 'left_90', 'right_90'等）
+        """
+        h, w = image.shape[:2]
+        center_x = w // 2
+        bottom_y = h - 10
+        
+        # 7个方向：左90°, 左60°, 左30°, 前0°, 右30°, 右60°, 右90°
+        # 对应的像素角度（从底部向上，-90°是正上方）
+        direction_configs = [
+            {'key': 'left_90', 'angle': -180, 'label': 'L90°'},
+            {'key': 'left_60', 'angle': -150, 'label': 'L60°'},
+            {'key': 'left_30', 'angle': -120, 'label': 'L30°'},
+            {'key': 'front', 'angle': -90, 'label': 'F0°'},
+            {'key': 'right_30', 'angle': -60, 'label': 'R30°'},
+            {'key': 'right_60', 'angle': -30, 'label': 'R60°'},
+            {'key': 'right_90', 'angle': 0, 'label': 'R90°'}
+        ]
+        
+        for config in direction_configs:
+            dist_str = distance_dict.get(config['key'], 'Unknown')
+            if dist_str == 'Unknown':
+                continue
+            
+            # 根据距离确定颜色和长度
+            if "WARNING" in dist_str or "<0.5" in dist_str:
+                color = (0, 0, 255)  # 红色
+                line_length = 60
+            elif ">2.0" in dist_str or "open" in dist_str:
+                color = (0, 255, 0)  # 绿色
+                line_length = 120
+            else:
+                color = (0, 255, 255)  # 黄色
+                line_length = 90
+            
+            # 计算终点
+            angle_rad = np.deg2rad(config['angle'])
+            end_x = int(center_x + line_length * np.cos(angle_rad))
+            end_y = int(bottom_y + line_length * np.sin(angle_rad))
+            
+            # 绘制线条（中心线粗一点）
+            thickness = 3 if config['key'] == 'front' else 2
+            cv2.line(image, (center_x, bottom_y), (end_x, end_y), color, thickness)
+            
+            # 在线条末端绘制标签（角度 + 距离）
+            label = f"{config['label']}:{dist_str}"
+            font_scale = 0.4
+            font_thickness = 1
+            text_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thickness)[0]
+            
+            # 标签位置：沿着线条方向稍微延伸
+            label_x = int(end_x + 15 * np.cos(angle_rad) - text_size[0] // 2)
+            label_y = int(end_y + 15 * np.sin(angle_rad) + text_size[1] // 2)
+            
+            # 绘制黑色背景
+            cv2.rectangle(image, (label_x - 2, label_y - text_size[1] - 2),
+                         (label_x + text_size[0] + 2, label_y + 2), (0, 0, 0), -1)
+            cv2.putText(image, label, (label_x, label_y),
+                       cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, font_thickness)
+        
+        return image
+    
     def prepare_action_image_with_enhancements(self, image_path: str, mask_path: str = None, 
-                                               distance_str: str = "Unknown", classes: List[str] = None,
+                                               distance_dict: Dict[str, str] = None, classes: List[str] = None,
                                                use_floor: bool = True, use_distance: bool = True) -> str:
         """
-        为action模式准备增强图像：添加地面分割（绿色）和距离辅助线
+        为action模式准备增强图像：添加地面分割（绿色）和7方向距离辅助线
         
         Args:
             image_path: 原始图像路径
             mask_path: semantic mask路径
-            distance_str: 距离字符串
+            distance_dict: 距离字典 {'front': 'X.XXm', 'left_30': 'X.XXm', ...}
             classes: 类别列表
             use_floor: 是否绘制地面分割
             use_distance: 是否绘制距离辅助线
@@ -1227,8 +1285,8 @@ class MapVisualizer:
         if use_floor and mask_path and os.path.exists(mask_path) and classes:
             image = self.draw_floor_from_saved_mask(image, mask_path, classes)
         
-        if use_distance and distance_str != "Unknown":
-            image = self.draw_distance_on_view(image, distance_str)
+        if use_distance and distance_dict:
+            image = self.draw_distance_on_action_view(image, distance_dict)
         
         base_path = os.path.splitext(image_path)[0]
         enhanced_path = f"{base_path}_enhanced.png"

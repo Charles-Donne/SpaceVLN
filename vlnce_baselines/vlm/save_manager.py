@@ -68,13 +68,10 @@ class SaveManager:
         Returns:
             thinking_dir: 保存目录路径
         """
-        phase = thinking_record.get('phase', '')
-        if phase.startswith('verify'):
-            subtask_id = thinking_record.get('next_subtask_id', f"{thinking_record.get('subtask_count', 1)}a")
-        else:
-            subtask_id = thinking_record.get('subtask_id', f"{thinking_record.get('subtask_count', 1)}a")
+        # 使用subtask_count作为目录名，不再使用attempt字母
+        subtask_count = thinking_record.get('subtask_count', 1)
         
-        thinking_dir = os.path.join(self.episode_dir, "thinking", f"subtask_{subtask_id}")
+        thinking_dir = os.path.join(self.episode_dir, "thinking", f"subtask_{subtask_count}")
         os.makedirs(thinking_dir, exist_ok=True)
         
         # 保存输入图片
@@ -102,12 +99,8 @@ class SaveManager:
             thinking_dir: 保存目录（如果None则重新计算）
         """
         if not thinking_dir:
-            phase = thinking_record.get('phase', '')
-            if phase.startswith('verify'):
-                subtask_id = thinking_record.get('next_subtask_id', f"{thinking_record.get('subtask_count', 1)}a")
-            else:
-                subtask_id = thinking_record.get('subtask_id', f"{thinking_record.get('subtask_count', 1)}a")
-            thinking_dir = os.path.join(self.episode_dir, "thinking", f"subtask_{subtask_id}")
+            subtask_count = thinking_record.get('subtask_count', 1)
+            thinking_dir = os.path.join(self.episode_dir, "thinking", f"subtask_{subtask_count}")
         
         # 保存response
         if 'response' in thinking_record:

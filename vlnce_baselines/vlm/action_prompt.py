@@ -65,8 +65,8 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 # Output Format (JSON)
 
 {{
-    "reasoning": "<(1) Subtask goal. (2) Finding of observation. (3) Map check: your position, orientation, landmark, obstacles.>",
-    "action_analysis": "<Execute next key action OR adaptive adjustment with reason>",
+    "reasoning": "<(1) Current location. (2) Destination and distance. (3) Key observations. (4) Map analysis.>",
+    "action_analysis": "<Determine if arrived (STOP) OR execute next action with reason>",
     "action": "TURN_LEFT" | "TURN_RIGHT" | "MOVE_FORWARD" | "STOP",
     "degrees": <30-180> (TURN only),
     "meters": <0.25-1.5> (MOVE_FORWARD only)
@@ -80,8 +80,8 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 **Previous Action Reason**: None
 **Current Observation**: Oven is not in front view; need to turn to face it.
 {{
-    "reasoning": "The subtask goal is to face the oven first. RGB: No oven visible in current front view. Map: Purple marker (oven) is to the left, far outside the dark green circle (0.5m radius), need to rotate first to face it. Distances: Front is open (>2m), safe to turn left.",
-    "action_analysis": "Follow instruction - turn left 90° to align with oven direction. Front path clear.",
+    "reasoning": "Current location: Restroom area. Destination waypoint: Oven in kitchen (purple marker on map). Distance to destination: >2.0m (oven outside dark green circle). Subtask goal: Face the oven first. RGB: No oven visible in current front view. Map: Purple marker (oven) is to the left, far outside dark green circle (>0.5m from destination). Distances: Front is open (>2m), safe to turn left. Not arrived yet - need to turn to face destination.",
+    "action_analysis": "Not at destination (>2.0m away, oven not in front view). Execute first action: Turn left 90° to align with oven direction. Path clear for turning.",
     "action": "TURN_LEFT",
     "degrees": 90
 }}
@@ -92,8 +92,8 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 **Previous Action Reason**: Continue moving forward to get closer to the oven.
 **Current Observation**: Facing the oven, but the distance is still too far.
 {{
-    "reasoning": "The subtask goal is to reach the oven. RGB & Detection: The oven is ahead, and there's space to move. Map: Purple marker (oven) is ahead but still outside the dark green circle (0.5m radius), meaning the destination is not yet reached. The path is clear with no obstacles. Previous movement was successful. Distances: Front 1.8m is sufficient for 0.5m movement.",
-    "action_analysis": "Continue moving forward to get closer to the oven. Front distance 1.8m allows safe 0.5m movement.",
+    "reasoning": "Current location: Approaching kitchen oven area. Destination waypoint: Oven in kitchen (purple marker). Distance to destination: ~1.3m (oven still outside dark green circle). Subtask goal: Reach the oven. RGB & Detection: Oven visible ahead. Map: Purple marker (oven) ahead but outside dark green circle (>0.5m), meaning not arrived yet. Path clear, no black obstacles. Previous movement successful (0.5m forward). Distances: Front 1.8m allows safe movement. Not arrived - continue moving.",
+    "action_analysis": "Not at destination (1.3m away, outside 0.5m radius). Continue with instruction: Move forward to approach oven. Front distance 1.8m allows safe 0.5m movement.",
     "action": "MOVE_FORWARD",
     "meters": 0.5
 }}
@@ -104,8 +104,8 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 **Previous Action Reason**: Continue moving forward to get closer to the oven.
 **Current Observation**: The oven is directly in front, very close (within 0.5m).
 {{
-    "reasoning": "The subtask goal is to reach the oven. RGB: Oven clearly visible in front view. Detection: Oven detected. Map: Purple marker (oven) is now inside the dark green circle (0.5m radius), meaning destination has been reached. Red arrow overlaps with the destination, orange trajectory confirms arrival. All key actions completed.",
-    "action_analysis": "All conditions met for STOP: oven detected, within 0.5m radius, visible in front view, and key actions completed.",
+    "reasoning": "Current location: Kitchen oven area (red arrow on map overlaps purple marker). Destination waypoint: Oven in kitchen (purple marker). Distance to destination: <0.5m (oven INSIDE dark green circle - ARRIVED). RGB: Oven clearly visible and large in front view. Detection: Oven detected. Map: Purple marker (oven) now inside dark green circle (<0.5m radius), red arrow overlaps destination, orange trajectory confirms arrival. All key actions completed (turned 90° + moved 1.0m). ARRIVED at destination.",
+    "action_analysis": "ARRIVED at destination waypoint (oven <0.5m, inside dark green circle, visible in front, trajectory confirms). All stop conditions met: (1) key actions completed, (2) destination detected and <0.5m, (3) arrived at destination area. Execute STOP.",
     "action": "STOP"
 }}
 
@@ -115,8 +115,8 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 **Previous Action Reason**: Follow instruction - turn left 90° to align with oven direction.
 **Current Observation**: Oven is at front-left 30°, but straight ahead has a wall (black obstacle on map).
 {{
-    "reasoning": "The subtask goal is to reach the oven. RGB: Wall/obstacle blocking direct path ahead. Detection: Oven detected at left side. Map: Purple marker (oven) at front-left 30°, still outside the dark green circle (0.5m radius), black obstacle directly ahead blocking the path, green path to the left. CRITICAL: Front distance 0.3m (<0.5m WARNING) - cannot move forward safely. Left-30 has 1.5m clearance.",
-    "action_analysis": "Adaptive adjustment: Turn left 30° to avoid obstacle and align toward oven. Front obstacle too close (0.3m), left path has 1.5m clearance.",
+    "reasoning": "Current location: Near restroom/kitchen boundary. Destination waypoint: Oven in kitchen (purple marker at front-left). Distance to destination: ~2.0m (oven outside dark green circle). Subtask goal: Reach the oven. RGB: Wall/obstacle blocking direct forward path. Detection: Oven detected at left side. Map: Purple marker (oven) at front-left 30°, outside dark green circle (>0.5m), black obstacle directly ahead blocking path, green floor area to the left. CRITICAL: Front distance 0.3m (<0.5m WARNING) - cannot move forward. Left-30 has 1.5m clearance. Not arrived - need to navigate around obstacle.",
+    "action_analysis": "Not at destination (2.0m away, oven at left). Adaptive adjustment needed: Front path blocked (<0.5m WARNING), cannot follow straight instruction. Turn left 30° to avoid obstacle and approach oven direction (left path 1.5m clear).",
     "action": "TURN_LEFT",
     "degrees": 30
 }}
@@ -127,8 +127,8 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 **Previous Action Reason**: Move toward doorway following instruction.
 **Current Observation**: Position barely changed on map - orange trajectory shows minimal movement. Wall/obstacle in front.
 {{
-    "reasoning": "Goal: reach doorway. Previous FAILED: 0.5m→0.02m. Map: Position unchanged, black ahead. Front <0.5m WARNING, Right-90 >2m open.",
-    "action_analysis": "Collision detected - turn RIGHT toward open space (Right-90 >2m).",
+    "reasoning": "Current location: Same position (red arrow unchanged, collision detected). Destination waypoint: Doorway area (purple marker ahead). Distance to destination: >1.5m (doorway outside dark green circle). Previous action FAILED: intended 0.5m but only 0.02m moved - collision occurred. Map: Position unchanged, black obstacle directly ahead blocking path. Front <0.5m WARNING (wall), Right-90 >2m open space. Not arrived - stuck at obstacle, need to find alternative path.",
+    "action_analysis": "Not at destination (>1.5m away, blocked path). Previous forward movement failed (collision). Cannot continue straight - obstacle blocks path. Adaptive detour: Turn RIGHT toward open space (Right-90 >2m clear) to navigate around obstacle.",
     "action": "TURN_RIGHT",
     "degrees": 60
 }}
@@ -169,10 +169,10 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
    - Target Alignment: Keep destination centered in Front view (0°)
 
 6. **STOP CONDITIONS** - Only STOP when ALL met:
-   - Completed ALL key actions in sub-instruction
-   - Destination landmark detected in View + within <0.5m(destination is within map dark green circle) + visible in FRONT RGB view (maximized proximity before stop)
-   - Arrived at destination area (destination is within map dark green circle)
-   - Must have moved - orange trajectory on map confirms arrival at destination area
+   - Identify current location from observations, determine if reached sub-destination
+   - Destination visible in FRONT RGB view + detected + within 0.5m (inside dark green circle on map)
+   - Completed all key actions in sub-instruction
+   - **Critical**: Check distance - if >0.5m from destination, do NOT stop
 
 7. **ACTION PARAMETERS**:
    - Specify degrees (30-180) for TURN | meters (0.25-1.5) for MOVE_FORWARD
