@@ -1512,9 +1512,9 @@ class VLMNavigationController(InteractiveNavigationController):
                 mask_path = candidate
                 break
         
-        # 为RGB图像添加地面分割和距离辅助线（调用visualizer）
+        # 为RGB图像添加距离辅助线（不使用地面分割，因为mask是detection结果不是地板）
         fp_image = self.visualizer.prepare_action_image_with_enhancements(
-            fp_image, mask_path, self.latest_obstacle_distances, self.classes, use_floor=True, use_distance=True)
+            fp_image, mask_path, self.latest_obstacle_distances, self.classes, use_floor=False, use_distance=True)
         
         # 获取当前地图路径和检测图像
         self._get_current_map_path()
@@ -1531,9 +1531,9 @@ class VLMNavigationController(InteractiveNavigationController):
         if not detection_image:
             print(f"  ⚠️  Detection image not found for step {last_step} (tried phases: {possible_phases})")
         else:
-            # 为detection图像添加地面分割和距离辅助线（使用相同的mask）
+            # 为detection图像添加距离辅助线（不使用地面分割）
             detection_image = self.visualizer.prepare_action_image_with_enhancements(
-                detection_image, mask_path, self.latest_obstacle_distances, self.classes, use_floor=True, use_distance=True)
+                detection_image, mask_path, self.latest_obstacle_distances, self.classes, use_floor=False, use_distance=True)
         
         # 查找局部地图（使用相同的回退逻辑）
         local_map = None
@@ -1571,7 +1571,37 @@ class VLMNavigationController(InteractiveNavigationController):
             'right_90': 'Unknown'
         })
         
-        # 调用VLM决策（不传递pose，使用当前progress_summary）
+        # 准备action输入记录（在调用API之前）
+        attempt_letter = chr(ord('a') + self.subtask_attempt)
+        action_record = {
+            "step": self.current_step + 1,  # 即将执行的action的step
+            "subtask_count": self.subtask_count,
+            "subtask_attempt": self.subtask_attempt,
+            "subtask_id": f"{self.subtask_count}{attempt_letter}",  # 如 "1a"
+            "timestamp": datetime.now().isoformat(),
+            "detected_landmarks": detected_landmarks,  # 记录传递给VLM的landmarks
+            # 保存输入图片路径（action模块只使用3张图：RGB + Detection + Local Map）
+            "input_images": {
+                "rgb.png": fp_image,
+                "detection.png": detection_image,
+                "local_map.png": local_map,
+            },
+        }
+        
+        # 保存子任务信息
+        subtask_info = {
+            "subtask_id": self.subtask_count,
+            "next_waypoint_destination": self.current_subtask.get('next_waypoint_destination', ''),
+            "subtask_instruction": self.current_subtask.get('subtask_instruction', ''),
+            "start_step": self.current_step,  # 子任务开始时的step（决策前）
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        # 1️⃣ 先保存输入（图片 + prompt稍后在decide_action中生成后保存）
+        action_dir = self.save_manager.save_action_input(action_record, subtask_info)
+        print(f"  💾 已保存输入: {action_dir}")
+        
+        # 2️⃣ 调用VLM决策（不传递pose，使用当前progress_summary）
         result = self.action_executor.decide_action(
             next_waypoint_destination=self.current_subtask.get('next_waypoint_destination', ''),
             subtask_instruction=self.current_subtask.get('subtask_instruction', ''),
@@ -1600,38 +1630,15 @@ class VLMNavigationController(InteractiveNavigationController):
             print("✗ VLM决策失败")
             return None, None, True, 1
         
-        # 记录action输出（包含输入图片和prompt）
-        # step记录即将执行的action的步数（例如：当前step=12，下一个action将在step 13执行）
-        attempt_letter = chr(ord('a') + self.subtask_attempt)
-        action_record = {
-            "step": self.current_step + 1,  # 即将执行的action的step
-            "subtask_count": self.subtask_count,
-            "subtask_attempt": self.subtask_attempt,
-            "subtask_id": f"{self.subtask_count}{attempt_letter}",  # 如 "1a"
-            "action_name": action_name,
-            "action_id": action_id,
-            "response": response,
-            "timestamp": datetime.now().isoformat(),
-            "detected_landmarks": detected_landmarks,  # 记录传递给VLM的landmarks
-            # 保存输入图片路径（action模块只使用3张图：RGB + Detection + Local Map）
-            "input_images": {
-                "rgb.png": fp_image,
-                "detection.png": detection_image,
-                "local_map.png": local_map,
-            },
-            "prompt": prompt,
-        }
-        self.action_outputs.append(action_record)
+        # 3️⃣ 保存响应和prompt
+        action_record["action_name"] = action_name
+        action_record["action_id"] = action_id
+        action_record["response"] = response
+        action_record["prompt"] = prompt
         
-        # 保存action记录，同时保存子任务信息
-        subtask_info = {
-            "subtask_id": self.subtask_count,
-            "subtask_destination": self.current_subtask.get('subtask_destination', ''),
-            "subtask_instruction": self.current_subtask.get('subtask_instruction', ''),
-            "start_step": self.current_step,  # 子任务开始时的step（决策前）
-            "timestamp": datetime.now().isoformat()
-        }
-        self.save_manager.save_action(action_record, subtask_info)
+        self.action_outputs.append(action_record)
+        self.save_manager.save_action_response(action_record)
+        print(f"  ✓ 已保存响应: {action_name}")
         
         # 保存planned action参数，供后续计算actual progress使用
         self.last_planned_degrees = degrees
@@ -1869,10 +1876,10 @@ class VLMNavigationController(InteractiveNavigationController):
             }
         
         # 2.5 自动旋转到waypoint方向
-        waypoint_direction = subtask.get('waypoint_direction', '')
-        if waypoint_direction and 'Front' not in waypoint_direction:
+        next_waypoint_direction = subtask.get('next_waypoint_direction', '')
+        if next_waypoint_direction and 'Front' not in next_waypoint_direction:
             print(f"\n[两阶段导航] 阶段1: 旋转到waypoint方向")
-            success, action_sequence = self.auto_rotate_to_waypoint(waypoint_direction)
+            success, action_sequence = self.auto_rotate_to_waypoint(next_waypoint_direction)
             
             if not success or not action_sequence:
                 print("  ✗ 自动旋转解析失败")

@@ -132,17 +132,13 @@ class SaveManager:
         if 'response' in thinking_record:
             self.save_thinking_response(thinking_record, thinking_dir)
     
-    def save_action(self, action_record: Dict, subtask_info: Optional[Dict] = None):
+    def save_action_input(self, action_record: Dict, subtask_info: Optional[Dict] = None) -> str:
         """
-        保存VLM动作输出
+        保存VLM动作输入（图片 + prompt）
+        在调用API之前调用，确保输入数据被保存
         
-        结构: action/subtask_Na/ (a/b/c标识尝试次数)
-            - info.json (子任务信息：destination、instruction等)
-            - step_X/
-                - input_images/ (输入图片)
-                - response.json (响应)
-        
-        同时更新records/action_summary.json汇总文件
+        Returns:
+            action_dir: 保存目录路径
         """
         # 使用subtask_id（如 "1a", "1b"）作为目录名
         subtask_id = action_record.get('subtask_id', f"{action_record.get('subtask_count', 1)}a")
@@ -176,6 +172,26 @@ class SaveManager:
             with open(os.path.join(action_dir, "prompt.txt"), 'w', encoding='utf-8') as f:
                 f.write(action_record['prompt'])
         
+        return action_dir
+    
+    def save_action_response(self, action_record: Dict):
+        """
+        保存VLM动作响应和prompt
+        在API返回后调用
+        """
+        # 使用subtask_id（如 "1a", "1b"）作为目录名
+        subtask_id = action_record.get('subtask_id', f"{action_record.get('subtask_count', 1)}a")
+        step = action_record.get('step', 0)
+        
+        # 步骤目录（应该已经存在）
+        subtask_dir = os.path.join(self.episode_dir, "action", f"subtask_{subtask_id}")
+        action_dir = os.path.join(subtask_dir, f"step_{step}")
+        
+        # 保存prompt（如果有）
+        if 'prompt' in action_record and action_record['prompt']:
+            with open(os.path.join(action_dir, "prompt.txt"), 'w', encoding='utf-8') as f:
+                f.write(action_record['prompt'])
+        
         # 保存response
         with open(os.path.join(action_dir, "response.json"), 'w', encoding='utf-8') as f:
             json.dump(action_record.get('response', {}), f, ensure_ascii=False, indent=2)
@@ -183,6 +199,21 @@ class SaveManager:
         # 更新汇总文件到records/（排除input_images和prompt，避免文件过大）
         self._update_summary_file("action_summary.json", action_record, 
                                  exclude_keys=['input_images', 'prompt'])
+    
+    def save_action(self, action_record: Dict, subtask_info: Optional[Dict] = None):
+        """
+        保存VLM动作输出（兼容旧代码，内部调用save_action_input和save_action_response）
+        
+        结构: action/subtask_Na/ (a/b/c标识尝试次数)
+            - info.json (子任务信息：destination、instruction等)
+            - step_X/
+                - input_images/ (输入图片)
+                - response.json (响应)
+        
+        同时更新records/action_summary.json汇总文件
+        """
+        self.save_action_input(action_record, subtask_info)
+        self.save_action_response(action_record)
     
     def save_waypoint_memory(self, waypoint_memory: List[Dict], 
                             instruction: str, current_step: int):

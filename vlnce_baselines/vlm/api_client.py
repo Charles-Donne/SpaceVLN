@@ -69,6 +69,10 @@ class BaseAPIClient(ABC):
     @staticmethod
     def encode_image_base64(image_path: str) -> str:
         """编码图像为base64"""
+        import os
+        file_size = os.path.getsize(image_path)
+        if file_size > 5 * 1024 * 1024:  # 5MB
+            print(f"⚠️  Large image: {os.path.basename(image_path)} ({file_size / 1024 / 1024:.2f}MB)")
         with open(image_path, "rb") as f:
             return base64.b64encode(f.read()).decode("utf-8")
     
@@ -143,8 +147,15 @@ class BaseAPIClient(ABC):
             # 打印原始响应以便调试
             if not content or len(content.strip()) < 10:
                 print(f"✗ Empty or too short API response: {content}")
+                print(f"✗ Full result: {result}")
                 return None
-                
+            
+            # 检查是否有finish_reason提示截断
+            finish_reason = result['choices'][0].get('finish_reason', 'unknown')
+            if finish_reason == 'length':
+                print(f"⚠️  API response truncated due to length limit")
+                print(f"⚠️  Content length: {len(content)}")
+            
             parsed = self.parse_json_response(content)
             
             if parsed is None:
