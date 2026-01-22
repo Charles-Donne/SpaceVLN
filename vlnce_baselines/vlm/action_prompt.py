@@ -38,6 +38,7 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 - **Black areas**: Obstacles (MUST AVOID)
 - **Green areas**: Safe floor areas
 - **Blue area**: Your current 90° field of view
+- **Watch for space changes**: Entering a new room shows as green area expansion on map
 
 # Navigation Strategy
 
@@ -51,18 +52,24 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
    - Should be visible in front or front-side view (you're already rotated toward it)
    - If not visible yet: Follow sub-instruction navigation guidance
 
-3. **Check Obstacles**: Look at Detection view (IMAGE 2) distance labels in all 7 directions
+3. **Check Space Change**: Compare RGB view and Local Map together
+   - **For room destinations**: If RGB shows you're inside the target room (see room features like furniture, walls) AND map shows new green space → You've arrived
+   - **For object destinations**: Need to get close (<0.5m) to the specific object
+
+4. **Check Obstacles**: Look at Detection view (IMAGE 2) distance labels in all 7 directions
    - If path has ">2.0m open" → Safe to move
    - If path has "<0.5m WARNING" → Must detour around obstacle
 
-4. **Navigate**:
+5. **Navigate**:
    - **If path clear**: Move forward toward destination (follow sub-instruction)
    - **If obstacle blocks**: Detour (turn 30-60° to clear side, move, then turn back)
-   - **If arrived** (destination visible in front AND <0.5m): STOP
+   - **If arrived**: STOP (see arrival conditions below)
 
 # Decision Priority
 
-1. **Am I at destination?** → Destination in FRONT view + <0.5m → STOP
+1. **Am I at destination?** → Check arrival condition:
+   - **Room destination** (e.g., "kitchen", "bedroom", "exercise room"): RGB view shows inside the room + Map shows entered new space → STOP
+   - **Object destination** (e.g., "table", "chair", "bed"): Object in FRONT view + <0.5m → STOP
 2. **Can I move forward?** → Check FRONT distance label for obstacles
 3. **Execute action** → Move forward toward destination OR detour around obstacle (turn to clear side, move, turn back)
 
@@ -131,13 +138,26 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
     "degrees": 30
 }}
 
+## Ex5 - Arrived at room destination (entered new space):
+**Destination**: Exercise room
+**Sub-Instruction**: Enter the exercise room through the doorway
+**Progress**: Moved forward 2.0m total, passed through doorway
+**Observation**: RGB view shows exercise equipment inside room (treadmill, weights visible), Detection shows FRONT >2.0m, Left-90 1.65m, Right-90 >2.0m. Local map shows red arrow now in expanded green area (new room space).
+{{
+    "reasoning": "Current: Inside exercise room (can see gym equipment around me). Destination: Exercise room - already entered. Space change: Map shows I've moved from hallway into new room (green area expanded). Plan: Stop, destination reached.",
+    "action_analysis": "Arrived at destination (room destination). RGB view confirms inside exercise room with equipment visible. Map confirms space transition from hallway to room. Stop here.",
+    "action": "STOP"
+}}
+
 **CRITICAL RULES**:
 
 1. **Already Facing Destination**: You start already rotated toward the destination direction - destination should be in front or front-side view
-2. **Prioritize RGB View**: Look at IMAGE 1 (RGB) to see destination in the scene
-3. **Use Distance Labels**: Check IMAGE 2 (Detection view) distance warnings before moving
-4. **Turn Only for Obstacles**: Only turn to detour around obstacles (<0.5m blocking front path), then turn back to face destination
-5. **Stop Condition**: Only STOP when destination is visible in FRONT view AND distance <0.5m"""
+2. **Prioritize RGB View + Map Together**: Look at IMAGE 1 (RGB) to see what's around you, and IMAGE 3 (Local Map) to understand space changes
+3. **Room vs Object Destinations**:
+   - **Room** (kitchen, bedroom, exercise room, etc.): STOP when RGB shows you're inside the room + Map shows new space entered
+   - **Object** (table, chair, bed, etc.): STOP when object in FRONT view + <0.5m
+4. **Use Distance Labels**: Check IMAGE 2 (Detection view) distance warnings before moving
+5. **Turn Only for Obstacles**: Only turn to detour around obstacles (<0.5m blocking front path), then turn back to face destination"""
 
 
 def get_action_execution_prompt(next_waypoint_destination: str,

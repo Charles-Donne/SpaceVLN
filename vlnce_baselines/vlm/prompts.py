@@ -164,12 +164,10 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 - IMAGE 1 = Front (0°) is the current forward direction
 
 **Direction Selection Strategy**:
-- Analyze all 12 views to determine which direction contains the Next Waypoint
-- Choose the angle where Next Waypoint appears centered in view (or most possible)
-- **System will automatically rotate to face the waypoint_direction you specify**
-- After rotation, Next Waypoint will be in Front view (IMAGE 1) for step-by-step navigation
-
-**Action Origin**: All actions start from IMAGE 1 (Front 0°) **after automatic rotation**
+- **Observe all 12 views**: Previous waypoint markers (blue circles with numbers + room type) show visited locations
+- **Logical reasoning**: Determine what next waypoint should be and which IMAGE (1-12) it appears in
+- **Avoid backtracking**: Don't return to visited waypoints unless necessary
+- **System auto-rotates** to your specified waypoint_direction → Next Waypoint becomes Front view (IMAGE 1)
 
 **Global Map** - Full explored area (updated trajectory, waypoints, landmarks)
 **Local Map** - Nearby region (agent-centered, FOV cone shown)
@@ -216,17 +214,16 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
    - Determine which waypoint in sequence you are closest to or have reached
    - If off-path: Identify current location and nearest waypoint in sequence
 
-2. **Determine Next Waypoint Direction**:
-   - Analyze which of the 12 views (IMAGE 1-12) contains the Next Waypoint
-   - Choose the angle where Next Waypoint is most Centered/Visible
-   
-3. **Plan Navigation to Next Waypoint**:
-   - **System will auto-rotate** to face your specified waypoint_direction
-   - After rotation, Next Waypoint will be in Front view (IMAGE 1)
-   - Write step-by-step instructions assuming agent is already **facing the Next Waypoint**
-   - **On-path (before/at waypoint)**: Plan instruction to next waypoint in sequence
-   - **Off-path (deviated)**: Plan instruction to return to nearest waypoint in sequence, then continue
-   - Always move forward in waypoint_sequence chain, do NOT turn back to previous waypoints
+2. **Determine Next Waypoint**: 
+   - Observe 12 views + previous waypoint markers (blue circles with room types)
+   - Logical reasoning: What should next waypoint be? Which IMAGE (1-12)?
+   - Choose most centered/visible angle, avoid backtracking
+
+3. **Plan Navigation**: 
+   - Specify waypoint_direction → **system auto-rotates** → Next Waypoint in Front view (IMAGE 1)
+   - Write instructions assuming already facing Next Waypoint
+   - On-path: navigate to next waypoint | Off-path: return to nearest waypoint → continue
+   - Move forward in sequence, do NOT turn back
 
 # Actions Available
 

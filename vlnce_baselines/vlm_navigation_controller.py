@@ -389,9 +389,16 @@ class VLMNavigationController(InteractiveNavigationController):
             dy = wp_y - agent_y
             distance = np.sqrt(dx**2 + dy**2)
             
-            # 计算waypoint的方向角
-            wp_angle = np.arctan2(dy, dx)
-            angle_diff = wp_angle - view_direction
+            # 计算waypoint相对于agent当前朝向(红色箭头方向)的角度
+            # agent_o是agent当前朝向，view_angle是相对于agent朝向的偏移
+            wp_angle_world = np.arctan2(dy, dx)  # waypoint在世界坐标系的角度
+            wp_angle_relative = wp_angle_world - agent_o  # waypoint相对于agent朝向的角度
+            wp_angle_relative = np.arctan2(np.sin(wp_angle_relative), np.cos(wp_angle_relative))  # 归一化到[-pi, pi]
+            
+            # 计算waypoint相对于当前视图的角度差
+            # view_angle是当前视图相对于agent朝向的偏移(度)
+            view_offset_rad = np.deg2rad(view_angle)
+            angle_diff = wp_angle_relative - view_offset_rad
             angle_diff = np.arctan2(np.sin(angle_diff), np.cos(angle_diff))
             
             # 只显示±15度内的waypoint（确保每个waypoint只出现在一个视图中）
@@ -761,10 +768,10 @@ class VLMNavigationController(InteractiveNavigationController):
             # 先绘制可导航区域（绿色地面）
             image = self._draw_navigable_area_on_view(image, angle)
             
-            # 绘制距离信息（使用统一计算的12方向距离数据）
-            dist_key = f'angle_{angle}'  # 'angle_0', 'angle_30', ..., 'angle_330'
-            dist_str = self.latest_obstacle_distances_12.get(dist_key, 'Unknown')
-            image = self.visualizer.draw_distance_on_view(image, dist_str)
+            # 不再绘制距离信息线段（黄色梯形线已删除）
+            # dist_key = f'angle_{angle}'
+            # dist_str = self.latest_obstacle_distances_12.get(dist_key, 'Unknown')
+            # image = self.visualizer.draw_distance_on_view(image, dist_str)
             
             # 然后绘制waypoint标记（如果在当前视角范围内）
             if waypoint_info:
