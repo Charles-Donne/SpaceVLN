@@ -768,10 +768,10 @@ class VLMNavigationController(InteractiveNavigationController):
             # 先绘制可导航区域（绿色地面）
             image = self._draw_navigable_area_on_view(image, angle)
             
-            # 不再绘制距离信息线段（黄色梯形线已删除）
-            # dist_key = f'angle_{angle}'
-            # dist_str = self.latest_obstacle_distances_12.get(dist_key, 'Unknown')
-            # image = self.visualizer.draw_distance_on_view(image, dist_str)
+            # 绘制距离信息（使用统一计算的12方向距离数据）
+            dist_key = f'angle_{angle}'  # 'angle_0', 'angle_30', ..., 'angle_330'
+            dist_str = self.latest_obstacle_distances_12.get(dist_key, 'Unknown')
+            image = self.visualizer.draw_distance_on_view(image, dist_str)
             
             # 然后绘制waypoint标记（如果在当前视角范围内）
             if waypoint_info:
