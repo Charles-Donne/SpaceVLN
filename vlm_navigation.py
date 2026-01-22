@@ -32,7 +32,7 @@ def main():
                        help="VLM配置文件路径")
     
     # 导航参数
-    parser.add_argument("--max-subtask-steps", type=int, default=10,
+    parser.add_argument("--max-subtask-steps", type=int, default=6,
                        help="每个子任务最大步数（达到后触发验证）")
     
     # 运行模式

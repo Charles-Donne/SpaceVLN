@@ -15,8 +15,8 @@ from vlnce_baselines.visualization.visualizer import MapVisualizer
 class LLMPlanner(BaseAPIClient):
     """LLM规划器 - 负责子任务生成和验证"""
     
-    REQUIRED_FIELDS_INITIAL = ['waypoint_direction', 'subtask_destination', 'subtask_instruction', 'completion_criteria']
-    REQUIRED_FIELDS_VERIFY = ['waypoint_direction', 'subtask_destination', 'subtask_instruction', 'completion_criteria']
+    REQUIRED_FIELDS_INITIAL = ['next_waypoint_direction', 'next_waypoint_destination', 'subtask_instruction', 'completion_criteria']
+    REQUIRED_FIELDS_VERIFY = ['next_waypoint_direction', 'next_waypoint_destination', 'subtask_instruction', 'completion_criteria']
     
     # completion_criteria 子字段（嵌套结构）
     REQUIRED_CRITERIA_FIELDS = ['Surrounding_Detection', 'Spatial_relationship', 'Location']
