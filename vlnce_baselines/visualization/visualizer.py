@@ -1165,21 +1165,21 @@ class MapVisualizer:
         h, w = image.shape[:2]
         center_x = w // 2
         bottom_y = h - 5
-        side_offset = int(w * 0.15)
+        side_offset = int(w * 0.25)  # 增大两侧宽度：0.15 → 0.25
         
         if "WARNING" in distance_str or "<0.5" in distance_str:
-            color, line_ratio = (0, 0, 255), 0.3
+            color, line_ratio = (0, 0, 255), 0.15  # 红色：只延伸一点点（0.3 → 0.15）
         elif ">2.0" in distance_str or "open" in distance_str:
-            color, line_ratio = (0, 255, 0), 1.0
+            color, line_ratio = (0, 255, 0), 0.65  # 绿色：降到之前黄色位置（1.0 → 0.65）
         else:
-            color, line_ratio = (0, 255, 255), 0.65
+            color, line_ratio = (0, 255, 255), 0.4  # 黄色：再低一点（0.65 → 0.4）
         
         max_length = bottom_y - h // 2
         end_y = bottom_y - int(max_length * line_ratio)
         
         cv2.line(image, (center_x, bottom_y), (center_x, end_y), color, 3)
-        cv2.line(image, (center_x - side_offset, bottom_y), (center_x - int(side_offset * 0.5), end_y), color, 2)
-        cv2.line(image, (center_x + side_offset, bottom_y), (center_x + int(side_offset * 0.5), end_y), color, 2)
+        cv2.line(image, (center_x - side_offset, bottom_y), (center_x - int(side_offset * 0.5), end_y), color, 2)  # 减少收缩：0.5 → 0.3
+        cv2.line(image, (center_x + side_offset, bottom_y), (center_x + int(side_offset * 0.5), end_y), color, 2)  # 减少收缩：0.5 → 0.3
         
         text_x = center_x + 10
         text_y = (bottom_y + h // 2) // 2
