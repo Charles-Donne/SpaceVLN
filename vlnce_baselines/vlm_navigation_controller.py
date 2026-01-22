@@ -1185,10 +1185,16 @@ class VLMNavigationController(InteractiveNavigationController):
         next_attempt = self.subtask_attempt + 1
         next_attempt_letter = chr(ord('a') + next_attempt)
         
+        # 对于verification，使用下一个subtask_count，因为：
+        # 1. Verification的目的是验证当前subtask并规划下一个subtask
+        # 2. Initial planning保存在subtask_1/，verification应保存在subtask_2/等
+        # 3. 即使verification失败也用下一个编号，表示"尝试规划下一个"
+        verification_subtask_count = self.subtask_count + 1
+        
         thinking_record = {
             "step": self.current_step,  # 验证扫描完成后的step
             "phase": f"verify_{subtask_id}",  # verify_1a, verify_2b, etc.
-            "subtask_count": self.subtask_count,
+            "subtask_count": verification_subtask_count,  # 使用下一个编号
             "subtask_attempt": self.subtask_attempt,
             "subtask_id": subtask_id,  # 当前验证的子任务，如 "1a"
             "next_subtask_id": f"{next_subtask_count}{next_attempt_letter}",  # 暂定，后续根据is_completed更新
@@ -1512,9 +1518,9 @@ class VLMNavigationController(InteractiveNavigationController):
                 mask_path = candidate
                 break
         
-        # 为RGB图像添加距离辅助线（不使用地面分割，因为mask是detection结果不是地板）
+        # 为RGB图像不添加距离辅助线（只有detection才显示距离）
         fp_image = self.visualizer.prepare_action_image_with_enhancements(
-            fp_image, mask_path, self.latest_obstacle_distances, self.classes, use_floor=False, use_distance=True)
+            fp_image, mask_path, self.latest_obstacle_distances, self.classes, use_floor=False, use_distance=False)
         
         # 获取当前地图路径和检测图像
         self._get_current_map_path()

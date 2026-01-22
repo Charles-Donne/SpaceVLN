@@ -284,7 +284,7 @@ class SemanticMapper:
         self.waypoint_counter += 1
         waypoint_id = self.waypoint_counter
         
-        # 保存waypoint
+        # 保存waypoint（只保存位置）
         self.waypoint_positions.append((map_x, map_y))
         self.waypoint_ids.append(waypoint_id)
         self.waypoint_descriptions.append(description)

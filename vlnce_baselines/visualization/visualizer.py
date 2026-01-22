@@ -561,7 +561,7 @@ class MapVisualizer:
                 
                 # 静默处理，不输出标注统计
             
-            # ===== 阶段7: 绘制Waypoint标记（深红色圆圈+白色数字）=====
+            # ===== 阶段7: 绘制Waypoint标记（蓝色圆圈+白色数字）=====
             if waypoint_positions and waypoint_ids and len(waypoint_positions) == len(waypoint_ids):
                 for (wp_x, wp_y), wp_id in zip(waypoint_positions, waypoint_ids):
                     # 转换waypoint坐标到旋转后的坐标系
@@ -1220,16 +1220,16 @@ class MapVisualizer:
             if dist_str == 'Unknown':
                 continue
             
-            # 根据距离确定颜色和长度
+            # 根据距离确定颜色和长度（FRONT线条更长）
             if "WARNING" in dist_str or "<0.5" in dist_str:
                 color = (0, 0, 255)  # 红色
-                line_length = 60
+                line_length = 65 if config['key'] == 'front' else 60
             elif ">2.0" in dist_str or "open" in dist_str:
                 color = (0, 255, 0)  # 绿色
-                line_length = 120
+                line_length = 140 if config['key'] == 'front' else 120
             else:
                 color = (0, 255, 255)  # 黄色
-                line_length = 90
+                line_length = 105 if config['key'] == 'front' else 90
             
             # 计算终点
             angle_rad = np.deg2rad(config['angle'])
@@ -1240,38 +1240,71 @@ class MapVisualizer:
             thickness = 3 if config['key'] == 'front' else 2
             cv2.line(image, (center_x, bottom_y), (end_x, end_y), color, thickness)
             
-            # 在线条末端绘制标签（上下分开：上方是方向，下方是距离）
-            direction_label = config['label']
-            distance_label = dist_str
-            
-            # FRONT用大字号，其他用小字号
-            font_scale = 0.6 if config['key'] == 'front' else 0.4
+            # FRONT用大字号，其他用稍大字号（0.4→0.5）
+            font_scale = 0.6 if config['key'] == 'front' else 0.5
             font_thickness = 2 if config['key'] == 'front' else 1
             
-            # 计算两个标签的大小
-            dir_size = cv2.getTextSize(direction_label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thickness)[0]
-            dist_size = cv2.getTextSize(distance_label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thickness)[0]
-            
-            # 标签位置：沿着线条方向延伸（增加offset使标签离中心更远）
-            label_offset = 25  # 增加到25，使标签组离线条末端更远
-            base_x = int(end_x + label_offset * np.cos(angle_rad))
-            base_y = int(end_y + label_offset * np.sin(angle_rad))
-            
-            # 上方：方向标签
-            dir_x = base_x - dir_size[0] // 2
-            dir_y = base_y - 5  # 上方位置
-            cv2.rectangle(image, (dir_x - 2, dir_y - dir_size[1] - 2),
-                         (dir_x + dir_size[0] + 2, dir_y + 2), (0, 0, 0), -1)
-            cv2.putText(image, direction_label, (dir_x, dir_y),
-                       cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, font_thickness)
-            
-            # 下方：距离标签（紧挨着方向标签，只间隔2像素）
-            dist_x = base_x - dist_size[0] // 2
-            dist_y = base_y + dist_size[1] + 2  # 只间隔2像素，紧挨着
-            cv2.rectangle(image, (dist_x - 2, dist_y - dist_size[1] - 2),
-                         (dist_x + dist_size[0] + 2, dist_y + 2), (0, 0, 0), -1)
-            cv2.putText(image, distance_label, (dist_x, dist_y),
-                       cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, font_thickness)
+            # 左右90度：单行标签往两边靠
+            if config['key'] in ['left_90', 'right_90']:
+                # 合并标签："Left 90 1.3m" 或 "Right 90 >2.0m open"
+                combined_label = f"{config['label']} {dist_str}"
+                label_size = cv2.getTextSize(combined_label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thickness)[0]
+                
+                # 标签位置：往两边偏移
+                label_offset = 25
+                label_x = int(end_x + label_offset * np.cos(angle_rad))
+                label_y = int(end_y + label_offset * np.sin(angle_rad))
+                
+                # 左右对齐
+                if config['key'] == 'left_90':
+                    text_x = label_x - label_size[0]  # 右对齐
+                else:  # right_90
+                    text_x = label_x  # 左对齐
+                text_y = label_y + label_size[1] // 2
+                
+                cv2.rectangle(image, (text_x - 2, text_y - label_size[1] - 2),
+                             (text_x + label_size[0] + 2, text_y + 2), (0, 0, 0), -1)
+                cv2.putText(image, combined_label, (text_x, text_y),
+                           cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, font_thickness)
+            else:
+                # 其他方向：上下分开（上方是方向，下方是距离）
+                direction_label = config['label']
+                distance_label = dist_str
+                
+                # 计算两个标签的大小
+                dir_size = cv2.getTextSize(direction_label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thickness)[0]
+                dist_size = cv2.getTextSize(distance_label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thickness)[0]
+                
+                # 标签位置：沿着线条方向延伸
+                label_offset = 25
+                base_x = int(end_x + label_offset * np.cos(angle_rad))
+                base_y = int(end_y + label_offset * np.sin(angle_rad))
+                
+                # 30度和60度标签向下移动并向两侧偏移（远离中间，靠近两侧）
+                if config['key'] in ['left_30', 'left_60', 'right_30', 'right_60']:
+                    base_y += 15  # 向下偏移15像素
+                    # 向两侧偏移（左边的向左，右边的向右）
+                    side_offset = 20  # 水平偏移量
+                    if config['key'] in ['left_30', 'left_60']:
+                        base_x -= side_offset  # 左侧标签向左偏移
+                    else:  # right_30, right_60
+                        base_x += side_offset  # 右侧标签向右偏移
+                
+                # 上方：方向标签
+                dir_x = base_x - dir_size[0] // 2
+                dir_y = base_y - 5  # 上方位置
+                cv2.rectangle(image, (dir_x - 2, dir_y - dir_size[1] - 2),
+                             (dir_x + dir_size[0] + 2, dir_y + 2), (0, 0, 0), -1)
+                cv2.putText(image, direction_label, (dir_x, dir_y),
+                           cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, font_thickness)
+                
+                # 下方：距离标签（紧挨着方向标签，只间隔2像素）
+                dist_x = base_x - dist_size[0] // 2
+                dist_y = base_y + dist_size[1] + 2  # 只间隔2像素，紧挨着
+                cv2.rectangle(image, (dist_x - 2, dist_y - dist_size[1] - 2),
+                             (dist_x + dist_size[0] + 2, dist_y + 2), (0, 0, 0), -1)
+                cv2.putText(image, distance_label, (dist_x, dist_y),
+                           cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, font_thickness)
         
         return image
     
