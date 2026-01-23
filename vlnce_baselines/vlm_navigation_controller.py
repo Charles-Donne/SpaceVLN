@@ -835,11 +835,16 @@ class VLMNavigationController(InteractiveNavigationController):
         directions_dir = os.path.join(self.config.RESULTS_DIR, f"episode_{self.current_episode_id}", "directions")
         os.makedirs(directions_dir, exist_ok=True)
         
-        # 获取waypoint历史信息（用于在方向视图上绘制）
+        # 获取waypoint历史信息和最终角度（用于在方向视图上绘制）
         # 注意：initial时不显示waypoint（还没有历史），replan时显示上一个waypoint
         waypoint_info = None
+        last_waypoint_angle_deg = None
         if phase != "initial" and hasattr(self, 'mapper') and self.mapper:
             waypoint_info = self.mapper.get_waypoints()
+            # 使用visualizer计算的最终角度（环视结束后Agent回到0°时计算的）
+            if hasattr(self, 'last_waypoint_angle_cache') and self.last_waypoint_angle_cache is not None:
+                last_waypoint_angle_deg = np.degrees(self.last_waypoint_angle_cache)
+                print(f"\n  📍 使用最终角度映射Waypoint: {last_waypoint_angle_deg:.1f}°")
         
         for config in DIRECTION_CONFIG:
             step_idx = config["step"]  # 1-12
@@ -859,9 +864,20 @@ class VLMNavigationController(InteractiveNavigationController):
             dist_str = self.latest_obstacle_distances_12.get(dist_key, 'Unknown')
             image = self.visualizer.draw_distance_on_view(image, dist_str)
             
-            # 然后绘制waypoint标记（如果在当前视角范围内）
-            if waypoint_info:
-                image = self._draw_waypoints_on_view(image, angle, waypoint_info)
+            # 绘制waypoint标记（使用最终角度判断是否在当前视图）
+            if waypoint_info and last_waypoint_angle_deg is not None:
+                # 计算waypoint相对于当前视图的角度差
+                angle_diff = last_waypoint_angle_deg - angle
+                # 归一化到[-180, 180]
+                while angle_diff > 180:
+                    angle_diff -= 360
+                while angle_diff < -180:
+                    angle_diff += 360
+                
+                # 只在±15度范围内显示waypoint
+                if abs(angle_diff) <= 15:
+                    print(f"    ✓ Waypoint显示在 {direction_name} (角度差={angle_diff:.1f}°)")
+                    image = self._draw_waypoints_on_view(image, angle, waypoint_info)
             
             # 在图片顶部添加白色背景的角度标注
             h, w = image.shape[:2]

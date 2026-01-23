@@ -216,16 +216,17 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
    - Determine which waypoint in sequence you are closest to or have reached
    - If off-path: Identify current location and nearest waypoint in sequence
 
-2. **Determine Next Waypoint**: 
+2. **Determine Next Waypoint Direction**: 
    - Observe 12 views + previous waypoint markers (blue circles with room types)
-   - Logical reasoning: What should next waypoint be? Which IMAGE (1-12)?
-   - Choose most centered/visible angle, avoid backtracking
+   - Logical reasoning: What should next waypoint be? Which IMAGE (1-12) shows it most clearly?
+   - Choose the angle where next waypoint appears most centered/visible
 
-3. **Plan Navigation**: 
-   - Specify waypoint_direction → **system auto-rotates** → Next Waypoint in Front view (IMAGE 1)
-   - Write instructions assuming already facing Next Waypoint
-   - On-path: navigate to next waypoint | Off-path: return to nearest waypoint → continue
-   - Move forward in sequence, do NOT turn back
+3. **Plan Navigation from Front View**: 
+   - Specify next_waypoint_direction (IMAGE 1-12)
+   - **System will automatically rotate** to face that direction
+   - After rotation, next waypoint will be in Front view (IMAGE 1, 0°)
+   - Write subtask_instruction assuming agent is **already facing the waypoint**
+   - Instructions should start from Front view: "Move forward..." (no need to mention rotation)
 
 # Actions Available
 
@@ -268,7 +269,7 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
     "waypoint_sequence": "Restroom(✓) → Exercise Room(Current) → Living Room → Living Room's Table(Goal)",
     "next_waypoint_direction": "IMAGE 1 (Front 0°)",
     "next_waypoint_destination": "living room",
-    "subtask_instruction": "Move forward through the exercise room toward the living room exit",
+    "subtask_instruction": "Move forward through the exercise room to reach the living room exit",
     "next_waypoint_landmark": "arched doorway",
     "completion_criteria": {{
         "Surrounding_Detection": "Arched doorway detected in Front. Exercise equipment detected in Back",
@@ -276,7 +277,7 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
         "Location": "Living Room Entrance - arched doorway ahead, exercise room behind"
     }},
     "global_task_finish": false,
-    "reasoning": "Current in Exercise Room, gym equipment surrounding in multiple images, restroom behind in IMAGE 7. Previous subtask (enter exercise room) completed. Global map shows red arrow inside gym area, orange trajectory shows entered from restroom. Local map shows inside exercise room with equipment around. Next waypoint is Living Room - need to cross exercise room to find living room exit. Move forward through gym to locate arched doorway leading to living room."
+    "reasoning": "Exercise Room entrance - gym equipment surrounding, restroom behind. Previous subtask completed. Next: Living Room. IMAGE 1 shows path forward through gym. System auto-rotates to face IMAGE 1 (Front 0°) - already aligned. After rotation, move forward through exercise room to locate living room exit (arched doorway)."
 }}
 
 ## Example 2:
@@ -301,24 +302,24 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 }}
 
 ## Example 3:
-**Global Task**: Walk toward the oven. Go through the archway on your right that is past the painting of the girl in a blue bonnet. Go through the doorway on your left. Stop in front of the small sink, before you reach the grill. 
-**Previous Subtask**: Approach oven area
-**Current Observation:** IMAGE 1 (Front 0°): Oven visible ahead but distance > 1.0m. IMAGE 7 (Back 180°): Kitchen island visible behind
+**Global Task**: Walk to the kitchen through the hallway, then enter the bedroom on your left.
+**Previous Subtask**: Navigate through hallway
+**Current Observation:** IMAGE 1 (Front 0°): Hallway continues ahead. IMAGE 5 (Left 120°): Bedroom doorway visible with bed inside. IMAGE 7 (Back 180°): Kitchen visible behind
 
 {{
-    "current_waypoint": "Kitchen - Oven ahead > 1.0m, kitchen island behind",
-    "waypoint_sequence": "Starting Point(✓) → Kitchen(Current) → Oven Area(Next) → Archway Past Painting → Left Doorway → Small Sink(Goal)",
-    "next_waypoint_direction": "IMAGE 1 (Front 0°)",
-    "next_waypoint_destination": "oven area",
-    "subtask_instruction": "Continue moving forward to approach oven until oven is directly ahead < 0.5m (target: oven centered in Front view, very close)",
-    "next_waypoint_landmark": "oven",
+    "current_waypoint": "Hallway - bedroom doorway at left, kitchen behind",
+    "waypoint_sequence": "Kitchen(✓) → Hallway(Current) → Bedroom(Goal)",
+    "next_waypoint_direction": "IMAGE 5 (Left 120°)",
+    "next_waypoint_destination": "bedroom",
+    "subtask_instruction": "Move forward through the doorway to enter the bedroom",
+    "next_waypoint_landmark": "bed",
     "completion_criteria": {{
-        "Surrounding_Detection": "Oven detected in Front centered ahead occupying large portion. Kitchen island detected far away in Back",
-        "Spatial_relationship": "Oven ahead < 0.5m (map shows oven landmark within dark green circle). Kitchen island far behind. Orange trajectory shows forward movement toward oven",
-        "Location": "Oven Area - oven ahead < 0.5m, kitchen island far behind"
+        "Surrounding_Detection": "Bed detected in Front. Hallway detected in Back",
+        "Spatial_relationship": "Bed ahead < 1.0m (map shows inside bedroom). Hallway behind (map shows previous location). Orange trajectory shows entered bedroom interior",
+        "Location": "Bedroom - bed ahead, hallway behind"
     }},
-    "global_task_finish": false,
-    "reasoning": "Current approaching oven - IMAGE 1 shows oven visible, IMAGE 7 shows kitchen island behind. Target is oven area. Position: BEFORE target - oven detected but > 1.0m. Global map shows red arrow in kitchen, orange trajectory shows forward progress toward oven area. Local map shows oven outside dark green circle (> 0.5m away), dark red dashed line aligned with oven direction, blue filled area shows oven visible but not yet close. No black obstacles blocking path ahead. Completion requires oven < 0.5m (inside dark green circle). Oven in IMAGE 1, no turn needed. Continue forward 0.75m until oven enters dark green circle."
+    "global_task_finish": true,
+    "reasoning": "Hallway position - bedroom doorway visible in IMAGE 5 (Left 120°), kitchen behind. Previous subtask completed. Next: Bedroom (final destination). System will auto-rotate 120° left to face bedroom doorway. After rotation, bedroom doorway will be in Front view (IMAGE 1, 0°). Then move forward through doorway into bedroom. No need to mention rotation in instruction."
 }}
 
 **Critical Requirements**:
