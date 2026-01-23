@@ -332,6 +332,7 @@ class SemanticMapper:
             'full_pose': self.full_pose,
             'floor': self.floor,
             'trajectory_points': self.trajectory_points,
+            'global_trajectory_points': self.global_trajectory_points,
             'waypoint_positions': self.waypoint_positions,
             'waypoint_ids': self.waypoint_ids,
             'map_shape': self.map_shape,
