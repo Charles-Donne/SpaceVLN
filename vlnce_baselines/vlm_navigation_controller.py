@@ -827,19 +827,20 @@ class VLMNavigationController(InteractiveNavigationController):
         waypoint_info = None
         last_waypoint_angle_deg = None
         if phase != "initial" and hasattr(self, 'mapper') and self.mapper:
-            waypoint_info = self.mapper.get_waypoints()
-            if waypoint_info:
-                # 获取当前地图状态
-                map_state = self.mapper.get_map()
-                wp_positions = [wp['coordinates'] for wp in waypoint_info]
-                wp_ids = [wp['id'] for wp in waypoint_info]
+            wp_positions, wp_ids, wp_descriptions = self.mapper.get_waypoints()
+            if wp_positions:  # 如果有waypoint
+                # 获取当前地图状态和RGB
+                map_state = self.mapper.get_map_state()
+                rgb_bgr = cv2.cvtColor(obs[0]['rgb'], cv2.COLOR_RGB2BGR)
                 
                 # 调用visualizer渲染地图并计算waypoint角度
                 print(f"\n  [Waypoint角度计算] 环视结束，计算最后waypoint的方向...")
                 _, _, _, last_waypoint_angle = self.visualizer.save_step_visualization(
+                    step=look_step,  # 使用最后一步的timestep
                     episode_id=self.current_episode_id,
-                    timestep=look_step,  # 使用最后一步的timestep
-                    semantic_map=map_state['semantic_map'],
+                    rgb=rgb_bgr,
+                    full_map=map_state['full_map'],
+                    trajectory_points=map_state['trajectory_points'],
                     detected_classes=list(self.detected_classes),
                     current_pose=map_state['full_pose'],
                     floor=map_state['floor'],
@@ -864,6 +865,9 @@ class VLMNavigationController(InteractiveNavigationController):
                 if last_waypoint_angle is not None:
                     last_waypoint_angle_deg = np.degrees(last_waypoint_angle)
                     print(f"  📍 Last Waypoint角度: {last_waypoint_angle_deg:.1f}° (正=右侧, 负=左侧, 0=正前方)")
+                
+                # 保存waypoint信息用于绘制在view上（直接保存tuple）
+                waypoint_info = (wp_positions, wp_ids, wp_descriptions)
         
         # 保存12张独立图片（不拼接），每张图片添加角度标注 + waypoint标记
         from .vlm.navigation_config import DIRECTION_CONFIG
