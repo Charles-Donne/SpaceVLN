@@ -246,8 +246,12 @@ class VLMNavigationController(InteractiveNavigationController):
                     world_y = agent_y + dist * np.sin(ray_angle)
                     
                     # 转换到地图坐标
-                    map_x = int((world_x - self.mapper.map_min_x) / self.mapper.map_resolution)
-                    map_y = int((world_y - self.mapper.map_min_y) / self.mapper.map_resolution)
+                    resolution = self.mapper.resolution / 100.0
+                    map_shape = self.mapper.map_shape
+                    map_min_x = - (map_shape[1] // 2) * resolution
+                    map_min_y = - (map_shape[0] // 2) * resolution
+                    map_x = int((world_x - map_min_x) / resolution)
+                    map_y = int((world_y - map_min_y) / resolution)
                     
                     # 检查是否在地图范围内
                     if 0 <= map_x < self.mapper.occupancy_grid.shape[1] and \
@@ -339,9 +343,10 @@ class VLMNavigationController(InteractiveNavigationController):
                 projected_points = []
                 
                 # 获取mapper的转换参数
-                resolution = self.mapper.map_resolution  # 米/像素
-                map_min_x = self.mapper.map_min_x  # 地图最小X坐标（米）
-                map_min_y = self.mapper.map_min_y  # 地图最小Y坐标（米）
+                resolution = self.mapper.resolution / 100.0  # cm/像素 → 米/像素
+                map_shape = self.mapper.map_shape  # (H, W)
+                map_min_x = - (map_shape[1] // 2) * resolution  # 地图左边缘的世界X坐标（米）
+                map_min_y = - (map_shape[0] // 2) * resolution  # 地图上边缘的世界Y坐标（米）
                 
                 # 投影轨迹点到当前视角
                 for traj_map_x, traj_map_y in trajectory_points:
@@ -413,9 +418,11 @@ class VLMNavigationController(InteractiveNavigationController):
             # 从地图像素坐标转换到世界坐标
             # 这里需要用mapper的分辨率和偏移量
             if hasattr(self, 'mapper') and self.mapper:
-                resolution = self.mapper.map_resolution  # 米/像素
-                map_min_x = self.mapper.map_min_x  # 地图最小X坐标（米）
-                map_min_y = self.mapper.map_min_y  # 地图最小Y坐标（米）
+                resolution = self.mapper.resolution / 100.0  # cm/像素 → 米/像素
+                # 全局地图中心是agent起始位置(0, 0)，所以地图原点是负的半张地图
+                map_shape = self.mapper.map_shape  # (H, W)
+                map_min_x = - (map_shape[1] // 2) * resolution  # 地图左边缘的世界X坐标（米）
+                map_min_y = - (map_shape[0] // 2) * resolution  # 地图上边缘的世界Y坐标（米）
                 
                 # waypoint世界坐标（米）
                 wp_world_x = map_min_x + wp_map_y * resolution  # map_y → world_x
@@ -554,8 +561,12 @@ class VLMNavigationController(InteractiveNavigationController):
                 world_y = agent_y + dist * np.sin(ray_angle)
                 
                 # 转换到地图坐标
-                map_x = int((world_x - self.mapper.map_min_x) / self.mapper.map_resolution)
-                map_y = int((world_y - self.mapper.map_min_y) / self.mapper.map_resolution)
+                resolution = self.mapper.resolution / 100.0
+                map_shape = self.mapper.map_shape
+                map_min_x = - (map_shape[1] // 2) * resolution
+                map_min_y = - (map_shape[0] // 2) * resolution
+                map_x = int((world_x - map_min_x) / resolution)
+                map_y = int((world_y - map_min_y) / resolution)
                 
                 # 检查是否在地图范围内且是floor
                 if 0 <= map_x < floor_map.shape[1] and 0 <= map_y < floor_map.shape[0]:
@@ -1899,13 +1910,13 @@ class VLMNavigationController(InteractiveNavigationController):
             }
     
     def run_vlm_navigation(self, max_steps: int = 500, 
-                          max_subtask_steps: int = 10) -> Dict[str, Any]:
+                          max_subtask_steps: int = 6) -> Dict[str, Any]:
         """
         运行完整的VLM导航流程
         
         Args:
             max_steps: 最大总步数
-            max_subtask_steps: 每个子任务最大步数（达到后触发验证）
+            max_subtask_steps: 每个子任务最大步数（达到后触发验证，默认6步）
             
         Returns:
             导航结果字典
