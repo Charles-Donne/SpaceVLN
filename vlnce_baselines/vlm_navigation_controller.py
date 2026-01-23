@@ -737,11 +737,10 @@ class VLMNavigationController(InteractiveNavigationController):
             total_new_classes += new_classes
             
             # 调用visualizer保存所有数据（RGB、检测、全局地图、局部地图、semantic masks）
-            # 自动从mapper获取waypoint并渲染（忽略descriptions，可视化不需要）
-            # 环视时不计算距离（加快速度），环视完成后统一计算
-            wp_positions, wp_ids, _ = self.mapper.get_waypoints()
+            # 地图可视化（保存地图+检测landmarks）
+            # 环视过程中不传waypoint，不计算角度（环视结束后统一计算）
             rgb_bgr = cv2.cvtColor(obs[0]['rgb'], cv2.COLOR_RGB2BGR)
-            paths, detected_landmarks_step, obstacle_distances, last_waypoint_angle = self.visualizer.save_step_visualization(
+            paths, detected_landmarks_step, obstacle_distances, _ = self.visualizer.save_step_visualization(
                 step=look_step,
                 episode_id=self.current_episode_id,
                 rgb=rgb_bgr,
@@ -760,16 +759,12 @@ class VLMNavigationController(InteractiveNavigationController):
                     'min_total_pixels': self.landmark_min_total_pixels,
                     'min_area_threshold': self.landmark_min_area_threshold
                 },
-                waypoint_positions=wp_positions,
-                waypoint_ids=wp_ids,
+                waypoint_positions=None,  # 环视过程中不传waypoint
+                waypoint_ids=None,
                 phase=phase,
                 global_trajectory_points=map_state['global_trajectory_points'],
                 calculate_distances=False  # 环视时不计算距离，加快速度
             )
-            
-            # 缓存最后一个waypoint的角度（用于环视结束后输出）
-            if last_waypoint_angle is not None:
-                self.last_waypoint_angle_cache = last_waypoint_angle
             
             # 累积当前step检测到的landmarks
             if detected_landmarks_step:
@@ -827,6 +822,49 @@ class VLMNavigationController(InteractiveNavigationController):
             # 返回空列表，调用方需要处理这种情况
             return [], []
         
+        # 环视结束后，计算waypoint角度（只计算一次，用于显示在12张view上）
+        # 注意：initial时不显示waypoint（还没有历史），replan时显示上一个waypoint
+        waypoint_info = None
+        last_waypoint_angle_deg = None
+        if phase != "initial" and hasattr(self, 'mapper') and self.mapper:
+            waypoint_info = self.mapper.get_waypoints()
+            if waypoint_info:
+                # 获取当前地图状态
+                map_state = self.mapper.get_map()
+                wp_positions = [wp['coordinates'] for wp in waypoint_info]
+                wp_ids = [wp['id'] for wp in waypoint_info]
+                
+                # 调用visualizer渲染地图并计算waypoint角度
+                print(f"\n  [Waypoint角度计算] 环视结束，计算最后waypoint的方向...")
+                _, _, _, last_waypoint_angle = self.visualizer.save_step_visualization(
+                    episode_id=self.current_episode_id,
+                    timestep=look_step,  # 使用最后一步的timestep
+                    semantic_map=map_state['semantic_map'],
+                    detected_classes=list(self.detected_classes),
+                    current_pose=map_state['full_pose'],
+                    floor=map_state['floor'],
+                    hfov=self.config.MAP.HFOV,
+                    detections=None,
+                    labels=None,
+                    masks=None,
+                    landmark_classes=self.landmark_classes,
+                    mapping_classes=self.mapping_classes,
+                    landmark_config={
+                        'min_total_pixels': self.landmark_min_total_pixels,
+                        'min_area_threshold': self.landmark_min_area_threshold
+                    },
+                    waypoint_positions=wp_positions,
+                    waypoint_ids=wp_ids,
+                    phase=phase,
+                    global_trajectory_points=map_state['global_trajectory_points'],
+                    calculate_distances=False
+                )
+                
+                # 转换为度数用于view映射
+                if last_waypoint_angle is not None:
+                    last_waypoint_angle_deg = np.degrees(last_waypoint_angle)
+                    print(f"  📍 Last Waypoint角度: {last_waypoint_angle_deg:.1f}° (正=右侧, 负=左侧, 0=正前方)")
+        
         # 保存12张独立图片（不拼接），每张图片添加角度标注 + waypoint标记
         from .vlm.navigation_config import DIRECTION_CONFIG
         
@@ -834,17 +872,6 @@ class VLMNavigationController(InteractiveNavigationController):
         direction_names = []
         directions_dir = os.path.join(self.config.RESULTS_DIR, f"episode_{self.current_episode_id}", "directions")
         os.makedirs(directions_dir, exist_ok=True)
-        
-        # 获取waypoint历史信息和最终角度（用于在方向视图上绘制）
-        # 注意：initial时不显示waypoint（还没有历史），replan时显示上一个waypoint
-        waypoint_info = None
-        last_waypoint_angle_deg = None
-        if phase != "initial" and hasattr(self, 'mapper') and self.mapper:
-            waypoint_info = self.mapper.get_waypoints()
-            # 使用visualizer计算的最终角度（环视结束后Agent回到0°时计算的）
-            if hasattr(self, 'last_waypoint_angle_cache') and self.last_waypoint_angle_cache is not None:
-                last_waypoint_angle_deg = np.degrees(self.last_waypoint_angle_cache)
-                print(f"\n  📍 使用最终角度映射Waypoint: {last_waypoint_angle_deg:.1f}°")
         
         for config in DIRECTION_CONFIG:
             step_idx = config["step"]  # 1-12
@@ -924,15 +951,6 @@ class VLMNavigationController(InteractiveNavigationController):
             self.latest_local_map = None
         
         print(f"  12方向独立视图已保存 (每张30°) | Step={self.current_step}")
-        
-        # 输出最后一个waypoint的角度信息（从最后保存的可视化中获取）
-        if hasattr(self, 'last_waypoint_angle_cache') and self.last_waypoint_angle_cache is not None:
-            angle_deg = np.degrees(self.last_waypoint_angle_cache)
-            waypoint_info = self.mapper.get_waypoints() if hasattr(self, 'mapper') and self.mapper else None
-            if waypoint_info and len(waypoint_info[0]) > 0:
-                wp_id = waypoint_info[1][-1]  # 最后一个waypoint的ID
-                print(f"  📍 Last Waypoint (ID {wp_id}) Angle: {angle_deg:.1f}° from front (正=右侧, 负=左侧, 0=正前方)")
-        
         print("="*60 + "\n")
         
         return direction_paths, direction_names
