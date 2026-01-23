@@ -76,20 +76,32 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 # Actions Available
 
 **Turn**: TURN_LEFT/RIGHT (30°, 60°, 90°, 120°, 150°, 180°)
-**Move**: MOVE_FORWARD (0.25m, 0.5m, 0.75m, 1.0m, 1.25m, 1.5m)
+**Move**: MOVE_FORWARD - **MUST be 0.25m to 1.0m only** (e.g., 0.25m, 0.5m, 0.75m, 1.0m)
 **Arrive**: STOP (when destination in front AND <0.5m)
 
 # Output Format (JSON)
 
+**CRITICAL**: You MUST output ONLY valid JSON. No extra text before or after.
+**Word Limits**: 
+- "reasoning": MAX 120 words (4 sentences max)
+- "action_analysis": MAX 50 words (2 sentences max)
+
 {{
-    "reasoning": "<(1) Where am I? (2) Where is destination - which direction in view? (3) Distance to destination. (4) Any obstacles blocking the path? (5) Action plan.>",
-    "action_analysis": "<Arrived at destination? OR Next action to take>",
+    "reasoning": "<4 sentences max: (1) Where am I? (2) Destination location in view? (3) Obstacles blocking? (4) Action plan.>",
+    "action_analysis": "<2 sentences max: Arrived? OR Next action?>",
     "action": "TURN_LEFT" | "TURN_RIGHT" | "MOVE_FORWARD" | "STOP",
     "degrees": <30-180> (TURN only),
-    "meters": <0.25-1.5> (MOVE_FORWARD only)
+    "meters": <0.25-1.0 ONLY, MAX 1.0m> (MOVE_FORWARD only)
 }}
 
 # Examples
+
+**FORMAT REQUIREMENTS**:
+- Output ONLY the JSON object, no additional text
+- Keep reasoning to 4 sentences (120 words max) - NO distance estimation needed
+- Keep action_analysis to 2 sentences (50 words max)
+- Use exact action names: "TURN_LEFT", "TURN_RIGHT", "MOVE_FORWARD", "STOP"
+- **MOVE_FORWARD meters: MUST be 0.25-1.0 ONLY (Maximum 1.0m)**
 
 ## Ex1 - Move forward toward destination:
 **Destination**: Kitchen table
@@ -97,8 +109,8 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 **Progress**: Just started
 **Observation**: RGB view shows table directly ahead, Detection shows FRONT 1.5m
 {{
-    "reasoning": "Current: Living room, facing kitchen table. Destination: Table visible in front view (already rotated toward it). Distance: ~1.5m from table. Obstacles: Front 1.5m allows movement. Plan: Move forward 0.75m toward table.",
-    "action_analysis": "Not at destination (table ahead, 1.5m away). Move forward to approach table.",
+    "reasoning": "Current: Living room, facing kitchen table. Destination: Table visible in front view (already rotated toward it). Obstacles: Front 1.5m allows movement. Plan: Move forward 0.75m toward table.",
+    "action_analysis": "Not at destination (table ahead). Move forward to approach table.",
     "action": "MOVE_FORWARD",
     "meters": 0.75
 }}
@@ -109,7 +121,7 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 **Progress**: Moved forward 1.5m total
 **Observation**: RGB view shows table very close in front, Detection shows FRONT 0.3m
 {{
-    "reasoning": "Current: Kitchen area. Destination: Table in front view, very close. Distance: 0.3m (within 0.5m arrival radius). Obstacles: None. Plan: Stop, arrived at destination.",
+    "reasoning": "Current: Kitchen area. Destination: Table in front view, very close (<0.5m arrival radius). Obstacles: None. Plan: Stop, arrived at destination.",
     "action_analysis": "Arrived at destination (table in front view, <0.5m). Stop here.",
     "action": "STOP"
 }}
@@ -120,8 +132,8 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 **Progress**: Moved forward 0.5m
 **Observation**: RGB view shows doorway ahead but furniture/wall blocking direct path, Detection shows FRONT <0.5m WARNING, Right-30 1.5m clear
 {{
-    "reasoning": "Current: Hallway. Destination: Bedroom doorway visible ahead-right but blocked. Distance: ~1.8m to doorway. Obstacles: FRONT <0.5m blocked. Right-30 1.5m clear. Plan: Turn right 30° to bypass obstacle.",
-    "action_analysis": "Destination ahead-right but direct path blocked (FRONT <0.5m). Detour: Turn right 30° to use clear path (1.5m), will turn back toward doorway after bypassing.",
+    "reasoning": "Current: Hallway. Destination: Bedroom doorway visible ahead-right but blocked. Obstacles: FRONT <0.5m blocked, Right-30 1.5m clear. Plan: Turn right 30° to bypass obstacle.",
+    "action_analysis": "Direct path blocked (FRONT <0.5m). Detour: Turn right 30° to use clear path, will turn back toward doorway after bypassing.",
     "action": "TURN_RIGHT",
     "degrees": 30
 }}
@@ -132,7 +144,7 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 **Progress**: Moved forward 0.5m, turned right 30°, moved forward 0.5m
 **Observation**: RGB view shows doorway now at left 30°, Detection shows Left-30 1.2m, FRONT >2.0m open
 {{
-    "reasoning": "Current: Hallway, bypassed obstacle. Destination: Doorway at left 30° in view. Distance: ~1.2m to doorway. Obstacles: All clear. Plan: Turn left 30° to face doorway again.",
+    "reasoning": "Current: Hallway, bypassed obstacle. Destination: Doorway at left 30° in view. Obstacles: All clear. Plan: Turn left 30° to face doorway again.",
     "action_analysis": "Bypassed obstacle. Doorway now at left 30°. Turn back toward destination.",
     "action": "TURN_LEFT",
     "degrees": 30

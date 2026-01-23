@@ -401,7 +401,7 @@ class VLMNavigationController(InteractiveNavigationController):
                 for pt in projected_points:
                     cv2.circle(image, pt, 3, (0, 140, 255), -1)  # 深橙色点
         
-        # ========== 2. 绘制last waypoint标记（仅30度内） ==========
+        # ========== 2. 绘制last waypoint标记（使用渲染坐标系直接计算） ==========
         # 显示最后一个waypoint（last waypoint）
         if len(waypoint_positions) > 0:
             # 获取最后一个waypoint（列表最后一个元素）
@@ -410,57 +410,83 @@ class VLMNavigationController(InteractiveNavigationController):
             wp_id = waypoint_ids[last_idx]
             wp_desc = waypoint_info[2][last_idx] if len(waypoint_info[2]) > last_idx else ""
             
-            # 🔑 关键修复：将地图坐标转换为世界坐标（米）
-            # waypoint_positions格式：(map_x, map_y)，但存储时map_x对应trajectory的x，map_y对应trajectory的y
-            # trajectory_points格式：(traj_x, traj_y) 对应 (map的y, map的x)
-            # 所以：wp_map_x对应原始地图的y坐标，wp_map_y对应原始地图的x坐标
+            # 🔑 新方案：直接使用global map渲染坐标计算角度
+            # 原理：在visualizer的render_global_map()中，waypoint已经经过旋转+平移变换
+            # 变换后：图像中心(240, 240) = Agent位置，图像上方 = Agent前方
+            # 直接计算rotated_point相对于图像中心的角度即可
             
-            # 从地图像素坐标转换到世界坐标
-            # 这里需要用mapper的分辨率和偏移量
-            if hasattr(self, 'mapper') and self.mapper:
-                resolution = self.mapper.resolution / 100.0  # cm/像素 → 米/像素
-                # 全局地图中心是agent起始位置(0, 0)，所以地图原点是负的半张地图
-                map_shape = self.mapper.map_shape  # (H, W)
-                map_min_x = - (map_shape[1] // 2) * resolution  # 地图左边缘的世界X坐标（米）
-                map_min_y = - (map_shape[0] // 2) * resolution  # 地图上边缘的世界Y坐标（米）
-                
-                # waypoint世界坐标（米）
-                wp_world_x = map_min_x + wp_map_y * resolution  # map_y → world_x
-                wp_world_y = map_min_y + wp_map_x * resolution  # map_x → world_y
-            else:
-                # 回退：如果没有mapper，跳过
+            if not hasattr(self, 'mapper') or not self.mapper:
                 return image
             
-            # 计算waypoint相对于agent的向量（世界坐标系）
-            dx = wp_world_x - agent_x
-            dy = wp_world_y - agent_y
-            distance = np.sqrt(dx**2 + dy**2)
+            # 1. 地图坐标 → 显示坐标（与visualizer.py完全一致）
+            map_shape = self.mapper.map_shape
+            h_map, w_map = map_shape
+            display_x = wp_map_y * 480 / w_map
+            display_y = (h_map - 1 - wp_map_x) * 480 / h_map
             
-            # 🔑 关键修复：arctan2返回的是相对于正东方（正X轴）的角度
-            # 需要转换为相对于正北方（agent_o = 0对应正北）
-            wp_angle_from_east = np.arctan2(dy, dx)  # 相对于正东的角度，范围[-π, π]
+            # 2. 应用旋转+平移变换（需要从visualizer获取rotation_matrix）
+            # 旋转角度: 90 - current_o（让agent朝向对准正上方）
+            # 旋转中心: agent当前位置
+            # 平移: 将agent移到图像中心(240, 240)
+            current_o = np.rad2deg(agent_o)  # 弧度→度
+            rotation_angle = 90 - current_o
             
-            # agent_o是相对于正东的角度（0=东，π/2=北，π=西，-π/2=南）
-            # 计算waypoint相对于agent当前朝向的角度
-            wp_angle_relative = wp_angle_from_east - agent_o
-            wp_angle_relative = np.arctan2(np.sin(wp_angle_relative), np.cos(wp_angle_relative))  # 归一化到[-π, π]
+            # agent在显示坐标系中的位置（trajectory最后一点）
+            trajectory_points = self.mapper.trajectory_points
+            if len(trajectory_points) == 0:
+                return image
+            last_traj_x, last_traj_y = trajectory_points[-1]
+            agent_display_x = last_traj_y * 480 / w_map
+            agent_display_y = (h_map - 1 - last_traj_x) * 480 / h_map
             
-            # 计算waypoint相对于当前视图的角度差
-            # view_angle是当前视图相对于agent朝向的偏移(度)，逆时针为正
+            # 构造旋转矩阵（与visualizer.py逻辑一致）
+            rotation_center = (agent_display_x, agent_display_y)
+            rotation_matrix = cv2.getRotationMatrix2D(rotation_center, rotation_angle, 1.0)
+            
+            # 添加平移：将旋转后的agent移到(240, 240)
+            target_center = np.array([240, 240, 1])
+            current_center = np.array([agent_display_x, agent_display_y, 1])
+            rotated_center = rotation_matrix @ current_center
+            translation = target_center[:2] - rotated_center[:2]
+            rotation_matrix[0, 2] += translation[0]
+            rotation_matrix[1, 2] += translation[1]
+            
+            # 应用变换到waypoint
+            point = np.array([display_x, display_y, 1])
+            rotated_point = rotation_matrix @ point
+            
+            # 3. 计算相对于图像中心(240, 240)的角度
+            # 图像坐标系：X右，Y下
+            # Agent位置：(240, 240)
+            # Agent前方：图像上方（Y = 0方向）
+            dx = rotated_point[0] - 240  # X方向：右为正
+            dy = rotated_point[1] - 240  # Y方向：下为正
+            
+            # arctan2(dx, -dy) = 相对于正上方（前方）的角度
+            # 解释：
+            # - arctan2(y, x) 返回从+X轴逆时针到(x,y)的角度
+            # - 这里用 arctan2(dx, -dy)，相当于：
+            #   * -dy是向上的分量（图像上方=前方）
+            #   * dx是向右的分量
+            #   * 返回从正上方（前方）顺时针旋转的角度
+            #   * 正值=右侧，负值=左侧
+            angle_from_front = np.arctan2(dx, -dy)  # 相对于前方的角度，范围[-π, π]
+            
+            # 计算相对于当前视图的角度差
+            # view_angle: 当前视图相对于agent朝向的偏移（度），逆时针为正
             view_offset_rad = np.deg2rad(view_angle)
-            angle_diff = wp_angle_relative - view_offset_rad
-            angle_diff = np.arctan2(np.sin(angle_diff), np.cos(angle_diff))
+            angle_diff = angle_from_front - view_offset_rad
+            angle_diff = np.arctan2(np.sin(angle_diff), np.cos(angle_diff))  # 归一化到[-π, π]
             
             # 🐛 调试输出（首次环视时打印）
-            if view_angle == 0:  # 只在第一个视图（0°）打印一次
-                print(f"\n  [Waypoint #{wp_id} 调试]")
+            if view_angle == 0:
+                print(f"\n  [Waypoint #{wp_id} 调试 - 渲染坐标系方案]")
                 print(f"    地图坐标: ({wp_map_x}, {wp_map_y})")
-                print(f"    世界坐标: ({wp_world_x:.2f}m, {wp_world_y:.2f}m)")
-                print(f"    Agent坐标: ({agent_x:.2f}m, {agent_y:.2f}m)")
-                print(f"    Agent朝向: {np.rad2deg(agent_o):.1f}°")
-                print(f"    相对向量: dx={dx:.2f}m, dy={dy:.2f}m, dist={distance:.2f}m")
-                print(f"    Waypoint绝对角度: {np.rad2deg(wp_angle_from_east):.1f}° (从东)")
-                print(f"    相对Agent角度: {np.rad2deg(wp_angle_relative):.1f}°")
+                print(f"    显示坐标: ({display_x:.1f}, {display_y:.1f})")
+                print(f"    旋转后坐标: ({rotated_point[0]:.1f}, {rotated_point[1]:.1f})")
+                print(f"    图像中心: (240, 240)")
+                print(f"    相对向量: dx={dx:.1f}, dy={dy:.1f}")
+                print(f"    相对前方角度: {np.rad2deg(angle_from_front):.1f}° (正=右侧, 负=左侧)")
             
             # 只显示±15度内的waypoint（确保每个waypoint只出现在一个视图中）
             if abs(angle_diff) <= display_fov_half:
@@ -2024,6 +2050,13 @@ class VLMNavigationController(InteractiveNavigationController):
             # VLM决策计数（每次调用action模型算1步）
             subtask_steps += 1
             
+            # 🔑 关键修复：在执行前检查步数限制，避免多执行一步
+            if subtask_steps > max_subtask_steps:
+                print(f"\n[警告] 子任务达到最大步数 ({max_subtask_steps}步)，触发验证")
+                _, _, _ = self.verify_and_replan()
+                subtask_steps = 0  # 重置步数
+                continue
+            
             # 执行动作前记录pose（用于后续计算实际变化）
             if self.pose_before_action is None:
                 self.pose_before_action = self._get_agent_pose()
@@ -2101,12 +2134,6 @@ class VLMNavigationController(InteractiveNavigationController):
                 print("\nEpisode自动完成")
                 navigation_complete = True
                 break
-            
-            # 子任务超时验证
-            if subtask_steps >= max_subtask_steps:
-                print(f"\n[警告] 子任务达到最大步数 ({max_subtask_steps}步)，触发验证")
-                _, _, _ = self.verify_and_replan()
-                subtask_steps = 0  # 无论验证成功与否，都清空子任务步数
         
         # 4. 生成GIF动画
         gif_path = None

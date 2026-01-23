@@ -73,6 +73,12 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 
 # Output Format (JSON only)
 
+**CRITICAL**: Output ONLY valid JSON. No extra text before or after.
+**Word Limits**:
+- "reasoning": MAX 200 words (concise explanation)
+- "subtask_instruction": MAX 100 words (clear, actionable steps)
+- Other fields: Keep concise (20-50 words each)
+
 {{
     "current_waypoint": "<Current Area Type> - <Key Surrounding Landmarks and Relationships>",
     "waypoint_sequence": "<Current Location> → <Next Waypoint> → ... → <Final Waypoints>",
@@ -86,7 +92,7 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
         "Location": "<Current Area Type> - <relative position descriptions>"
     }},
     "global_task_finish": <true if completing this subtask will finish the entire global task, false otherwise>,
-    "reasoning": "<Brief explanation of observation and analysis leading to this subtask planning>"
+    "reasoning": "<Max 200 words: Brief explanation of observation and analysis leading to this subtask planning>"
 }}
 
 #Examples:
@@ -234,6 +240,12 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 
 # Output Format (JSON only)
 
+**CRITICAL**: Output ONLY valid JSON. No extra text before or after.
+**Word Limits**:
+- "reasoning": MAX 200 words (concise completion check + next plan)
+- "subtask_instruction": MAX 100 words (clear, actionable steps)
+- Other fields: Keep concise (20-50 words each)
+
 {{
     "current_waypoint": "<Current Area Type> - <Key Surrounding Landmarks and Relationships>",
     "waypoint_sequence": "<Completed Waypoints(✓)> → <Current Position> → <Next Waypoint> → <Remaining Waypoints> → <Goal>",
@@ -247,7 +259,7 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
         "Location": "<Next Waypoint Area> - <relative position descriptions>"
     }},
     "global_task_finish": <true if completing this subtask will finish the entire global task, false otherwise>,
-    "reasoning": "<Brief explanation of completion verification, progress, and next plan>"
+    "reasoning": "<Max 200 words: Brief explanation of completion verification, progress, and next plan>"
 }}
 
 ## Example 1:
