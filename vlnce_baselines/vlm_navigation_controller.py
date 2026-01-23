@@ -297,11 +297,17 @@ class VLMNavigationController(InteractiveNavigationController):
     
     def _draw_waypoints_on_view(self, image: np.ndarray, view_angle: float, waypoint_info: tuple) -> np.ndarray:
         """
-        在方向视图上绘制waypoint标记和历史轨迹
+        在环视方向视图上绘制waypoint标记和历史轨迹
+        
+        坐标系统说明：
+        1. 世界坐标系：agent_x, agent_y（米），agent_o（弧度，0=东，π/2=北）
+        2. 地图坐标系：map_x, map_y（像素），通过 world = map_min + map_coord * resolution 转换
+        3. 角度系统：arctan2(dy, dx)返回相对于正东（+X轴）的角度，范围[-π, π]
+        4. 环视视图：view_angle是相对于agent朝向的逆时针角度（0°=前，90°=左，180°=后，270°=右）
         
         Args:
             image: 当前方向的图像 (H, W, 3) BGR格式
-            view_angle: 当前视角的角度 (0-330, 30度递增)
+            view_angle: 当前视角的角度 (0-330, 30度递增，逆时针)
             waypoint_info: (waypoint_positions, waypoint_ids, descriptions) from mapper.get_waypoints()
             
         Returns:
@@ -312,12 +318,13 @@ class VLMNavigationController(InteractiveNavigationController):
         
         waypoint_positions, waypoint_ids, _ = waypoint_info
         
-        # 获取当前agent位置和朝向
+        # 获取当前agent位置和朝向（世界坐标系）
         agent_x, agent_y, agent_o = self._get_agent_pose()
         
-        # 计算当前视角的绝对方向（agent朝向 + 相对角度）
+        # 计算当前视角的绝对方向（世界坐标系）
+        # view_angle: 相对于agent朝向的角度（度），逆时针为正
         view_offset_rad = np.deg2rad(view_angle)
-        view_direction = agent_o + view_offset_rad
+        view_direction = agent_o + view_offset_rad  # 当前视图在世界坐标系中的绝对方向
         
         # 实际相机FOV是79度，但只显示±15度内的waypoint（确保唯一性）
         display_fov_half = np.deg2rad(15)  # 只显示30度范围内的waypoint
@@ -327,22 +334,36 @@ class VLMNavigationController(InteractiveNavigationController):
         
         # ========== 1. 绘制历史轨迹投影 ==========
         if hasattr(self, 'mapper') and self.mapper:
-            trajectory_points = self.mapper.trajectory_points  # List[(x, y)]
+            trajectory_points = self.mapper.trajectory_points  # List[(map_x, map_y)] 地图像素坐标
             if len(trajectory_points) > 1:
                 projected_points = []
                 
+                # 获取mapper的转换参数
+                resolution = self.mapper.map_resolution  # 米/像素
+                map_min_x = self.mapper.map_min_x  # 地图最小X坐标（米）
+                map_min_y = self.mapper.map_min_y  # 地图最小Y坐标（米）
+                
                 # 投影轨迹点到当前视角
-                for traj_x, traj_y in trajectory_points:
-                    dx = traj_x - agent_x
-                    dy = traj_y - agent_y
+                for traj_map_x, traj_map_y in trajectory_points:
+                    # 🔑 关键修复：将地图像素坐标转换为世界坐标（米）
+                    # trajectory_points格式：(map_x, map_y) 对应地图的(y, x)
+                    traj_world_x = map_min_x + traj_map_y * resolution  # map_y → world_x
+                    traj_world_y = map_min_y + traj_map_x * resolution  # map_x → world_y
+                    
+                    # 计算相对于agent的向量
+                    dx = traj_world_x - agent_x
+                    dy = traj_world_y - agent_y
                     distance = np.sqrt(dx**2 + dy**2)
                     
                     if distance < 0.1:
                         continue
                     
-                    # 计算角度差
-                    traj_angle = np.arctan2(dy, dx)
-                    angle_diff = traj_angle - view_direction
+                    # 🔑 关键修复：arctan2返回相对于正东的角度
+                    traj_angle_from_east = np.arctan2(dy, dx)
+                    
+                    # 计算相对于当前视图方向的角度差
+                    # view_direction = agent_o + view_offset_rad
+                    angle_diff = traj_angle_from_east - view_direction
                     angle_diff = np.arctan2(np.sin(angle_diff), np.cos(angle_diff))
                     
                     # 只绘制在79度FOV内的轨迹点
@@ -380,29 +401,65 @@ class VLMNavigationController(InteractiveNavigationController):
         if len(waypoint_positions) > 0:
             # 获取最后一个waypoint（列表最后一个元素）
             last_idx = len(waypoint_positions) - 1
-            wp_x, wp_y = waypoint_positions[last_idx]
+            wp_map_x, wp_map_y = waypoint_positions[last_idx]  # 地图坐标 (map_x, map_y)
             wp_id = waypoint_ids[last_idx]
             wp_desc = waypoint_info[2][last_idx] if len(waypoint_info[2]) > last_idx else ""
             
-            # 计算waypoint相对于agent的向量
-            dx = wp_x - agent_x
-            dy = wp_y - agent_y
+            # 🔑 关键修复：将地图坐标转换为世界坐标（米）
+            # waypoint_positions格式：(map_x, map_y)，但存储时map_x对应trajectory的x，map_y对应trajectory的y
+            # trajectory_points格式：(traj_x, traj_y) 对应 (map的y, map的x)
+            # 所以：wp_map_x对应原始地图的y坐标，wp_map_y对应原始地图的x坐标
+            
+            # 从地图像素坐标转换到世界坐标
+            # 这里需要用mapper的分辨率和偏移量
+            if hasattr(self, 'mapper') and self.mapper:
+                resolution = self.mapper.map_resolution  # 米/像素
+                map_min_x = self.mapper.map_min_x  # 地图最小X坐标（米）
+                map_min_y = self.mapper.map_min_y  # 地图最小Y坐标（米）
+                
+                # waypoint世界坐标（米）
+                wp_world_x = map_min_x + wp_map_y * resolution  # map_y → world_x
+                wp_world_y = map_min_y + wp_map_x * resolution  # map_x → world_y
+            else:
+                # 回退：如果没有mapper，跳过
+                return image
+            
+            # 计算waypoint相对于agent的向量（世界坐标系）
+            dx = wp_world_x - agent_x
+            dy = wp_world_y - agent_y
             distance = np.sqrt(dx**2 + dy**2)
             
-            # 计算waypoint相对于agent当前朝向(红色箭头方向)的角度
-            # agent_o是agent当前朝向，view_angle是相对于agent朝向的偏移
-            wp_angle_world = np.arctan2(dy, dx)  # waypoint在世界坐标系的角度
-            wp_angle_relative = wp_angle_world - agent_o  # waypoint相对于agent朝向的角度
-            wp_angle_relative = np.arctan2(np.sin(wp_angle_relative), np.cos(wp_angle_relative))  # 归一化到[-pi, pi]
+            # 🔑 关键修复：arctan2返回的是相对于正东方（正X轴）的角度
+            # 需要转换为相对于正北方（agent_o = 0对应正北）
+            wp_angle_from_east = np.arctan2(dy, dx)  # 相对于正东的角度，范围[-π, π]
+            
+            # agent_o是相对于正东的角度（0=东，π/2=北，π=西，-π/2=南）
+            # 计算waypoint相对于agent当前朝向的角度
+            wp_angle_relative = wp_angle_from_east - agent_o
+            wp_angle_relative = np.arctan2(np.sin(wp_angle_relative), np.cos(wp_angle_relative))  # 归一化到[-π, π]
             
             # 计算waypoint相对于当前视图的角度差
-            # view_angle是当前视图相对于agent朝向的偏移(度)
+            # view_angle是当前视图相对于agent朝向的偏移(度)，逆时针为正
             view_offset_rad = np.deg2rad(view_angle)
             angle_diff = wp_angle_relative - view_offset_rad
             angle_diff = np.arctan2(np.sin(angle_diff), np.cos(angle_diff))
             
+            # 🐛 调试输出（首次环视时打印）
+            if view_angle == 0:  # 只在第一个视图（0°）打印一次
+                print(f"\n  [Waypoint #{wp_id} 调试]")
+                print(f"    地图坐标: ({wp_map_x}, {wp_map_y})")
+                print(f"    世界坐标: ({wp_world_x:.2f}m, {wp_world_y:.2f}m)")
+                print(f"    Agent坐标: ({agent_x:.2f}m, {agent_y:.2f}m)")
+                print(f"    Agent朝向: {np.rad2deg(agent_o):.1f}°")
+                print(f"    相对向量: dx={dx:.2f}m, dy={dy:.2f}m, dist={distance:.2f}m")
+                print(f"    Waypoint绝对角度: {np.rad2deg(wp_angle_from_east):.1f}° (从东)")
+                print(f"    相对Agent角度: {np.rad2deg(wp_angle_relative):.1f}°")
+            
             # 只显示±15度内的waypoint（确保每个waypoint只出现在一个视图中）
             if abs(angle_diff) <= display_fov_half:
+                    # 🐛 调试输出：显示waypoint出现在哪个视图
+                    print(f"    ✓ Waypoint #{wp_id} 出现在 VIEW {view_angle}° (相对Agent), 角度差={np.rad2deg(angle_diff):.1f}°")
+                    
                     # X坐标映射：使用79度FOV范围映射到图像宽度
                     x_ratio = (angle_diff + camera_fov_half) / (2 * camera_fov_half)
                     x_pos = int(x_ratio * w)
@@ -617,9 +674,8 @@ class VLMNavigationController(InteractiveNavigationController):
         # 注意：不清空landmark，让VLM能看到旧landmark来判断子任务是否完成
         # 轨迹和landmark的清空会在verify_and_replan中VLM输出后进行
         
-        # 更新距离信息（仅当地图已初始化时）
-        if hasattr(self, 'mapper') and self.mapper.full_map is not None:
-            self._update_obstacle_distances()
+        # 不在环视前更新距离（地图还未扫描，数据不准确）
+        # 距离计算会在环视完成后进行
         
         # 存储12张环视图像用于合成全景图（step 1-12）
         lookaround_images = []
@@ -658,6 +714,7 @@ class VLMNavigationController(InteractiveNavigationController):
             
             # 调用visualizer保存所有数据（RGB、检测、全局地图、局部地图、semantic masks）
             # 自动从mapper获取waypoint并渲染（忽略descriptions，可视化不需要）
+            # 环视时不计算距离（加快速度），环视完成后统一计算
             wp_positions, wp_ids, _ = self.mapper.get_waypoints()
             rgb_bgr = cv2.cvtColor(obs[0]['rgb'], cv2.COLOR_RGB2BGR)
             paths, detected_landmarks_step, obstacle_distances = self.visualizer.save_step_visualization(
@@ -682,7 +739,8 @@ class VLMNavigationController(InteractiveNavigationController):
                 waypoint_positions=wp_positions,
                 waypoint_ids=wp_ids,
                 phase=phase,
-                global_trajectory_points=map_state['global_trajectory_points']
+                global_trajectory_points=map_state['global_trajectory_points'],
+                calculate_distances=False  # 环视时不计算距离，加快速度
             )
             
             # 累积当前step检测到的landmarks
@@ -765,8 +823,8 @@ class VLMNavigationController(InteractiveNavigationController):
             # lookaround_images[11] = step 12 (0°)
             image = lookaround_images[step_idx - 1].copy()
             
-            # 先绘制可导航区域（绿色地面）
-            image = self._draw_navigable_area_on_view(image, angle)
+            # 不再绘制可导航区域（去掉绿色地面分割，加快速度）
+            # image = self._draw_navigable_area_on_view(image, angle)
             
             # 绘制距离信息（使用统一计算的12方向距离数据）
             dist_key = f'angle_{angle}'  # 'angle_0', 'angle_30', ..., 'angle_330'

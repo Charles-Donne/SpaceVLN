@@ -283,7 +283,8 @@ class MapVisualizer:
                          landmark_classes: Optional[List[str]] = None,
                          landmark_config: Optional[Dict] = None,
                          waypoint_positions: Optional[List[Tuple[int, int]]] = None,
-                         waypoint_ids: Optional[List[int]] = None) -> Tuple[np.ndarray, np.ndarray, List, np.ndarray, Dict[str, str]]:
+                         waypoint_ids: Optional[List[int]] = None,
+                         calculate_distances: bool = False) -> Tuple[np.ndarray, np.ndarray, List, np.ndarray, Dict[str, str]]:
         """
         渲染全局地图（严格按照ZS_Evaluator的渲染逻辑 + 平滑轨迹线）
         
@@ -519,10 +520,12 @@ class MapVisualizer:
                 flags=cv2.INTER_NEAREST
             ) > 127
             
-            # ===== 🎯 在旋转后立即计算距离（与渲染逻辑完全一致）=====
-            obstacle_distances = self.calculate_obstacle_distances_from_rotated_map(
-                obstacle_mask_rotated, 240, 240
-            )
+            # ===== 🎯 可选距离计算（环视时不计算，加快速度）=====
+            obstacle_distances = {}
+            if calculate_distances:
+                obstacle_distances = self.calculate_obstacle_distances_from_rotated_map(
+                    obstacle_mask_rotated, 240, 240
+                )
             
             # 用黑色覆盖障碍物区域（会覆盖箭头，使障碍物更醒目）
             global_map_with_trajectory[obstacle_mask_rotated] = [0, 0, 0]  # 黑色BGR
@@ -1491,7 +1494,8 @@ class MapVisualizer:
                                masks: Optional[np.ndarray] = None,
                                phase: str = "action",
                                global_trajectory_points: Optional[List[Tuple[int, int]]] = None,
-                               controller = None) -> Tuple[Dict[str, str], List, Dict[str, str]]:  # 兼容旧参数
+                               controller = None,
+                               calculate_distances: bool = False) -> Tuple[Dict[str, str], List, Dict[str, str]]:  # 兼容旧参数
         """
         一键保存当前步骤的所有可视化（支持新detection渲染 + 平滑轨迹线 + waypoint标记）
         
@@ -1530,7 +1534,7 @@ class MapVisualizer:
         _, global_map_with_trajectory, landmarks, global_map_clean, obstacle_distances = self.render_global_map(
             full_map, global_traj_to_use, detected_classes, floor,
             current_pose, landmark_classes, landmark_config,
-            waypoint_positions, waypoint_ids
+            waypoint_positions, waypoint_ids, calculate_distances
         )
         paths['global_map'] = self.save_global_map(step, episode_id, global_map_with_trajectory, phase)
         
