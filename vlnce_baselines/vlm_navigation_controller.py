@@ -754,7 +754,7 @@ class VLMNavigationController(InteractiveNavigationController):
             # 环视时不计算距离（加快速度），环视完成后统一计算
             wp_positions, wp_ids, _ = self.mapper.get_waypoints()
             rgb_bgr = cv2.cvtColor(obs[0]['rgb'], cv2.COLOR_RGB2BGR)
-            paths, detected_landmarks_step, obstacle_distances = self.visualizer.save_step_visualization(
+            paths, detected_landmarks_step, obstacle_distances, last_waypoint_angle = self.visualizer.save_step_visualization(
                 step=look_step,
                 episode_id=self.current_episode_id,
                 rgb=rgb_bgr,
@@ -779,6 +779,10 @@ class VLMNavigationController(InteractiveNavigationController):
                 global_trajectory_points=map_state['global_trajectory_points'],
                 calculate_distances=False  # 环视时不计算距离，加快速度
             )
+            
+            # 缓存最后一个waypoint的角度（用于环视结束后输出）
+            if last_waypoint_angle is not None:
+                self.last_waypoint_angle_cache = last_waypoint_angle
             
             # 累积当前step检测到的landmarks
             if detected_landmarks_step:
@@ -917,6 +921,15 @@ class VLMNavigationController(InteractiveNavigationController):
             self.latest_local_map = None
         
         print(f"  12方向独立视图已保存 (每张30°) | Step={self.current_step}")
+        
+        # 输出最后一个waypoint的角度信息（从最后保存的可视化中获取）
+        if hasattr(self, 'last_waypoint_angle_cache') and self.last_waypoint_angle_cache is not None:
+            angle_deg = np.degrees(self.last_waypoint_angle_cache)
+            waypoint_info = self.mapper.get_waypoints() if hasattr(self, 'mapper') and self.mapper else None
+            if waypoint_info and len(waypoint_info[0]) > 0:
+                wp_id = waypoint_info[1][-1]  # 最后一个waypoint的ID
+                print(f"  📍 Last Waypoint (ID {wp_id}) Angle: {angle_deg:.1f}° from front (正=右侧, 负=左侧, 0=正前方)")
+        
         print("="*60 + "\n")
         
         return direction_paths, direction_names

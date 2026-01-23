@@ -284,7 +284,7 @@ class MapVisualizer:
                          landmark_config: Optional[Dict] = None,
                          waypoint_positions: Optional[List[Tuple[int, int]]] = None,
                          waypoint_ids: Optional[List[int]] = None,
-                         calculate_distances: bool = False) -> Tuple[np.ndarray, np.ndarray, List, np.ndarray, Dict[str, str]]:
+                         calculate_distances: bool = False) -> Tuple[np.ndarray, np.ndarray, List, np.ndarray, Dict[str, str], Optional[float]]:
         """
         渲染全局地图（严格按照ZS_Evaluator的渲染逻辑 + 平滑轨迹线）
         
@@ -303,12 +303,13 @@ class MapVisualizer:
             landmark_config: landmark配置 {min_total_pixels, min_area_threshold}
         
         Returns:
-            (sem_map_vis, global_map_with_trajectory, landmarks, global_map_rotated, obstacle_distances)
+            (sem_map_vis, global_map_with_trajectory, landmarks, global_map_rotated, obstacle_distances, last_waypoint_angle)
             - sem_map_vis: 基础渲染地图 (480×480)
             - global_map_with_trajectory: 带轨迹的旋转地图 (440×440)
             - landmarks: [(x, y, class_name), ...] 标注列表
             - global_map_rotated: 旋转地图（无轨迹，440×440）
             - obstacle_distances: {'front': "X.XXm", 'left_30': ..., ...} 5方向距离
+            - last_waypoint_angle: 最后一个waypoint相对于正前方的角度（弧度），None表示无waypoint
         
         渲染层次（严格按照ZS_Evaluator）:
             - 白色(0): 未探索区域
@@ -565,14 +566,21 @@ class MapVisualizer:
                 # 静默处理，不输出标注统计
             
             # ===== 阶段7: 绘制Waypoint标记（蓝色圆圈+白色数字）=====
+            last_waypoint_angle = None  # 初始化
             if waypoint_positions and waypoint_ids and len(waypoint_positions) == len(waypoint_ids):
-                for (wp_x, wp_y), wp_id in zip(waypoint_positions, waypoint_ids):
+                for idx, ((wp_x, wp_y), wp_id) in enumerate(zip(waypoint_positions, waypoint_ids)):
                     # 转换waypoint坐标到旋转后的坐标系
                     # waypoint_positions是(map_x, map_y)格式，需要与trajectory_points相同的转换
                     display_x = wp_y * 480 / w
                     display_y = (h - 1 - wp_x) * 480 / h
                     point = np.array([display_x, display_y, 1])
                     rotated_point = rotation_matrix @ point
+                    
+                    # 计算最后一个waypoint的角度（相对于正前方）
+                    if idx == len(waypoint_positions) - 1:
+                        dx = rotated_point[0] - 240  # waypoint相对于中心的横向偏移
+                        dy = rotated_point[1] - 240  # waypoint相对于中心的纵向偏移
+                        last_waypoint_angle = np.arctan2(dx, -dy)  # 相对于正上方（前方）的角度（弧度）
                     
                     # 绘制蓝色圆圈（BGR=(255, 0, 0)）
                     cv2.circle(global_map_with_trajectory,
@@ -603,7 +611,7 @@ class MapVisualizer:
         global_map_with_trajectory = self.add_orientation_labels(global_map_with_trajectory)
         global_map_rotated = self.add_orientation_labels(global_map_rotated)
         
-        # 初始化obstacle_distances（如果没有current_pose则无法计算）
+        # 初始化obstacle_distances和last_waypoint_angle（如果没有current_pose则无法计算）
         if 'obstacle_distances' not in locals():
             obstacle_distances = {
                 'front': 'Unknown',
@@ -613,8 +621,11 @@ class MapVisualizer:
                 'right_90': 'Unknown'
             }
         
-        # 返回：基础地图 + 显示副本（带轨迹和landmark+waypoint） + 无轨迹的旋转地图（供local_map裁剪） + 距离信息
-        return sem_map_vis, global_map_with_trajectory, landmarks, global_map_rotated, obstacle_distances
+        if 'last_waypoint_angle' not in locals():
+            last_waypoint_angle = None
+        
+        # 返回：基础地图 + 显示副本（带轨迹和landmark+waypoint） + 无轨迹的旋转地图（供local_map裁剪） + 距离信息 + 最后waypoint角度
+        return sem_map_vis, global_map_with_trajectory, landmarks, global_map_rotated, obstacle_distances, last_waypoint_angle
     
     def render_local_map(self, 
                         full_map: np.ndarray,
@@ -1495,7 +1506,7 @@ class MapVisualizer:
                                phase: str = "action",
                                global_trajectory_points: Optional[List[Tuple[int, int]]] = None,
                                controller = None,
-                               calculate_distances: bool = False) -> Tuple[Dict[str, str], List, Dict[str, str]]:  # 兼容旧参数
+                               calculate_distances: bool = False) -> Tuple[Dict[str, str], List, Dict[str, str], Optional[float]]:  # 兼容旧参数
         """
         一键保存当前步骤的所有可视化（支持新detection渲染 + 平滑轨迹线 + waypoint标记）
         
@@ -1515,10 +1526,11 @@ class MapVisualizer:
             controller: VLMNavigationController实例（用于绘制距离线）
         
         Returns:
-            (paths, landmarks, obstacle_distances)
+            (paths, landmarks, obstacle_distances, last_waypoint_angle)
             - paths: 保存路径字典 {'rgb', 'global_map', 'local_map', 'detection'}
             - landmarks: Landmark列表
             - obstacle_distances: {'front': "X.XXm", 'left_30': ..., ...} 5方向距离
+            - last_waypoint_angle: 最后一个waypoint相对于正前方的角度（弧度），None表示无waypoint
             
         注意:
         1. floor通过形态学方法计算（像ZS_Evaluator._process_map）
@@ -1531,7 +1543,7 @@ class MapVisualizer:
         
         # 2. 渲染并保存全局地图（使用global_trajectory_points或回退到trajectory_points）
         global_traj_to_use = global_trajectory_points if global_trajectory_points is not None else trajectory_points
-        _, global_map_with_trajectory, landmarks, global_map_clean, obstacle_distances = self.render_global_map(
+        _, global_map_with_trajectory, landmarks, global_map_clean, obstacle_distances, last_waypoint_angle = self.render_global_map(
             full_map, global_traj_to_use, detected_classes, floor,
             current_pose, landmark_classes, landmark_config,
             waypoint_positions, waypoint_ids, calculate_distances
@@ -1557,7 +1569,7 @@ class MapVisualizer:
         if masks is not None:
             paths['masks'] = self.save_semantic_masks(step, episode_id, masks, phase)
         
-        return paths, detected_landmarks_step, obstacle_distances
+        return paths, detected_landmarks_step, obstacle_distances, last_waypoint_angle
     
     # ========== 辅助方法 ==========
     
