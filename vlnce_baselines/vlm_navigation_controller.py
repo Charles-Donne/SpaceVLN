@@ -777,7 +777,8 @@ class VLMNavigationController(InteractiveNavigationController):
                 waypoint_ids=wp_ids,
                 phase=phase,
                 global_trajectory_points=map_state['global_trajectory_points'],
-                calculate_distances=False  # 环视时不计算距离，加快速度
+                calculate_distances=False,  # 环视时不计算距离，加快速度
+                calculate_waypoint_angle=(i == 12)  # 只在最后一步计算waypoint角度
             )
             
             # 缓存最后一个waypoint的角度（用于环视结束后输出）
@@ -922,13 +923,40 @@ class VLMNavigationController(InteractiveNavigationController):
         
         print(f"  12方向独立视图已保存 (每张30°) | Step={self.current_step}")
         
-        # 输出最后一个waypoint的角度信息（从最后保存的可视化中获取）
+        # 输出最后一个waypoint的角度信息（从渲染坐标系统计算的实际角度）
         if hasattr(self, 'last_waypoint_angle_cache') and self.last_waypoint_angle_cache is not None:
-            angle_deg = np.degrees(self.last_waypoint_angle_cache)
+            angle_rad = self.last_waypoint_angle_cache
+            angle_deg = np.degrees(angle_rad)
             waypoint_info = self.mapper.get_waypoints() if hasattr(self, 'mapper') and self.mapper else None
+            
             if waypoint_info and len(waypoint_info[0]) > 0:
                 wp_id = waypoint_info[1][-1]  # 最后一个waypoint的ID
-                print(f"  📍 Last Waypoint (ID {wp_id}) Angle: {angle_deg:.1f}° from front (正=右侧, 负=左侧, 0=正前方)")
+                wp_pos = waypoint_info[0][-1]  # 地图坐标
+                
+                # 计算方位描述
+                if abs(angle_deg) < 15:
+                    direction = "正前方"
+                elif 15 <= angle_deg < 75:
+                    direction = "右前方"
+                elif 75 <= angle_deg < 105:
+                    direction = "正右侧"
+                elif 105 <= angle_deg < 165:
+                    direction = "右后方"
+                elif abs(angle_deg) >= 165:
+                    direction = "正后方"
+                elif -165 < angle_deg <= -105:
+                    direction = "左后方"
+                elif -105 < angle_deg <= -75:
+                    direction = "正左侧"
+                else:  # -75 < angle_deg <= -15
+                    direction = "左前方"
+                
+                print(f"\n  🎯 Last Waypoint 方向信息:")
+                print(f"     ID: #{wp_id}")
+                print(f"     地图坐标: {wp_pos}")
+                print(f"     角度: {angle_deg:+.1f}° (弧度: {angle_rad:+.3f})")
+                print(f"     方位: {direction}")
+                print(f"     说明: 正=右转, 负=左转, 0=正前方")
         
         print("="*60 + "\n")
         
@@ -1128,6 +1156,9 @@ class VLMNavigationController(InteractiveNavigationController):
         """
         解析waypoint方向并生成旋转动作序列
         
+        优先使用渲染坐标系统计算的实际角度（last_waypoint_angle_cache）
+        如果没有缓存，则回退到字符串解析方式
+        
         Args:
             waypoint_direction: 如 "IMAGE 5 (Left 120deg)"
             
@@ -1136,7 +1167,50 @@ class VLMNavigationController(InteractiveNavigationController):
                 - success: 是否成功解析
                 - action_sequence: 动作序列，每个动作为 {"action": "TURN_LEFT/RIGHT", "degrees": 30}
         """
+        # 🎯 优先使用渲染坐标系统计算的实际角度
+        if hasattr(self, 'last_waypoint_angle_cache') and self.last_waypoint_angle_cache is not None:
+            angle_rad = self.last_waypoint_angle_cache
+            angle_deg = np.degrees(angle_rad)
+            
+            print(f"\n[自动旋转] 使用渲染坐标计算的实际角度: {angle_deg:.1f}°")
+            
+            # 判断方向和角度
+            if abs(angle_deg) < 5:  # 小于5度视为已对准
+                print(f"  ✓ Waypoint已基本对准正前方 ({angle_deg:.1f}°)，无需旋转")
+                return True, []
+            
+            # 确定旋转方向和角度
+            if angle_deg > 0:
+                # 正值 = waypoint在右侧，需要右转
+                direction = 'RIGHT'
+                angle = abs(angle_deg)
+            else:
+                # 负值 = waypoint在左侧，需要左转
+                direction = 'LEFT'
+                angle = abs(angle_deg)
+            
+            print(f"  目标角度: {direction} {angle:.1f}°")
+            
+            # 生成动作序列（每次30度）
+            num_turns = int(round(angle / 30))
+            if num_turns == 0:
+                num_turns = 1  # 至少转一次
+            
+            action_sequence = []
+            for i in range(num_turns):
+                action_sequence.append({
+                    "action": f"TURN_{direction}",
+                    "degrees": 30
+                })
+            
+            actual_rotation = num_turns * 30
+            print(f"  生成动作序列: {num_turns}次 TURN_{direction} 30° (总计{actual_rotation}°)")
+            return True, action_sequence
+        
+        # 🔄 回退方案：字符串解析方式（兼容旧代码）
         import re
+        
+        print(f"\n[自动旋转] ⚠️  未找到渲染角度缓存，使用字符串解析: {waypoint_direction}")
         
         # 解析方向和角度
         # 支持格式: "IMAGE 5 (Left 120deg)" 或 "Left 120deg"
@@ -1166,7 +1240,7 @@ class VLMNavigationController(InteractiveNavigationController):
             print(f"  ⚠️  无法识别方向: {waypoint_direction}")
             return False, []
         
-        print(f"\n[自动旋转] 解析waypoint方向: {direction} {angle}°")
+        print(f"  解析结果: {direction} {angle}°")
         
         # 生成动作序列（每次30度）
         num_turns = angle // 30
