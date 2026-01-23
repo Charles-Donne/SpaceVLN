@@ -301,13 +301,10 @@ class VLMNavigationController(InteractiveNavigationController):
     
     def _draw_waypoints_on_view(self, image: np.ndarray, view_angle: float, waypoint_info: tuple) -> np.ndarray:
         """
-        在环视方向视图上绘制waypoint标记和历史轨迹
+        在环视方向视图上绘制waypoint标记
         
-        坐标系统说明：
-        1. 世界坐标系：agent_x, agent_y（米），agent_o（弧度，0=东，π/2=北）
-        2. 地图坐标系：map_x, map_y（像素），通过 world = map_min + map_coord * resolution 转换
-        3. 角度系统：arctan2(dy, dx)返回相对于正东（+X轴）的角度，范围[-π, π]
-        4. 环视视图：view_angle是相对于agent朝向的逆时针角度（0°=前，90°=左，180°=后，270°=右）
+        简化版本：调用此函数时已经确认waypoint在当前视图的±15°内
+        直接在图像中心绘制waypoint标记即可
         
         Args:
             image: 当前方向的图像 (H, W, 3) BGR格式
@@ -315,12 +312,49 @@ class VLMNavigationController(InteractiveNavigationController):
             waypoint_info: (waypoint_positions, waypoint_ids, descriptions) from mapper.get_waypoints()
             
         Returns:
-            绘制了waypoint标记和轨迹后的图像
+            绘制了waypoint标记后的图像
         """
         if not waypoint_info or len(waypoint_info[0]) == 0:
             return image
         
-        waypoint_positions, waypoint_ids, _ = waypoint_info
+        waypoint_positions, waypoint_ids, waypoint_descriptions = waypoint_info
+        
+        # 获取最后一个waypoint
+        if len(waypoint_positions) > 0:
+            last_idx = len(waypoint_positions) - 1
+            wp_id = waypoint_ids[last_idx]
+            wp_desc = waypoint_descriptions[last_idx] if len(waypoint_descriptions) > last_idx else ""
+            
+            # 绘制在图像中心位置
+            h, w = image.shape[:2]
+            x_pos = w // 2
+            y_pos = h // 2
+            
+            # 绘制waypoint标记（蓝色外圈 + 白色填充）
+            cv2.circle(image, (x_pos, y_pos), 20, (255, 0, 0), 3)  # 蓝色边框，半径20
+            cv2.circle(image, (x_pos, y_pos), 17, (255, 255, 255), -1)  # 白色填充
+            
+            # 绘制waypoint ID（红色粗体）
+            text = f"{wp_id}"
+            font_scale = 0.8
+            thickness = 2
+            text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)[0]
+            text_x = x_pos - text_size[0] // 2
+            text_y = y_pos + text_size[1] // 2
+            cv2.putText(image, text, (text_x, text_y), 
+                       cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 255), thickness)
+            
+            # 在waypoint下方绘制描述（如果有）
+            if wp_desc:
+                desc_font_scale = 0.5
+                desc_thickness = 1
+                desc_y = y_pos + 35
+                desc_size = cv2.getTextSize(wp_desc, cv2.FONT_HERSHEY_SIMPLEX, desc_font_scale, desc_thickness)[0]
+                desc_x = x_pos - desc_size[0] // 2
+                cv2.putText(image, wp_desc, (desc_x, desc_y),
+                           cv2.FONT_HERSHEY_SIMPLEX, desc_font_scale, (0, 0, 255), desc_thickness)
+        
+        return image
         
         # 获取当前agent位置和朝向（世界坐标系）
         agent_x, agent_y, agent_o = self._get_agent_pose()
