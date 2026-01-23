@@ -108,7 +108,7 @@ class BaseAPIClient(ABC):
             return None
     
     def _save_failed_response(self, response_text: str, error_msg: str):
-        """保存解析失败的VLM输出到JSON文件（完整内容）"""
+        """保存解析失败的VLM原始输出"""
         import os
         from datetime import datetime
         
@@ -118,22 +118,15 @@ class BaseAPIClient(ABC):
         
         # 生成时间戳文件名
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        filename = os.path.join(failed_dir, f"failed_{timestamp}.json")
+        filename = os.path.join(failed_dir, f"failed_{timestamp}.txt")
         
-        # 保存完整的失败记录
-        failed_record = {
-            "timestamp": datetime.now().isoformat(),
-            "error": error_msg,
-            "raw_response": response_text,  # 完整内容
-            "response_length": len(response_text)
-        }
-        
+        # 保存VLM原始输出
         try:
             with open(filename, 'w', encoding='utf-8') as f:
-                json.dump(failed_record, f, indent=2, ensure_ascii=False)
-            print(f"  💾 完整失败响应已保存: {os.path.abspath(filename)}")
+                f.write(response_text)  # 直接写入原始文本
+            print(f"  💾 VLM原始输出已保存: {os.path.abspath(filename)}")
         except Exception as e:
-            print(f"  ⚠️  保存失败响应时出错: {e}")
+            print(f"  ⚠️  保存失败: {e}")
     
     def build_message_content(self, text: str, image_paths: List[str]) -> List[Dict]:
         """构建消息内容"""

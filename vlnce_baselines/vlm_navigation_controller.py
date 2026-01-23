@@ -1936,13 +1936,13 @@ class VLMNavigationController(InteractiveNavigationController):
             }
     
     def run_vlm_navigation(self, max_steps: int = 500, 
-                          max_subtask_steps: int = 6) -> Dict[str, Any]:
+                          max_subtask_steps: int = 5) -> Dict[str, Any]:
         """
         运行完整的VLM导航流程
         
         Args:
             max_steps: 最大总步数
-            max_subtask_steps: 每个子任务最大步数（达到后触发验证，默认6步）
+            max_subtask_steps: 每个子任务最大步数（达到后强制触发验证，默认5步）
             
         Returns:
             导航结果字典
@@ -2049,13 +2049,16 @@ class VLMNavigationController(InteractiveNavigationController):
             
             # VLM决策计数（每次调用action模型算1步）
             subtask_steps += 1
+            print(f"  [步数统计] 当前子任务已执行 {subtask_steps}/{max_subtask_steps} 步")
             
-            # 🔑 关键修复：在执行前检查步数限制，避免多执行一步
-            if subtask_steps > max_subtask_steps:
-                print(f"\n[警告] 子任务达到最大步数 ({max_subtask_steps}步)，触发验证")
-                _, _, _ = self.verify_and_replan()
-                subtask_steps = 0  # 重置步数
-                continue
+            # 🔑 关键修复：在执行action后检查步数限制
+            # 如果达到最大步数（例如5步），执行完当前动作后立即强制replan
+            if subtask_steps >= max_subtask_steps:
+                print(f"\n⚠️  [强制重规划] 子任务已达到最大步数 ({max_subtask_steps}步)，执行完当前动作后将触发验证")
+                # 继续执行当前动作，但标记下一轮要replan
+                force_replan_after_action = True
+            else:
+                force_replan_after_action = False
             
             # 执行动作前记录pose（用于后续计算实际变化）
             if self.pose_before_action is None:
@@ -2126,6 +2129,13 @@ class VLMNavigationController(InteractiveNavigationController):
                 
                 # 更新pose_before为当前pose（供下次计算使用）
                 self.pose_before_action = pose_after_action_batch
+            
+            # 🔑 强制重规划检查：如果达到最大步数，执行完动作后立即触发verify
+            if force_replan_after_action:
+                print(f"\n🔄 [强制重规划] 已执行完 {max_subtask_steps} 步，立即触发验证和重规划")
+                _, _, _ = self.verify_and_replan()
+                subtask_steps = 0  # 重置步数
+                continue
             
             if navigation_complete:
                 break
