@@ -74,10 +74,6 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 # Output Format (JSON only)
 
 **CRITICAL**: Output ONLY valid JSON. No extra text before or after.
-**Word Limits**:
-- "reasoning": MAX 200 words (concise explanation)
-- "subtask_instruction": MAX 100 words (clear, actionable steps)
-- Other fields: Keep concise (20-50 words each)
 
 {{
     "current_waypoint": "<Current Area Type> - <Key Surrounding Landmarks and Relationships>",

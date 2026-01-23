@@ -101,9 +101,39 @@ class BaseAPIClient(ABC):
                     return json.loads(json_str)
                 except json.JSONDecodeError as e:
                     print(f"✗ JSON parse error: {e}")
+                    self._save_failed_response(response_text, str(e))
             else:
                 print(f"✗ No JSON found in response")
+                self._save_failed_response(response_text, "No JSON object found")
             return None
+    
+    def _save_failed_response(self, response_text: str, error_msg: str):
+        """保存解析失败的VLM输出到JSON文件（完整内容）"""
+        import os
+        from datetime import datetime
+        
+        # 保存到当前工作目录下的failed_vlm_responses文件夹
+        failed_dir = "failed_vlm_responses"
+        os.makedirs(failed_dir, exist_ok=True)
+        
+        # 生成时间戳文件名
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        filename = os.path.join(failed_dir, f"failed_{timestamp}.json")
+        
+        # 保存完整的失败记录
+        failed_record = {
+            "timestamp": datetime.now().isoformat(),
+            "error": error_msg,
+            "raw_response": response_text,  # 完整内容
+            "response_length": len(response_text)
+        }
+        
+        try:
+            with open(filename, 'w', encoding='utf-8') as f:
+                json.dump(failed_record, f, indent=2, ensure_ascii=False)
+            print(f"  💾 完整失败响应已保存: {os.path.abspath(filename)}")
+        except Exception as e:
+            print(f"  ⚠️  保存失败响应时出错: {e}")
     
     def build_message_content(self, text: str, image_paths: List[str]) -> List[Dict]:
         """构建消息内容"""
