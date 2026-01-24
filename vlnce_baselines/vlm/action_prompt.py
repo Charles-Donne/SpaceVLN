@@ -8,7 +8,7 @@
 - MOVE_FORWARD: 0.25m
 """
 
-ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the sub-instruction to navigate toward the destination while observing the RGB view and avoiding obstacles.
+ACTION_EXECUTION_PROMPT = """You are executing navigation to reach {next_waypoint_destination}. Analyze view + map to decide: arrived OR move toward destination OR adjust pose to avoid obstacles.
 
 # Current Sub-Task
 **Destination**: {next_waypoint_destination}
@@ -18,160 +18,127 @@ ACTION_EXECUTION_PROMPT = """You are executing a navigation sub-task. Follow the
 
 # Visual Inputs
 
-**IMAGE 1 - RGB View**: Your first-person view showing the environment
-- **Look for your destination** ({next_waypoint_destination}) in this view
-- Identify landmarks, room features, doorways, furniture
-- Determine where the destination is located (front, left, right)
+**IMAGE 1 - RGB View**: First-person view
+- **Primary focus**: Is destination visible? Where is it? (front/left/right)
 
-**IMAGE 2 - Detection View with Distance Labels**: Same view with obstacle distance warnings
-- Shows 7 direction distance measurements from bottom center
-- **FRONT**: {distance_front}
-- **Left/Right 30°**: {distance_left_30} / {distance_right_30}
-- **Left/Right 60°**: {distance_left_60} / {distance_right_60}
-- **Left/Right 90°**: {distance_left_90} / {distance_right_90}
-- **Use these distances to avoid obstacles** when planning movement
+**IMAGE 2 - Detection View + Distance Labels**: Obstacle distances from your position
+- **FRONT**: {distance_front} | **Left/Right 30°**: {distance_left_30}/{distance_right_30}
+- **Left/Right 60°**: {distance_left_60}/{distance_right_60} | **Left/Right 90°**: {distance_left_90}/{distance_right_90}
+- **Critical for obstacle avoidance**: < 0.5m = blocked, > 1.5m = clear
 
-**IMAGE 3 - Local Map** (Bird's-eye view):
-- **Red arrow**: Your current position and facing direction (map top = FRONT)
-- **Dark green circle**: 0.5m arrival radius around you
-- **Orange line**: Your trajectory history
-- **Black areas**: Obstacles (MUST AVOID)
-- **Green areas**: Safe floor areas
-- **Blue area**: Your current 90° field of view
-- **Watch for space changes**: Entering a new room shows as green area expansion on map
+**IMAGE 3 - Local Map**: Bird's-eye view
+- **Red arrow**: Your position/direction (top = FRONT)
+- **Dark green circle**: 0.5m arrival radius
+- **Black**: Obstacles (AVOID) | **Green**: Safe floor
+- **Orange line**: Movement trajectory
+- **Blue area**: 90° FOV cone
 
-# Navigation Strategy
+# Decision Process (Execute in Order)
 
-**Initial State**: You are already facing toward the destination direction (rotated automatically)
+**Step 0: Confirm Current Position** (FOUNDATION)
+- What room/space am I in? What's around me? (RGB view + Map position)
+- This establishes context for all decisions
 
-1. **Follow Sub-Instruction**: The sub-instruction guides you on how to reach the destination
-   - Parse the instruction for key actions (turn left/right, move forward, etc.)
-   - Execute these actions in sequence while adapting for obstacles
+**Step 1: Check Arrival** (HIGHEST PRIORITY)
+- **Destination visible?** Room = inside + room features; Object = in FRONT view
+- **Distance < 0.5m?** Check map dark green circle
+- **If YES** → **STOP** immediately
 
-2. **Locate Destination**: Look at RGB view (IMAGE 1) - where is {next_waypoint_destination}?
-   - Should be visible in front or front-side view (you're already rotated toward it)
-   - If not visible yet: Follow sub-instruction navigation guidance
+**Step 2: Check Obstacles** (if not arrived)
+- **FRONT > 1.0m** = clear to move | **< 0.5m** = blocked, must turn first
+- If blocked: Turn toward clearer side (check Left/Right 30-60°)
 
-3. **Check Space Change**: Compare RGB view and Local Map together
-   - **For room destinations**: If RGB shows you're inside the target room (see room features like furniture, walls) AND map shows new green space → You've arrived
-   - **For object destinations**: Need to get close (<0.5m) to the specific object
+**Step 3: Navigate**
+- **Path clear**: MOVE_FORWARD (0.25-1.0m toward destination)
+- **Blocked**: TURN toward clear side (30-60°), then bypass and realign
 
-4. **Check Obstacles**: Look at Detection view (IMAGE 2) distance labels in all 7 directions
-   - If path has ">2.0m open" → Safe to move
-   - If path has "<0.5m WARNING" → Must detour around obstacle
+# Available Actions
 
-5. **Navigate**:
-   - **If path clear**: Move forward toward destination (follow sub-instruction)
-   - **If obstacle blocks**: Detour (turn 30-60° to clear side, move, then turn back)
-   - **If arrived**: STOP (see arrival conditions below)
+- **TURN_LEFT/RIGHT**: degrees = 30, 60, 90, 120, 150, 180
+- **MOVE_FORWARD**: meters = 0.25, 0.5, 0.75, 1.0 (max 1.0m)
+- **STOP**: (when < 0.5m at destination)
 
-# Decision Priority
-
-1. **Am I at destination?** → Check arrival condition:
-   - **Room destination** (e.g., "kitchen", "bedroom", "exercise room"): RGB view shows inside the room + Map shows entered new space → STOP
-   - **Object destination** (e.g., "table", "chair", "bed"): Object in FRONT view + <0.5m → STOP
-2. **Can I move forward?** → Check FRONT distance label for obstacles
-3. **Execute action** → Move forward toward destination OR detour around obstacle (turn to clear side, move, turn back)
-
-# Actions Available
-
-**Turn**: TURN_LEFT/RIGHT (30°, 60°, 90°, 120°, 150°, 180°)
-**Move**: MOVE_FORWARD - **MUST be 0.25m to 1.0m only** (e.g., 0.25m, 0.5m, 0.75m, 1.0m)
-**Arrive**: STOP (when destination in front AND <0.5m)
-
-# Output Format (JSON)
-
-**CRITICAL**: You MUST output ONLY valid JSON. No extra text before or after.
+# Output (JSON only)
 
 {{
-    "reasoning": "<4 sentences max: (1) Where am I? (2) Destination location in view? (3) Obstacles blocking? (4) Action plan.>",
-    "action_analysis": "<2 sentences max: Arrived? OR Next action?>",
-    "action": "TURN_LEFT" | "TURN_RIGHT" | "MOVE_FORWARD" | "STOP",
+    "reasoning": "<4 sentences: 0) Where am I? (current position/space) 1) Arrived? (check view+map) 2) Destination location? Obstacles? 3) Action decision>",
+    "action_analysis": "<1-2 sentences: Why this action?>",
+    "action": "STOP" | "MOVE_FORWARD" | "TURN_LEFT" | "TURN_RIGHT",
     "degrees": <30-180> (TURN only),
-    "meters": <0.25-1.0 ONLY, MAX 1.0m> (MOVE_FORWARD only)
+    "meters": <0.25-1.0> (MOVE only)
 }}
 
 # Examples
-
-**FORMAT REQUIREMENTS**:
-- Output ONLY the JSON object, no additional text
-- Keep reasoning to 4 sentences (120 words max) - NO distance estimation needed
-- Keep action_analysis to 2 sentences (50 words max)
-- Use exact action names: "TURN_LEFT", "TURN_RIGHT", "MOVE_FORWARD", "STOP"
 - **MOVE_FORWARD meters: MUST be 0.25-1.0 ONLY (Maximum 1.0m)**
 
-## Ex1 - Move forward toward destination:
+## Ex1 - Arrived at destination (object):
+**Destination**: Kitchen table
+**Sub-Instruction**: Move forward to the kitchen table
+**Progress**: Moved forward 1.5m
+**Observation**: RGB shows table directly in front view very close, Detection FRONT 0.3m, Map shows trajectory approaching table
+
+{{
+    "reasoning": "Step 0: Currently in kitchen area, see kitchen features around. Step 1: Table visible in FRONT view, very close. Map confirms < 0.5m (inside dark green circle). Arrived. Step 2-3: Not needed.",
+    "action_analysis": "Destination reached (table in front < 0.5m). Stop to avoid overshooting.",
+    "action": "STOP"
+}}
+
+## Ex2 - Move forward (path clear):
 **Destination**: Kitchen table
 **Sub-Instruction**: Move forward to the kitchen table
 **Progress**: Just started
-**Observation**: RGB view shows table directly ahead, Detection shows FRONT 1.5m
+**Observation**: RGB shows table ahead, Detection FRONT 1.5m clear, Left-90 0.8m, Right-90 1.2m
 
 {{
-    "reasoning": "Current: Living room, facing kitchen table. Destination: Table visible in front view (already rotated toward it). Obstacles: Front 1.5m allows movement. Plan: Move forward 0.75m toward table.",
-    "action_analysis": "Not at destination (table ahead). Move forward to approach table.",
+    "reasoning": "Step 0: Currently in living room area near kitchen. Step 1: Table visible ahead but not close enough (> 0.5m). Not arrived. Step 2: FRONT 1.5m clear, no obstacles. Step 3: Move forward 0.75m toward table.",
+    "action_analysis": "Path clear to destination. Advance toward table.",
     "action": "MOVE_FORWARD",
     "meters": 0.75
 }}
 
-## Ex2 - Arrived at destination:
-**Destination**: Kitchen table
-**Sub-Instruction**: Move forward to the kitchen table
-**Progress**: Moved forward 1.5m total
-**Observation**: RGB view shows table very close in front, Detection shows FRONT 0.3m
-
-{{
-    "reasoning": "Current: Kitchen area. Destination: Table in front view, very close (<0.5m arrival radius). Obstacles: None. Plan: Stop, arrived at destination.",
-    "action_analysis": "Arrived at destination (table in front view, <0.5m). Stop here.",
-    "action": "STOP"
-}}
-
-## Ex3 - Detour around obstacle:
+## Ex3 - Obstacle blocking, adjust pose:
 **Destination**: Bedroom doorway
-**Sub-Instruction**: Walk straight to the bedroom doorway
-**Progress**: Moved forward 0.5m
-**Observation**: RGB view shows doorway ahead but furniture/wall blocking direct path, Detection shows FRONT <0.5m WARNING, Right-30 1.5m clear
+**Sub-Instruction**: Walk to bedroom doorway
+**Progress**: Moved 0.5m
+**Observation**: RGB shows doorway ahead-right but furniture blocking, Detection FRONT 0.4m blocked, Right-30 1.8m clear
 
 {{
-    "reasoning": "Current: Hallway. Destination: Bedroom doorway visible ahead-right but blocked. Obstacles: FRONT <0.5m blocked, Right-30 1.5m clear. Plan: Turn right 30° to bypass obstacle.",
-    "action_analysis": "Direct path blocked (FRONT <0.5m). Detour: Turn right 30° to use clear path, will turn back toward doorway after bypassing.",
+    "reasoning": "Step 0: In hallway corridor, see walls on both sides. Step 1: Doorway visible but not reached. Step 2: FRONT 0.4m blocked by furniture, Right-30 1.8m clear. Step 3: Turn right 30° to bypass obstacle on clearer side.",
+    "action_analysis": "Obstacle blocks direct path (FRONT < 0.5m). Adjust pose right to avoid.",
     "action": "TURN_RIGHT",
     "degrees": 30
 }}
 
-## Ex4 - Resume toward destination after detour:
-**Destination**: Bedroom doorway  
-**Sub-Instruction**: Walk straight to the bedroom doorway
-**Progress**: Moved forward 0.5m, turned right 30°, moved forward 0.5m
-**Observation**: RGB view shows doorway now at left 30°, Detection shows Left-30 1.2m, FRONT >2.0m open
+## Ex4 - Bypass obstacle then realign:
+**Destination**: Bedroom doorway
+**Progress**: Turned right 30°, moved 0.5m past obstacle
+**Observation**: RGB shows doorway now at left side, Detection FRONT 2.0m clear, Left-30 1.5m
 
 {{
-    "reasoning": "Current: Hallway, bypassed obstacle. Destination: Doorway at left 30° in view. Obstacles: All clear. Plan: Turn left 30° to face doorway again.",
-    "action_analysis": "Bypassed obstacle. Doorway now at left 30°. Turn back toward destination.",
+    "reasoning": "Step 0: Still in hallway, furniture now behind me. Step 1: Doorway visible at left, not close yet. Bypassed obstacle. Step 2: FRONT clear now. Step 3: Turn left 30° to realign toward doorway.",
+    "action_analysis": "Obstacle bypassed. Realign toward destination direction.",
     "action": "TURN_LEFT",
     "degrees": 30
 }}
 
-## Ex5 - Arrived at room destination (entered new space):
+## Ex5 - Arrived at room (entered new space):
 **Destination**: Exercise room
-**Sub-Instruction**: Enter the exercise room through the doorway
-**Progress**: Moved forward 2.0m total, passed through doorway
-**Observation**: RGB view shows exercise equipment inside room (treadmill, weights visible), Detection shows FRONT >2.0m, Left-90 1.65m, Right-90 >2.0m. Local map shows red arrow now in expanded green area (new room space).
+**Sub-Instruction**: Enter exercise room
+**Progress**: Moved 2.0m, passed doorway
+**Observation**: RGB shows gym equipment inside room (treadmill, weights), Map shows red arrow in new expanded green area
 
 {{
-    "reasoning": "Current: Inside exercise room (can see gym equipment around me). Destination: Exercise room - already entered. Space change: Map shows I've moved from hallway into new room (green area expanded). Plan: Stop, destination reached.",
-    "action_analysis": "Arrived at destination (room destination). RGB view confirms inside exercise room with equipment visible. Map confirms space transition from hallway to room. Stop here.",
+    "reasoning": "Step 0: Now inside exercise room, surrounded by gym equipment. Step 1: Room destination confirmed - see treadmill, weights around. Map shows entered new room space (green area expanded). Arrived.",
+    "action_analysis": "Room destination reached (RGB shows inside room + map confirms space transition). Stop.",
     "action": "STOP"
 }}
 
-**CRITICAL RULES**:
-
-1. **Already Facing Destination**: You start already rotated toward the destination direction - destination should be in front or front-side view
-2. **Prioritize RGB View + Map Together**: Look at IMAGE 1 (RGB) to see what's around you, and IMAGE 3 (Local Map) to understand space changes
-3. **Room vs Object Destinations**:
-   - **Room** (kitchen, bedroom, exercise room, etc.): STOP when RGB shows you're inside the room + Map shows new space entered
-   - **Object** (table, chair, bed, etc.): STOP when object in FRONT view + <0.5m
-4. **Use Distance Labels**: Check IMAGE 2 (Detection view) distance warnings before moving
-5. **Turn Only for Obstacles**: Only turn to detour around obstacles (<0.5m blocking front path), then turn back to face destination"""
+**Critical Rules**:
+1. **Arrival Check First**: Always check if arrived before any other action (avoid overshooting)
+2. **Use Detection Distances**: < 0.5m = blocked, > 1.0m = safe to move
+3. **Obstacle Avoidance**: If FRONT blocked, turn toward clearer side (check Left/Right 30-60° distances)
+4. **Map Confirmation**: Use dark green circle (0.5m radius) to verify arrival distance
+5. **Room vs Object**: Room = inside + new space on map; Object = in view + < 0.5m"""
 
 
 def get_action_execution_prompt(next_waypoint_destination: str,

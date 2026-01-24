@@ -330,11 +330,11 @@ class VLMNavigationController(InteractiveNavigationController):
             x_pos = w // 2
             y_pos = h // 2
             
-            # 绘制waypoint标记（蓝色外圈 + 白色填充）
-            cv2.circle(image, (x_pos, y_pos), 20, (255, 0, 0), 3)  # 蓝色边框，半径20
-            cv2.circle(image, (x_pos, y_pos), 17, (255, 255, 255), -1)  # 白色填充
+            # 绘制waypoint圆圈标记（白底蓝色边框）
+            cv2.circle(image, (x_pos, y_pos), 25, (255, 0, 0), 3)  # 蓝色边框，半径25
+            cv2.circle(image, (x_pos, y_pos), 22, (255, 255, 255), -1)  # 白色填充
             
-            # 在圆形内绘制waypoint ID（红色粗体）
+            # 在圆形内绘制waypoint ID（黑色字体）
             text = f"{wp_id}"
             font_scale = 0.8
             thickness = 2
@@ -342,17 +342,32 @@ class VLMNavigationController(InteractiveNavigationController):
             text_x = x_pos - text_size[0] // 2
             text_y = y_pos + text_size[1] // 2
             cv2.putText(image, text, (text_x, text_y), 
-                       cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 255), thickness)
+                       cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), thickness)  # 黑色字体
             
-            # 在圆形上方绘制房间类型/空间类型标签（如果有描述）
+            # 在圆形上方绘制房间类型标签（带白底蓝边框）
             if wp_desc:
-                desc_font_scale = 0.6
-                desc_thickness = 2
-                desc_y = y_pos - 30  # 在圆形上方
+                desc_font_scale = 0.5
+                desc_thickness = 1
                 desc_size = cv2.getTextSize(wp_desc, cv2.FONT_HERSHEY_SIMPLEX, desc_font_scale, desc_thickness)[0]
-                desc_x = x_pos - desc_size[0] // 2
-                cv2.putText(image, wp_desc, (desc_x, desc_y),
-                           cv2.FONT_HERSHEY_SIMPLEX, desc_font_scale, (0, 0, 255), desc_thickness)
+                
+                # 标签框的位置和尺寸
+                padding = 5
+                box_width = desc_size[0] + padding * 2
+                box_height = desc_size[1] + padding * 2
+                box_x1 = x_pos - box_width // 2
+                box_y1 = y_pos - 40 - box_height
+                box_x2 = box_x1 + box_width
+                box_y2 = box_y1 + box_height
+                
+                # 绘制白底蓝边框的标签框
+                cv2.rectangle(image, (box_x1, box_y1), (box_x2, box_y2), (255, 255, 255), -1)  # 白色填充
+                cv2.rectangle(image, (box_x1, box_y1), (box_x2, box_y2), (255, 0, 0), 2)  # 蓝色边框
+                
+                # 在框内绘制房间类型文本（黑色字体）
+                text_x = box_x1 + padding
+                text_y = box_y1 + padding + desc_size[1]
+                cv2.putText(image, wp_desc, (text_x, text_y),
+                           cv2.FONT_HERSHEY_SIMPLEX, desc_font_scale, (0, 0, 0), desc_thickness)
         
         return image
         
@@ -1613,12 +1628,12 @@ class VLMNavigationController(InteractiveNavigationController):
         
         return is_completed, response, prompt
     
-    def execute_action_with_vlm(self) -> Tuple[Optional[int], Optional[str], bool, int]:
+    def execute_action_with_vlm(self) -> Tuple[Optional[int], Optional[str], bool, int, Optional[Dict]]:
         """
         使用VLM决策并执行动作
         
         Returns:
-            (action_id, action_name, should_stop, repeat_count)
+            (action_id, action_name, should_stop, repeat_count, response)
         """
         if not self.action_executor or not self.current_subtask:
             return None, None, True
@@ -1811,7 +1826,7 @@ class VLMNavigationController(InteractiveNavigationController):
         
         if action_id is None:
             print("✗ VLM决策失败")
-            return None, None, True, 1
+            return None, None, True, 1, None
         
         # 3️⃣ 保存响应和prompt
         action_record["action_name"] = action_name
@@ -1848,7 +1863,7 @@ class VLMNavigationController(InteractiveNavigationController):
             if meters > 0:
                 repeat_count = max(1, round(meters / self.action_executor.move_distance))
         
-        return action_id, action_name, should_stop, repeat_count
+        return action_id, action_name, should_stop, repeat_count, response
     
     def step_with_vlm(self, action: int, action_name: str = "", save_vis: bool = True) -> Dict[str, Any]:
         """
@@ -2085,9 +2100,10 @@ class VLMNavigationController(InteractiveNavigationController):
             # VLM决策动作（失败则重试）
             max_retries = 3
             action_id = None
+            vlm_response = None
             
             for retry in range(max_retries):
-                action_id, action_name, should_stop, repeat_count = self.execute_action_with_vlm()
+                action_id, action_name, should_stop, repeat_count, vlm_response = self.execute_action_with_vlm()
                 
                 if action_id is not None:
                     break
@@ -2102,6 +2118,19 @@ class VLMNavigationController(InteractiveNavigationController):
                 print("✗ VLM决策失败，已达最大重试次数，跳过此步")
                 continue
             
+            # 🔑 关键检查：在执行任何action之前，检查VLM响应中的global_task_finish
+            if vlm_response and vlm_response.get('global_task_finish', False):
+                print("\n" + "="*60)
+                print("🏆 检测到global_task_finish=true（在action响应中）")
+                print("="*60)
+                print(f"  📍 Action: {action_name}")
+                print(f"  📊 总步数: {total_steps}")
+                print(f"  📊 子任务数: {self.subtask_count}")
+                print("  ⚠️  任务已完成，不再执行此action，立即保存结果")
+                print("="*60)
+                navigation_complete = True
+                break
+            
             # 如果VLM决定停止 → 验证子任务
             if should_stop:
                 print("\n[VLM输出STOP] 开始验证子任务...")
@@ -2112,7 +2141,13 @@ class VLMNavigationController(InteractiveNavigationController):
                 
                 # 立即检查是否完成全局任务
                 if is_completed and new_subtask and new_subtask.get('global_task_finish', False):
-                    print("\n🛑 全局任务完成 - 立即终止导航循环")
+                    print("\n" + "="*60)
+                    print("🛑 全局任务完成 - 立即终止导航循环")
+                    print("="*60)
+                    print(f"  📊 总步数: {total_steps}")
+                    print(f"  📊 子任务数: {self.subtask_count}")
+                    print("  ✓ 开始保存结果和生成GIF...")
+                    print("="*60)
                     navigation_complete = True
                     break
                 
@@ -2219,13 +2254,32 @@ class VLMNavigationController(InteractiveNavigationController):
                 break
         
         # 4. 生成GIF动画
+        print("\n" + "="*60)
+        print("📊 开始生成最终结果...")
+        print("="*60)
+        
         gif_path = None
         if self.nav_visualizer:
+            print("🎬 正在生成GIF动画...")
             gif_path = self.nav_visualizer.save_gif(fps=2)
-            print(f"\n🎬 GIF动画: {gif_path if gif_path else '未生成'}")
+            if gif_path:
+                print(f"✓ GIF动画已保存: {gif_path}")
+            else:
+                print("✗ GIF动画生成失败")
         
         # 5. 保存结果（供后续测评）
+        print("\n💾 正在保存导航结果...")
         final_result = self._save_navigation_result(navigation_complete, total_steps)
+        
+        print("\n" + "="*60)
+        print("🎉 导航完成！所有结果已保存")
+        print("="*60)
+        print(f"  Success: {navigation_complete}")
+        print(f"  Total Steps: {total_steps}")
+        print(f"  Result File: {final_result}")
+        if gif_path:
+            print(f"  GIF File: {gif_path}")
+        print("="*60 + "\n")
         
         return {
             'success': navigation_complete,

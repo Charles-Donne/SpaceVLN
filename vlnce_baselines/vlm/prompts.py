@@ -77,15 +77,16 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 
 {{
     "current_waypoint": "<Current Area Type> - <Key Surrounding Landmarks and Relationships>",
+    "task_progress": "<Global task with completed parts marked with ✓. E.g.: 'Turn around(✓) walk through exercise room into living room. Wait by Table.'>",
     "waypoint_sequence": "<Current Location> → <Next Waypoint> → ... → <Final Waypoints>",
     "next_waypoint_direction": "<IMAGE number where next waypoint appears most centered/visible (1-12)>",
     "next_waypoint_destination": "<Next immediate waypoint name>",
     "subtask_instruction": "<Step-by-step navigation instructions starting from Front view>",
     "next_waypoint_landmark": "<Single landmark to detect (common, e.g. door, table, painting, cabinet)>",
     "completion_criteria": {{
-        "Surrounding_Detection": "<Destination detected in which view>. <Other objects detected in which view>",
-        "Spatial_relationship": "<Destination position and distance> (map verification). <Other objects relationships> (map verification). <Trajectory description>",
-        "Location": "<Current Area Type> - <relative position descriptions>"
+        "Detection": "<What detected + distance>",
+        "Location": "<Current position/area>",
+        "Map": "<Map space description + trajectory>"
     }},
     "global_task_finish": <true if completing this subtask will finish the entire global task, false otherwise>,
     "reasoning": "<Max 200 words: Brief explanation of observation and analysis leading to this subtask planning>"
@@ -99,15 +100,16 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 
 {{
     "current_waypoint": "Restroom - beside exercise room doorway, toilet and washbasin nearby.",
+    "task_progress": "Turn around(✓) walk through the exercise room into the living room. Wait by the Table.",
     "waypoint_sequence": "Restroom(Current) → Exercise Room → Living Room → Living Room's Table(Goal)",
     "next_waypoint_direction": "IMAGE 5 (Left 120°)",
     "next_waypoint_destination": "exercise room",
     "subtask_instruction": "Move forward through doorway to enter the exercise room",
     "next_waypoint_landmark": "exercise equipment",
     "completion_criteria": {{
-        "Surrounding_Detection": "Exercise equipment detected surrounding in multiple views. Restroom fixtures detected in Back",
-        "Spatial_relationship": "Exercise equipment surrounding agent < 1.0m (map shows inside gym area). Restroom far behind (map shows previous location). Orange trajectory shows entered exercise room interior",
-        "Location": "Exercise Room - exercise equipment surrounding, restroom behind"
+        "Detection": "Exercise equipment surrounding < 1.0m",
+        "Location": "Exercise Room interior",
+        "Map": "Inside gym area (green space). Trajectory entered from restroom."
     }},
     "global_task_finish": false,
     "reasoning": "IMAGE 5 (Left 120°) shows exercise room doorway with gym equipment - next waypoint. System will auto-rotate 120° left to face this direction. After rotation, move forward through doorway into exercise room. Local map shows dark green circle (0.5m range) clear. Global map shows red arrow (current position) in small room, orange trajectory shows arrival path, exercise room (larger green area) is to the left. Using 'exercise equipment' as landmark."
@@ -119,31 +121,28 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 
 {{
     "current_waypoint": "Bedroom - near exit",
+    "task_progress": "Exit the room and turn left, head toward the kitchen and turn right. Go through the kitchen and out. Wait right at the bathroom.",
     "waypoint_sequence": "Bedroom(Current) → Corridor → Kitchen Entrance → Kitchen → Kitchen Exit → Bathroom(Goal)",
     "next_waypoint_direction": "IMAGE 2 (Left 30°)",
     "next_waypoint_destination": "corridor with pictures",
     "subtask_instruction": "Move forward through doorway to reach corridor",
     "next_waypoint_landmark": "picture",
     "completion_criteria": {{
-        "Surrounding_Detection": "Pictures detected on corridor wall in Front. Bedroom interior detected in Back",
-        "Spatial_relationship": "Pictures on corridor wall < 0.5m (map shows decorative objects along corridor). Bedroom interior far behind (map shows previous area). Orange trajectory shows forward 1.5m movement to corridor",
-        "Location": "Corridor - pictures on wall < 1.0m, bedroom behind"
+        "Detection": "Pictures on corridor wall < 0.5m",
+        "Location": "Corridor",
+        "Map": "Corridor space along bedroom exit. Trajectory moved forward 1.5m."
     }},
     "global_task_finish": false,
     "reasoning": "IMAGE 2 (Left 30°) shows bedroom exit with corridor and pictures visible - next waypoint. System will auto-rotate 30° left to face this direction. After rotation, move forward 1.5m through doorway. Global map shows red arrow in bedroom (enclosed green area), corridor extends to the left with green floor area. Orange trajectory short (just started). Local map shows doorway ahead. Blue filled area (90° FOV) will show doorway centered after rotation. Using 'picture' as landmark."
 }}
 
 **Critical Requirements**:
-- **12-Direction Analysis**: Analyze all 12 directional views (IMAGE 1-12) to locate current position and next waypoint
-- **Auto-Rotation System**: Specify waypoint_direction, system will auto-rotate to face it. Write instructions assuming agent is already facing the waypoint
-- **Sequential Navigation**: Treat waypoint_sequence as a chain to follow progressively. Identify current position → plan to next waypoint. Do NOT turn back to previous waypoints
-- **Off-Path Recovery**: If deviated from sequence, identify current location and plan route to nearest upcoming waypoint
-- **Forward Direction Alignment**: After auto-rotation, agent faces waypoint directly. Verify alignment and move forward
-- **Path Alignment**: Keep agent centered in corridors/paths, parallel to walls/boundaries with equal distance to both sides
-- **Target Alignment**: After auto-rotation, destination/landmark will be centered in Front view (0°)
-- **Distance Judgment**: Use dark green circle on local map to determine if destination/landmark is nearby - objects within the circle are < 0.5m from current position
-- **Landmark Selection**: Priority: landmarks from Global Task (e.g., "Wait by the Table" → "table"). Use specific objects (chair, table, bed, cabinet, sofa, painting). Avoid ambiguous terms (door, doorway, entrance, wall).
-- **Logical Analysis**: Ensure reasoning and output aligns with inputs - All the content must not contain any contradictions.
+- **12-Direction Analysis**: Analyze all 12 views to locate position and next waypoint
+- **Auto-Rotation**: System rotates to waypoint_direction. Write instructions from Front view after rotation.
+- **Sequential Navigation**: Follow waypoint_sequence progressively. Don't return to previous waypoints.
+- **Path Safety**: Avoid obstacles (black areas). Keep centered in paths. Use maps for safe routes.
+- **Distance Judgment**: Dark green circle on local map = 0.5m radius (objects inside < 0.5m away)
+- **Landmark Priority**: Use objects from Global Task. Prefer specific items (chair, table, bed). Avoid ambiguous terms (door, entrance).
 """
 
 
@@ -160,103 +159,80 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 **Previous Subtask Completion Criteria**: {completion_criteria}
 
 # Visual Observations
-12 directional views (30° FOV each, covering full 360°) + 2 top-down maps:
+12 directional views (30° FOV, full 360°) + 2 maps:
 
-**IMAGE 1-12**: 12 independent directional views, each labeled with its angle
-- IMAGE 1 = Front (0°) is the current forward direction
+**IMAGE 1-12**: Independent views labeled with angles. IMAGE 1 = Front (0°)
+- **Waypoint markers**: White circles (ID) + boxes (room type) show visited locations
+- Example: Circle "3" + "Kitchen" box in IMAGE 7 = Kitchen waypoint behind
+- **Use to avoid backtracking**
 
-**Direction Selection Strategy**:
-- **Observe all 12 views**: Previous waypoint markers (blue circles with numbers + room type) show visited locations
-- **Logical reasoning**: Determine what next waypoint should be and which IMAGE (1-12) it appears in
-- **Avoid backtracking**: Don't return to visited waypoints unless necessary
-- **System auto-rotates** to your specified waypoint_direction → Next Waypoint becomes Front view (IMAGE 1)
+**Direction Strategy**: Observe all views for waypoint markers. Move toward NEXT waypoint (not previous ones marked with circles). System auto-rotates to your chosen direction.
 
-**Global Map** - Full explored area (updated trajectory, waypoints, landmarks)
-**Local Map** - Nearby region (agent-centered, FOV cone shown)
+**Maps**:
+- **Global Map**: Full area (trajectory, waypoints, landmarks) - Top = Front
+- **Local Map**: Nearby region (agent-centered, FOV cone, dark green = 0.5m radius)
 
-# Map Interpretation Guide
+# Map Guide
 
-**Map Orientation**: 
-- Top of map = Agent's current Front direction (Front is always up)
+**Colors**: White=unexplored, Black=obstacles (AVOID), Green=safe floor, Orange line=trajectory, Red arrow=current position/direction, Purple=landmarks, Blue circles=waypoints
 
-**Global Map**:
-- **White**: Unexplored/unknown areas
-- **Black**: Obstacles (walls, furniture, barriers) - **MUST AVOID in next planning**
-- **Green**: Confirmed floor areas (safe to navigate)
-- **Orange line**: Complete trajectory from navigation start to current position (all subtasks)
-  - Shows your entire navigation history - **AVOID revisiting same areas unless necessary**
-- **Red arrow**: Current position, arrow points to Front direction
-- **Dark red dashed line**: Extends from red arrow upward, indicating exact Forward direction
-  - **Should align with destination and safe paths**, **NOT face obstacles**
-- **Purple markers with labels**: Previous Detected Landmark: {detected_landmarks}
-- **Blue circles with white numbers**: Historical waypoints (see below)
+**Global Map**: 
+- Red arrow points to Front; dashed line extends forward (should align with safe paths, NOT obstacles)
+- Orange line = full navigation history (avoid revisiting)
+- Blue circles with numbers = waypoint history
+
+**Local Map**: 
+- Dark green circle = 0.5m radius (objects inside are < 0.5m away)
+- Orange line = current subtask trajectory
+- Blue filled = visible 90° FOV area
+
+**Use Maps**: Verify position via trajectory/landmarks. Identify obstacles (black). Global for layout, local for immediate surroundings.
 
 # Spatial Memory (Waypoint History):
 {waypoint_summary}
-- Each numbered waypoint indicates a previously 360° scan and thinking location
-  
-**Local Map** (zoomed view around agent, same color legend as Global Map):
-- Shows finer details in immediate vicinity for precise navigation
-- **Red arrow**: Current position, arrow points to Front direction
-- **Dark red dashed line**: Extends from red arrow upward, indicating exact Forward direction
-- **Dark green circle**: 0.5m radius nearby area around current position
-- **Orange line**: Current subtask trajectory (shorter than global map trajectory)
-- **Blue filled area**: Current visible navigable area (90° FOV, blocked by obstacles)
-- Better for planning nearby movements and obstacle avoidance
-
-**Use Maps for Verification & Planning**:
-- **Verify Previous Subtask**: Detect current position, previous landmarks({detected_landmarks})'s direction and distance, trajectory history to confirm if previous subtask completed.
-- **Identify obstacles**: Black areas and space behind black areas(unexplored) - MUST AVOID in next planning.
-- **Spatial awareness**: Use global map for overall layout, local map for immediate surroundings.
+- Numbered waypoints = previous 360° scan locations
 
 # Your Task
 
-1. **Locate Current Position in Waypoint Sequence**: 
-   - Analyze all 12 directional views + map trajectory + landmarks to identify current position
-   - Determine which waypoint in sequence you are closest to or have reached
-   - If off-path: Identify current location and nearest waypoint in sequence
+**Step 1: Localize Current Position**
+- Analyze 12 views: What's visible in each? Where are waypoint markers (white circles)?
+- Analyze Global Map: Where's red arrow? Which waypoint am I closest to?
+- Synthesize: Where am I in environment? Which waypoint in sequence?
 
-2. **Determine Next Waypoint Direction**: 
-   - Observe 12 views + previous waypoint markers (blue circles with room types)
-   - Logical reasoning: What should next waypoint be? Which IMAGE (1-12) shows it most clearly?
-   - Choose the angle where next waypoint appears most centered/visible
+**Step 2: Determine Next Direction**
+- Identify next waypoint from sequence
+- Find which IMAGE (1-12) shows it most clearly
+- Verify on map: Does this direction lead there?
+- Avoid waypoint markers (visited areas) and orange trajectory path
 
-3. **Plan Navigation from Front View**: 
-   - Specify next_waypoint_direction (IMAGE 1-12)
-   - **System will automatically rotate** to face that direction
-   - After rotation, next waypoint will be in Front view (IMAGE 1, 0°)
-   - Write subtask_instruction assuming agent is **already facing the waypoint**
-   - Instructions should start from Front view: "Move forward..." (no need to mention rotation)
+**Step 3: Plan Navigation**
+- Choose next_waypoint_direction (IMAGE 1-12)
+- System auto-rotates to face it → next waypoint becomes Front (IMAGE 1)
+- Write instructions assuming already facing waypoint: "Move forward..."
 
-# Actions Available
-
-**Turn**: TURN_LEFT/RIGHT (30°, 60°, 90°, 120°, 150°, 180°)
-**Move**: MOVE_FORWARD (0.25m, 0.5m, 0.75m, 1.0m, 1.25m, 1.5m)
-**Arrive**: STOP (when <0.5m from destination)
-- Use key actions (turn/move/stop) to navigate, but use fewer precise parameters (meters/degrees)
+# Actions
+TURN_LEFT/RIGHT (30-180°), MOVE_FORWARD (0.25-1.5m), STOP (<0.5m from goal)
 
 # Output Format (JSON only)
 
 **CRITICAL**: Output ONLY valid JSON. No extra text before or after.
-**Word Limits**:
-- "reasoning": MAX 200 words (concise completion check + next plan)
-- "subtask_instruction": MAX 100 words (clear, actionable steps)
-- Other fields: Keep concise (20-50 words each)
+**Word Limits**: reasoning MAX 200 words, subtask_instruction MAX 100 words, others 20-50 words
 
 {{
     "current_waypoint": "<Current Area Type> - <Key Surrounding Landmarks and Relationships>",
+    "task_progress": "<Global task with completed parts marked with ✓. E.g.: 'Turn around(✓) walk through exercise room(✓) into living room. Wait by Table.'>",
     "waypoint_sequence": "<Completed Waypoints(✓)> → <Current Position> → <Next Waypoint> → <Remaining Waypoints> → <Goal>",
     "next_waypoint_direction": "<IMAGE number where next waypoint appears most centered/visible (1-12)>",
     "next_waypoint_destination": "<Next waypoint in sequence to navigate toward>",
     "subtask_instruction": "<Step-by-step navigation instructions from current position to next waypoint>",
     "next_waypoint_landmark": "<Single landmark name at next waypoint for detection>",
     "completion_criteria": {{
-        "Surrounding_Detection": "<Next waypoint detected in which view>. <Other objects detected in which view>",
-        "Spatial_relationship": "<Next waypoint position and distance> (map verification). <Other objects relationships> (map verification). <Trajectory description>",
-        "Location": "<Next Waypoint Area> - <relative position descriptions>"
+        "Detection": "<What detected + distance>",
+        "Location": "<Current position/area>",
+        "Map": "<Map space description + trajectory>"
     }},
-    "global_task_finish": <true if completing this subtask will finish the entire global task, false otherwise>,
-    "reasoning": "<Max 200 words: Brief explanation of completion verification, progress, and next plan>"
+    "global_task_finish": <true ONLY if Current Position = Final Goal (not just visible, but actually AT the goal location), false otherwise>,
+    "reasoning": "<MAX 200 words: 1) Where am I? (views + map + waypoints) 2) What's around? (front/back/left/right) 3) Task progress: Which parts of global task completed? 4) Which waypoint? Where's last one? 5) Next direction? (IMAGE # + map direction) 6) Plan>"
 }}
 
 ## Example 1:
@@ -266,18 +242,19 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 
 {{
     "current_waypoint": "Exercise Room (entrance area) - gym equipment surrounding, restroom behind",
+    "task_progress": "Turn around(✓) walk through the exercise room(✓) into the living room. Wait by the Table.",
     "waypoint_sequence": "Restroom(✓) → Exercise Room(Current) → Living Room → Living Room's Table(Goal)",
     "next_waypoint_direction": "IMAGE 1 (Front 0°)",
     "next_waypoint_destination": "living room",
     "subtask_instruction": "Move forward through the exercise room to reach the living room exit",
     "next_waypoint_landmark": "arched doorway",
     "completion_criteria": {{
-        "Surrounding_Detection": "Arched doorway detected in Front. Exercise equipment detected in Back",
-        "Spatial_relationship": "Arched doorway ahead (map shows exit to living room). Exercise equipment behind (map shows gym area). Orange trajectory shows movement through exercise room toward living room",
-        "Location": "Living Room Entrance - arched doorway ahead, exercise room behind"
+        "Detection": "Arched doorway in Front view",
+        "Location": "Living Room entrance",
+        "Map": "Doorway space leading to living room. Trajectory moved through exercise room."
     }},
     "global_task_finish": false,
-    "reasoning": "Exercise Room entrance - gym equipment surrounding, restroom behind. Previous subtask completed. Next: Living Room. IMAGE 1 shows path forward through gym. System auto-rotates to face IMAGE 1 (Front 0°) - already aligned. After rotation, move forward through exercise room to locate living room exit (arched doorway)."
+    "reasoning": "Spatial localization: 12 views show gym equipment in Front/Sides (IMAGE 1-6, 8-12), restroom visible in Back (IMAGE 7). Global map shows red arrow at Exercise Room entrance, blue circle #1 (Restroom) behind me. Waypoint history confirms last waypoint = Restroom. Task progress: Turned around(✓), walked through exercise room(✓), now need to enter living room and reach table. Environment awareness: Gym equipment surrounding (front/sides), restroom behind (completed). Waypoint progress: Currently at Exercise Room entrance (Waypoint #2), last waypoint (Restroom) is directly behind on map. Next direction: IMAGE 1 (Front 0°) shows path forward through gym area toward living room exit. Map shows living room ahead of current position. Plan: Already facing Front, move forward through exercise room to reach living room."
 }}
 
 ## Example 2:
@@ -287,18 +264,19 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 
 {{
     "current_waypoint": "Kitchen Center - refrigerator ahead < 0.5m, counter to right, kitchen island behind",
+    "task_progress": "Turn around(✓) and navigate to refrigerator in kitchen(✓).",
     "waypoint_sequence": "Bedroom(✓) → Hallway(✓) → Kitchen Center(✓) → Refrigerator(Current + Goal)",
     "next_waypoint_direction": "IMAGE 1 (Front 0°)",
     "next_waypoint_destination": "refrigerator in kitchen",
-    "subtask_instruction": "Stop. The refrigerator is directly ahead within 0.5m",
+    "subtask_instruction": "Stop. Already at the refrigerator within 0.5m",
     "next_waypoint_landmark": "refrigerator",
     "completion_criteria": {{
-        "Surrounding_Detection": "Refrigerator detected in Front centered ahead. Counter detected in Right. Kitchen island detected in Back",
-        "Spatial_relationship": "Refrigerator ahead < 0.5m (map shows refrigerator landmark within dark green circle). Counter at right. Kitchen island behind. Orange trajectory shows direct forward movement through kitchen to refrigerator",
-        "Location": "Refrigerator Area - refrigerator ahead < 0.5m, counter at right, kitchen island behind"
+        "Detection": "Refrigerator in Front < 0.5m (inside dark green circle)",
+        "Location": "Refrigerator area - goal position",
+        "Map": "At refrigerator landmark (purple marker). Trajectory ends here."
     }},
     "global_task_finish": true,
-    "reasoning": "Current at Kitchen Center, refrigerator < 0.5m ahead filling IMAGE 1. Previous subtask (kitchen center) completed. Global map shows red arrow in kitchen (large green area), orange trajectory extends from bedroom through hallway to kitchen center, purple marker likely shows refrigerator landmark ahead. Local map shows refrigerator within dark green circle (< 0.5m), dark red dashed line points directly at refrigerator, blue filled area shows refrigerator dominates front view. Refrigerator is final destination in IMAGE 1. Global task complete. Execute STOP."
+    "reasoning": "Spatial localization: 12 views show refrigerator in Front (IMAGE 1), counter at Right (IMAGE 10), kitchen island in Back (IMAGE 7). Global map shows red arrow at refrigerator landmark position, blue circles #1-3 (Bedroom, Hallway, Kitchen Center) along orange trajectory behind. Waypoint history confirms I've traveled through all intermediate waypoints. Task progress: Turned around(✓), navigated to refrigerator in kitchen(✓) - all parts completed. Environment awareness: Refrigerator directly ahead < 0.5m (inside dark green circle on local map), counter to my right, kitchen island behind. Waypoint progress: At Refrigerator (final waypoint). Last waypoint (Kitchen Center) visible on map behind current position. Next direction: Already at goal - no next waypoint needed. Map verification: Orange trajectory ends at refrigerator, local map shows refrigerator within 0.5m radius. Global task complete - Current Position = Final Goal."
 }}
 
 ## Example 3:
@@ -308,34 +286,30 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 
 {{
     "current_waypoint": "Hallway - bedroom doorway at left, kitchen behind",
+    "task_progress": "Walk to the kitchen(✓) through the hallway(✓), then enter the bedroom on your left.",
     "waypoint_sequence": "Kitchen(✓) → Hallway(Current) → Bedroom(Goal)",
     "next_waypoint_direction": "IMAGE 5 (Left 120°)",
     "next_waypoint_destination": "bedroom",
     "subtask_instruction": "Move forward through the doorway to enter the bedroom",
     "next_waypoint_landmark": "bed",
     "completion_criteria": {{
-        "Surrounding_Detection": "Bed detected in Front. Hallway detected in Back",
-        "Spatial_relationship": "Bed ahead < 1.0m (map shows inside bedroom). Hallway behind (map shows previous location). Orange trajectory shows entered bedroom interior",
-        "Location": "Bedroom - bed ahead, hallway behind"
+        "Detection": "Bed in Front < 1.0m",
+        "Location": "Bedroom interior",
+        "Map": "Inside bedroom space. Trajectory entered from hallway."
     }},
     "global_task_finish": true,
-    "reasoning": "Hallway position - bedroom doorway visible in IMAGE 5 (Left 120°), kitchen behind. Previous subtask completed. Next: Bedroom (final destination). System will auto-rotate 120° left to face bedroom doorway. After rotation, bedroom doorway will be in Front view (IMAGE 1, 0°). Then move forward through doorway into bedroom. No need to mention rotation in instruction."
+    "reasoning": "Spatial localization: 12 views show hallway ahead (IMAGE 1), bedroom doorway with bed at Left (IMAGE 5 at 120°), kitchen in Back (IMAGE 7). Global map shows red arrow in hallway, blue circle #1 (Kitchen) behind me, bedroom room ahead-left. Waypoint history confirms last waypoint = Kitchen. Task progress: Walked to kitchen(✓), through hallway(✓), now entering bedroom on left - final step. Environment awareness: In hallway corridor, bedroom doorway at my left 120°, kitchen behind me. Waypoint progress: At Hallway (Waypoint #2), last waypoint (Kitchen) visible on map directly behind. Next direction: IMAGE 5 (Left 120°) shows bedroom doorway most clearly - this is the final goal. Map confirms bedroom room in that direction. Plan: System will auto-rotate 120° left, then move forward into bedroom. Goal reached."
 }}
 
 **Critical Requirements**:
-- **12-Direction Analysis**: Analyze all 12 directional views (IMAGE 1-12) to locate current position and next waypoint
-- **Auto-Rotation System**: Specify waypoint_direction, system will auto-rotate to face it. Write instructions assuming agent is already facing the Next Waypoint
-- **Sequential Navigation**: Treat waypoint_sequence as a chain to follow progressively. Identify current position → plan to next waypoint. Do NOT turn back to previous waypoints
-- **Off-Path Recovery**: If deviated from sequence, identify current location and plan route to nearest upcoming waypoint
-- **Forward Direction Alignment**: After auto-rotation, agent faces Next Waypoint directly. Verify alignment and move forward
-- **Path Alignment**: Keep agent centered in corridors/paths, parallel to walls/boundaries with equal distance to both sides
-- **Target Alignment**: After auto-rotation, destination/landmark will be centered in Front view (0°)
-- **Distance Judgment**: Use dark green circle on local map to determine if destination/landmark is nearby - objects within the circle are < 0.5m from current position
-- **Planning**: Start all actions from Front view (0°) after auto-rotation. If subtask completed, plan NEXT waypoint; if not, adjust CURRENT subtask
-- **Map**: Use maps to verify trajectory, identify obstacles and plan safe paths for next subtask
-- **Landmark Selection**: Priority: landmarks from Global Task (e.g., "Wait by the Table" → "table"). Use specific objects (chair, table, bed, cabinet, sofa, painting). Avoid ambiguous terms (door, doorway, entrance, wall).
-- **Logical Analysis**: Ensure reasoning and output aligns with inputs - All the content must not contain any contradictions.
-- **Explore Unseen Areas**: If the destination is invisible, explore more places but avoiding areas with too many history waypoints, and understand the spatial relationships.
+- **Spatial Awareness**: Analyze 12 views + Global Map + waypoint history to determine current position. Show reasoning explicitly.
+- **Task Progress Tracking**: Mark completed parts of global instruction with ✓ to maintain awareness of overall task completion.
+- **Waypoint Markers**: White circles + boxes show visited areas - avoid backtracking
+- **Auto-Rotation**: System rotates to next_waypoint_direction. Write instructions from Front view.
+- **Sequential Navigation**: Follow waypoint_sequence progressively. Don't return to previous waypoints (marked circles).
+- **Task Completion**: global_task_finish=true ONLY when Current = Goal in waypoint_sequence (< 0.5m, inside dark green circle)
+- **Path Safety**: Avoid black areas (obstacles). Keep centered in paths. Use maps to verify trajectory and plan safe routes.
+- **Landmark Priority**: Use objects from Global Task. Prefer specific items (chair, table, bed). Avoid ambiguous terms (door, entrance).
 """
 
 
