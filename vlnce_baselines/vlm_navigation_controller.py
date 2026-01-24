@@ -1477,9 +1477,9 @@ class VLMNavigationController(InteractiveNavigationController):
                 print(f"  🔍 Completion Criteria:")
                 criteria = response.get('completion_criteria', {})
                 if isinstance(criteria, dict):
-                    print(f"     - Surrounding_Detection: {criteria.get('Surrounding_Detection', 'N/A')}")
-                    print(f"     - Spatial_relationship: {criteria.get('Spatial_relationship', 'N/A')}")
+                    print(f"     - Detection: {criteria.get('Detection', 'N/A')}")
                     print(f"     - Location: {criteria.get('Location', 'N/A')}")
+                    print(f"     - Map: {criteria.get('Map', 'N/A')}")
                 print(f"  💭 Reasoning: {response.get('reasoning', 'N/A')}")
                 print("="*60)
                 
