@@ -334,7 +334,7 @@ class VLMNavigationController(InteractiveNavigationController):
             cv2.circle(image, (x_pos, y_pos), 20, (255, 0, 0), 3)  # 蓝色边框，半径20
             cv2.circle(image, (x_pos, y_pos), 17, (255, 255, 255), -1)  # 白色填充
             
-            # 绘制waypoint ID（红色粗体）
+            # 在圆形内绘制waypoint ID（红色粗体）
             text = f"{wp_id}"
             font_scale = 0.8
             thickness = 2
@@ -344,11 +344,11 @@ class VLMNavigationController(InteractiveNavigationController):
             cv2.putText(image, text, (text_x, text_y), 
                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 255), thickness)
             
-            # 在waypoint下方绘制描述（如果有）
+            # 在圆形上方绘制房间类型/空间类型标签（如果有描述）
             if wp_desc:
-                desc_font_scale = 0.5
-                desc_thickness = 1
-                desc_y = y_pos + 35
+                desc_font_scale = 0.6
+                desc_thickness = 2
+                desc_y = y_pos - 30  # 在圆形上方
                 desc_size = cv2.getTextSize(wp_desc, cv2.FONT_HERSHEY_SIMPLEX, desc_font_scale, desc_thickness)[0]
                 desc_x = x_pos - desc_size[0] // 2
                 cv2.putText(image, wp_desc, (desc_x, desc_y),
@@ -1462,11 +1462,14 @@ class VLMNavigationController(InteractiveNavigationController):
                 print(f"  🔍 Completion Criteria:")
                 criteria = response.get('completion_criteria', {})
                 if isinstance(criteria, dict):
-                    print(f"     - Panoramic_Detection: {criteria.get('Panoramic_Detection', 'N/A')}")
+                    print(f"     - Surrounding_Detection: {criteria.get('Surrounding_Detection', 'N/A')}")
                     print(f"     - Spatial_relationship: {criteria.get('Spatial_relationship', 'N/A')}")
                     print(f"     - Location: {criteria.get('Location', 'N/A')}")
                 print(f"  💭 Reasoning: {response.get('reasoning', 'N/A')}")
                 print("="*60)
+                
+                # 立即返回，标记任务完成
+                return True, response, prompt
                 
                 # 在结束前保存最终waypoint
                 waypoint_desc = response.get('current_waypoint', 'Final destination')
@@ -2104,16 +2107,14 @@ class VLMNavigationController(InteractiveNavigationController):
                 print("\n[VLM输出STOP] 开始验证子任务...")
                 
                 # verify_and_replan会调用thinking模型检查任务是否完成
-                # 返回值：(is_completed, new_subtask, waypoint_summary)
+                # 返回值：(is_completed, new_subtask, prompt)
                 is_completed, new_subtask, _ = self.verify_and_replan()
                 
-                # 检查是否完成全局任务
-                if is_completed and new_subtask:
-                    task_finished = new_subtask.get('global_task_finish', False)
-                    if task_finished:
-                        print("\n🛑 全局任务完成 - 立即终止导航循环")
-                        navigation_complete = True
-                        break
+                # 立即检查是否完成全局任务
+                if is_completed and new_subtask and new_subtask.get('global_task_finish', False):
+                    print("\n🛑 全局任务完成 - 立即终止导航循环")
+                    navigation_complete = True
+                    break
                 
                 # 子任务完成或重新规划，重置步数计数
                 subtask_steps = 0

@@ -199,8 +199,7 @@ class InteractiveNavigationController:
         print(f" +{new_classes}类" if new_classes > 0 else "")
         
         if save_vis:
-            # 获取waypoint数据（忽略descriptions，可视化不需要）
-            wp_positions, wp_ids, _ = self.mapper.get_waypoints()
+            # action执行时不传waypoint信息，不计算角度（只在环视后计算）
             rgb_bgr = cv2.cvtColor(obs[0]['rgb'], cv2.COLOR_RGB2BGR)
             _, detected_landmarks_step, _, _ = self.visualizer.save_step_visualization(
                 step=self.current_step,
@@ -220,8 +219,8 @@ class InteractiveNavigationController:
                     'min_total_pixels': self.landmark_min_total_pixels,
                     'min_area_threshold': self.landmark_min_area_threshold
                 },
-                waypoint_positions=wp_positions,
-                waypoint_ids=wp_ids,
+                waypoint_positions=None,  # action时不传waypoint
+                waypoint_ids=None,
                 phase=phase,
                 global_trajectory_points=map_state['global_trajectory_points']
             )
