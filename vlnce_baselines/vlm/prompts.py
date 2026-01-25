@@ -244,21 +244,21 @@ TURN_LEFT/RIGHT (30-180°), MOVE_FORWARD (0.25-1.5m), STOP (<0.5m from goal)
 }}
 
 ## Example 2:
-**Global Task**: Turn around and navigate to refrigerator in kitchen
-**Previous Subtask**: Navigate through kitchen center
-**Current Observation:** IMAGE 1 (Front 0°): Refrigerator directly ahead < 0.5m. IMAGE 10 (Right 270°): Counter visible. IMAGE 7 (Back 180°): Kitchen island visible
+**Global Task**: Exit the bedroom and turn left. Walk straight passing the gray couch and stop near the rug.
+**Previous Subtask**: Navigate past gray couch toward rug
+**Current Observation:** IMAGE 1 (Front 0°): Rug directly ahead < 0.5m, gray couch visible beside rug. IMAGE 10 (Right 270°): Gray couch right beside. IMAGE 7 (Back 180°): Hallway visible behind
 
 {{
-    "current_waypoint": "Kitchen Center - refrigerator ahead < 0.5m, counter to right, kitchen island behind",
-    "task_progress": "Turn around(✓) and navigate to refrigerator in kitchen(✓).",
-    "waypoint_sequence": "Bedroom(✓) → Hallway(✓) → Kitchen Center(✓) → Refrigerator(Current + Goal)",
+    "current_waypoint": "Rug area - standing near rug, gray couch right beside",
+    "task_progress": "Exit the bedroom(✓) and turn left(✓). Walk straight passing the gray couch(✓) and stop near the rug(✓).",
+    "waypoint_sequence": "Bedroom(✓) → Hallway(✓) → Living Room(✓) → Rug(Current = Goal)",
     "next_waypoint_direction": "IMAGE 1 (Front 0°)",
-    "next_waypoint_destination": "refrigerator in kitchen",
-    "subtask_instruction": "Stop. Already at the refrigerator within 0.5m",
-    "next_waypoint_landmark": "refrigerator",
-    "completion_criteria": "Detection: Refrigerator in Front < 0.5m (inside dark green circle) | Location: Refrigerator area - goal position | Map: At refrigerator landmark (purple marker), trajectory ends here",
+    "next_waypoint_destination": "rug",
+    "subtask_instruction": "Stop. Already near the rug within 0.5m",
+    "next_waypoint_landmark": "rug",
+    "completion_criteria": "Detection: Rug in Front < 0.5m, gray couch beside | Location: Rug area - goal position | Map: At rug landmark, trajectory ends here",
     "global_task_finish": true,
-    "reasoning": "Spatial localization: 12 views show refrigerator in Front (IMAGE 1) < 0.5m - final destination visible and very close. Counter at Right (IMAGE 10), kitchen island in Back (IMAGE 7). Global map confirms red arrow near refrigerator landmark. Task progress: Turned around(✓), navigated to refrigerator in kitchen(✓) - all parts completed. Global task finish condition met: Final destination (refrigerator) is visible in current views (IMAGE 1) and close enough (< 0.5m). Task complete - stop immediately, no need to navigate further."
+    "reasoning": "Spatial localization: 12 views show rug in Front (IMAGE 1) < 0.5m with gray couch visible right beside rug - final destination reached. Gray couch at Right (IMAGE 10), hallway in Back (IMAGE 7). Global map confirms red arrow at rug position. Task progress: Exited bedroom(✓), turned left(✓), walked straight passing gray couch(✓), stopped near rug(✓) - all parts completed. Global task finish condition met: Final destination (rug) is visible in current views (IMAGE 1) and very close (< 0.5m), gray couch visible beside rug confirming correct location. Task complete - stop immediately."
 }}
 
 ## Example 3:

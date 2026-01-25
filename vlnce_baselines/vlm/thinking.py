@@ -18,9 +18,6 @@ class LLMPlanner(BaseAPIClient):
     REQUIRED_FIELDS_INITIAL = ['next_waypoint_direction', 'next_waypoint_destination', 'subtask_instruction', 'completion_criteria']
     REQUIRED_FIELDS_VERIFY = ['next_waypoint_direction', 'next_waypoint_destination', 'subtask_instruction', 'completion_criteria']
     
-    # completion_criteria 子字段（嵌套结构）
-    REQUIRED_CRITERIA_FIELDS = ['Detection', 'Location', 'Map']
-    
     def __init__(self, config_path: str = "vlnce_baselines/vlm/llm_config.yaml", 
                  action_space: str = None):
         """
@@ -44,19 +41,19 @@ class LLMPlanner(BaseAPIClient):
         """验证响应字段"""
         required = self.REQUIRED_FIELDS_INITIAL if mode == 'initial' else self.REQUIRED_FIELDS_VERIFY
         
-        # 先验证基础字段
+        # 验证基础字段
         if not self.validate_fields(response, required):
             return False
         
-        # 验证completion_criteria嵌套字段
+        # 验证completion_criteria格式（应该是字符串格式：Detection: ... | Location: ... | Map: ...）
         criteria = response.get('completion_criteria')
-        if criteria and isinstance(criteria, dict):
-            for field in self.REQUIRED_CRITERIA_FIELDS:
-                if field not in criteria:
-                    print(f"⚠️ Missing completion_criteria field: {field}")
-                    return False
+        if criteria and isinstance(criteria, str):
+            # 检查是否包含三个关键字段标识
+            if not all(keyword in criteria for keyword in ['Detection:', 'Location:', 'Map:']):
+                print(f"⚠️ completion_criteria应包含 'Detection:', 'Location:', 'Map:' 三个部分")
+                return False
         else:
-            print(f"⚠️ completion_criteria should be a dict with fields: {self.REQUIRED_CRITERIA_FIELDS}")
+            print(f"⚠️ completion_criteria应该是字符串格式 (例如: 'Detection: ... | Location: ... | Map: ...')")
             return False
         
         return True
