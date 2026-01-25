@@ -40,9 +40,11 @@ ACTION_EXECUTION_PROMPT = """You are executing navigation to reach {next_waypoin
 - This establishes context for all decisions
 
 **Step 1: Check Arrival** (HIGHEST PRIORITY)
-- **Destination visible?** Room = inside + room features; Object = in FRONT view
-- **Distance < 0.5m?** Check map dark green circle
-- **If YES** → **STOP** immediately
+- **Is destination visible in RGB view?** 
+  * **Room destination**: Am I inside? See room features around?
+  * **Object destination**: Is object in FRONT/nearby view and very close?
+- **Check distance**: Map dark green circle (< 0.5m) OR RGB shows extremely close
+- **If destination visible AND very close** → **STOP immediately** (avoid overshooting)
 
 **Step 2: Check Obstacles** (if not arrived)
 - **FRONT > 1.0m** = clear to move | **< 0.5m** = blocked, must turn first
@@ -134,11 +136,11 @@ ACTION_EXECUTION_PROMPT = """You are executing navigation to reach {next_waypoin
 }}
 
 **Critical Rules**:
-1. **Arrival Check First**: Always check if arrived before any other action (avoid overshooting)
+1. **Arrival Check First**: Always check if arrived before any other action. Look at RGB view - if destination visible and very close, STOP immediately (avoid overshooting)
 2. **Use Detection Distances**: < 0.5m = blocked, > 1.0m = safe to move
 3. **Obstacle Avoidance**: If FRONT blocked, turn toward clearer side (check Left/Right 30-60° distances)
 4. **Map Confirmation**: Use dark green circle (0.5m radius) to verify arrival distance
-5. **Room vs Object**: Room = inside + new space on map; Object = in view + < 0.5m"""
+5. **Subtask Completion**: When destination appears in RGB view AND very close (< 0.5m on map or visually obvious), STOP - subtask complete"""
 
 
 def get_action_execution_prompt(next_waypoint_destination: str,

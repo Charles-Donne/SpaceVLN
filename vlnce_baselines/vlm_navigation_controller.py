@@ -946,8 +946,23 @@ class VLMNavigationController(InteractiveNavigationController):
             
             # 绘制waypoint标记（使用最终角度判断是否在当前视图）
             if waypoint_info and last_waypoint_angle_deg is not None:
-                # 计算waypoint相对于当前视图的角度差
-                angle_diff = last_waypoint_angle_deg - angle
+                # 🔄 坐标系转换：
+                # Waypoint角度系统: 0°=正前方，+90°=右侧，-90°=左侧，±180°=后方
+                # 12视图角度系统: 0°=Front，90°=Left，180°=Back，270°=Right（逆时针）
+                # 转换公式: view_angle = -waypoint_angle (负号表示方向相反)
+                # 例如：waypoint +90°(右侧) → view 270°(Right)
+                #      waypoint -90°(左侧) → view 90°(Left)
+                #      waypoint +138°(右后方) → view -138° → 222° (约210°附近，右后方)
+                
+                waypoint_view_angle = -last_waypoint_angle_deg
+                # 归一化到[0, 360)
+                while waypoint_view_angle < 0:
+                    waypoint_view_angle += 360
+                while waypoint_view_angle >= 360:
+                    waypoint_view_angle -= 360
+                
+                # 计算与当前视图的角度差
+                angle_diff = waypoint_view_angle - angle
                 # 归一化到[-180, 180]
                 while angle_diff > 180:
                     angle_diff -= 360
@@ -956,7 +971,7 @@ class VLMNavigationController(InteractiveNavigationController):
                 
                 # 只在±15度范围内显示waypoint
                 if abs(angle_diff) <= 15:
-                    print(f"    ✓ Waypoint显示在 {direction_name} (角度差={angle_diff:.1f}°)")
+                    print(f"    ✓ Waypoint显示在 {direction_name} (waypoint={last_waypoint_angle_deg:.1f}° → view={waypoint_view_angle:.1f}°, diff={angle_diff:.1f}°)")
                     image = self._draw_waypoints_on_view(image, angle, waypoint_info)
             
             # 在图片顶部添加白色背景的角度标注
