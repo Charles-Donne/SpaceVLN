@@ -1439,7 +1439,6 @@ class VLMNavigationController(InteractiveNavigationController):
         from vlnce_baselines.vlm.prompts import get_verification_replanning_prompt
         prompt = get_verification_replanning_prompt(
             self.current_instruction,
-            self.current_subtask.get('waypoint_sequence', 'Unknown'),
             self.current_subtask.get('next_waypoint_destination', 'Unknown'),
             self.current_subtask.get('subtask_instruction', 'Unknown'),
             str(self.current_subtask.get('completion_criteria', {})),

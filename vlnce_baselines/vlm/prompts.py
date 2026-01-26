@@ -126,7 +126,7 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 {{
     "current_waypoint": "Bedroom - near exit",
     "task_progress": "Exit the room and turn left, head toward the kitchen and turn right. Go through the kitchen and out. Wait right at the bathroom.",
-    "waypoint_sequence": "Bedroom(Current) → Corridor → Kitchen Entrance → Kitchen → Kitchen Exit → Bathroom(Goal)",
+    "waypoint_sequence": "Bedroom(Current) → Corridor → Kitchen Entrance → Kitchen  → Bathroom(Goal)",
     "next_waypoint_direction": "IMAGE 2 (Left 30°)",
     "next_waypoint_destination": "corridor with pictures",
     "subtask_instruction": "Move forward through doorway to reach corridor",
@@ -272,7 +272,7 @@ TURN_LEFT/RIGHT (30-180°), MOVE_FORWARD (0.25-1.5m), STOP (<0.5m from goal)
 {{
     "current_waypoint": "Living Room - Rug area, standing near rug with gray couch beside",
     "task_progress": "Exit the bedroom(✓) and turn left(✓). Walk straight passing the gray couch(✓) and stop near the rug(✓).",
-    "waypoint_sequence": "Bedroom Exit(✓) → Hallway(✓) → Living Room with Gray Couch(✓) → Rug(Current = Goal)",
+    "waypoint_sequence": "Bedroom Exit(✓) → Hallway(✓) → Living Room with Gray Couch(✓) → Living Room's Rug(Current = Goal)",
     "next_waypoint_direction": "IMAGE 1 (Front 0°)",
     "next_waypoint_destination": "rug",
     "subtask_instruction": "Stop. Already at rug within 0.5m - goal reached",
