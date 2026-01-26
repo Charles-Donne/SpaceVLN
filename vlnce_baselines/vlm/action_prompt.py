@@ -63,7 +63,7 @@ ACTION_EXECUTION_PROMPT = """You are executing navigation to reach {next_waypoin
 # Output (JSON only)
 
 {{
-    "reasoning": "<4 sentences: 0) Where am I? (current position/space) 1) Arrived? (check view+map) 2) Destination location? Obstacles? 3) Action decision>",
+    "reasoning": "<MAX 4 sentences: 1) Current Position: Where am I NOW? (Based on NEAR objects < 0.5m in RGB view + Local Map position - NOT distant objects) 2) Destination: What is my destination? Where is it located? (In which direction/view? How far?) 3) Arrival Check: Have I reached the destination? (Is destination beside me or am I AT the destination? If yes, must STOP) 4) Navigation Action: If not arrived, how should I move to reach destination? (Are there obstacles ahead? How to avoid obstacles and move toward destination?)>",
     "action_analysis": "<1-2 sentences: Why this action?>",
     "action": "STOP" | "MOVE_FORWARD" | "TURN_LEFT" | "TURN_RIGHT",
     "degrees": <30-180> (TURN only),
@@ -80,7 +80,7 @@ ACTION_EXECUTION_PROMPT = """You are executing navigation to reach {next_waypoin
 **Observation**: RGB shows table directly in front view very close, Detection FRONT 0.3m, Map shows trajectory approaching table
 
 {{
-    "reasoning": "Step 0: Currently in kitchen area, see kitchen features around. Step 1: Table visible in FRONT view, very close. Map confirms < 0.5m (inside dark green circle). Arrived. Step 2-3: Not needed.",
+    "reasoning": "1) Current Position: In kitchen area - see kitchen counters, cabinets surrounding me (NEAR objects in RGB view). Local Map shows red arrow in kitchen space. 2) Destination: Kitchen table is my destination. RGB view shows table directly in FRONT, very close - large in view, occupying significant area. 3) Arrival Check: YES, reached destination. Table is right in front < 0.5m (inside Local Map dark green circle). Am AT the table position. Must STOP. 4) Navigation Action: Not needed - already arrived at destination.",
     "action_analysis": "Destination reached (table in front < 0.5m). Stop to avoid overshooting.",
     "action": "STOP"
 }}
@@ -92,7 +92,7 @@ ACTION_EXECUTION_PROMPT = """You are executing navigation to reach {next_waypoin
 **Observation**: RGB shows table ahead, Detection FRONT 1.5m clear, Left-90 0.8m, Right-90 1.2m
 
 {{
-    "reasoning": "Step 0: Currently in living room area near kitchen. Step 1: Table visible ahead but not close enough (> 0.5m). Not arrived. Step 2: FRONT 1.5m clear, no obstacles. Step 3: Move forward 0.75m toward table.",
+    "reasoning": "1) Current Position: In living room area near kitchen entrance - see living room furniture around me (NEAR). Local Map red arrow shows position in living room. 2) Destination: Kitchen table is my destination. RGB view shows table visible ahead in distance - small in view, FAR away (not NEAR yet). 3) Arrival Check: NO, not arrived. Table visible ahead but > 0.5m away (outside Local Map green circle). Not AT destination yet. 4) Navigation Action: FRONT obstacle distance 1.5m - clear, safe to move. No obstacles blocking path. Move forward 0.75m toward table to approach destination.",
     "action_analysis": "Path clear to destination. Advance toward table.",
     "action": "MOVE_FORWARD",
     "meters": 0.75
@@ -105,7 +105,7 @@ ACTION_EXECUTION_PROMPT = """You are executing navigation to reach {next_waypoin
 **Observation**: RGB shows doorway ahead-right but furniture blocking, Detection FRONT 0.4m blocked, Right-30 1.8m clear
 
 {{
-    "reasoning": "Step 0: In hallway corridor, see walls on both sides. Step 1: Doorway visible but not reached. Step 2: FRONT 0.4m blocked by furniture, Right-30 1.8m clear. Step 3: Turn right 30° to bypass obstacle on clearer side.",
+    "reasoning": "1) Current Position: In hallway corridor - see hallway walls on both sides (NEAR objects in RGB view), narrow passage. Local Map shows red arrow in corridor space. 2) Destination: Bedroom doorway is my destination. RGB view shows doorway visible ahead-right direction but furniture blocking direct path. 3) Arrival Check: NO, not arrived. Doorway visible but not reached yet, still in hallway (not bedroom). 4) Navigation Action: FRONT obstacle distance 0.4m - BLOCKED by furniture (< 0.5m). Right-30° shows 1.8m clear - safe direction. Turn right 30° to bypass obstacle on clearer side, then can move toward destination.",
     "action_analysis": "Obstacle blocks direct path (FRONT < 0.5m). Adjust pose right to avoid.",
     "action": "TURN_RIGHT",
     "degrees": 30
@@ -117,7 +117,7 @@ ACTION_EXECUTION_PROMPT = """You are executing navigation to reach {next_waypoin
 **Observation**: RGB shows doorway now at left side, Detection FRONT 2.0m clear, Left-30 1.5m
 
 {{
-    "reasoning": "Step 0: Still in hallway, furniture now behind me. Step 1: Doorway visible at left, not close yet. Bypassed obstacle. Step 2: FRONT clear now. Step 3: Turn left 30° to realign toward doorway.",
+    "reasoning": "1) Current Position: Still in hallway corridor - furniture now behind me (NEAR obstacles passed). Local Map shows red arrow still in hallway but moved past previous obstacle. 2) Destination: Bedroom doorway is my destination. RGB view shows doorway now visible at LEFT side - need to realign toward it. 3) Arrival Check: NO, not arrived yet. Doorway visible at left but not reached, still in hallway corridor. Bypassed obstacle successfully. 4) Navigation Action: FRONT obstacle distance clear now (> 0.5m). Obstacle bypassed, but destination (doorway) now at left direction. Turn left 30° to realign toward doorway direction, then can continue moving toward destination.",
     "action_analysis": "Obstacle bypassed. Realign toward destination direction.",
     "action": "TURN_LEFT",
     "degrees": 30
@@ -130,7 +130,7 @@ ACTION_EXECUTION_PROMPT = """You are executing navigation to reach {next_waypoin
 **Observation**: RGB shows gym equipment inside room (treadmill, weights), Map shows red arrow in new expanded green area
 
 {{
-    "reasoning": "Step 0: Now inside exercise room, surrounded by gym equipment. Step 1: Room destination confirmed - see treadmill, weights around. Map shows entered new room space (green area expanded). Arrived.",
+    "reasoning": "1) Current Position: Inside exercise room - see gym equipment surrounding me (treadmill, weights visible as NEAR objects in RGB view, large, < 1.0m, occupying view). Local Map red arrow shows position in expanded green area (new room space). 2) Destination: Exercise room is my destination. RGB view confirms inside exercise room - gym equipment all around defining this space. 3) Arrival Check: YES, arrived at destination. AM IN exercise room (room destination), see room features surrounding. Local Map shows space transition - entered new room area (green area expanded). Must STOP. 4) Navigation Action: Not needed - already arrived at room destination.",
     "action_analysis": "Room destination reached (RGB shows inside room + map confirms space transition). Stop.",
     "action": "STOP"
 }}

@@ -1554,63 +1554,8 @@ class VLMNavigationController(InteractiveNavigationController):
                     
                     if rotation_success:
                         print(f"  ✓ 旋转完成，waypoint应该在前方，直接开始Action")
-        else:
-            attempt_letter = chr(ord('a') + self.subtask_attempt)
-            print(f"\n[子任务未完成] #{self.subtask_count}{attempt_letter} - 重新规划")
-            
-            # ===== 关键顺序：先添加waypoint（使用当前trajectory），再清空 =====
-            
-            # 1. 先创建waypoint（此时trajectory还存在）
-            waypoint_desc = response.get('current_waypoint', 'Replanning location')
-            waypoint_id = self.mapper.add_waypoint(waypoint_desc)
-            
-            # 保存waypoint摘要
-            waypoint_summary = self._get_waypoint_summary()
-            self.save_manager.save_waypoint_memory(
-                waypoint_summary,
-                self.current_instruction,
-                self.current_step
-            )
-            
-            # 2. 然后清空旧状态（为新规划准备）
-            print("\n[状态清理] 添加waypoint后 - 清空旧landmark和轨迹（准备重新规划）")
-            self.mapper.clear_trajectory()  # 清空轨迹
-            self.landmark_classes = []      # 清空landmark标注（马上会重新设置）
-            self.progress_summary = ""      # 重置进度摘要
-            self.previous_action_reason = ""  # 重置上一步action reason（重新规划）
-            if hasattr(self, 'current_step_landmarks'):
-                self.current_step_landmarks.clear()
-            
-            # 未完成时保持subtask_count不变，递增attempt
-            self.subtask_attempt += 1  # 下次验证用b, c, d...
-            self.current_subtask = response
-            
-            # 更新位置观察（用于记录轨迹）
-            if 'current_observation' in response:
-                self.current_position_info = {
-                    'waypoint': response.get('current_waypoint', getattr(self, 'current_position_info', {}).get('waypoint', 'Unknown')),
-                    'observation': response.get('current_observation', ''),
-                    'step': self.current_step
-                }
-            
-            # 从新的子任务指令中提取landmark（直接使用VLM输出的next_waypoint_landmark）
-            next_waypoint_landmark = response.get('next_waypoint_landmark', None)
-            
-            # 直接使用VLM输出，不自动提取
-            if next_waypoint_landmark:
-                self.landmark_classes = [next_waypoint_landmark]
-                self.target_landmark = next_waypoint_landmark
-                print(f"  🎯 Updated Target Landmark: {self.target_landmark}")
-            else:
-                self.target_landmark = None
-                self.landmark_classes = []
-                print(f"  ℹ️  No target landmark")
-            
-            # ⚠️ 重要：self.classes始终保持为所有mapping_classes，用于完整的语义建图
-            
-            # 输出LLM验证结果和调整后的子任务
-            self._print_subtask_info(response, is_initial=False)
         
+        # 返回response和prompt
         return response, prompt
     
     def execute_action_with_vlm(self) -> Tuple[Optional[int], Optional[str], bool, int, Optional[Dict]]:
