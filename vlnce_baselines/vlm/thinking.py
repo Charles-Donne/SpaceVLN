@@ -156,7 +156,6 @@ class LLMPlanner(BaseAPIClient):
             return None, False
         
         # 获取当前子任务信息
-        waypoint_sequence = current_subtask.get('waypoint_sequence', 'Unknown')
         subtask_destination = current_subtask.get('next_waypoint_destination', 'Unknown')
         subtask_instruction = current_subtask.get('subtask_instruction', 'Unknown')
         completion_criteria = current_subtask.get('completion_criteria', 'Unknown')
@@ -178,7 +177,6 @@ class LLMPlanner(BaseAPIClient):
         
         prompt = get_verification_replanning_prompt(
             instruction,
-            waypoint_sequence,
             subtask_destination,
             subtask_instruction,
             completion_criteria,

@@ -330,13 +330,13 @@ class VLMNavigationController(InteractiveNavigationController):
             x_pos = w // 2
             y_pos = h // 2
             
-            # 绘制waypoint圆圈标记（白底蓝色边框）
-            cv2.circle(image, (x_pos, y_pos), 25, (255, 0, 0), 3)  # 蓝色边框，半径25
-            cv2.circle(image, (x_pos, y_pos), 22, (255, 255, 255), -1)  # 白色填充
+            # 绘制waypoint圆圈标记（白底蓝色边框，减小到刚好覆盖ID）
+            cv2.circle(image, (x_pos, y_pos), 15, (255, 0, 0), 2)  # 蓝色边框，半径15
+            cv2.circle(image, (x_pos, y_pos), 13, (255, 255, 255), -1)  # 白色填充
             
             # 在圆形内绘制waypoint ID（黑色字体）
             text = f"{wp_id}"
-            font_scale = 0.8
+            font_scale = 0.5  # 减小字体
             thickness = 2
             text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)[0]
             text_x = x_pos - text_size[0] // 2
@@ -344,18 +344,32 @@ class VLMNavigationController(InteractiveNavigationController):
             cv2.putText(image, text, (text_x, text_y), 
                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), thickness)  # 黑色字体
             
-            # 在圆形上方绘制房间类型标签（带白底蓝边框）
+            # 在圆形上方绘制房间标签（两行：第1行红色加粗房间类型，第2行描述）
             if wp_desc:
-                desc_font_scale = 0.5
-                desc_thickness = 1
-                desc_size = cv2.getTextSize(wp_desc, cv2.FONT_HERSHEY_SIMPLEX, desc_font_scale, desc_thickness)[0]
+                # 分离房间类型和描述（假设格式为 "Hallway - near bedroom exit"）
+                parts = wp_desc.split(' - ', 1) if ' - ' in wp_desc else [wp_desc, '']
+                room_type = parts[0].strip()  # 房间类型（如 "Hallway"）
+                description = parts[1].strip() if len(parts) > 1 else ''  # 描述
                 
-                # 标签框的位置和尺寸
-                padding = 5
-                box_width = desc_size[0] + padding * 2
-                box_height = desc_size[1] + padding * 2
+                # 第1行：红色加粗房间类型
+                room_font_scale = 0.6
+                room_thickness = 2
+                room_size = cv2.getTextSize(room_type, cv2.FONT_HERSHEY_SIMPLEX, room_font_scale, room_thickness)[0]
+                
+                # 第2行：黑色描述（如果有）
+                desc_font_scale = 0.45
+                desc_thickness = 1
+                desc_size = cv2.getTextSize(description, cv2.FONT_HERSHEY_SIMPLEX, desc_font_scale, desc_thickness)[0] if description else (0, 0)
+                
+                # 计算标签框尺寸（取两行最宽）
+                padding = 4
+                max_width = max(room_size[0], desc_size[0])
+                box_width = max_width + padding * 2
+                line_spacing = 3
+                box_height = room_size[1] + (desc_size[1] + line_spacing if description else 0) + padding * 2
+                
                 box_x1 = x_pos - box_width // 2
-                box_y1 = y_pos - 40 - box_height
+                box_y1 = y_pos - 25 - box_height  # 距离圆圈25px
                 box_x2 = box_x1 + box_width
                 box_y2 = box_y1 + box_height
                 
@@ -363,11 +377,18 @@ class VLMNavigationController(InteractiveNavigationController):
                 cv2.rectangle(image, (box_x1, box_y1), (box_x2, box_y2), (255, 255, 255), -1)  # 白色填充
                 cv2.rectangle(image, (box_x1, box_y1), (box_x2, box_y2), (255, 0, 0), 2)  # 蓝色边框
                 
-                # 在框内绘制房间类型文本（黑色字体）
-                text_x = box_x1 + padding
-                text_y = box_y1 + padding + desc_size[1]
-                cv2.putText(image, wp_desc, (text_x, text_y),
-                           cv2.FONT_HERSHEY_SIMPLEX, desc_font_scale, (0, 0, 0), desc_thickness)
+                # 绘制第1行：红色加粗房间类型
+                room_text_x = box_x1 + (box_width - room_size[0]) // 2  # 居中
+                room_text_y = box_y1 + padding + room_size[1]
+                cv2.putText(image, room_type, (room_text_x, room_text_y),
+                           cv2.FONT_HERSHEY_SIMPLEX, room_font_scale, (0, 0, 255), room_thickness)  # 红色加粗
+                
+                # 绘制第2行：黑色描述（如果有）
+                if description:
+                    desc_text_x = box_x1 + (box_width - desc_size[0]) // 2  # 居中
+                    desc_text_y = room_text_y + line_spacing + desc_size[1]
+                    cv2.putText(image, description, (desc_text_x, desc_text_y),
+                               cv2.FONT_HERSHEY_SIMPLEX, desc_font_scale, (0, 0, 0), desc_thickness)  # 黑色普通
         
         return image
         

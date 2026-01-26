@@ -162,7 +162,6 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 {instruction}
 
 # Previous Subtask Context:
-**Previous Waypoint Sequence**: {waypoint_sequence}
 **Previous Subtask Destination**: {subtask_destination}
 **Previous Subtask Instruction**: {subtask_instruction}
 **Previous Subtask Completion Criteria**: {completion_criteria}
@@ -214,14 +213,12 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 - Analyze 12 views + map: What's NEAR you vs. far ahead? Where's red arrow? What's in green circle?
 - Synthesize: Where am I based on NEAR objects and map position?
 
-**Step 2: Determine Next Direction**
-- Identify next waypoint from waypoint_sequence (NEXT unfinished waypoint after Current position)
-- **CRITICAL**: Find which IMAGE (1-12) shows next waypoint **MOST CENTERED** in view (waypoint aligned in middle of frame for easiest approach)
-- **CRITICAL**: Check obstacle distance in that IMAGE - FRONT direction after rotation must be > 0.5m (safe, no walls/obstacles blocking)
-- **CRITICAL**: Verify on Global Map: Does this direction lead to next waypoint along safe green path? Avoid black obstacle areas
-- **CRITICAL**: Choose the MOST CONVENIENT direction where: 1) Next waypoint is centered/aligned, 2) Front path is clear (no obstacles), 3) Shortest/easiest route to waypoint
-- If direct path blocked by obstacles, choose alternative IMAGE direction that bypasses obstacles
-- Avoid waypoint markers (visited areas) and orange trajectory path (don't backtrack)
+**Step 2: Determine Next Waypoint (Dynamic Reasoning)**
+- **Dynamic Planning**: Infer next waypoint based on global task + current position. Use SPACE names (Bedroom, Hallway, Living Room's Sofa)
+- **Intermediate Waypoints**: If final destination not visible, infer intermediate waypoints (e.g., Bedroom → Hallway → Living Room → Sofa). Choose next immediate reachable waypoint
+- **Direction Selection**: Find IMAGE (1-12) where next waypoint is MOST CENTERED + obstacle distance > 0.5m + map shows safe green path
+- **Convenience Priority**: 1) Centered/aligned, 2) Front path clear, 3) Shortest route. Bypass obstacles if needed
+- **Avoid**: Waypoint markers (visited areas) and orange trajectory (no backtracking)
 
 **Step 3: Plan Navigation**
 - Choose next_waypoint_direction (IMAGE 1-12) based on: 1) Waypoint most centered/aligned, 2) Front direction has no obstacles after rotation, 3) Map-verified safe path, 4) Most convenient route
@@ -239,14 +236,14 @@ TURN_LEFT/RIGHT (30-180°), MOVE_FORWARD (0.25-1.5m), STOP (<0.5m from goal)
 {{
     "current_waypoint": "<Current Area Type> - <Key Surrounding Landmarks and Relationships>",
     "task_progress": "<Global task with completed parts marked with ✓. CRITICAL: Only mark stages TRULY completed - don't mark if just visible ahead. E.g.: 'Turn around(✓) walk through exercise room(✓) into living room. Wait by Table.'>",
-    "waypoint_sequence": "<Completed Waypoints(✓)> → <Current Position> → <Next Waypoint> → <Remaining Waypoints> → <Goal>. CRITICAL: Mark waypoint (✓) only when you've PASSED THROUGH or ARE CURRENTLY AT (<0.5m) that waypoint. Don't mark future waypoints visible ahead.",
+    "waypoint_sequence": "<Your DYNAMICALLY INFERRED waypoint chain: Completed(✓) → Current → Next Immediate Waypoint → Intermediate Waypoints → Final Goal. Use SPACE names (e.g., Bedroom, Hallway, Living Room's Sofa). Infer intermediate waypoints if final destination not directly reachable. Mark (✓) only waypoints you've PASSED THROUGH or ARE AT (<0.5m). Example: Bedroom(✓) → Hallway(Current) → Living Room → Sofa(Goal)>",
     "next_waypoint_direction": "<IMAGE number where next waypoint appears most centered/visible (1-12)>",
     "next_waypoint_destination": "<Next waypoint in sequence to navigate toward>",
     "subtask_instruction": "<Step-by-step navigation instructions from current position to next waypoint>",
     "next_waypoint_landmark": "<Single landmark name at next waypoint for detection>",
     "completion_criteria": "<Detection: what detected + distance | Location: position/area | Map: space + trajectory>",
     "global_task_finish": <true ONLY when you have completed ALL waypoints and reached the final destination (visible and close < 0.5m) - This ENDS entire navigation immediately. false otherwise>,
-    "reasoning": "<MAX 250 words: CRITICAL: Base ALL reasoning on actual visual observations - maintain logical consistency throughout. 1) Current Position & Waypoint: Where am I ACTUALLY? (Identify NEAR objects < 1.0m in 12 views, use Local Map green circle 0.5m to confirm immediate surroundings. Separate from FAR objects: small/distant, belong to next spaces). What is my current waypoint based on near surroundings? 2) Next Waypoint & Direction: Based on global task and waypoint_sequence, what is the next waypoint? In which IMAGE (1-12) is it most centered/aligned and visible? Why this direction (waypoint centered in frame, obstacle distance > 0.5m, most convenient path, map-verified safe route)? 3) Task Progress: Which stages TRULY completed (✓)? Which stage am I CURRENTLY at? (Only mark completed if you've passed through) 4) Near-term Plan: How to reach the next waypoint from current position? (System will AUTO-ROTATE to next_waypoint_direction first. Explain your subtask_instruction AFTER rotation - assume already facing waypoint, describe step-by-step movement from Front view) 5) Long-term Plan: What remaining tasks after next waypoint? How to reach subsequent waypoints and ultimately complete the global task? Ensure reasoning is internally consistent and matches observations.>"
+    "reasoning": "<MAX 250 words: CRITICAL: Base ALL reasoning on actual visual observations - maintain logical consistency. 1) Current Position & Waypoint: Where am I ACTUALLY? (Identify NEAR objects < 1.0m in 12 views, use Local Map green circle 0.5m). What is my current waypoint (use SPACE name: Bedroom, Hallway, Living Room, etc.)? 2) Next Waypoint & Dynamic Reasoning: Based on global task and current position, what is the next immediate reachable waypoint? If final destination not visible (e.g., Living Room's Sofa from Bedroom), infer intermediate waypoints (Bedroom → Hallway → Living Room → Sofa). Choose next immediate waypoint you can reach. In which IMAGE (1-12) is it most centered/aligned? Why this direction (centered, obstacle distance > 0.5m, convenient path, map-verified)? 3) Task Progress: Which stages TRULY completed (✓)? Current stage? 4) Near-term Plan: System AUTO-ROTATES to next_waypoint_direction. Explain subtask_instruction AFTER rotation - assume facing waypoint, describe movement from Front view. 5) Long-term Plan: What remaining tasks/waypoints? How to reach subsequent waypoints and complete global task? Ensure internal consistency.>"
 }}
 
 ## Example 1:
@@ -264,7 +261,7 @@ TURN_LEFT/RIGHT (30-180°), MOVE_FORWARD (0.25-1.5m), STOP (<0.5m from goal)
     "next_waypoint_landmark": "arched doorway",
     "completion_criteria": "Detection: Arched doorway in Front view | Location: Living Room entrance | Map: Doorway space leading to living room, trajectory moved through exercise room",
     "global_task_finish": false,
-    "reasoning": "1) Current Position & Waypoint: NEAR objects in 12 views show gym equipment surrounding me in Front/Sides (IMAGE 1-6, 8-12) - large, < 1.0m, occupying significant view. Local Map green circle confirms gym equipment inside 0.5m radius. Currently AT Exercise Room entrance (Waypoint #2). Restroom (Waypoint #1, completed) visible FAR behind in IMAGE 7 - small/distant, separate space. 2) Next Waypoint & Direction: Based on waypoint_sequence, next waypoint is Living Room. Global task requires walking through exercise room to reach living room. IMAGE 1 (Front 0°) shows open path ahead through exercise room interior toward living room exit - living room entrance CENTERED in this view. Choose IMAGE 1 because: a) Living room path is most centered/aligned in this direction, b) Front obstacle distance > 0.5m (safe, clear path), c) Global Map confirms living room ahead via green path, d) Most convenient/direct route. 3) Task Progress: Stage 'Turn around'(✓ completed) - turned from restroom to face exercise room. Stage 'walk through exercise room' - IN PROGRESS (at entrance, need to continue through). Current at Exercise Room entrance area. 4) Near-term Plan: Next waypoint (living room) is in IMAGE 1 (Front 0°) - already facing correct direction, no rotation needed. Subtask_instruction AFTER auto-rotation (already aligned): Move forward straight through exercise room interior. Living room entrance will be in Front view - gym equipment on sides, clear path ahead. Use arched doorway as landmark for living room entrance verification. 5) Long-term Plan: After reaching living room entrance → Enter living room → Scan to locate table → Navigate to table position → Stop at table (final goal). 2-3 waypoints remaining to complete global task."
+    "reasoning": "1) Current Position & Waypoint: NEAR objects in 12 views show gym equipment surrounding me in Front/Sides (IMAGE 1-6, 8-12) - large, < 1.0m, occupying significant view. Local Map green circle confirms gym equipment inside 0.5m radius. Current waypoint: Exercise Room (Waypoint #2). Restroom (Waypoint #1, completed) visible FAR behind in IMAGE 7 - small/distant, separate space. 2) Next Waypoint & Dynamic Reasoning: Global task requires reaching Living Room's Table. From Exercise Room, I cannot directly see the table. Infer intermediate waypoints: Exercise Room → Living Room (enter room first) → Table (locate inside). Next immediate waypoint: Living Room. IMAGE 1 (Front 0°) shows open path ahead through exercise room interior toward living room entrance - living room entrance CENTERED in this view. Choose IMAGE 1: a) Living room path most centered/aligned, b) Front obstacle distance > 0.5m (safe, clear), c) Global Map confirms living room ahead via green path, d) Most convenient/direct route. 3) Task Progress: Stage 'Turn around'(✓ completed) - turned from restroom to face exercise room. Stage 'walk through exercise room' - IN PROGRESS (at entrance, need to continue through). 4) Near-term Plan: Next waypoint (Living Room) in IMAGE 1 (Front 0°) - already facing correct direction, no rotation needed. Subtask_instruction AFTER auto-rotation (already aligned): Move forward straight through exercise room interior. Living room entrance will be in Front view - gym equipment on sides, clear path ahead. Use arched doorway as landmark for living room entrance. 5) Long-term Plan: After reaching Living Room entrance → Enter living room → Scan to locate table → Navigate to table position → Stop at table (final goal). 2-3 waypoints remaining."
 }}
 
 ## Example 2:
@@ -300,7 +297,7 @@ TURN_LEFT/RIGHT (30-180°), MOVE_FORWARD (0.25-1.5m), STOP (<0.5m from goal)
     "next_waypoint_landmark": "bed",
     "completion_criteria": "Detection: Bed in Front < 1.0m | Location: Bedroom interior | Map: Inside bedroom space, trajectory entered from hallway",
     "global_task_finish": false,
-    "reasoning": "1) Current Position & Waypoint: NEAR objects in 12 views show hallway walls on both sides - occupying Front view (IMAGE 1), defining current space. Local Map green circle (0.5m radius) shows hallway corridor surroundings. Currently IN Hallway (Waypoint #2). Bedroom doorway visible at Left (IMAGE 5, 120°) - FAR, ~2.5m away, bed partially visible inside = next target, NOT current location. Kitchen visible FAR behind (IMAGE 7) - completed area. 2) Next Waypoint & Direction: Based on waypoint_sequence, next waypoint is Bedroom (final destination). Global task requires entering bedroom on left. IMAGE 5 (Left 120°) shows bedroom doorway MOST CENTERED/ALIGNED in frame with bed partially visible inside. Choose IMAGE 5 because: a) Bedroom doorway is centered in this view (easiest approach), b) After rotating to IMAGE 5, Front direction will have obstacle distance > 0.5m (safe, clear path through doorway), c) Global Map shows bedroom as green area to the left (safe path verified), d) Most convenient route to bedroom. 3) Task Progress: Stage 1 'Walk to kitchen'(✓ COMPLETED), Stage 2 'through hallway'(✓ COMPLETED). Stage 3 'enter bedroom on left' - NOT YET STARTED (bedroom visible but not reached). Currently at Hallway near bedroom entrance (about to start final stage). 4) Near-term Plan: Next waypoint (bedroom) is in IMAGE 5 (Left 120°). System will AUTO-ROTATE 120° left to face bedroom doorway first. Subtask_instruction AFTER auto-rotation (assuming already facing doorway in Front view): Move forward straight through doorway to enter bedroom interior. Doorway will be centered in Front view after rotation. Bed will become visible ahead for arrival verification. Use bed as landmark to confirm bedroom entry. 5) Long-term Plan: After entering bedroom (final waypoint) → Confirm inside bedroom space → STOP (task complete). Only 1 remaining waypoint. Bedroom is final destination - once entered and bed confirmed nearby, global task finished."
+    "reasoning": "1) Current Position & Waypoint: NEAR objects in 12 views show hallway walls on both sides - occupying Front view (IMAGE 1), defining current space. Local Map green circle (0.5m radius) shows hallway corridor surroundings. Current waypoint: Hallway (Waypoint #2). Bedroom doorway visible at Left (IMAGE 5, 120°) - FAR, ~2.5m away, bed partially visible inside = next target, NOT current location. Kitchen visible FAR behind (IMAGE 7) - completed area. 2) Next Waypoint & Dynamic Reasoning: Global task requires entering Bedroom (final destination). From Hallway, bedroom is visible and directly reachable. Next immediate waypoint: Bedroom. IMAGE 5 (Left 120°) shows bedroom doorway MOST CENTERED/ALIGNED in frame with bed partially visible inside. Choose IMAGE 5: a) Bedroom doorway centered in this view (easiest approach), b) After rotating to IMAGE 5, Front direction will have obstacle distance > 0.5m (safe, clear path through doorway), c) Global Map shows bedroom as green area to the left (safe path verified), d) Most convenient route to bedroom. 3) Task Progress: Stage 1 'Walk to kitchen'(✓ COMPLETED), Stage 2 'through hallway'(✓ COMPLETED). Stage 3 'enter bedroom on left' - NOT YET STARTED (bedroom visible but not reached). Currently at Hallway near bedroom entrance (about to start final stage). 4) Near-term Plan: Next waypoint (Bedroom) is in IMAGE 5 (Left 120°). System will AUTO-ROTATE 120° left to face bedroom doorway first. Subtask_instruction AFTER auto-rotation (assuming already facing doorway in Front view): Move forward straight through doorway to enter bedroom interior. Doorway will be centered in Front view after rotation. Bed will become visible ahead for arrival verification. Use bed as landmark to confirm bedroom entry. 5) Long-term Plan: After entering Bedroom (final waypoint) → Confirm inside bedroom space → STOP (task complete). Only 1 remaining waypoint. Bedroom is final destination - once entered and bed confirmed nearby, global task finished."
 }}
 
 ## Example 4:
@@ -356,7 +353,6 @@ def get_initial_planning_prompt(instruction: str,
     )
 
 def get_verification_replanning_prompt(instruction: str,
-                                       waypoint_sequence: str,
                                        subtask_destination: str,
                                        subtask_instruction: str,
                                        completion_criteria: str,
@@ -368,7 +364,6 @@ def get_verification_replanning_prompt(instruction: str,
     
     Args:
         instruction: 完整导航指令
-        waypoint_sequence: 当前路径点序列
         subtask_destination: 当前子任务目的地
         subtask_instruction: 当前子任务指令
         completion_criteria: 完成条件
@@ -386,7 +381,6 @@ def get_verification_replanning_prompt(instruction: str,
     
     return VERIFICATION_REPLANNING_PROMPT.format(
         instruction=instruction,
-        waypoint_sequence=waypoint_sequence,
         subtask_destination=subtask_destination,
         subtask_instruction=subtask_instruction,
         completion_criteria=completion_criteria,
