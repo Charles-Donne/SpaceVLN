@@ -1433,7 +1433,7 @@ class VLMNavigationController(InteractiveNavigationController):
         print(f"  💾 已保存输入: {thinking_dir}")
         
         # 2️⃣ 调用LLM验证（全局地图必需，局部地图可选，传递实际检测到的类别）
-        response, is_completed, _ = self.planner.verify_and_replan(
+        response, _ = self.planner.verify_and_replan(
             instruction=self.current_instruction,
             current_subtask=self.current_subtask,
             observation_images=image_paths,
@@ -1449,17 +1449,15 @@ class VLMNavigationController(InteractiveNavigationController):
         
         if not response:
             print("✗ LLM验证未返回有效响应")
-            return False, None, None
+            return None, None
         
-        # 更新next_subtask_id（根据is_completed）
-        if is_completed and not response.get('global_task_finish', False):
-            thinking_record["next_subtask_id"] = f"{self.subtask_count + 1}a"
-        elif response.get('global_task_finish', False):
+        # 更新next_subtask_id
+        if response.get('global_task_finish', False):
             thinking_record["next_subtask_id"] = "final"
-        # else: 保持原值（未完成，重试）
+        else:
+            thinking_record["next_subtask_id"] = f"{self.subtask_count + 1}a"
         
         # 3️⃣ 保存response
-        thinking_record["is_completed"] = is_completed
         thinking_record["response"] = response
         self.save_manager.save_thinking_response(thinking_record, thinking_dir)
         print(f"  💾 已保存响应: {thinking_dir}/response.json")
@@ -1467,62 +1465,34 @@ class VLMNavigationController(InteractiveNavigationController):
         # 记录到内存
         self.thinking_outputs.append(thinking_record)
         
-        if is_completed:
-            attempt_letter = chr(ord('a') + self.subtask_attempt)
-            print(f"\n[子任务完成] #{self.subtask_count}{attempt_letter}")
-            
-            # 打印LLM的response关键信息
-            print(f"  📍 Current Waypoint: {response.get('current_waypoint', 'N/A')}")
+        # 打印LLM的response关键信息
+        attempt_letter = chr(ord('a') + self.subtask_attempt)
+        print(f"\n[子任务验证] #{self.subtask_count}{attempt_letter}")
+        print(f"  📍 Current Waypoint: {response.get('current_waypoint', 'N/A')}")
+        print(f"  📍 Waypoint Sequence: {response.get('waypoint_sequence', 'N/A')}")
+        print(f"  🎯 Next Waypoint Destination: {response.get('next_waypoint_destination', 'N/A')}")
+        print(f"  📝 Subtask Instruction: {response.get('subtask_instruction', 'N/A')}")
+        
+        # 检查是否完成全局任务（由模型判断）
+        task_finished = response.get('global_task_finish', False)
+        print(f"  🎯 global_task_finish: {task_finished}")
+        
+        if task_finished:
+            print("\n" + "="*60)
+            print("🏆 全局任务完成 - 模型判断所有导航任务已完成！")
+            print("="*60)
+            print(f"  📍 Final Waypoint: {response.get('current_waypoint', 'N/A')}")
             print(f"  📍 Waypoint Sequence: {response.get('waypoint_sequence', 'N/A')}")
-            print(f"  🎯 Next Waypoint Destination: {response.get('next_waypoint_destination', 'N/A')}")
-            print(f"  📝 Subtask Instruction: {response.get('subtask_instruction', 'N/A')}")
+            print(f"  💭 Reasoning: {response.get('reasoning', 'N/A')}")
+            print("="*60)
+            # 直接返回response，标记任务完成
+            return response, prompt
+        else:
+            print(f"  ➡️  继续下一个子任务（#{self.subtask_count + 1}a）")
             
-            # 检查是否完成全局任务
-            task_finished = response.get('global_task_finish', False)
-            print(f"  🎯 global_task_finish: {task_finished}")
-            
-            if task_finished:
-                print("\n" + "="*60)
-                print("🏆 全局任务完成 - 导航成功！")
-                print("="*60)
-                print(f"  📍 Current Waypoint: {response.get('current_waypoint', 'N/A')}")
-                print(f"  📍 Waypoint Sequence: {response.get('waypoint_sequence', 'N/A')}")
-                print(f"  🎯 Next Waypoint Destination: {response.get('next_waypoint_destination', 'N/A')}")
-                print(f"  📝 Subtask Instruction: {response.get('subtask_instruction', 'N/A')}")
-                print(f"  🔍 Completion Criteria:")
-                criteria = response.get('completion_criteria', {})
-                if isinstance(criteria, dict):
-                    print(f"     - Detection: {criteria.get('Detection', 'N/A')}")
-                    print(f"     - Location: {criteria.get('Location', 'N/A')}")
-                    print(f"     - Map: {criteria.get('Map', 'N/A')}")
-                print(f"  💭 Reasoning: {response.get('reasoning', 'N/A')}")
-                print("="*60)
-                
-                # 立即返回，标记任务完成
-                return True, response, prompt
-                
-                # 在结束前保存最终waypoint
-                waypoint_desc = response.get('current_waypoint', 'Final destination')
-                waypoint_id = self.mapper.add_waypoint(waypoint_desc)
-                final_waypoint_summary = self._get_waypoint_summary()
-                self.save_manager.save_waypoint_memory(
-                    final_waypoint_summary,
-                    self.current_instruction,
-                    self.current_step
-                )
-                
-                # 直接结束导航，不再执行action
-                return (True, response, final_waypoint_summary)
-            else:
-                print(f"  ➡️  继续下一个子任务（#{self.subtask_count + 1}a）")
-            
-            # ===== 关键顺序：先添加waypoint（使用当前trajectory），再清空 =====
-            
-            # 1. 先创建waypoint（此时trajectory还存在）
+            # 保存waypoint
             waypoint_desc = response.get('current_waypoint', 'Unknown location')
             waypoint_id = self.mapper.add_waypoint(waypoint_desc)
-            
-            # 保存waypoint摘要
             waypoint_summary = self._get_waypoint_summary()
             self.save_manager.save_waypoint_memory(
                 waypoint_summary,
@@ -1530,22 +1500,22 @@ class VLMNavigationController(InteractiveNavigationController):
                 self.current_step
             )
             
-            # 2. 然后清空旧状态（为新子任务准备）
-            print("\n[状态清理] 添加waypoint后 - 清空旧landmark和轨迹（准备新子任务）")
-            self.mapper.clear_trajectory()  # 清空轨迹
-            self.landmark_classes = []      # 清空landmark标注（马上会重新设置）
-            self.progress_summary = ""      # 重置进度摘要
-            self.previous_action_reason = ""  # 重置上一步action reason（新子任务）
-            self.pose_before_action = None   # 重置pose追踪（新子任务从当前位置开始）
-            self.last_planned_degrees = 0    # 重置计划角度
-            self.last_planned_meters = 0     # 重置计划距离
-            self.last_action_name = ""        # 重置动作名称
+            # 清空旧状态（为新子任务准备）
+            print("\n[状态清理] 清空旧landmark和轨迹（准备新子任务）")
+            self.mapper.clear_trajectory()
+            self.landmark_classes = []
+            self.progress_summary = ""
+            self.previous_action_reason = ""
+            self.pose_before_action = None
+            self.last_planned_degrees = 0
+            self.last_planned_meters = 0
+            self.last_action_name = ""
             if hasattr(self, 'current_step_landmarks'):
-                self.current_step_landmarks.clear()  # 清空step landmark记录
+                self.current_step_landmarks.clear()
             
             # 更新到新子任务：递增计数，重置尝试
             self.subtask_count += 1
-            self.subtask_attempt = 0  # 新子任务从a开始
+            self.subtask_attempt = 0
             self.current_subtask = response
             
             # 更新当前位置信息（用于后续参考）
@@ -1641,7 +1611,7 @@ class VLMNavigationController(InteractiveNavigationController):
             # 输出LLM验证结果和调整后的子任务
             self._print_subtask_info(response, is_initial=False)
         
-        return is_completed, response, prompt
+        return response, prompt
     
     def execute_action_with_vlm(self) -> Tuple[Optional[int], Optional[str], bool, int, Optional[Dict]]:
         """
@@ -2151,17 +2121,15 @@ class VLMNavigationController(InteractiveNavigationController):
                 print("\n[VLM输出STOP] 开始验证子任务...")
                 
                 # verify_and_replan会调用thinking模型检查任务是否完成
-                # 返回值：(is_completed, new_subtask, prompt)
-                is_completed, new_subtask, _ = self.verify_and_replan()
+                new_subtask, _ = self.verify_and_replan()
                 
-                # 立即检查是否完成全局任务
-                if is_completed and new_subtask and new_subtask.get('global_task_finish', False):
+                # 检查模型是否判断全局任务完成
+                if new_subtask and new_subtask.get('global_task_finish', False):
                     print("\n" + "="*60)
-                    print("🛑 全局任务完成 - 立即终止导航循环")
+                    print("🛑 模型判断：全局任务完成 - 立即终止导航")
                     print("="*60)
                     print(f"  📊 总步数: {total_steps}")
                     print(f"  📊 子任务数: {self.subtask_count}")
-                    print("  ✓ 开始保存结果和生成GIF...")
                     print("="*60)
                     navigation_complete = True
                     break
@@ -2256,7 +2224,12 @@ class VLMNavigationController(InteractiveNavigationController):
             # 🔑 强制重规划检查：如果达到最大步数，执行完动作后立即触发verify
             if force_replan_after_action:
                 print(f"\n🔄 [强制重规划] 已执行完 {max_subtask_steps} 步，立即触发验证和重规划")
-                _, _, _ = self.verify_and_replan()
+                new_subtask, _ = self.verify_and_replan()
+                # 检查是否完成全局任务
+                if new_subtask and new_subtask.get('global_task_finish', False):
+                    print("🛑 强制重规划后：模型判断任务完成")
+                    navigation_complete = True
+                    break
                 subtask_steps = 0  # 重置步数
                 continue
             
@@ -2282,9 +2255,10 @@ class VLMNavigationController(InteractiveNavigationController):
             else:
                 print("✗ GIF动画生成失败")
         
-        # 5. 保存结果（供后续测评）
+        # 5. 获取环境评估指标并保存结果
         print("\n💾 正在保存导航结果...")
-        final_result = self._save_navigation_result(navigation_complete, total_steps)
+        env_metrics = self.envs.call_at(0, "get_metrics") if hasattr(self.envs, 'call_at') else {}
+        final_result = self._save_navigation_result(navigation_complete, total_steps, env_metrics)
         
         print("\n" + "="*60)
         print("🎉 导航完成！所有结果已保存")
@@ -2313,40 +2287,56 @@ class VLMNavigationController(InteractiveNavigationController):
         """保存VLM动作输出（调用save_manager）"""
         self.save_manager.save_action(action_record)
     
-    def _save_navigation_result(self, success: bool, total_steps: int) -> str:
-        """保存导航结果到log/目录"""
-        # 获取所有关键指标
-        metrics = {}
-        if self.latest_info:
-            metrics = {
-                # 核心指标
-                'distance_to_goal': self.latest_info.get('distance_to_goal', -1),
-                'success': int(self.latest_info.get('success', 0)),  # 0或1
-                'spl': self.latest_info.get('spl', 0.0),
-                'path_length': self.latest_info.get('path_length', 0.0),
-                
-                # Oracle指标
-                'oracle_success': int(self.latest_info.get('oracle_success', 0)),  # 0或1
-                'oracle_navigation_error': self.latest_info.get('oracle_navigation_error', float('inf')),
-                'oracle_spl': self.latest_info.get('oracle_spl', 0.0),
-            }
+    def _save_navigation_result(self, success: bool, total_steps: int, env_metrics: Dict = None) -> str:
+        """
+        保存导航结果到log/目录
         
+        VLN-CE关键评估指标说明：
+        - distance_to_goal: 停止时智能体与目标点的距离(米)，越小越好
+        - success: 成功率，智能体是否在3米内停止(0或1)
+        - spl: Success weighted by Path Length，成功率与路径效率的综合指标
+               公式: success * (最短路径长度 / 实际路径长度)
+               范围[0,1]，越高表示既成功又高效
+        - path_length: 智能体实际行走的路径长度(米)
+        - oracle_success: 预言成功率，整个轨迹中是否曾经到达过目标3米内(0或1)
+                         用于评估智能体是否找到过目标但错过了停止
+        - oracle_navigation_error: 轨迹中与目标点的最小距离
+        - oracle_spl: 基于oracle_success的spl指标
+        
+        Args:
+            success: 是否完成任务
+            total_steps: 总步数
+            env_metrics: 从环境获取的metrics字典
+        """
+        import math
+        
+        def check_inf_nan(value):
+            """检查并修正无效值（参考Sub-VLM-VLN）"""
+            if isinstance(value, (int, float)):
+                if math.isinf(value) or math.isnan(value):
+                    return 0
+            return value
+        
+        # 优先使用env_metrics，回退到latest_info
+        metrics_source = env_metrics if env_metrics else (self.latest_info if self.latest_info else {})
+        
+        # 提取并验证核心指标
         result = {
             'episode_id': self.current_episode_id,
             'instruction': self.current_instruction,
             'total_steps': total_steps,
             'subtask_count': self.subtask_count,
             
-            # 核心导航指标
-            'success': metrics.get('success', 0),
-            'spl': metrics.get('spl', 0.0),
-            'distance_to_goal': metrics.get('distance_to_goal', -1),
-            'path_length': metrics.get('path_length', 0.0),
+            # 核心导航指标（带数据验证）
+            'success': int(check_inf_nan(metrics_source.get('success', 0))),
+            'spl': float(check_inf_nan(metrics_source.get('spl', 0.0))),
+            'distance_to_goal': float(check_inf_nan(metrics_source.get('distance_to_goal', -1.0))),
+            'path_length': float(check_inf_nan(metrics_source.get('path_length', 0.0))),
             
-            # Oracle指标
-            'oracle_success': metrics.get('oracle_success', 0),
-            'oracle_navigation_error': metrics.get('oracle_navigation_error', float('inf')),
-            'oracle_spl': metrics.get('oracle_spl', 0.0),
+            # Oracle指标（带数据验证）
+            'oracle_success': int(check_inf_nan(metrics_source.get('oracle_success', 0))),
+            'oracle_navigation_error': float(check_inf_nan(metrics_source.get('oracle_navigation_error', float('inf')))),
+            'oracle_spl': float(check_inf_nan(metrics_source.get('oracle_spl', 0.0))),
             
             # 附加信息
             'detected_classes': list(self.detected_classes),
@@ -2355,6 +2345,14 @@ class VLMNavigationController(InteractiveNavigationController):
             'action_count': len(self.action_outputs),
             'timestamp': datetime.now().isoformat()
         }
+        
+        # 打印关键指标（便于实时监控）
+        print(f"\n📊 Episode {self.current_episode_id} 评估指标:")
+        print(f"  - Success: {result['success']}")
+        print(f"  - SPL: {result['spl']:.4f}")
+        print(f"  - Distance to Goal: {result['distance_to_goal']:.3f}m")
+        print(f"  - Path Length: {result['path_length']:.3f}m")
+        print(f"  - Oracle Success: {result['oracle_success']}")
         
         return self.save_manager.save_result(result)
     

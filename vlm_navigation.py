@@ -6,6 +6,7 @@ VLM自动导航系统入口
 使用LLM进行高层规划 + VLM进行低层动作执行
 基于interactive_navigation架构，集成语义建图和可视化
 """
+import os
 import argparse
 from vlnce_baselines.config.default import get_config
 from vlnce_baselines.vlm_navigation_controller import VLMNavigationController
@@ -167,13 +168,32 @@ def main():
     
     print(f"\n{'='*80}")
     
-    # 打印整体统计
+    # 使用analyze_results脚本生成完整统计
+    print("\n📊 生成详细评估报告...")
+    import subprocess
+    analyze_script = os.path.join(os.path.dirname(__file__), "analyze_results.py")
+    if os.path.exists(analyze_script) and args.results_dir:
+        try:
+            result = subprocess.run(
+                ["python", analyze_script, "--path", args.results_dir, "--save"],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            if result.returncode == 0:
+                print(result.stdout)
+            else:
+                print(f"⚠️  分析脚本执行失败: {result.stderr}")
+        except Exception as e:
+            print(f"⚠️  无法运行分析脚本: {e}")
+    
     print("\n" + "="*60)
-    print("🏁 批量运行统计")
+    print("🏁 批量评估完成")
     print("="*60)
     print(f"✅ 成功率: {success_count}/{total_count} ({success_count/total_count*100:.1f}%)")
     print(f"📊 平均步数: {sum(r['steps'] for r in results_summary)/total_count:.1f}")
     print(f"📁 结果目录: {args.results_dir or config.RESULTS_DIR}")
+    print(f"📄 详细报告: {os.path.join(args.results_dir or config.RESULTS_DIR, 'summary.txt')}")
     print("="*60)
 
 

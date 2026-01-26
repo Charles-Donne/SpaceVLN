@@ -62,7 +62,10 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 
 # Your Task
 
-1. **Analyze environment**: Use 12 directional views + global and local map to identify your position, related landmarks and obstacles
+1. **Analyze environment**: 
+   - **Identify current position**: Focus on NEAR objects (< 1.0m, large in views, occupying significant view area). Use Local Map's dark green circle (0.5m radius) - objects inside define your current location.
+   - **Identify next waypoint**: Look for objects in distance (small, far ahead, separate space) - these determine navigation direction, NOT current position.
+   - Use 12 directional views + global and local map to distinguish immediate surroundings from distant targets
 2. **Determine waypoint direction**: 
    - **CRITICAL**: Choose IMAGE where next waypoint appears **MOST CENTERED** in the view
    - **CRITICAL**: Verify obstacle distance > 0.5m in that direction (safe to navigate)
@@ -84,18 +87,18 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 
 **CRITICAL**: Output ONLY valid JSON. No extra text before or after.
 
-{{
+{{{
     "current_waypoint": "<Current Area Type> - <Key Surrounding Landmarks and Relationships>",
-    "task_progress": "<Global task with completed parts marked with ✓. E.g.: 'Turn around(✓) walk through exercise room into living room. Wait by Table.'>",
-    "waypoint_sequence": "<Current Location> → <Next Waypoint> → ... → <Final Waypoints>",
+    "task_progress": "<Global task with completed parts marked with ✓. CRITICAL: Only mark stages TRULY completed. E.g.: 'Turn around(✓) walk through exercise room into living room. Wait by Table.'>",
+    "waypoint_sequence": "<Current Location> → <Next Waypoint> → ... → <Final Waypoints>. Note: Mark (✓) only for waypoints you've passed through.",
     "next_waypoint_direction": "<IMAGE number where next waypoint appears most centered/visible (1-12)>",
     "next_waypoint_destination": "<Next immediate waypoint name>",
     "subtask_instruction": "<Step-by-step navigation instructions starting from Front view>",
     "next_waypoint_landmark": "<Single landmark to detect (common, e.g. door, table, painting, cabinet)>",
     "completion_criteria": "<Detection: what detected + distance | Location: position/area | Map: space + trajectory>",
     "global_task_finish": <true ONLY when final destination of global task is visible in current views (any IMAGE 1-12) and close enough to reach - Global task complete, stop navigating immediately. false otherwise>,
-    "reasoning": "<Max 250 words: 1) Current observations (12 views + maps), 2) Current position in environment, 3) Global task progress: which stages completed (✓), which stage at now, 4) Future plan: step-by-step path from current position to final goal through remaining waypoints, 5) Next immediate action and why>"
-}}
+    "reasoning": "<Max 250 words: CRITICAL: Base ALL reasoning on actual observations from 12 views and maps. Maintain logical consistency. 1) Current observations (12 views + maps - what do you ACTUALLY see? Distinguish NEAR objects: large, < 1.0m, defining current location vs. FAR objects: small, distant, next targets), 2) Current position in environment (where ARE you based on NEAR surroundings and Local Map green circle 0.5m?), 3) Global task progress: which stages completed (✓), which stage at now (be honest - only mark truly completed stages), 4) Future plan: step-by-step path from current position to final goal through remaining waypoints, 5) Next immediate action and why (based on observations)>"
+}}}}
 
 #Examples:
 
@@ -134,6 +137,9 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 }}
 
 **Critical Requirements**:
+- **Accurate Position Awareness**: Determine TRUE current location by analyzing ALL 12 views + maps. Base current_waypoint on where you ACTUALLY are, not where you see in the distance.
+- **Task Progress Accuracy**: Only mark stages (✓) that are TRULY completed. Be honest about current progress - don't mark future steps as done.
+- **Reasoning Consistency**: Base ALL reasoning on actual visual observations. Ensure current position, task progress, and next action are logically consistent.
 - **12-Direction Analysis**: Analyze all 12 views to locate position and next waypoint
 - **Direction Selection Logic**: Choose next_waypoint_direction where: 1) Waypoint is MOST CENTERED in view, 2) Obstacle distance > 0.5m, 3) Map shows safe green path toward waypoint
 - **Waypoint Sequence Logic**: waypoints marked (✓) = completed/passed, Current = current position, unmarked = not yet reached. Maintain logical consistency.
@@ -202,9 +208,11 @@ VERIFICATION_REPLANNING_PROMPT = """You are a Vision-Language Navigation verific
 # Your Task
 
 **Step 1: Localize Current Position**
-- Analyze 12 views: What's visible in each? Where are waypoint markers (white circles)?
-- Analyze Global Map: Where's red arrow? Which waypoint am I closest to?
-- Synthesize: Where am I in environment? Which waypoint in sequence?
+- **CRITICAL**: Determine TRUE current location - focus on NEAR objects (< 1.0m, large in views, occupying significant area). FAR objects (small/distant) belong to next spaces, NOT current position.
+- **Map assistance**: Local Map green circle (0.5m radius) = immediate surroundings. Objects inside define your current location. Black obstacles outside circle = far away.
+- **Don't assume arrival from distance**: Living room visible ahead but you're in hallway → Current = Hallway, NOT Living Room.
+- Analyze 12 views + map: What's NEAR you vs. far ahead? Where's red arrow? What's in green circle?
+- Synthesize: Where am I based on NEAR objects and map position?
 
 **Step 2: Determine Next Direction**
 - Identify next waypoint from waypoint_sequence (NEXT unfinished waypoint after Current position)
@@ -229,15 +237,15 @@ TURN_LEFT/RIGHT (30-180°), MOVE_FORWARD (0.25-1.5m), STOP (<0.5m from goal)
 
 {{
     "current_waypoint": "<Current Area Type> - <Key Surrounding Landmarks and Relationships>",
-    "task_progress": "<Global task with completed parts marked with ✓. E.g.: 'Turn around(✓) walk through exercise room(✓) into living room. Wait by Table.'>",
-    "waypoint_sequence": "<Completed Waypoints(✓)> → <Current Position> → <Next Waypoint> → <Remaining Waypoints> → <Goal>",
+    "task_progress": "<Global task with completed parts marked with ✓. CRITICAL: Only mark stages TRULY completed - don't mark if just visible ahead. E.g.: 'Turn around(✓) walk through exercise room(✓) into living room. Wait by Table.'>",
+    "waypoint_sequence": "<Completed Waypoints(✓)> → <Current Position> → <Next Waypoint> → <Remaining Waypoints> → <Goal>. CRITICAL: Mark waypoint (✓) only when you've PASSED THROUGH or ARE CURRENTLY AT (<0.5m) that waypoint. Don't mark future waypoints visible ahead.",
     "next_waypoint_direction": "<IMAGE number where next waypoint appears most centered/visible (1-12)>",
     "next_waypoint_destination": "<Next waypoint in sequence to navigate toward>",
     "subtask_instruction": "<Step-by-step navigation instructions from current position to next waypoint>",
     "next_waypoint_landmark": "<Single landmark name at next waypoint for detection>",
     "completion_criteria": "<Detection: what detected + distance | Location: position/area | Map: space + trajectory>",
-    "global_task_finish": <true ONLY when final destination of global task is visible in current 12 views and close (< 1.0m) - You have arrived, stop immediately. false otherwise>,
-    "reasoning": "<MAX 250 words: 1) Spatial localization: Where am I? (views + map + waypoint markers), 2) Environment: What's around? (front/back/left/right), 3) Task progress: Which stages of global task completed (✓)? Which stage at now?, 4) Waypoint status: Current waypoint? Last waypoint location?, 5) Future plan: Step-by-step path from current position through remaining waypoints to final goal, 6) Next action: Which IMAGE direction? Why? (centered + no obstacles + map-verified path)>"
+    "global_task_finish": <true ONLY when you have completed ALL waypoints and reached the final destination (visible and close < 0.5m) - This ENDS entire navigation immediately. false otherwise>,
+    "reasoning": "<MAX 250 words: CRITICAL: Base ALL reasoning on actual visual observations - maintain logical consistency throughout. 1) Spatial localization: Where am I ACTUALLY? (Identify NEAR objects: large in views, < 1.0m, occupying significant view area. Separate from FAR objects: small/distant, belong to next spaces. Use Local Map green circle 0.5m to confirm immediate surroundings), 2) Environment: What SURROUNDS me immediately? (front/back/left/right - describe NEAR objects vs. what's visible far ahead), 3) Task progress: Which stages TRULY completed (✓)? Which stage am I CURRENTLY at? (only mark completed if you've passed through), 4) Waypoint status: Current waypoint (where I AM now based on near surroundings)? Last waypoint location (where was it)?, 5) Future plan: Step-by-step path from CURRENT TRUE position through remaining waypoints to final goal, 6) Next action: Which IMAGE direction? Why? (centered + no obstacles + map-verified path). Ensure reasoning is internally consistent and matches observations.>"
 }}
 
 ## Example 1:
@@ -313,15 +321,17 @@ TURN_LEFT/RIGHT (30-180°), MOVE_FORWARD (0.25-1.5m), STOP (<0.5m from goal)
 }}
 
 **Critical Requirements**:
+- **Accurate Position Awareness**: Determine TRUE current location by analyzing ALL 12 views + Global Map. Don't assume arrival at distant waypoints - must be INSIDE or IMMEDIATELY AT (<0.5m) to claim current position there.
 - **Spatial Awareness**: Analyze 12 views + Global Map + waypoint history to determine current position. Show reasoning explicitly in 6-part structure.
+- **Reasoning Consistency**: Base ALL reasoning on actual visual observations. Maintain logical consistency: current position → task progress → waypoint status → next action must all align. Don't contradict yourself.
+- **Task Progress Accuracy**: Only mark stages (✓) that are TRULY completed. If waypoint visible ahead but not reached, DON'T mark it completed. Be honest about current stage.
 - **Direction Selection Logic**: Choose next_waypoint_direction where: 1) Next waypoint is MOST CENTERED in that IMAGE, 2) Obstacle distance > 0.5m (safe), 3) Global Map confirms safe green path toward waypoint.
 - **Obstacle Bypass Planning**: If direct path blocked (distance < 0.5m), use Global Map to plan alternative route bypassing black obstacle areas while progressing toward next waypoint.
 - **Waypoint Sequence Logic**: (✓) = completed/passed waypoints, Current = current position, unmarked = not yet reached. Ensure logical consistency: can't mark future waypoints as (✓) if haven't reached them yet.
-- **Task Progress Tracking**: Mark completed parts of global instruction with ✓ to maintain awareness of overall task completion.
 - **Waypoint Markers**: White circles + boxes show visited areas - avoid backtracking
 - **Auto-Rotation**: System rotates to next_waypoint_direction. Write instructions from Front view.
 - **Sequential Navigation**: Follow waypoint_sequence progressively. Don't return to previous waypoints (marked circles).
-- **Global Task Completion**: global_task_finish=true when final destination visible in 12 views and close (< 1.0m). Once you see the goal in current views and it's nearby, task is complete - STOP immediately, don't continue navigating.
+- **Global Task Completion**: When you have completed ALL navigation waypoints and reached the final destination (visible in 12 views and close < 0.5m), output global_task_finish=true. This immediately ENDS the entire navigation - YOU make this final decision, no further verification.
 - **Path Safety**: Avoid black areas (obstacles). Keep centered in paths. Use maps to verify trajectory and plan safe routes.
 - **Landmark Priority**: Use objects from Global Task. Prefer specific items (chair, table, bed). Avoid ambiguous terms (door, entrance).
 """

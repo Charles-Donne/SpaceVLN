@@ -203,8 +203,8 @@ class LLMPlanner(BaseAPIClient):
             response = self.call_api(prompt, images)
             
             if response and self.validate_response(response, mode='verify'):
-                # 连续导航模式：始终推进到下一个waypoint，不需要is_completed判断
-                return response, True, prompt
+                # 只返回response，由模型的global_task_finish决定是否完成
+                return response, prompt
             
             if retry < max_retries - 1:
                 print(f"  ⚠️  验证API调用失败，重试 ({retry + 1}/{max_retries - 1})...")
@@ -212,4 +212,4 @@ class LLMPlanner(BaseAPIClient):
                 time.sleep(2)  # 等待2秒后重试
         
         print(f"  ✗ 验证API调用失败，已达最大重试次数")
-        return None, False, None
+        return None, None
