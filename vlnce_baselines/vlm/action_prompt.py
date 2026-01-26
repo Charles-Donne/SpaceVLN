@@ -85,45 +85,58 @@ ACTION_EXECUTION_PROMPT = """You are executing navigation to reach {next_waypoin
     "action": "STOP"
 }}
 
-## Ex2 - Move forward (path clear):
-**Destination**: Kitchen table
-**Sub-Instruction**: Move forward to the kitchen table
-**Progress**: Just started
-**Observation**: RGB shows table ahead, Detection FRONT 1.5m clear, Left-90 0.8m, Right-90 1.2m
+## Ex2 - Turn toward open path (doorway with obstacle):
+**Destination**: Living room
+**Sub-Instruction**: Walk straight into the living room
+**Progress**: Standing at doorway threshold
+**Observation**: RGB shows living room visible ahead-left through doorway, wall on right. Detection FRONT 0.70m (wall), Left-30 >2.0m open, Right-30 0.78m, Left-60 1.65m, Right-60 1.00m, Left-90 >2.0m open, Right-90 0.85m
 
 {{
-    "reasoning": "1) Current Position: In living room area near kitchen entrance - see living room furniture around me (NEAR). Local Map red arrow shows position in living room. 2) Destination: Kitchen table is my destination. RGB view shows table visible ahead in distance - small in view, FAR away (not NEAR yet). 3) Arrival Check: NO, not arrived. Table visible ahead but > 0.5m away (outside Local Map green circle). Not AT destination yet. 4) Navigation Action: FRONT obstacle distance 1.5m - clear, safe to move. No obstacles blocking path. Move forward 0.75m toward table to approach destination.",
-    "action_analysis": "Path clear to destination. Advance toward table.",
-    "action": "MOVE_FORWARD",
-    "meters": 0.75
-}}
-
-## Ex3 - Obstacle blocking, adjust pose:
-**Destination**: Bedroom doorway
-**Sub-Instruction**: Walk to bedroom doorway
-**Progress**: Moved 0.5m
-**Observation**: RGB shows doorway ahead-right but furniture blocking, Detection FRONT 0.4m blocked, Right-30 1.8m clear
-
-{{
-    "reasoning": "1) Current Position: In hallway corridor - see hallway walls on both sides (NEAR objects in RGB view), narrow passage. Local Map shows red arrow in corridor space. 2) Destination: Bedroom doorway is my destination. RGB view shows doorway visible ahead-right direction but furniture blocking direct path. 3) Arrival Check: NO, not arrived. Doorway visible but not reached yet, still in hallway (not bedroom). 4) Navigation Action: FRONT obstacle distance 0.4m - BLOCKED by furniture (< 0.5m). Right-30° shows 1.8m clear - safe direction. Turn right 30° to bypass obstacle on clearer side, then can move toward destination.",
-    "action_analysis": "Obstacle blocks direct path (FRONT < 0.5m). Adjust pose right to avoid.",
-    "action": "TURN_RIGHT",
-    "degrees": 30
-}}
-
-## Ex4 - Bypass obstacle then realign:
-**Destination**: Bedroom doorway
-**Progress**: Turned right 30°, moved 0.5m past obstacle
-**Observation**: RGB shows doorway now at left side, Detection FRONT 2.0m clear, Left-30 1.5m
-
-{{
-    "reasoning": "1) Current Position: Still in hallway corridor - furniture now behind me (NEAR obstacles passed). Local Map shows red arrow still in hallway but moved past previous obstacle. 2) Destination: Bedroom doorway is my destination. RGB view shows doorway now visible at LEFT side - need to realign toward it. 3) Arrival Check: NO, not arrived yet. Doorway visible at left but not reached, still in hallway corridor. Bypassed obstacle successfully. 4) Navigation Action: FRONT obstacle distance clear now (> 0.5m). Obstacle bypassed, but destination (doorway) now at left direction. Turn left 30° to realign toward doorway direction, then can continue moving toward destination.",
-    "action_analysis": "Obstacle bypassed. Realign toward destination direction.",
+    "reasoning": "1) Current Position: Standing at doorway threshold - see wall on right side (NEAR object in RGB view), floor tiles visible. Local Map shows red arrow at doorway entrance. 2) Destination: Living room is my destination. RGB view shows living room visible ahead-left through doorway opening. 3) Arrival Check: NO, not arrived. Living room visible but not entered yet (still at doorway threshold). 4) Navigation Action: FRONT obstacle distance 0.70m - NOT enough clearance (close to wall). Left-30° shows >2.0m open (very clear) - this is the doorway opening direction toward living room. Right side has walls (0.78m-0.85m). Must turn LEFT 30° first to face the open doorway path toward destination, then can advance.",
+    "action_analysis": "FRONT blocked by wall (0.70m). Left-30° is open (>2.0m) toward living room. Turn left to align with doorway opening.",
     "action": "TURN_LEFT",
     "degrees": 30
 }}
 
-## Ex5 - Arrived at room (entered new space):
+## Ex3 - Move forward (path clear):
+**Destination**: Kitchen table
+**Sub-Instruction**: Move forward to the kitchen table
+**Progress**: Just started
+**Observation**: RGB shows table ahead, Detection FRONT 1.5m clear, Left-30 1.2m, Right-30 1.0m, Left-60 0.9m, Right-60 1.1m, Left-90 0.8m, Right-90 1.2m
+
+{{
+    "reasoning": "1) Current Position: In living room area near kitchen entrance - see living room furniture around me (NEAR). Local Map red arrow shows position in living room. 2) Destination: Kitchen table is my destination. RGB view shows table visible ahead in distance - small in view, FAR away (not NEAR yet). 3) Arrival Check: NO, not arrived. Table visible ahead but > 0.5m away (outside Local Map green circle). Not AT destination yet. 4) Navigation Action: FRONT obstacle distance 1.5m - clear, safe to move. All directions show adequate clearance (> 0.8m). No obstacles blocking path. Move forward 0.75m toward table to approach destination.",
+    "action_analysis": "Path clear to destination (FRONT 1.5m). Advance toward table.",
+    "action": "MOVE_FORWARD",
+    "meters": 0.75
+}}
+
+## Ex4 - Obstacle blocking, adjust pose:
+**Destination**: Bedroom doorway
+**Sub-Instruction**: Walk to bedroom doorway
+**Progress**: Moved 0.5m
+**Observation**: RGB shows doorway ahead-right but furniture blocking, Detection FRONT 0.4m blocked, Left-30 0.6m, Right-30 1.8m clear, Left-60 0.8m, Right-60 2.0m, Left-90 1.0m, Right-90 1.5m
+
+{{
+    "reasoning": "1) Current Position: In hallway corridor - see hallway walls on both sides (NEAR objects in RGB view), narrow passage. Local Map shows red arrow in corridor space. 2) Destination: Bedroom doorway is my destination. RGB view shows doorway visible ahead-right direction but furniture blocking direct path. 3) Arrival Check: NO, not arrived. Doorway visible but not reached yet, still in hallway (not bedroom). 4) Navigation Action: FRONT obstacle distance 0.4m - BLOCKED by furniture (< 0.5m). Right-30° shows 1.8m clear (safe direction), Right-60° shows 2.0m even clearer. Turn right 30° to bypass obstacle on clearer side, then can move toward destination.",
+    "action_analysis": "Obstacle blocks direct path (FRONT 0.4m < 0.5m). Right side clear (1.8m). Adjust pose right to avoid.",
+    "action": "TURN_RIGHT",
+    "degrees": 30
+}}
+
+## Ex5 - Bypass obstacle then realign:
+**Destination**: Bedroom doorway
+**Progress**: Turned right 30°, moved 0.5m past obstacle
+**Observation**: RGB shows doorway now at left side, Detection FRONT 2.0m clear, Left-30 1.5m, Right-30 1.2m, Left-60 1.8m, Right-60 1.0m, Left-90 1.6m, Right-90 0.9m
+
+{{
+    "reasoning": "1) Current Position: Still in hallway corridor - furniture now behind me (NEAR obstacles passed). Local Map shows red arrow still in hallway but moved past previous obstacle. 2) Destination: Bedroom doorway is my destination. RGB view shows doorway now visible at LEFT side - need to realign toward it. 3) Arrival Check: NO, not arrived yet. Doorway visible at left but not reached, still in hallway corridor. Bypassed obstacle successfully. 4) Navigation Action: FRONT obstacle distance clear now (2.0m). Obstacle bypassed, but destination (doorway) now at left direction. Left-30° shows 1.5m clear. Turn left 30° to realign toward doorway direction, then can continue moving toward destination.",
+    "action_analysis": "Obstacle bypassed. Destination at left. Realign toward doorway direction.",
+    "action": "TURN_LEFT",
+    "degrees": 30
+}}
+
+## Ex6 - Arrived at room (entered new space):
 **Destination**: Exercise room
 **Sub-Instruction**: Enter exercise room
 **Progress**: Moved 2.0m, passed doorway

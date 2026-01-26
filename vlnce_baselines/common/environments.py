@@ -33,6 +33,10 @@ class VLNCEZeroShotEnv(habitat.RLEnv):
     def get_info(self, observations: Observations) -> Dict[Any, Any]:
         return self.habitat_env.get_metrics()
     
+    def get_metrics(self) -> Dict[Any, Any]:
+        """获取当前episode的评估指标"""
+        return self.habitat_env.get_metrics()
+    
     def get_done(self, observations):
         return self._env.episode_over
     
