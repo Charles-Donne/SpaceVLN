@@ -1986,23 +1986,24 @@ class VLMNavigationController(InteractiveNavigationController):
                 'right_90': 'Unknown'
             }
     
-    def run_vlm_navigation(self, max_steps: int = 500, 
-                          max_subtask_steps: int = 5) -> Dict[str, Any]:
+    def run_vlm_navigation(self, max_subtask_steps: int = 5) -> Dict[str, Any]:
         """
         运行完整的VLM导航流程
         
         Args:
-            max_steps: 最大总步数
             max_subtask_steps: 每个子任务最大步数（达到后强制触发验证，默认5步）
             
         Returns:
             导航结果字典
         """
+        # 从 Habitat 配置读取最大步数限制
+        max_steps = self.config.TASK_CONFIG.ENVIRONMENT.MAX_EPISODE_STEPS
+        
         print("\n" + "="*60)
         print("启动VLM自动导航")
         print("="*60)
         print(f"指令: {self.current_instruction}")
-        print(f"最大步数: {max_steps} | 子任务最大步数: {max_subtask_steps}")
+        print(f"最大步数: {max_steps} (从 Habitat 配置读取) | 子任务最大步数: {max_subtask_steps}")
         print("="*60 + "\n")
         
         # 1. 环视建图 + 收集观察（占用step 1-12）
@@ -2145,6 +2146,13 @@ class VLMNavigationController(InteractiveNavigationController):
                 else:
                     print(f"[Step {total_steps}] {action_name} | VLM决策次数: {subtask_steps}")
                 
+                # 🔍 记录DTG轨迹（每步记录）
+                if self.latest_info:
+                    dtg = self.latest_info.get('distance_to_goal', -1)
+                    if not hasattr(self, 'dtg_history'):
+                        self.dtg_history = []
+                    self.dtg_history.append(dtg)
+                
                 if result['done']:
                     print("\nEpisode自动完成")
                     navigation_complete = True
@@ -2217,6 +2225,23 @@ class VLMNavigationController(InteractiveNavigationController):
                 navigation_complete = True
                 break
         
+        # 主循环结束 - 记录退出原因和DTG轨迹统计
+        if total_steps >= max_steps:
+            print(f"\n⚠️  已达到最大步数限制: {total_steps}/{max_steps}")
+            print("导航循环结束，开始生成结果...")
+        elif navigation_complete:
+            print(f"\n✅ 导航任务完成，总步数: {total_steps}")
+        
+        # 🔍 打印DTG轨迹统计（用于调试）
+        if hasattr(self, 'dtg_history') and self.dtg_history:
+            valid_dtgs = [d for d in self.dtg_history if d >= 0]
+            if valid_dtgs:
+                print(f"\n📊 Distance to Goal 轨迹统计:")
+                print(f"   最小距离: {min(valid_dtgs):.3f}m")
+                print(f"   最终距离: {valid_dtgs[-1]:.3f}m")
+                print(f"   平均距离: {sum(valid_dtgs)/len(valid_dtgs):.3f}m")
+                print(f"   是否进入3米内: {'是' if min(valid_dtgs) < 3.0 else '否'}")
+        
         # 4. 生成GIF动画
         print("\n" + "="*60)
         print("📊 开始生成最终结果...")
@@ -2231,9 +2256,26 @@ class VLMNavigationController(InteractiveNavigationController):
             else:
                 print("✗ GIF动画生成失败")
         
-        # 5. 获取环境评估指标并保存结果
+        # 5. 🔑 关键修复：调用finish_episode()执行STOP并获取最终指标
         print("\n💾 正在保存导航结果...")
-        env_metrics = self.envs.call_at(0, "get_metrics") if hasattr(self.envs, 'call_at') else {}
+        print("\n🛑 调用finish_episode()执行STOP动作...")
+        final_metrics = self.finish_episode(
+            success=navigation_complete, 
+            stop_action=True  # 总是调用STOP以获得正确的Success判定
+        )
+        
+        # 使用STOP后的最终指标
+        env_metrics = final_metrics if final_metrics else {}
+        if not env_metrics:
+            print(f"⚠️  未获取到STOP后的指标，尝试从环境直接获取...")
+            try:
+                if hasattr(self.envs, 'call_at'):
+                    env_metrics = self.envs.call_at(0, "get_metrics")
+                    print(f"✅ 从环境获取指标成功")
+            except Exception as e:
+                print(f"❌ 无法获取环境指标: {e}")
+                env_metrics = {}
+        
         final_result = self._save_navigation_result(navigation_complete, total_steps, env_metrics)
         
         print("\n" + "="*60)

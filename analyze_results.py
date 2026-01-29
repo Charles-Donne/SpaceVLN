@@ -2,11 +2,30 @@
 """
 MapReAct-VLN 结果分析脚本
 =========================
-分析评估结果，计算汇总统计指标
-参考Sub-VLM-VLN的analyze_results.py实现
+分析评估结果，计算汇总统计指标，并检查指标计算逻辑
 
 使用方法:
-    python analyze_results.py --path results/experiment_name
+    python analyze_results.py --path data/vlm_navigation --save
+    
+指标说明:
+1. Distance to Goal: 智能体最后位置与目标点的测地线距离(geodesic distance)
+   - 来源: Habitat DistanceToGoal measure
+   - 计算: sim.geodesic_distance(agent_position, goal_positions)
+   
+2. Success: 是否在SUCCESS_DISTANCE(3米)内成功到达
+   - 来源: Habitat Success measure  
+   - 计算: distance_to_goal < SUCCESS_DISTANCE
+   
+3. SPL (Success weighted by Path Length):
+   - 公式: SPL = success * (shortest_path_length / max(actual_path_length, shortest_path_length))
+   - 如果成功但绕路，SPL会降低
+   - 如果失败，SPL = 0
+   
+4. Oracle Success: 整个轨迹中是否曾经进入过3米内
+   - 计算: min(所有step的distance_to_goal) < SUCCESS_DISTANCE
+   
+5. Oracle Navigation Error: 轨迹中与目标的最小距离
+   - 计算: min(所有step的distance_to_goal)
 """
 import os
 import argparse
@@ -29,215 +48,254 @@ def load_results(results_dir: str) -> List[Dict[str, Any]]:
     从log目录加载所有episode结果
     
     Args:
-        results_dir: 结果目录路径
-        
+        results_dir: 结果根目录（包含log/子目录）
+    
     Returns:
-        结果字典列表
+        results: Episode结果列表
     """
-    log_dir = os.path.join(results_dir, 'log')
+    log_dir = os.path.join(results_dir, "log")
+    
     if not os.path.exists(log_dir):
         print(f"❌ Log目录不存在: {log_dir}")
         return []
     
     results = []
-    json_files = [f for f in os.listdir(log_dir) if f.endswith('.json')]
-    
-    print(f"📁 找到 {len(json_files)} 个结果文件")
-    
-    for json_file in sorted(json_files):
-        filepath = os.path.join(log_dir, json_file)
-        try:
-            with open(filepath, 'r') as f:
-                data = json.load(f)
-                
-                # 数据验证和清洗
-                cleaned_data = {
-                    'episode_id': data.get('episode_id', 'unknown'),
-                    'success': int(check_inf_nan(data.get('success', 0))),
-                    'spl': float(check_inf_nan(data.get('spl', 0.0))),
-                    'distance_to_goal': float(check_inf_nan(data.get('distance_to_goal', 0.0))),
-                    'path_length': float(check_inf_nan(data.get('path_length', 0.0))),
-                    'oracle_success': int(check_inf_nan(data.get('oracle_success', 0))),
-                    'oracle_navigation_error': float(check_inf_nan(data.get('oracle_navigation_error', float('inf')))),
-                    'oracle_spl': float(check_inf_nan(data.get('oracle_spl', 0.0))),
-                    'total_steps': data.get('total_steps', 0),
-                    'subtask_count': data.get('subtask_count', 0),
-                }
-                results.append(cleaned_data)
-                
-        except json.JSONDecodeError as e:
-            print(f"⚠️  解析失败: {json_file} - {e}")
-        except Exception as e:
-            print(f"⚠️  读取失败: {json_file} - {e}")
+    for filename in sorted(os.listdir(log_dir)):
+        if filename.startswith("episode_") and filename.endswith(".json"):
+            filepath = os.path.join(log_dir, filename)
+            try:
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    results.append(data)
+            except Exception as e:
+                print(f"⚠️  读取文件失败 {filename}: {e}")
     
     return results
 
 
-def calculate_statistics(results: List[Dict[str, Any]]) -> Dict[str, float]:
+def compute_metrics(results: List[Dict]) -> Dict[str, Any]:
     """
     计算汇总统计指标
     
     Args:
-        results: 结果列表
-        
+        results: Episode结果列表
+    
     Returns:
-        统计指标字典
+        metrics: 汇总指标字典
     """
     if not results:
         return {}
     
     n = len(results)
     
-    stats = {
-        'num_episodes': n,
-        'success_rate': sum(r['success'] for r in results) / n,
-        'oracle_success_rate': sum(r['oracle_success'] for r in results) / n,
-        'avg_spl': sum(r['spl'] for r in results) / n,
-        'avg_oracle_spl': sum(r['oracle_spl'] for r in results) / n,
-        'avg_distance_to_goal': sum(r['distance_to_goal'] for r in results) / n,
-        'avg_oracle_navigation_error': sum(
-            r['oracle_navigation_error'] for r in results 
-            if r['oracle_navigation_error'] != float('inf')
-        ) / len([r for r in results if r['oracle_navigation_error'] != float('inf')]) if any(
-            r['oracle_navigation_error'] != float('inf') for r in results
-        ) else 0.0,
-        'avg_path_length': sum(r['path_length'] for r in results) / n,
-        'avg_steps': sum(r['total_steps'] for r in results) / n,
-        'avg_subtasks': sum(r['subtask_count'] for r in results) / n,
+    # 提取所有指标（带数据验证）
+    success_list = [check_inf_nan(r.get('success', 0)) for r in results]
+    spl_list = [check_inf_nan(r.get('spl', 0.0)) for r in results]
+    dtg_list = [check_inf_nan(r.get('distance_to_goal', -1)) for r in results]
+    path_length_list = [check_inf_nan(r.get('path_length', 0.0)) for r in results]
+    steps_list = [check_inf_nan(r.get('total_steps', 0)) for r in results]
+    
+    oracle_success_list = [check_inf_nan(r.get('oracle_success', 0)) for r in results]
+    oracle_error_list = [check_inf_nan(r.get('oracle_navigation_error', float('inf'))) for r in results]
+    oracle_spl_list = [check_inf_nan(r.get('oracle_spl', 0.0)) for r in results]
+    
+    subtask_list = [check_inf_nan(r.get('subtask_count', 0)) for r in results]
+    
+    # 过滤有效值（距离 >= 0）
+    valid_dtg = [d for d in dtg_list if d >= 0]
+    valid_oracle_error = [e for e in oracle_error_list if e != float('inf') and e >= 0]
+    
+    # 计算成功率
+    success_count = sum(success_list)
+    success_rate = success_count / n if n > 0 else 0.0
+    
+    oracle_success_count = sum(oracle_success_list)
+    oracle_success_rate = oracle_success_count / n if n > 0 else 0.0
+    
+    # 计算平均SPL
+    avg_spl = sum(spl_list) / n if n > 0 else 0.0
+    avg_oracle_spl = sum(oracle_spl_list) / n if n > 0 else 0.0
+    
+    # 计算平均距离
+    avg_dtg = sum(valid_dtg) / len(valid_dtg) if valid_dtg else -1
+    avg_oracle_error = sum(valid_oracle_error) / len(valid_oracle_error) if valid_oracle_error else -1
+    
+    # 计算平均路径长度和步数
+    avg_path_length = sum(path_length_list) / n if n > 0 else 0.0
+    avg_steps = sum(steps_list) / n if n > 0 else 0.0
+    avg_subtasks = sum(subtask_list) / n if n > 0 else 0.0
+    
+    metrics = {
+        'total_episodes': n,
+        'success_count': success_count,
+        'success_rate': success_rate,
+        'oracle_success_count': oracle_success_count,
+        'oracle_success_rate': oracle_success_rate,
+        'avg_spl': avg_spl,
+        'avg_oracle_spl': avg_oracle_spl,
+        'avg_distance_to_goal': avg_dtg,
+        'avg_oracle_navigation_error': avg_oracle_error,
+        'avg_path_length': avg_path_length,
+        'avg_steps': avg_steps,
+        'avg_subtasks': avg_subtasks,
+        'detailed_results': results  # 保留详细数据用于调试
     }
     
-    return stats
+    return metrics
 
 
-def print_statistics(stats: Dict[str, float], results: List[Dict[str, Any]]):
-    """
-    打印统计结果（参考Sub-VLM-VLN格式）
-    
-    Args:
-        stats: 统计指标字典
-        results: 原始结果列表
-    """
-    n = stats['num_episodes']
-    success_count = int(stats['success_rate'] * n)
-    oracle_success_count = int(stats['oracle_success_rate'] * n)
+def print_summary(metrics: Dict[str, Any]):
+    """打印汇总报告"""
+    n = metrics['total_episodes']
     
     print("\n" + "="*80)
     print("📊 MapReAct-VLN 评估结果汇总")
     print("="*80)
     
     print(f"\n🎯 核心指标:")
-    print(f"  Success rate:       {success_count}/{n} ({stats['success_rate']:.3f})")
-    print(f"  Oracle success rate: {oracle_success_count}/{n} ({stats['oracle_success_rate']:.3f})")
-    print(f"  SPL:                {stats['avg_spl']:.3f}")
-    print(f"  Oracle SPL:         {stats['avg_oracle_spl']:.3f}")
+    print(f"  Success rate:       {metrics['success_count']}/{n} ({metrics['success_rate']:.3f})")
+    print(f"  Oracle success rate: {metrics['oracle_success_count']}/{n} ({metrics['oracle_success_rate']:.3f})")
+    print(f"  SPL:                {metrics['avg_spl']:.3f}")
+    print(f"  Oracle SPL:         {metrics['avg_oracle_spl']:.3f}")
     
     print(f"\n📏 距离指标:")
-    print(f"  Distance to goal:           {stats['avg_distance_to_goal']:.3f}m")
-    print(f"  Oracle navigation error:    {stats['avg_oracle_navigation_error']:.3f}m")
-    print(f"  Path length:                {stats['avg_path_length']:.3f}m")
+    print(f"  Distance to goal:           {metrics['avg_distance_to_goal']:.3f}m")
+    print(f"  Oracle navigation error:    {metrics['avg_oracle_navigation_error']:.3f}m")
+    print(f"  Path length:                {metrics['avg_path_length']:.3f}m")
     
     print(f"\n⚙️  执行统计:")
-    print(f"  Average steps:     {stats['avg_steps']:.1f}")
-    print(f"  Average subtasks:  {stats['avg_subtasks']:.1f}")
+    print(f"  Average steps:     {metrics['avg_steps']:.1f}")
+    print(f"  Average subtasks:  {metrics['avg_subtasks']:.1f}")
     
-    print("\n" + "="*80)
+    print(f"\n{'='*80}")
 
 
-def save_summary(results_dir: str, stats: Dict[str, float], results: List[Dict[str, Any]]):
-    """
-    保存汇总报告
+def print_debug_info(metrics: Dict[str, Any]):
+    """打印调试信息，检查指标计算"""
+    print(f"\n🔍 指标计算调试信息:")
+    print(f"{'='*80}")
     
-    Args:
-        results_dir: 结果目录
-        stats: 统计指标
-        results: 原始结果列表
-    """
-    summary_file = os.path.join(results_dir, "summary.txt")
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    results = metrics['detailed_results']
+    print(f"\nEpisode详情:")
+    print(f"{'ID':<6} {'Success':<8} {'DTG(m)':<10} {'SPL':<8} {'Path(m)':<10} {'Steps':<6}")
+    print(f"{'-'*60}")
     
-    with open(summary_file, 'w') as f:
-        f.write("#"*80 + "\n")
-        f.write(f"MapReAct-VLN 评估汇总报告 | {now_str}\n")
-        f.write("#"*80 + "\n\n")
+    for r in results:
+        ep_id = r.get('episode_id', '?')
+        success = r.get('success', 0)
+        dtg = r.get('distance_to_goal', -1)
+        spl = r.get('spl', 0.0)
+        path = r.get('path_length', 0.0)
+        steps = r.get('total_steps', 0)
         
-        n = stats['num_episodes']
-        success_count = int(stats['success_rate'] * n)
-        oracle_success_count = int(stats['oracle_success_rate'] * n)
-        
-        f.write(f"评估Episode数: {n}\n\n")
-        
-        f.write("测试的Episode列表:\n")
-        for i, result in enumerate(results, 1):
-            f.write(f"  {i}. Episode {result['episode_id']}\n")
-        f.write("\n")
-        
-        f.write("评估指标汇总:\n")
-        f.write("-"*40 + "\n")
-        f.write(f"{'success_rate':<30s}: {stats['success_rate']:.4f} ({success_count}/{n})\n")
-        f.write(f"{'oracle_success_rate':<30s}: {stats['oracle_success_rate']:.4f} ({oracle_success_count}/{n})\n")
-        f.write(f"{'spl':<30s}: {stats['avg_spl']:.4f}\n")
-        f.write(f"{'oracle_spl':<30s}: {stats['avg_oracle_spl']:.4f}\n")
-        f.write(f"{'distance_to_goal':<30s}: {stats['avg_distance_to_goal']:.4f}\n")
-        f.write(f"{'oracle_navigation_error':<30s}: {stats['avg_oracle_navigation_error']:.4f}\n")
-        f.write(f"{'path_length':<30s}: {stats['avg_path_length']:.4f}\n")
-        f.write(f"{'avg_steps':<30s}: {stats['avg_steps']:.2f}\n")
-        f.write(f"{'avg_subtasks':<30s}: {stats['avg_subtasks']:.2f}\n")
-        f.write("\n")
-        
-        # 详细结果
-        f.write("\n详细结果:\n")
-        f.write("-"*80 + "\n")
-        f.write(f"{'Episode':<12} {'Success':<8} {'SPL':<8} {'DTG':<10} {'Path':<10} {'Steps':<8}\n")
-        f.write("-"*80 + "\n")
-        for r in results:
-            f.write(f"{str(r['episode_id']):<12} "
-                   f"{r['success']:<8} "
-                   f"{r['spl']:<8.3f} "
-                   f"{r['distance_to_goal']:<10.3f} "
-                   f"{r['path_length']:<10.3f} "
-                   f"{r['total_steps']:<8}\n")
+        print(f"{ep_id:<6} {success:<8} {dtg:<10.3f} {spl:<8.4f} {path:<10.3f} {steps:<6}")
     
-    print(f"\n💾 汇总报告已保存: {summary_file}")
+    # 检查指标异常
+    print(f"\n⚠️  异常检测:")
+    for r in results:
+        ep_id = r.get('episode_id', '?')
+        success = r.get('success', 0)
+        dtg = r.get('distance_to_goal', -1)
+        spl = r.get('spl', 0.0)
+        oracle_success = r.get('oracle_success', 0)
+        oracle_error = r.get('oracle_navigation_error', float('inf'))
+        
+        # 检查1: Success=1但DTG>3米 
+        if success == 1 and dtg > 3.0:
+            print(f"  ❌ Episode {ep_id}: Success=1 但 DTG={dtg:.3f}m > 3m (不应该成功)")
+        
+        # 检查2: Success=0但DTG<3米
+        if success == 0 and 0 <= dtg < 3.0:
+            print(f"  ⚠️  Episode {ep_id}: Success=0 但 DTG={dtg:.3f}m < 3m (应该成功)")
+        
+        # 检查3: SPL计算异常
+        if success == 0 and spl > 0:
+            print(f"  ❌ Episode {ep_id}: Success=0 但 SPL={spl:.4f} > 0 (不应该有SPL)")
+        
+        # 检查4: Oracle异常
+        if oracle_success == 1 and oracle_error > 3.0:
+            print(f"  ❌ Episode {ep_id}: Oracle Success=1 但 Oracle Error={oracle_error:.3f}m > 3m")
+        
+        # 检查5: 最终距离异常（DTG应该是停止时的距离）
+        if dtg < 0:
+            print(f"  ⚠️  Episode {ep_id}: DTG={dtg} < 0 (距离数据无效)")
+    
+    print(f"{'='*80}")
+
+
+def save_summary(metrics: Dict[str, Any], output_path: str):
+    """保存汇总报告到文件"""
+    n = metrics['total_episodes']
+    
+    content = f"""
+================================================================================
+📊 MapReAct-VLN 评估结果汇总
+================================================================================
+
+🎯 核心指标:
+  Success rate:       {metrics['success_count']}/{n} ({metrics['success_rate']:.3f})
+  Oracle success rate: {metrics['oracle_success_count']}/{n} ({metrics['oracle_success_rate']:.3f})
+  SPL:                {metrics['avg_spl']:.3f}
+  Oracle SPL:         {metrics['avg_oracle_spl']:.3f}
+
+📏 距离指标:
+  Distance to goal:           {metrics['avg_distance_to_goal']:.3f}m
+  Oracle navigation error:    {metrics['avg_oracle_navigation_error']:.3f}m
+  Path length:                {metrics['avg_path_length']:.3f}m
+
+⚙️  执行统计:
+  Average steps:     {metrics['avg_steps']:.1f}
+  Average subtasks:  {metrics['avg_subtasks']:.1f}
+
+================================================================================
+
+💾 汇总报告已保存: {output_path}
+
+✅ 分析完成
+"""
+    
+    with open(output_path, 'w', encoding='utf-8') as f:
+        f.write(content)
+    
+    return content
 
 
 def main():
-    parser = argparse.ArgumentParser(description="分析MapReAct-VLN评估结果")
-    parser.add_argument(
-        "--path",
-        type=str,
-        required=True,
-        help="结果目录路径（包含log/子目录）"
-    )
-    parser.add_argument(
-        "--save",
-        action="store_true",
-        help="保存汇总报告到summary.txt"
-    )
-    
+    parser = argparse.ArgumentParser(description="分析VLN评估结果")
+    parser.add_argument("--path", type=str, required=True, help="结果目录路径")
+    parser.add_argument("--save", action="store_true", help="保存汇总报告到summary.txt")
+    parser.add_argument("--debug", action="store_true", help="显示调试信息")
     args = parser.parse_args()
     
     if not os.path.exists(args.path):
-        print(f"❌ 结果目录不存在: {args.path}")
+        print(f"❌ 目录不存在: {args.path}")
         return
     
     # 加载结果
+    print(f"📂 加载结果: {args.path}")
     results = load_results(args.path)
     
     if not results:
-        print("❌ 未找到有效的结果文件")
+        print(f"⚠️  未找到任何episode结果")
         return
     
-    # 计算统计
-    stats = calculate_statistics(results)
+    print(f"✅ 加载了 {len(results)} 个episode")
     
-    # 打印结果
-    print_statistics(stats, results)
+    # 计算指标
+    metrics = compute_metrics(results)
     
-    # 保存汇总（如果指定）
+    # 打印汇总
+    print_summary(metrics)
+    
+    # 打印调试信息
+    if args.debug:
+        print_debug_info(metrics)
+    
+    # 保存报告
     if args.save:
-        save_summary(args.path, stats, results)
-    
-    print("\n✅ 分析完成")
+        summary_path = os.path.join(args.path, "summary.txt")
+        content = save_summary(metrics, summary_path)
+        print(content)
 
 
 if __name__ == "__main__":

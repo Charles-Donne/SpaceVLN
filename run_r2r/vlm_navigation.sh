@@ -1,12 +1,17 @@
 #!/bin/bash
 # VLM Navigation Controller
 # VLM自动导航系统：LLM规划 + VLM执行 + 语义建图
+# 
+# ⚠️ 步数限制说明：
+# 最大步数从 habitat_extensions/config/zs_vlnce_task.yaml 读取
+# ENVIRONMENT.MAX_EPISODE_STEPS: 500 (默认)
+# 
 # 用法: 
-#   单个episode: bash run_r2r/vlm_navigation.sh [episode_id] [max_steps]
-#   批量运行:    bash run_r2r/vlm_navigation.sh [start_id] [max_steps] [num_episodes]
-#   随机运行:    bash run_r2r/vlm_navigation.sh random [max_steps] [num_episodes]
-#   指定列表:    bash run_r2r/vlm_navigation.sh list [max_steps] [episode_ids]
-#                例如: bash run_r2r/vlm_navigation.sh list 500 "832,701,231"
+#   单个episode: bash run_r2r/vlm_navigation.sh [episode_id]
+#   批量运行:    bash run_r2r/vlm_navigation.sh [start_id] [num_episodes]
+#   随机运行:    bash run_r2r/vlm_navigation.sh random [num_episodes]
+#   指定列表:    bash run_r2r/vlm_navigation.sh list [episode_ids]
+#                例如: bash run_r2r/vlm_navigation.sh list "832,701,231"
 
 set -e
 trap 'echo "❌ 错误：脚本在第 $LINENO 行失败"; exit 1' ERR
@@ -17,10 +22,9 @@ export MAGNUM_LOG=quiet
 export PYTHONWARNINGS="ignore"
 export TRANSFORMERS_VERBOSITY=error
 
-# 参数解析
+# 参数解析（移除了max_steps参数）
 EPISODE_ID=${1:-0}
-MAX_STEPS=${2:-500}
-NUM_EPISODES=${3:-1}
+NUM_EPISODES=${2:-1}
 RANDOM_MODE=""
 EPISODE_IDS_MODE=""
 
@@ -30,7 +34,7 @@ if [ "$EPISODE_ID" == "random" ]; then
     EPISODE_ID=0
 elif [ "$EPISODE_ID" == "list" ]; then
     EPISODE_IDS_MODE="--episode-ids"
-    EPISODE_IDS="$NUM_EPISODES"  # 第3个参数是episode ID列表
+    EPISODE_IDS="$NUM_EPISODES"  # 第2个参数是episode ID列表
     NUM_EPISODES=1
     EPISODE_ID=0
 fi
@@ -38,11 +42,6 @@ fi
 # 参数验证
 if ! [[ "$EPISODE_ID" =~ ^[0-9]+$ ]]; then
     echo "❌ episode_id必须是正整数: $EPISODE_ID"
-    exit 1
-fi
-
-if ! [[ "$MAX_STEPS" =~ ^[0-9]+$ ]] || [ "$MAX_STEPS" -lt 1 ]; then
-    echo "❌ max_steps必须大于0: $MAX_STEPS"
     exit 1
 fi
 
@@ -86,16 +85,19 @@ echo "║       LLM Planning + VLM Action Execution                  ║"
 echo "╚════════════════════════════════════════════════════════════╝"
 echo ""
 
+# 从配置文件读取最大步数
+MAX_STEPS=$(grep -A 2 "ENVIRONMENT:" habitat_extensions/config/zs_vlnce_task.yaml | grep "MAX_EPISODE_STEPS" | awk '{print $2}' || echo "500")
+
 if [ -n "$RANDOM_MODE" ]; then
-    echo "📋 配置: 随机运行 $NUM_EPISODES 个episodes | 最大步数 $MAX_STEPS"
+    echo "📋 配置: 随机运行 $NUM_EPISODES 个episodes | 最大步数 $MAX_STEPS (从Habitat配置)"
 elif [ -n "$EPISODE_IDS_MODE" ]; then
-    echo "📋 配置: 指定运行 episodes $EPISODE_IDS | 最大步数 $MAX_STEPS"
+    echo "📋 配置: 指定运行 episodes $EPISODE_IDS | 最大步数 $MAX_STEPS (从Habitat配置)"
 else
     if [ "$NUM_EPISODES" -eq 1 ]; then
-        echo "📋 配置: Episode $EPISODE_ID | 最大步数 $MAX_STEPS"
+        echo "📋 配置: Episode $EPISODE_ID | 最大步数 $MAX_STEPS (从Habitat配置)"
     else
         END_ID=$((EPISODE_ID + NUM_EPISODES - 1))
-        echo "📋 配置: Episodes $EPISODE_ID-$END_ID (共$NUM_EPISODES个) | 最大步数 $MAX_STEPS"
+        echo "📋 配置: Episodes $EPISODE_ID-$END_ID (共$NUM_EPISODES个) | 最大步数 $MAX_STEPS (从Habitat配置)"
     fi
 fi
 
@@ -131,7 +133,6 @@ CUDA_VISIBLE_DEVICES=0 python vlm_navigation.py \
     --num-episodes "$NUM_EPISODES" \
     $RANDOM_MODE \
     $EPISODE_IDS_MODE ${EPISODE_IDS:+"$EPISODE_IDS"} \
-    --max-steps "$MAX_STEPS" \
     --results-dir "$RESULTS_DIR" \
     --llm-config "$LLM_CONFIG" \
     --vlm-config "$VLM_CONFIG" \

@@ -22,7 +22,6 @@ def main():
     parser.add_argument("--num-episodes", type=int, default=1, help="运行Episode数量（连续或随机）")
     parser.add_argument("--random", action="store_true", help="随机选择episodes而非连续运行")
     parser.add_argument("--results-dir", type=str, default=None, help="结果保存目录")
-    parser.add_argument("--max-steps", type=int, default=500, help="最大总步数")
     
     # VLM配置
     parser.add_argument("--llm-config", type=str, 
@@ -101,13 +100,15 @@ def main():
             # 重置Episode
             controller.reset_episode(episode_id=episode_id)
             
+            # 从配置读取最大步数
+            max_steps = config.TASK_CONFIG.ENVIRONMENT.MAX_EPISODE_STEPS
+            
             print(f"\n📝 指令: {controller.current_instruction}")
-            print(f"⚙️  配置: Episode {episode_id} | 最大步数 {args.max_steps}")
+            print(f"⚙️  配置: Episode {episode_id} | 最大步数 {max_steps} (从 Habitat 配置)")
             print(f"🔧 VLM: LLM={args.llm_config} | VLM={args.vlm_config}")
             
             # 运行VLM导航
             result = controller.run_vlm_navigation(
-                max_steps=args.max_steps,
                 max_subtask_steps=args.max_subtask_steps
             )
             

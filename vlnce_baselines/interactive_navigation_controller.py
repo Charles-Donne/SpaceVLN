@@ -253,19 +253,67 @@ class InteractiveNavigationController:
             'current_pose': map_state['full_pose']
         }
     
-    def finish_episode(self, success: bool = False, stop_action: bool = False) -> None:
-        """Episode结束总结"""
+    def finish_episode(self, success: bool = False, stop_action: bool = False) -> dict:
+        """
+        Episode结束总结
+        
+        重要：调用STOP动作以正确触发Habitat的Success判定
+        Success需要同时满足:
+        1. distance_to_goal < SUCCESS_DISTANCE (3米)
+        2. is_stop_called = True (必须调用STOP动作)
+        
+        Returns:
+            final_metrics: 调用STOP后的最终评估指标
+        """
         print(f"\n{'='*60}")
-        print(f"🏁 EPISODE 完成")
+        print(f"🏁 EPISODE 结束处理")
         print(f"{'='*60}")
         print(f"Episode: {self.current_episode_id}")
         print(f"📝 指令: {self.current_instruction if hasattr(self, 'current_instruction') else 'N/A'}")
         print(f"📊 步数: {self.current_step} | 类别: {len(self.detected_classes)}")
         if self.detected_classes:
             print(f"   {', '.join(list(self.detected_classes))}")
-        status = "主动停止" if stop_action else "自动结束"
-        print(f"✅ {status} | 成功: {'是' if success else '否'}")
+        status = "主动停止" if stop_action else "达到最大步数"
+        print(f"💡 结束原因: {status}")
+        
+        # 🔑 关键修复：调用STOP动作以触发Habitat的Success判定
+        final_metrics = {}
+        if stop_action:
+            print("\n🛑 执行STOP动作以完成Episode...")
+            try:
+                # 调用STOP动作 (action_id = 0)
+                outputs = self.envs.step([0])
+                observations, rewards, dones, infos = outputs
+                
+                # 获取最终指标
+                if infos and len(infos) > 0:
+                    final_metrics = infos[0]
+                    dtg = final_metrics.get('distance_to_goal', -1)
+                    success_flag = final_metrics.get('success', 0)
+                    print(f"✅ STOP执行成功")
+                    print(f"   最终距离: {dtg:.3f}m")
+                    print(f"   Success: {success_flag}")
+                    print(f"   SPL: {final_metrics.get('spl', 0.0):.4f}")
+                    
+                    # 验证逻辑一致性
+                    if success_flag == 1 and dtg > 3.0:
+                        print(f"   ⚠️  数据异常: Success=1 但 DTG={dtg:.3f}m > 3m")
+                    elif success_flag == 0 and 0 <= dtg < 3.0:
+                        print(f"   ⚠️  可能的问题: DTG={dtg:.3f}m < 3m 但 Success=0")
+                else:
+                    print(f"   ⚠️  未能获取最终指标")
+            except Exception as e:
+                print(f"   ❌ STOP执行失败: {e}")
+                final_metrics = {}
+        else:
+            print("\n⏱️  达到最大步数，未调用STOP")
+            print("   注意: 这种情况下Success将为0，即使距离<3米")
+            # 获取当前指标（不调用STOP）
+            if self.latest_info:
+                final_metrics = self.latest_info.copy()
+        
         print(f"{'='*60}\n")
+        return final_metrics
     
     def _concat_obs(self, obs: Observations) -> np.ndarray:
         """合并RGB和Depth"""
