@@ -112,11 +112,8 @@ def main():
                 max_subtask_steps=args.max_subtask_steps
             )
             
-            # 结束Episode
-            controller.finish_episode(
-                success=result['success'],
-                stop_action=True
-            )
+            # 注意：run_vlm_navigation()内部已经调用了finish_episode()
+            # 不需要再次调用，否则会导致"Episode over, call reset"错误
             
             results_summary.append({
                 'episode_id': episode_id,

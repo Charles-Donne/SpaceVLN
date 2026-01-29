@@ -278,7 +278,13 @@ class InteractiveNavigationController:
         
         # 🔑 关键修复：调用STOP动作以触发Habitat的Success判定
         final_metrics = {}
-        if stop_action:
+        
+        # 检查episode是否已经结束（避免在已done的episode上调用step）
+        episode_already_done = False
+        if hasattr(self, 'latest_info') and self.latest_info:
+            episode_already_done = self.latest_info.get('done', False)
+        
+        if stop_action and not episode_already_done:
             print("\n🛑 执行STOP动作以完成Episode...")
             try:
                 # 调用STOP动作 (action_id = 0)
@@ -305,6 +311,12 @@ class InteractiveNavigationController:
             except Exception as e:
                 print(f"   ❌ STOP执行失败: {e}")
                 final_metrics = {}
+        elif stop_action and episode_already_done:
+            print("\n⚠️  Episode已经结束（done=True），跳过STOP动作")
+            print("   使用缓存的最终指标")
+            # 使用最后一次的info作为最终指标
+            if hasattr(self, 'latest_info') and self.latest_info:
+                final_metrics = self.latest_info.copy()
         else:
             print("\n⏱️  达到最大步数，未调用STOP")
             print("   注意: 这种情况下Success将为0，即使距离<3米")
