@@ -72,9 +72,9 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
    - **CRITICAL**: Use Global Map to confirm this direction leads toward waypoint along safe path (green areas, avoiding black obstacles)
    - If waypoint direction has obstacles, choose alternative route that bypasses obstacles
 3. **Plan navigation instruction**: 
-   - **System will auto-rotate** to face your specified waypoint_direction
-   - After rotation, waypoint will be in Front view (IMAGE 1)
-   - Write step-by-step instructions assuming agent is already **facing the waypoint**
+   - **IMPORTANT**: System will AUTO-ROTATE to face your specified next_waypoint_direction → Next waypoint becomes Front (IMAGE 1) after rotation
+   - **Write subtask_instruction ASSUMING you are ALREADY FACING the waypoint after rotation**: e.g., "Move forward toward corridor" (NOT "Turn 30° left then move" - rotation already done by system)
+   - Describe navigation from Front view perspective after automatic rotation
 
 # Actions Available
 
@@ -93,11 +93,11 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
     "task_progress": "<Global task with completed parts marked with ✓. CRITICAL: Only mark stages TRULY completed. E.g.: 'Turn around(✓) walk through exercise room into living room. Wait by Table.'>",
     "next_waypoint_direction": "<IMAGE number where next waypoint appears most centered/visible (1-12)>",
     "next_waypoint_destination": "<Next immediate waypoint name>",
-    "subtask_instruction": "<Step-by-step navigation instructions starting from Front view>",
+    "subtask_instruction": "<Step-by-step navigation instructions from Front view AFTER system auto-rotates to next_waypoint_direction. Example: If you chose IMAGE 2 (Left 30°) as next_waypoint_direction for corridor, write 'Move forward through doorway to reach corridor' - NOT 'Turn 30° left then move'>",
     "next_waypoint_landmark": "<Single landmark to detect (common, e.g. door, table, painting, cabinet)>",
     "completion_criteria": "<Detection: what detected + distance | Location: position/area | Map: space + trajectory>",
     "global_task_finish": <true ONLY when final destination of global task is visible in current views (any IMAGE 1-12) and close enough to reach - Global task complete, stop navigating immediately. false otherwise>,
-    "reasoning": "<Max 250 words: CRITICAL: Base ALL reasoning on actual observations from 12 views and maps. Maintain logical consistency. 1) Current Position & Waypoint: Where am I ACTUALLY? (Identify NEAR objects < 1.0m in 12 views, use Local Map green circle 0.5m). What is my current waypoint? 2) Next Waypoint & Direction: Based on global task, what is the next waypoint? In which IMAGE (1-12) is it most centered and visible? Why this direction (obstacle distance > 0.5m, map-verified safe path)? 3) Task Progress: Which stages completed (✓)? Which stage am I currently at? (Be honest - only mark truly completed stages) 4) Near-term Plan: How to reach the next waypoint? (Explain your subtask_instruction step-by-step reasoning) 5) Long-term Plan: What remaining tasks after next waypoint? How to reach subsequent waypoints and ultimately complete the global task?>"
+    "reasoning": "<Max 250 words: CRITICAL: Base ALL reasoning on actual observations from 12 views and maps. Maintain logical consistency. 1) Current Position & Waypoint: Where am I ACTUALLY? (Identify NEAR objects < 1.0m in 12 views, use Local Map green circle 0.5m). What is my current waypoint? 2) Next Waypoint & Direction: Based on global task, what is the next waypoint? In which IMAGE (1-12) is it most centered and visible? Why this direction (obstacle distance > 0.5m, map-verified safe path)? 3) Task Progress: Which stages completed (✓)? Which stage am I currently at? (Be honest - only mark truly completed stages) 4) Near-term Plan: System AUTO-ROTATES to next_waypoint_direction. Explain subtask_instruction AFTER rotation - assume facing waypoint in Front view, describe movement. (Example: Chose IMAGE 5 for corridor → After rotation, corridor is Front → 'Move forward to corridor') 5) Long-term Plan: What remaining tasks after next waypoint? How to reach subsequent waypoints and ultimately complete the global task?>"
 }}
 
 #Examples:

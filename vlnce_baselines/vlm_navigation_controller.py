@@ -1130,8 +1130,10 @@ class VLMNavigationController(InteractiveNavigationController):
         obstacle_distances = getattr(self, 'latest_obstacle_distances', {
             'front': 'Unknown',
             'left_30': 'Unknown',
-            'right_30': 'Unknown',
+            'left_60': 'Unknown',
             'left_90': 'Unknown',
+            'right_30': 'Unknown',
+            'right_60': 'Unknown',
             'right_90': 'Unknown'
         })
         
@@ -1395,8 +1397,10 @@ class VLMNavigationController(InteractiveNavigationController):
         obstacle_distances = getattr(self, 'latest_obstacle_distances', {
             'front': 'Unknown',
             'left_30': 'Unknown',
-            'right_30': 'Unknown',
+            'left_60': 'Unknown',
             'left_90': 'Unknown',
+            'right_30': 'Unknown',
+            'right_60': 'Unknown',
             'right_90': 'Unknown'
         })
         
@@ -1714,10 +1718,14 @@ class VLMNavigationController(InteractiveNavigationController):
         obstacle_distances = getattr(self, 'latest_obstacle_distances', {
             'front': 'Unknown',
             'left_30': 'Unknown',
-            'right_30': 'Unknown',
+            'left_60': 'Unknown',
             'left_90': 'Unknown',
+            'right_30': 'Unknown',
+            'right_60': 'Unknown',
             'right_90': 'Unknown'
         })
+        
+        print(f"  📏 当前障碍物距离: front={obstacle_distances.get('front')}, left_30={obstacle_distances.get('left_30')}, left_60={obstacle_distances.get('left_60')}, right_30={obstacle_distances.get('right_30')}, right_60={obstacle_distances.get('right_60')}")
         
         # 准备action输入记录（在调用API之前）
         attempt_letter = chr(ord('a') + self.subtask_attempt)
@@ -1963,8 +1971,11 @@ class VLMNavigationController(InteractiveNavigationController):
             self.latest_obstacle_distances = self.visualizer.calculate_obstacle_distances_from_rotated_map(
                 obstacle_mask_rotated, 240, 240
             )
+            print(f"  ✅ 距离更新成功: front={self.latest_obstacle_distances.get('front', 'N/A')}, left_60={self.latest_obstacle_distances.get('left_60', 'N/A')}, right_60={self.latest_obstacle_distances.get('right_60', 'N/A')}")
         except Exception as e:
+            import traceback
             print(f"  ⚠️  距离更新失败: {e}")
+            print(f"  详细错误: {traceback.format_exc()}")
             self.latest_obstacle_distances = {
                 'front': 'Unknown',
                 'left_30': 'Unknown',
