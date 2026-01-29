@@ -882,8 +882,14 @@ class VLMNavigationController(InteractiveNavigationController):
         print(f"  扫描完成: +{total_new_classes}类 | 总计{len(self.detected_classes)}类")
         
         # 360度环视完成，现在更新距离信息（地图已完整扫描）
+        # 1. 先更新12方向距离（用于Thinking阶段）
         print(f"  [更新距离] 360度扫描完成，计算12个方向的障碍物距离...")
         self._update_obstacle_distances_12_directions()
+        
+        # 2. 同时更新7方向距离（用于Action阶段）
+        # 确保即使不转弯，Action也能获得距离信息
+        print(f"  [更新距离] 同时更新7个方向的障碍物距离（供Action使用）...")
+        self._update_obstacle_distances()
         
         # 检查是否完成了完整的12步环视
         if len(lookaround_images) < 12:
