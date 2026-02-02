@@ -34,6 +34,8 @@ def main():
     # 导航参数
     parser.add_argument("--max-subtask-steps", type=int, default=5,
                        help="每个子任务最大步数（达到后强制触发验证，默认5步）")
+    parser.add_argument("--max-steps", type=int, default=None,
+                       help="Episode最大总步数（覆盖配置文件，默认使用配置文件值）")
     
     # 运行模式
     parser.add_argument("--auto", action="store_true",
@@ -43,6 +45,13 @@ def main():
     
     # 加载配置
     config = get_config(args.exp_config, [])
+    
+    # 如果指定了 --max-steps，覆盖配置文件的值
+    if args.max_steps is not None:
+        config.defrost()
+        config.TASK_CONFIG.ENVIRONMENT.MAX_EPISODE_STEPS = args.max_steps
+        config.freeze()
+        print(f"\n⚙️  覆盖最大步数: {args.max_steps} (命令行参数)")
     
     from vlnce_baselines.config_system import ConfigHelper
     

@@ -37,16 +37,22 @@ class MapVisualizer:
     def __init__(self, 
                  results_dir: str,
                  resolution: int = 5,
-                 map_shape: Tuple[int, int] = (480, 480)):
+                 map_shape: Tuple[int, int] = (480, 480),
+                 enable_global_map_crop: bool = False,
+                 enable_adaptive_zoom: bool = False):
         """
         Args:
             results_dir: 保存根目录（如：data/manual_navigation）
             resolution: 地图分辨率（cm/pixel）
             map_shape: 地图尺寸
+            enable_global_map_crop: 是否裁剪global map到440×440（默认False，保持480×480）
+            enable_adaptive_zoom: 是否启用自适应缩放（根据轨迹范围自动调整显示区域）
         """
         self.results_dir = results_dir
         self.resolution = resolution
         self.map_shape = map_shape
+        self.enable_global_map_crop = enable_global_map_crop
+        self.enable_adaptive_zoom = enable_adaptive_zoom
         self.color_palette = [int(x * 255.) for x in color_palette]
         
         # 注意：不在初始化时创建目录，而是在保存时根据episode_id动态创建
@@ -272,6 +278,66 @@ class MapVisualizer:
                 f"L90={distances.get('left_90', 'Unknown')}, "
                 f"R90={distances.get('right_90', 'Unknown')}")
     
+    def _calculate_map_usage(self, 
+                            trajectory_points: List[Tuple[int, int]], 
+                            h: int, 
+                            w: int) -> Dict[str, Any]:
+        """
+        计算地图实际使用情况统计
+        
+        Args:
+            trajectory_points: 轨迹点列表 [(x, y), ...]（像素坐标）
+            h, w: 地图尺寸（像素）
+        
+        Returns:
+            统计字典，包括：
+            - x_min, x_max, y_min, y_max: 轨迹在实际世界的范围（米）
+            - used_width, used_height: 实际使用的宽度和高度（米）
+            - usage_percent: 使用百分比
+            - near_boundary: 是否接近边界（距离<10%）
+        """
+        if not trajectory_points:
+            return {
+                'x_min': 0, 'x_max': 0, 'y_min': 0, 'y_max': 0,
+                'used_width': 0, 'used_height': 0,
+                'usage_percent': 0,
+                'near_boundary': False
+            }
+        
+        # 将像素坐标转换为实际世界坐标（米）
+        # trajectory_points 中 (x, y) 是地图坐标系的像素位置
+        x_coords = [y * self.resolution / 100.0 for x, y in trajectory_points]  # y是水平方向
+        y_coords = [(h - 1 - x) * self.resolution / 100.0 for x, y in trajectory_points]  # x是垂直方向
+        
+        x_min, x_max = min(x_coords), max(x_coords)
+        y_min, y_max = min(y_coords), max(y_coords)
+        
+        used_width = x_max - x_min
+        used_height = y_max - y_min
+        
+        map_width_m = w * self.resolution / 100.0
+        map_height_m = h * self.resolution / 100.0
+        
+        usage_percent = (used_width * used_height) / (map_width_m * map_height_m) * 100
+        
+        # 检查是否接近边界（距离<10%）
+        boundary_threshold = 0.1
+        near_boundary = (
+            x_min < map_width_m * boundary_threshold or
+            x_max > map_width_m * (1 - boundary_threshold) or
+            y_min < map_height_m * boundary_threshold or
+            y_max > map_height_m * (1 - boundary_threshold)
+        )
+        
+        return {
+            'x_min': x_min, 'x_max': x_max,
+            'y_min': y_min, 'y_max': y_max,
+            'used_width': used_width,
+            'used_height': used_height,
+            'usage_percent': usage_percent,
+            'near_boundary': near_boundary
+        }
+    
     # ========== 渲染方法 ==========
     
     def render_global_map(self,
@@ -323,6 +389,17 @@ class MapVisualizer:
         obstacle_map = full_map[0, ...]
         explored_map = full_map[1, ...]
         h, w = obstacle_map.shape
+        
+        # ===== 计算地图使用统计（显示真实探索范围）=====
+        map_usage_stats = self._calculate_map_usage(trajectory_points, h, w)
+        print(f"\n📊 地图使用统计:")
+        print(f"  地图尺寸: {h}×{w} pixels = {h*self.resolution/100:.1f}m × {w*self.resolution/100:.1f}m")
+        print(f"  轨迹范围: X=[{map_usage_stats['x_min']:.1f}, {map_usage_stats['x_max']:.1f}]m, "
+              f"Y=[{map_usage_stats['y_min']:.1f}, {map_usage_stats['y_max']:.1f}]m")
+        print(f"  使用区域: {map_usage_stats['used_width']:.1f}m × {map_usage_stats['used_height']:.1f}m "
+              f"({map_usage_stats['usage_percent']:.1f}% of map)")
+        if map_usage_stats['near_boundary']:
+            print(f"  ⚠️  警告: 轨迹接近地图边界，建议增大 MAP_SIZE_CM")
         
         # ===== 阶段1: 创建语义地图（严格按照ZS_Evaluator的layer顺序）=====
         semantic_map = np.zeros((h, w), dtype=np.uint8)
@@ -660,11 +737,16 @@ class MapVisualizer:
                 
                 print("="*70 + "\n")
             
-            # ===== 裁剪到440×440（中心区域）=====
-            # 从480x480裁剪中心440x440区域
-            crop_offset = (480 - 440) // 2  # = 20
-            global_map_with_trajectory = global_map_with_trajectory[crop_offset:crop_offset+440, crop_offset:crop_offset+440].copy()
-            global_map_rotated = global_map_rotated[crop_offset:crop_offset+440, crop_offset:crop_offset+440].copy()
+            # ===== 可选：裁剪到440×440（中心区域）=====
+            # 默认关闭裁剪，保持完整的480×480地图
+            if self.enable_global_map_crop:
+                # 从480x480裁剪中心440x440区域
+                crop_offset = (480 - 440) // 2  # = 20
+                global_map_with_trajectory = global_map_with_trajectory[crop_offset:crop_offset+440, crop_offset:crop_offset+440].copy()
+                global_map_rotated = global_map_rotated[crop_offset:crop_offset+440, crop_offset:crop_offset+440].copy()
+                print(f"✂️  Global Map 裁剪: 480×480 → 440×440")
+            else:
+                print(f"📐 Global Map 尺寸: 480×480 (未裁剪，显示完整地图)")
         
         # 添加方位标签到global map
         global_map_with_trajectory = self.add_orientation_labels(global_map_with_trajectory)
@@ -1717,6 +1799,9 @@ class MapVisualizer:
 
 def create_visualizer(results_dir: str, 
                      resolution: int = 5,
-                     map_shape: Tuple[int, int] = (480, 480)) -> MapVisualizer:
+                     map_shape: Tuple[int, int] = (480, 480),
+                     enable_global_map_crop: bool = False,
+                     enable_adaptive_zoom: bool = False) -> MapVisualizer:
     """创建MapVisualizer实例"""
-    return MapVisualizer(results_dir, resolution, map_shape)
+    return MapVisualizer(results_dir, resolution, map_shape, 
+                        enable_global_map_crop, enable_adaptive_zoom)

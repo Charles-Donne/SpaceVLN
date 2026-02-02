@@ -43,7 +43,7 @@ _C.MAP.TEXT_THRESHOLD = 0.25
 _C.MAP.FRAME_WIDTH = 160
 _C.MAP.FRAME_HEIGHT = 120
 _C.MAP.MAP_RESOLUTION = 5
-_C.MAP.MAP_SIZE_CM = 2400
+_C.MAP.MAP_SIZE_CM = 2400  # 固定地图大小（24m×24m），可通过增大此值扩展边界
 _C.MAP.GLOBAL_DOWNSCALING = 2
 _C.MAP.VISION_RANGE = 100
 _C.MAP.DU_SCALE = 1
@@ -56,6 +56,11 @@ _C.MAP.MIN_Z = 2 # a lager min_z could lost some information on the floor, 2cm i
 _C.MAP.VISUALIZE = False
 _C.MAP.PRINT_IMAGES = False
 _C.MAP.REPVITSAM = 0
+
+# 可视化配置
+_C.MAP.ENABLE_GLOBAL_MAP_CROP = False  # 是否裁剪global map到440×440（默认False，保持480×480）
+_C.MAP.ENABLE_ADAPTIVE_ZOOM = False    # 是否启用自适应缩放（未来功能）
+
 
 
 # -----------------------------------------------------------------------------

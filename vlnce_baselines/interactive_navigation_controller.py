@@ -55,7 +55,13 @@ class InteractiveNavigationController:
         self.mapper = SemanticMapper(mapping_module, self.map_shape, self.resolution)
         
         print("[Init] 初始化Map Visualizer...")
-        self.visualizer = MapVisualizer(self.config.RESULTS_DIR, self.resolution, self.map_shape)
+        self.visualizer = MapVisualizer(
+            self.config.RESULTS_DIR, 
+            self.resolution, 
+            self.map_shape,
+            enable_global_map_crop=self.config.MAP.ENABLE_GLOBAL_MAP_CROP,
+            enable_adaptive_zoom=self.config.MAP.ENABLE_ADAPTIVE_ZOOM
+        )
         
         self.category_config = create_category_config()
         self.mapping_classes = self.category_config.mapping_classes
