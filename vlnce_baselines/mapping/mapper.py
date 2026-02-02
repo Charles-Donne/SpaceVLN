@@ -261,6 +261,9 @@ class SemanticMapper:
         """
         添加waypoint到当前位置
         
+        新增机制：如果当前位置2m之内有之前的waypoint，则删除2m之内的旧waypoint，
+        避免同一位置扎堆过多waypoint
+        
         Args:
             description: waypoint描述（可选，用于日志）
         
@@ -280,11 +283,40 @@ class SemanticMapper:
         map_x = last_traj_x  # 从trajectory的x → map_x
         map_y = last_traj_y  # 从trajectory的y → map_y
         
+        # ===== 新增：移除2m范围内的旧waypoint =====
+        distance_threshold_pixels = 200 / self.resolution  # 2m转换为像素（200cm / resolution）
+        
+        # 查找需要保留的waypoint（2m之外的waypoint）
+        waypoints_to_keep = []
+        for i, (old_x, old_y) in enumerate(self.waypoint_positions):
+            # 计算当前位置与旧waypoint的距离
+            distance = np.sqrt((map_x - old_x) ** 2 + (map_y - old_y) ** 2)
+            
+            if distance >= distance_threshold_pixels:
+                # 距离>=2m，保留
+                waypoints_to_keep.append(i)
+            else:
+                # 距离<2m，删除（打印日志）
+                old_id = self.waypoint_ids[i]
+                old_desc = self.waypoint_descriptions[i]
+                print(f"  🗑️  Removed nearby Waypoint #{old_id} @ ({old_x}, {old_y}) - {old_desc} (distance: {distance * self.resolution:.1f}cm < 200cm)")
+        
+        # 更新waypoint列表（只保留2m之外的waypoint）
+        if waypoints_to_keep:
+            self.waypoint_positions = [self.waypoint_positions[i] for i in waypoints_to_keep]
+            self.waypoint_ids = [self.waypoint_ids[i] for i in waypoints_to_keep]
+            self.waypoint_descriptions = [self.waypoint_descriptions[i] for i in waypoints_to_keep]
+        else:
+            # 所有旧waypoint都被删除
+            self.waypoint_positions = []
+            self.waypoint_ids = []
+            self.waypoint_descriptions = []
+        
         # 分配ID
         self.waypoint_counter += 1
         waypoint_id = self.waypoint_counter
         
-        # 保存waypoint（只保存位置）
+        # 保存新waypoint（只保存位置）
         self.waypoint_positions.append((map_x, map_y))
         self.waypoint_ids.append(waypoint_id)
         self.waypoint_descriptions.append(description)
