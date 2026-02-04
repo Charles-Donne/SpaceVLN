@@ -23,7 +23,7 @@ class InteractiveNavigationController:
     """实时键盘控制导航器"""
     
     def __init__(self, config: Config):
-        print("[Init] 配置MAP参数...")
+        # print("[Init] 配置MAP参数...")
         self.config = ConfigHelper.setup_navigation_config(config)
         self.device = get_device(self.config.TORCH_GPU_ID)
         torch.cuda.set_device(self.device)
@@ -35,26 +35,26 @@ class InteractiveNavigationController:
         self.map_shape = (self.config.MAP.MAP_SIZE_CM // self.resolution,
                          self.config.MAP.MAP_SIZE_CM // self.resolution)
         
-        print("[Init] 初始化Habitat环境...")
+        # print("[Init] 初始化Habitat环境...")
         self.envs = construct_envs(
             self.config, 
             get_env_class(self.config.ENV_NAME),
             auto_reset_done=False,
             episodes_allowed=self.config.TASK_CONFIG.DATASET.EPISODES_ALLOWED,
         )
-        print(f"[Init] 环境初始化完成，episodes: {self.envs.number_of_episodes}")
+        # print(f"[Init] 环境初始化完成，episodes: {self.envs.number_of_episodes}")
         
-        print("[Init] 初始化GroundedSAM...")
+        # print("[Init] 初始化GroundedSAM...")
         self.segment_module = GroundedSAM(self.config, self.device)
         
-        print("[Init] 初始化Semantic Mapping...")
+        # print("[Init] 初始化Semantic Mapping...")
         mapping_module = Semantic_Mapping(self.config.MAP).to(self.device)
         mapping_module.eval()
         
-        print("[Init] 初始化Semantic Mapper...")
+        # print("[Init] 初始化Semantic Mapper...")
         self.mapper = SemanticMapper(mapping_module, self.map_shape, self.resolution)
         
-        print("[Init] 初始化Map Visualizer...")
+        # print("[Init] 初始化Map Visualizer...")
         self.visualizer = MapVisualizer(
             self.config.RESULTS_DIR, 
             self.resolution, 
@@ -75,7 +75,8 @@ class InteractiveNavigationController:
         
         self.current_episode_id = None
         self.current_step = 0
-        print("[Init] 完成\n")
+        
+        print("✅ 初始化完成\n")
     
     @property
     def detected_classes(self):
@@ -84,7 +85,7 @@ class InteractiveNavigationController:
     
     def reset_episode(self, episode_id: int = None):
         print(f"\n{'='*60}")
-        print(f"[Reset] Episode {episode_id if episode_id else 0}")
+        print(f"Episode {episode_id if episode_id else 0}")
         print(f"{'='*60}")
         
         self.envs.reset()
@@ -99,15 +100,11 @@ class InteractiveNavigationController:
         current_episodes = self.envs.current_episodes()
         self.current_instruction = current_episodes[0].instruction.instruction_text
         
-        print(f"\n📍 Episode {self.current_episode_id}")
-        print(f"📝 指令: {self.current_instruction}")
-        print(f"{'='*60}\n")
+        print(f"\n📍 Episode {self.current_episode_id}: {self.current_instruction[:80]}{'...' if len(self.current_instruction) > 80 else ''}\n")
     
     def look_around(self) -> None:
         """360度环视建图(12步×30°)，步数0-11"""
-        print("\n" + "="*60)
-        print("🔄 环视扫描 (360°)")
-        print("="*60)
+        print("🔄 360°环视...", end="", flush=True)
         
         from habitat.sims.habitat_simulator.actions import HabitatSimActions
         
@@ -117,7 +114,7 @@ class InteractiveNavigationController:
             obs, _, dones, _ = [list(x) for x in zip(*outputs)]
             
             if dones[0]:
-                print("⚠️ Episode提前结束")
+                print(" ⚠️  Episode提前结束")
                 self.current_step = step + 1
                 return
             
@@ -131,54 +128,26 @@ class InteractiveNavigationController:
             )
             
             new_classes = len(self.detected_classes) - prev_class_count
-            if new_classes > 0:
-                print(f"\r  [{step+1}/12] +{new_classes}类", end="", flush=True)
-            
-            # 获取waypoint数据（忽略descriptions，可视化不需要）
-            wp_positions, wp_ids, _ = self.mapper.get_waypoints()
-            rgb_bgr = cv2.cvtColor(obs[0]['rgb'], cv2.COLOR_RGB2BGR)
-            _, landmarks, _, _ = self.visualizer.save_step_visualization(
-                step=step,
-                episode_id=self.current_episode_id,
-                rgb=rgb_bgr,
-                full_map=map_state['full_map'],
-                trajectory_points=map_state['trajectory_points'],
-                detected_classes=list(self.detected_classes),
-                current_pose=map_state['full_pose'],
-                floor=map_state['floor'],
-                hfov=self.config.MAP.HFOV,
-                detections=self.latest_detections_full if hasattr(self, 'latest_detections_full') else None,
-                labels=self.latest_labels_full if hasattr(self, 'latest_labels_full') else None,
-                landmark_classes=self.landmark_classes,
-                mapping_classes=self.mapping_classes,
-                landmark_config={
-                    'min_total_pixels': self.landmark_min_total_pixels,
-                    'min_area_threshold': self.landmark_min_area_threshold
-                },
-                waypoint_positions=wp_positions,
-                waypoint_ids=wp_ids,
-                global_trajectory_points=map_state['global_trajectory_points']
-            )
+            # 不再打印每步的进度，只在最后汇总
         
         self.current_step = 12
-        print()
-        print("="*60)
-        print(f"✅ 完成 | {len(self.detected_classes)}类 | {len(self.mapper.trajectory_points)}点")
-        
-        landmarks_found = [cls for cls in self.detected_classes if cls in self.landmark_classes]
-        if landmarks_found:
-            print(f"📍 Landmark: {', '.join(landmarks_found)}")
-        print("="*60 + "\n")
+        landmarks_found = [cls for cls in self.detected_classes if cls in landmark_classes]
+        print(f" ✅ {len(self.detected_classes)}类" + 
+              (f", Landmarks: {', '.join(landmarks_found[:3])}{'...' if len(landmarks_found) > 3 else ''}" if landmarks_found else ""))
     
     def step(self, action: int, save_vis: bool = True, phase: str = "action") -> Dict[str, Any]:
         """执行一步动作，更新地图并保存可视化"""
         # ⚠️ 关键修复：在使用current_step之前先累加，避免覆盖环视最后一步
         self.current_step += 1
         
-        print(f"\n[步骤{self.current_step}] {self._action_name(action)}", end="")
+        print(f"[步骤{self.current_step}] {self._action_name(action)}", end="")
         
         outputs = self.envs.step([action])
         obs, rewards, dones, infos = [list(x) for x in zip(*outputs)]
+        
+        # 保存done标志和info（用于finish_episode检查）
+        self.latest_done = dones[0]
+        self.latest_info = infos[0]
         
         if dones[0]:
             print(" → Episode结束")
@@ -290,30 +259,36 @@ class InteractiveNavigationController:
         if hasattr(self, 'latest_info') and self.latest_info:
             episode_already_done = self.latest_info.get('done', False)
         
+        # 额外检查：如果latest_done标志存在且为True，也认为episode已结束
+        if hasattr(self, 'latest_done') and self.latest_done:
+            episode_already_done = True
+        
         if stop_action and not episode_already_done:
-            print("\n🛑 执行STOP动作以完成Episode...")
+            # print("\n🛑 执行STOP动作以完成Episode...")
             try:
                 # 调用STOP动作 (action_id = 0)
                 outputs = self.envs.step([0])
-                observations, rewards, dones, infos = outputs
+                # 🔑 关键修复：与step()方法保持一致的解包方式
+                observations, rewards, dones, infos = [list(x) for x in zip(*outputs)]
                 
                 # 获取最终指标
                 if infos and len(infos) > 0:
                     final_metrics = infos[0]
                     dtg = final_metrics.get('distance_to_goal', -1)
                     success_flag = final_metrics.get('success', 0)
-                    print(f"✅ STOP执行成功")
-                    print(f"   最终距离: {dtg:.3f}m")
-                    print(f"   Success: {success_flag}")
-                    print(f"   SPL: {final_metrics.get('spl', 0.0):.4f}")
+                    print(f"✅ DTG: {dtg:.3f}m | Success: {success_flag} | SPL: {final_metrics.get('spl', 0.0):.4f}")
                     
-                    # 验证逻辑一致性
+                    # 数据验证
                     if success_flag == 1 and dtg > 3.0:
                         print(f"   ⚠️  数据异常: Success=1 但 DTG={dtg:.3f}m > 3m")
                     elif success_flag == 0 and 0 <= dtg < 3.0:
-                        print(f"   ⚠️  可能的问题: DTG={dtg:.3f}m < 3m 但 Success=0")
-                else:
-                    print(f"   ⚠️  未能获取最终指标")
+                        print(f"   ⚠️  可能: DTG={dtg:.3f}m < 3m 但 Success=0")
+            except AssertionError as e:
+                # Episode已经结束，无法调用STOP
+                print(f"\n⚠️  Episode已结束，无法执行STOP: {e}")
+                print("   使用最后一次step的指标")
+                if hasattr(self, 'latest_info') and self.latest_info:
+                    final_metrics = self.latest_info.copy()
             except Exception as e:
                 print(f"   ❌ STOP执行失败: {e}")
                 final_metrics = {}
@@ -324,8 +299,7 @@ class InteractiveNavigationController:
             if hasattr(self, 'latest_info') and self.latest_info:
                 final_metrics = self.latest_info.copy()
         else:
-            print("\n⏱️  达到最大步数，未调用STOP")
-            print("   注意: 这种情况下Success将为0，即使距离<3米")
+            print("⏱️  达到最大步数 (Success=0)")
             # 获取当前指标（不调用STOP）
             if self.latest_info:
                 final_metrics = self.latest_info.copy()
@@ -448,11 +422,11 @@ class InteractiveNavigationController:
     
     def toggle_trajectory(self):
         status = self.mapper.toggle_trajectory()
-        print(f"[轨迹] {status}")
+        # print(f"[轨迹] {status}")
     
     def clear_trajectory(self):
         self.mapper.clear_trajectory()
-        print("[轨迹] 已清空")
+        # print("[轨迹] 已清空")
     
     def get_keyboard_action(self) -> int:
         """获取键盘输入：w=前进 a=左转 d=右转 t=切换轨迹 c=清空轨迹"""
@@ -478,6 +452,7 @@ class InteractiveNavigationController:
         return names.get(action, f'UNKNOWN({action})')
     
     def close(self):
-        print("\n[Close] 关闭环境...")
+        # print("\n[Close] 关闭环境...")
         self.envs.close()
-        print("[Close] 完成！")
+        # print("[Close] 完成！")
+

@@ -45,15 +45,10 @@ class LLMPlanner(BaseAPIClient):
         if not self.validate_fields(response, required):
             return False
         
-        # 验证completion_criteria格式（应该是字符串格式：Detection: ... | Location: ... | Map: ...）
+        # 验证completion_criteria为字符串即可（描述到达后的状态）
         criteria = response.get('completion_criteria')
-        if criteria and isinstance(criteria, str):
-            # 检查是否包含三个关键字段标识
-            if not all(keyword in criteria for keyword in ['Detection:', 'Location:', 'Map:']):
-                print(f"⚠️ completion_criteria应包含 'Detection:', 'Location:', 'Map:' 三个部分")
-                return False
-        else:
-            print(f"⚠️ completion_criteria应该是字符串格式 (例如: 'Detection: ... | Location: ... | Map: ...')")
+        if not criteria or not isinstance(criteria, str):
+            print(f"⚠️ completion_criteria应该是字符串格式")
             return False
         
         return True
