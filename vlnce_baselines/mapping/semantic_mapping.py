@@ -161,37 +161,36 @@ class Semantic_Mapping(nn.Module):
         ).float().to(self.device)
     
     def reset(self) -> None:
-        """重置地图系统"""
-        self.curr_loc = None
-        self.last_loc = None
+        """重置地图系统（分块架构）"""
+        # 清空分类和tiles
         self.vis_classes = []
         self.tiles.clear()
+        self.one_step_tiles.clear()
         
-        # 重置agent全局坐标到原点
-        self.agent_global_x = 0.0
-        self.agent_global_y = 0.0
-        self.agent_orientation = 0.0
-        
-        # 重置pose
+        # 重置pose tensors
         self.local_pose.fill_(0.)
         self.full_pose.fill_(0.)
-        self.curr_loc.fill_(0.)
+        self.curr_loc = torch.zeros(self.num_environments, 3).float().to(self.device)
+        self.last_loc = None
         
-        # 重置origins和lmb
+        # 重置origins和lmb（numpy arrays）
         self.origins.fill(0.)
         self.lmb.fill(0.)
         self.state.fill(0.)
         
-        # 清空local_map和full_map
-        self.local_map = None
-        self.one_step_local_map = None
-        self.full_map = None
-        self.one_step_full_map = None
-        
+        # 重置feat
         self.feat = torch.ones(
             self.args.NUM_ENVIRONMENTS, 1, 
             self.screen_h // self.du_scale * self.screen_w // self.du_scale
         ).float().to(self.device)
+        
+        # 清空local_map和full_map（将在init_map_and_pose中重新创建）
+        if hasattr(self, 'local_map'):
+            self.local_map = None
+            self.one_step_local_map = None
+        if hasattr(self, 'full_map'):
+            self.full_map = None
+            self.one_step_full_map = None
         
         if self.visualize or self.print_images:
             self.vis_image = vu.init_vis_image()
@@ -250,12 +249,23 @@ class Semantic_Mapping(nn.Module):
             self.TILE_SIZE, self.TILE_SIZE
         ).float().to(self.device)
     
-    def _ensure_tiles_exist(self, tile_indices, nc):
-        """确保指定的块存在"""
+    def _ensure_tiles_exist(self, tile_indices, nc, is_one_step=False):
+        """
+        确保指定的块存在
+        
+        Args:
+            tile_indices: [(tile_x, tile_y), ...]
+            nc: 通道数
+            is_one_step: 是否为one_step_tiles
+        """
+        # 选择使用的tiles字典
+        tiles_dict = self.one_step_tiles if is_one_step else self.tiles
+        
         for (tile_x, tile_y) in tile_indices:
-            if self.tiles[(tile_x, tile_y)] is None:
-                self.tiles[(tile_x, tile_y)] = self._create_empty_tile(nc)
-                print(f"🆕 创建新块: tile({tile_x}, {tile_y}) = 世界坐标({tile_x*12:.0f}m, {tile_y*12:.0f}m)")
+            if tiles_dict.get((tile_x, tile_y)) is None:
+                tiles_dict[(tile_x, tile_y)] = self._create_empty_tile(nc)
+                if not is_one_step:  # 只在主tiles创建时打印
+                    print(f"🆕 创建新块: tile({tile_x}, {tile_y}) = 世界坐标({tile_x*12:.0f}m, {tile_y*12:.0f}m)")
     
     def _get_tiles_for_region(self, center_x_m, center_y_m, size_m):
         """
@@ -291,24 +301,39 @@ class Semantic_Mapping(nn.Module):
         
         return tiles
     
-    def get_local_map_from_tiles(self, nc):
+    def get_local_map_from_tiles(self, nc, env_id=None, is_one_step=False):
         """
         从块中拼接Local Map（240×240，以agent为中心）
         
+        Args:
+            nc: 通道数
+            env_id: 环境ID，如果为None则处理所有环境并返回[batch, C, H, W]
+            is_one_step: 是否使用one_step_tiles
+        
         Returns:
-            local_map: [batch, C, 240, 240]
+            local_map: [C, 240, 240] (if env_id specified) 或 [batch, C, 240, 240]
         """
-        # 计算agent世界坐标（米）
-        agent_x_m = self.full_pose[0, 0].item()
-        agent_y_m = self.full_pose[0, 1].item()
+        # 确定使用哪个环境的pose
+        if env_id is not None:
+            agent_x_m = self.full_pose[env_id, 0].item()
+            agent_y_m = self.full_pose[env_id, 1].item()
+            num_envs = 1
+        else:
+            # 使用第一个环境（兼容性）
+            agent_x_m = self.full_pose[0, 0].item()
+            agent_y_m = self.full_pose[0, 1].item()
+            num_envs = self.num_environments
+        
+        # 选择使用的tiles字典
+        tiles_dict = self.one_step_tiles if is_one_step else self.tiles
         
         # 获取需要的块
         tiles_needed = self._get_tiles_for_region(agent_x_m, agent_y_m, self.TILE_SIZE_M)
-        self._ensure_tiles_exist(tiles_needed, nc)
+        self._ensure_tiles_exist(tiles_needed, nc, is_one_step=is_one_step)
         
         # 创建Local Map
         local_map = torch.zeros(
-            self.num_environments, nc,
+            num_envs, nc,
             self.TILE_SIZE, self.TILE_SIZE
         ).float().to(self.device)
         
@@ -324,7 +349,7 @@ class Semantic_Mapping(nn.Module):
         
         # 从各个块中提取数据
         for (tile_x, tile_y) in tiles_needed:
-            tile = self.tiles[(tile_x, tile_y)]
+            tile = tiles_dict.get((tile_x, tile_y))
             if tile is None:
                 continue
             
@@ -364,26 +389,41 @@ class Semantic_Mapping(nn.Module):
                      tile_y_start:tile_y_end]
         
         # 更新lmb（Local Map在世界坐标系中的像素边界）
-        for e in range(self.num_environments):
-            self.lmb[e] = [start_px, end_px, start_py, end_py]
-            # 更新origins（Local Map左上角的世界坐标）
-            self.origins[e] = [
-                start_py * self.resolution / 100.0,  # Y方向（米）
-                start_px * self.resolution / 100.0,  # X方向（米）
+        if env_id is not None:
+            # 只更新指定环境
+            self.lmb[env_id] = [start_px, end_px, start_py, end_py]
+            self.origins[env_id] = [
+                start_py * self.resolution / 100.0,  # X方向（米）
+                start_px * self.resolution / 100.0,  # Y方向（米）
                 0.0
             ]
-        
-        return local_map
+            # 返回单个环境的map，去除batch维度
+            return local_map[0]
+        else:
+            # 更新所有环境
+            for e in range(self.num_environments):
+                self.lmb[e] = [start_px, end_px, start_py, end_py]
+                self.origins[e] = [
+                    start_py * self.resolution / 100.0,  # X方向（米）
+                    start_px * self.resolution / 100.0,  # Y方向（米）
+                    0.0
+                ]
+            return local_map
     
-    def update_tiles_from_local_map(self, local_map):
+    def update_tiles_from_local_map(self, local_map, env_id=0, is_one_step=False):
         """
         将更新后的Local Map写回到块中
         
         Args:
-            local_map: [batch, C, 240, 240]
+            local_map: [C, 240, 240] 单个环境的Local Map
+            env_id: 环境ID
+            is_one_step: 是否写回到one_step_tiles
         """
+        # 选择使用的tiles字典
+        tiles_dict = self.one_step_tiles if is_one_step else self.tiles
+        
         # Local Map的世界像素范围（从lmb获取）
-        start_px, end_px, start_py, end_py = self.lmb[0]
+        start_px, end_px, start_py, end_py = self.lmb[env_id]
         
         # 计算涉及的块
         tile_x_min = start_px // self.TILE_SIZE
@@ -394,7 +434,7 @@ class Semantic_Mapping(nn.Module):
         # 写回数据到各个块
         for tile_x in range(tile_x_min, tile_x_max + 1):
             for tile_y in range(tile_y_min, tile_y_max + 1):
-                tile = self.tiles[(tile_x, tile_y)]
+                tile = tiles_dict.get((tile_x, tile_y))
                 if tile is None:
                     continue
                 
@@ -425,25 +465,29 @@ class Semantic_Mapping(nn.Module):
                 local_y_start = copy_start_py - start_py
                 local_y_end = copy_end_py - start_py
                 
-                # 写回数据
-                tile[:, :,
+                # 写回数据（local_map是单个环境的，形状[C, H, W]）
+                tile[env_id, :,
                      tile_x_start:tile_x_end,
                      tile_y_start:tile_y_end] = \
-                    local_map[:, :,
+                    local_map[:,
                              local_x_start:local_x_end,
                              local_y_start:local_y_end]
     
-    def get_full_map_for_rendering(self, crop_size_m=24.0):
+    def get_full_map_for_rendering(self, crop_size_m=24.0, is_one_step=False):
         """
         获取用于渲染的全局地图（以agent为中心裁剪）
         
         Args:
             crop_size_m: 裁剪尺寸（米），默认24m×24m
+            is_one_step: 是否使用one_step_tiles
         
         Returns:
             full_map: [batch, C, H, W]
             map_size: (H, W) 实际尺寸
         """
+        # 选择使用的tiles字典
+        tiles_dict = self.one_step_tiles if is_one_step else self.tiles
+        
         # 获取需要的块
         agent_x_m = self.full_pose[0, 0].item()
         agent_y_m = self.full_pose[0, 1].item()
@@ -456,8 +500,10 @@ class Semantic_Mapping(nn.Module):
             map_size_px = int(crop_size_m * 100 / self.resolution)
             return torch.zeros(self.num_environments, nc, map_size_px, map_size_px).float().to(self.device), (map_size_px, map_size_px)
         
-        nc = self.tiles[tiles_needed[0]].shape[1] if self.tiles[tiles_needed[0]] is not None else self.MAP_CHANNELS + 1
-        self._ensure_tiles_exist(tiles_needed, nc)
+        # 获取通道数
+        first_tile = tiles_dict.get(tiles_needed[0])
+        nc = first_tile.shape[1] if first_tile is not None else self.MAP_CHANNELS + 1
+        self._ensure_tiles_exist(tiles_needed, nc, is_one_step=is_one_step)
         
         # 计算裁剪区域的世界像素范围
         crop_size_px = int(crop_size_m * 100 / self.resolution)
@@ -479,7 +525,7 @@ class Semantic_Mapping(nn.Module):
         
         # 从各个块中拼接
         for (tile_x, tile_y) in tiles_needed:
-            tile = self.tiles[(tile_x, tile_y)]
+            tile = tiles_dict.get((tile_x, tile_y))
             if tile is None:
                 continue
             
@@ -654,14 +700,17 @@ class Semantic_Mapping(nn.Module):
         初始化分块地图和agent姿态
         
         新设计：
-        1. Agent初始世界坐标为(0, 0)，不再是(12, 12)
+        1. Agent初始世界坐标为(6.0, 6.0)在Tile(0,0)中心
         2. 创建初始块tile(0, 0)，覆盖世界坐标[0, 12)m × [0, 12)m
-        3. Agent在块中心(6m, 6m)
-        4. Local Map以agent为中心，范围[-6, 6)m × [-6, 6)m
+        3. Local Map以agent为中心，范围[0, 12)m × [0, 12)m
         """
         nc = num_detected_classes + self.MAP_CHANNELS
         
-        # Agent初始世界坐标：(0, 0, 0)
+        # 确保必要的tensor已初始化
+        if self.local_map is None:
+            self._prepare(nc)
+        
+        # Agent初始世界坐标：(6.0, 6.0, 0.0) - 位于Tile(0,0)中心
         self.full_pose.fill_(0.)
         self.full_pose[:, 0] = 6.0  # X方向 = 6m（块中心）
         self.full_pose[:, 1] = 6.0  # Y方向 = 6m（块中心）
@@ -679,22 +728,33 @@ class Semantic_Mapping(nn.Module):
         self.local_map = self.get_local_map_from_tiles(nc)
         self.one_step_local_map = self.local_map.clone()
         
-        # Local Pose：agent相对Local Map的位置
-        # 因为Local Map以agent为中心，所以agent在Local Map中心(6m, 6m)
+        # Local Pose：agent相对Local Map origin的位置
+        # Local Map origin在(0, 0)，agent在(6, 6)
         for e in range(self.num_environments):
             self.local_pose[e] = torch.tensor([6.0, 6.0, 0.0]).float().to(self.device)
             self.curr_loc[e] = self.full_pose[e].clone()
+            
+            # 更新Local Map边界和origins
+            # Local Map覆盖世界坐标[0, 12)m × [0, 12)m
+            self.lmb[e, 0] = 0     # gx1 (Y方向起始，像素)
+            self.lmb[e, 1] = 240   # gx2 (Y方向结束，像素)
+            self.lmb[e, 2] = 0     # gy1 (X方向起始，像素)
+            self.lmb[e, 3] = 240   # gy2 (X方向结束，像素)
+            
+            # origins: Local Map左上角的世界坐标（米）
+            self.origins[e] = [0.0, 0.0, 0.0]
         
         # 更新state
         locs = self.full_pose.cpu().numpy()
         self.state[:, :3] = locs
-        self.state[:, 3:] = self.lmb[0]  # [gx1, gx2, gy1, gy2]
+        for e in range(self.num_environments):
+            self.state[e, 3:] = self.lmb[e]
         
         # 获取用于渲染的Full Map
         self.full_map, _ = self.get_full_map_for_rendering(crop_size_m=24.0)
         self.one_step_full_map = self.full_map.clone()
         
-        print(f"✅ 地图初始化完成: Agent@世界(6.0m, 6.0m) = tile(0,0)@块内(120px, 120px)")
+        print(f"✅ 地图初始化: Agent@世界(6.0m, 6.0m) Tile(0,0)中心 LocalMap[0-12m]")
                                 
     def update_map(self, step: int, detected_classes: OrderedSet, current_episode_id: int) -> None:
         """
@@ -732,8 +792,8 @@ class Semantic_Mapping(nn.Module):
             self.one_step_local_map[e, 2:4, loc_r - 1:loc_r + 2, loc_c - 1:loc_c + 2] = 1.
             
             # 将更新后的Local Map写回到对应的tiles
-            self.update_tiles_from_local_map(self.local_map[e], self.full_pose[e])
-            self.update_tiles_from_local_map(self.one_step_local_map[e], self.full_pose[e], is_one_step=True)
+            self.update_tiles_from_local_map(self.local_map[e], env_id=e, is_one_step=False)
+            self.update_tiles_from_local_map(self.one_step_local_map[e], env_id=e, is_one_step=True)
         
         # 定期recentering：当agent偏离Local Map中心时，重新获取Local Map
         if ((step + 1) % self.args.CENTER_RESET_STEPS) == 0:
