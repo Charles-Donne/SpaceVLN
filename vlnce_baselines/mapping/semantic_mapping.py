@@ -110,6 +110,10 @@ class Semantic_Mapping(nn.Module):
         self.tiles = defaultdict(lambda: None)
         self.one_step_tiles = defaultdict(lambda: None)
         
+        # 地图尺寸（用于兼容性）
+        self.map_shape = (args.MAP_SIZE_CM // args.MAP_RESOLUTION, 
+                          args.MAP_SIZE_CM // args.MAP_RESOLUTION)  # (480, 480)
+        
         # Local Map尺寸（固定240×240）
         self.local_w = self.TILE_SIZE
         self.local_h = self.TILE_SIZE
@@ -159,6 +163,13 @@ class Semantic_Mapping(nn.Module):
         self.feat = torch.ones(
             args.NUM_ENVIRONMENTS, 1, 
             self.screen_h // self.du_scale * self.screen_w // self.du_scale
+        ).float().to(self.device)
+        
+        # Init grid（用于3D体素化，初始为1通道，后续动态扩展）
+        self.init_grid = torch.zeros(
+            args.NUM_ENVIRONMENTS, 1,
+            self.vision_range, self.vision_range,
+            self.max_height - self.min_height
         ).float().to(self.device)
     
     def reset(self) -> None:
@@ -730,7 +741,9 @@ class Semantic_Mapping(nn.Module):
         self.one_step_local_map = self.local_map.clone()
         
         # Local Pose：agent相对Local Map origin的位置
-        # Local Map origin在(0, 0)，agent在(6, 6)
+        # 初始时：Local Map origin在(0, 0)，agent在(6, 6) = 中心(120, 120)像素
+        # 后续：agent在Local Map中移动，local_pose会变化（如7.2, 5.8等）
+        # 只在recentering时重置回中心
         for e in range(self.num_environments):
             self.local_pose[e] = torch.tensor([6.0, 6.0, 0.0]).float().to(self.device)
             self.curr_loc[e] = self.full_pose[e].clone()
@@ -761,11 +774,15 @@ class Semantic_Mapping(nn.Module):
         """
         更新分块地图
         
+        关键逻辑：
+        - Agent在Local Map中的位置是动态的（由forward()更新local_pose）
+        - 例如：(120,120) → (140,125) → (160,130) ... 逐渐偏离中心
+        - 每CENTER_RESET_STEPS步recentering：重新提取Local Map，agent回到中心
+        
         步骤：
-        1. 更新agent在Local Map中的位置标记
-        2. 将Local Map写回到对应的tiles
-        3. 更新full_pose（世界坐标）
-        4. 每CENTER_RESET_STEPS步执行recentering：重新获取Local Map
+        1. 根据当前local_pose标记agent在Local Map中的位置
+        2. 将更新的Local Map写回到tiles
+        3. 定期recentering：重新获取以agent为中心的Local Map
         """
         if step == 0:
             self.last_loc = self.state[:, :3]
@@ -820,8 +837,9 @@ class Semantic_Mapping(nn.Module):
                     0.
                 ]
                 
-                # 更新local_pose：agent相对于新Local Map origin的位置
-                # 因为重新获取的Local Map总是以agent为中心，所以local_pose应该是(6, 6, ori)
+                # 重置local_pose：因为重新提取的Local Map以agent为中心
+                # agent重新回到Local Map中心 = (6m, 6m) = (120px, 120px)
+                # 这就是recentering：让agent回到Local Map中心，方便继续探索
                 self.local_pose[e, 0] = 6.0
                 self.local_pose[e, 1] = 6.0
                 # 保持原有朝向
