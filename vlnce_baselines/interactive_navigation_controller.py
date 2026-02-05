@@ -84,9 +84,7 @@ class InteractiveNavigationController:
         return self.category_config._detected_classes
     
     def reset_episode(self, episode_id: int = None):
-        print(f"\n{'='*60}")
-        print(f"Episode {episode_id if episode_id else 0}")
-        print(f"{'='*60}")
+        print(f"\n{'='*60}\nEpisode {episode_id if episode_id else 0}\n{'='*60}")
         
         self.envs.reset()
         self.current_step = 0
@@ -100,7 +98,7 @@ class InteractiveNavigationController:
         current_episodes = self.envs.current_episodes()
         self.current_instruction = current_episodes[0].instruction.instruction_text
         
-        print(f"\n📍 Episode {self.current_episode_id}: {self.current_instruction[:80]}{'...' if len(self.current_instruction) > 80 else ''}\n")
+        print(f"📍 指令: {self.current_instruction[:100]}{'...' if len(self.current_instruction) > 100 else ''}")
     
     def look_around(self) -> None:
         """360度环视建图(12步×30°)，步数0-11"""
@@ -140,7 +138,7 @@ class InteractiveNavigationController:
         # ⚠️ 关键修复：在使用current_step之前先累加，避免覆盖环视最后一步
         self.current_step += 1
         
-        print(f"[步骤{self.current_step}] {self._action_name(action)}", end="")
+        print(f"[{self.current_step}] {self._action_name(action)}", end="")
         
         outputs = self.envs.step([action])
         obs, rewards, dones, infos = [list(x) for x in zip(*outputs)]

@@ -392,14 +392,7 @@ class MapVisualizer:
         
         # ===== 计算地图使用统计（显示真实探索范围）=====
         map_usage_stats = self._calculate_map_usage(trajectory_points, h, w)
-        print(f"\n📊 地图使用统计:")
-        print(f"  地图尺寸: {h}×{w} pixels = {h*self.resolution/100:.1f}m × {w*self.resolution/100:.1f}m")
-        print(f"  轨迹范围: X=[{map_usage_stats['x_min']:.1f}, {map_usage_stats['x_max']:.1f}]m, "
-              f"Y=[{map_usage_stats['y_min']:.1f}, {map_usage_stats['y_max']:.1f}]m")
-        print(f"  使用区域: {map_usage_stats['used_width']:.1f}m × {map_usage_stats['used_height']:.1f}m "
-              f"({map_usage_stats['usage_percent']:.1f}% of map)")
-        if map_usage_stats['near_boundary']:
-            print(f"  ⚠️  警告: 轨迹接近地图边界，建议增大 MAP_SIZE_CM")
+        # 静默处理统计信息，不打印详细数据
         
         # ===== 阶段1: 创建语义地图（严格按照ZS_Evaluator的layer顺序）=====
         semantic_map = np.zeros((h, w), dtype=np.uint8)
@@ -645,76 +638,19 @@ class MapVisualizer:
             # ===== 阶段7: 绘制Waypoint标记（蓝色圆圈+白色数字）=====
             last_waypoint_angle = None  # 初始化
             if waypoint_positions and waypoint_ids and len(waypoint_positions) == len(waypoint_ids):
-                # 🔍 打印地图坐标系统说明
-                print("\n" + "="*70)
-                print("🗺️  Global Map 渲染坐标系统")
-                print("="*70)
-                print(f"原始地图尺寸: {h}×{w} (H×W)")
-                print(f"显示地图尺寸: 480×480 → 裁剪后: 440×440")
-                print(f"\n坐标系统规则:")
-                print(f"  • 原始地图: map_x ∈ [0, {h-1}], map_y ∈ [0, {w-1}]")
-                print(f"  • X轴(map_x): 0=地图顶部, {h-1}=地图底部")
-                print(f"  • Y轴(map_y): 0=地图左侧, {w-1}=地图右侧")
-                print(f"\n显示坐标转换公式:")
-                print(f"  • display_x = map_y × 480 / {w}")
-                print(f"  • display_y = ({h-1} - map_x) × 480 / {h}  [Y轴翻转]")
-                print(f"\n旋转后坐标:")
-                print(f"  • 图像中心(240, 240) = Agent当前位置")
-                print(f"  • 图像上方(Y=0) = Agent前方")
-                print(f"  • 图像右侧(X=480) = Agent右侧")
-                
-                # 打印Agent当前位置
-                if len(trajectory_points) > 0:
-                    agent_map_x, agent_map_y = trajectory_points[-1]
-                    agent_display_x = agent_map_y * 480 / w
-                    agent_display_y = (h - 1 - agent_map_x) * 480 / h
-                    agent_point = np.array([agent_display_x, agent_display_y, 1])
-                    agent_rotated = rotation_matrix @ agent_point
-                    print(f"\n📍 Agent当前位置:")
-                    print(f"  • 地图坐标: ({agent_map_x:.1f}, {agent_map_y:.1f})")
-                    print(f"  • 显示坐标: ({agent_display_x:.1f}, {agent_display_y:.1f})")
-                    print(f"  • 旋转后坐标: ({agent_rotated[0]:.1f}, {agent_rotated[1]:.1f}) [应该在(240, 240)附近]")
-                
-                print(f"\n🔵 Waypoint列表 (共{len(waypoint_positions)}个):")
-                print("-"*70)
-                
+                # 静默处理waypoint渲染，不输出详细坐标
                 for idx, ((wp_x, wp_y), wp_id) in enumerate(zip(waypoint_positions, waypoint_ids)):
                     # 转换waypoint坐标到旋转后的坐标系
-                    # waypoint_positions是(map_x, map_y)格式，需要与trajectory_points相同的转换
                     display_x = wp_y * 480 / w
                     display_y = (h - 1 - wp_x) * 480 / h
                     point = np.array([display_x, display_y, 1])
                     rotated_point = rotation_matrix @ point
                     
-                    # 打印每个waypoint的坐标信息
-                    print(f"  Waypoint #{wp_id}:")
-                    print(f"    地图坐标: ({wp_x}, {wp_y})")
-                    print(f"    显示坐标: ({display_x:.1f}, {display_y:.1f})")
-                    print(f"    渲染坐标: ({rotated_point[0]:.1f}, {rotated_point[1]:.1f})")
-                    
-                    # 计算相对于Agent的方位
-                    dx = rotated_point[0] - 240
-                    dy = rotated_point[1] - 240
-                    distance_px = np.sqrt(dx**2 + dy**2)
-                    angle_rad = np.arctan2(dx, -dy)
-                    angle_deg = np.degrees(angle_rad)
-                    
-                    direction = "正前方" if abs(angle_deg) < 15 else \
-                               "右前方" if 15 <= angle_deg < 75 else \
-                               "右侧" if 75 <= angle_deg < 105 else \
-                               "右后方" if 105 <= angle_deg < 165 else \
-                               "正后方" if abs(angle_deg) >= 165 else \
-                               "左后方" if -165 < angle_deg <= -105 else \
-                               "左侧" if -105 < angle_deg <= -75 else \
-                               "左前方" if -75 < angle_deg <= -15 else "正前方"
-                    
-                    print(f"    相对方位: {direction} ({angle_deg:+.1f}°), 距离: {distance_px:.0f}像素")
-                    
                     # 计算最后一个waypoint的角度（相对于正前方）
                     if idx == len(waypoint_positions) - 1:
-                        last_waypoint_angle = angle_rad
-                        print(f"    ⭐ [Last Waypoint] 用于旋转对准")
-                    print()
+                        dx = rotated_point[0] - 240
+                        dy = rotated_point[1] - 240
+                        last_waypoint_angle = np.arctan2(dx, -dy)
                     
                     # 绘制蓝色圆圈（BGR=(255, 0, 0)）
                     cv2.circle(global_map_with_trajectory,
@@ -734,8 +670,6 @@ class MapVisualizer:
                     text_y = int(rotated_point[1]) + text_height // 2
                     cv2.putText(global_map_with_trajectory, text, (text_x, text_y),
                                font, font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
-                
-                print("="*70 + "\n")
             
             # ===== 可选：裁剪到440×440（中心区域）=====
             # 默认关闭裁剪，保持完整的480×480地图
@@ -1303,10 +1237,10 @@ class MapVisualizer:
             alpha = 0.7  # 增加透明度，让绿色更明显
             result = cv2.addWeighted(overlay, alpha, image, 1 - alpha, 0)
             
-            print(f"  ✓ Floor mask applied: {np.sum(floor_bool)} pixels")
+            # Floor mask应用成功（静默）
             return result
         except Exception as e:
-            print(f"  ⚠️  Failed to load floor mask from {mask_path}: {e}")
+            # 静默失败处理
             return image
     
     def draw_distance_on_view(self, image: np.ndarray, distance_str: str) -> np.ndarray:
