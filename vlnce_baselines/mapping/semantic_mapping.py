@@ -533,6 +533,9 @@ class Semantic_Mapping(nn.Module):
         """
         获取用于渲染的全局地图（以agent为中心裁剪）
         
+        仅从已存在的tiles提取数据，不创建空白块（内存优化）
+        未探索区域保持为0（黑色/未知）
+        
         Args:
             crop_size_m: 裁剪尺寸（米），默认24m×24m
             is_one_step: 是否使用one_step_tiles
@@ -560,10 +563,18 @@ class Semantic_Mapping(nn.Module):
         if self.local_map is not None:
             nc = self.local_map.shape[1]
         else:
-            first_tile = tiles_dict.get(tiles_needed[0])
-            nc = first_tile.shape[1] if first_tile is not None else self.MAP_CHANNELS + 1
+            # 从已存在的tile获取通道数
+            nc = None
+            for tile_idx in tiles_needed:
+                tile = tiles_dict.get(tile_idx)
+                if tile is not None:
+                    nc = tile.shape[1]
+                    break
+            if nc is None:
+                nc = self.MAP_CHANNELS + 1
         
-        self._ensure_tiles_exist(tiles_needed, nc, is_one_step=is_one_step)
+        # 注意：不调用_ensure_tiles_exist()
+        # 只从已存在的tiles中提取，未探索区域保持为0
         
         # 计算裁剪区域的世界像素范围
         crop_size_px = int(crop_size_m * 100 / self.resolution)
