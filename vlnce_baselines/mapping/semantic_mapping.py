@@ -106,8 +106,9 @@ class Semantic_Mapping(nn.Module):
         self.exp_pred_threshold = args.EXP_PRED_THRESHOLD
         self.map_pred_threshold = args.MAP_PRED_THRESHOLD
         
-        # 分块地图：{(tile_x, tile_y): tensor[C, 240, 240]}
+        # 分块地图：{(tile_x, tile_y): tensor[batch, C, 240, 240]}
         self.tiles = defaultdict(lambda: None)
+        self.one_step_tiles = defaultdict(lambda: None)
         
         # Local Map尺寸（固定240×240）
         self.local_w = self.TILE_SIZE
