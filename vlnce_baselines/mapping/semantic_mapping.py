@@ -62,10 +62,43 @@ class Semantic_Mapping(nn.Module):
     3. 按需扩展 - 动态创建新块，理论上无限大小
     4. 内存高效 - 只存储探索过的区域
     
-    坐标系统：
-    - 世界坐标：agent初始位置为(0, 0)，单位：米，可以是负值
-    - 块索引：(tile_x, tile_y)，可以是负值，如(-1, 0)表示左边的块
-    - 块内坐标：(local_x, local_y)，范围[0, 239]，单位：像素
+    坐标系统详解：
+    ============
+    
+    1. 世界坐标（米）：
+       - agent_x_m, agent_y_m: agent的世界坐标，单位：米
+       - 初始位置：(6.0m, 6.0m) 位于Tile(0,0)中心
+       - 可以是负值，如(-3.5, 10.2)
+    
+    2. 世界像素坐标：
+       - px, gx: Y轴像素（行，高度）= agent_y_m * 20
+       - py, gy: X轴像素（列，宽度）= agent_x_m * 20
+       - 注意：遗留命名中gx对应Y轴，gy对应X轴！
+    
+    3. Tile索引（块索引）：
+       - tile_x: X轴方向的块索引 = floor(agent_x_m / 12.0)
+       - tile_y: Y轴方向的块索引 = floor(agent_y_m / 12.0)
+       - 可以是负值，如(-1, 2)表示X轴左边1块，Y轴上边2块
+       - Tile(0,0)覆盖：X∈[0,12)m, Y∈[0,12)m
+       - Tile(-1,1)覆盖：X∈[-12,0)m, Y∈[12,24)m
+    
+    4. Tensor维度：
+       - [batch, channels, H, W] = [bs, C, height, width]
+       - H（高度）= rows = Y轴方向的像素数
+       - W（宽度）= cols = X轴方向的像素数
+       - 索引：tensor[b, c, py, px] 其中 py=X像素, px=Y像素
+    
+    5. 命名规范（新代码请遵循）：
+       - agent_x_m, agent_y_m: 世界坐标（米）
+       - agent_px: Y轴像素 = agent_y_m * 20
+       - agent_py: X轴像素 = agent_x_m * 20
+       - tile_x, tile_y: Tile索引
+       - local_h, local_w: tensor内部索引（h=height=Y, w=width=X）
+    
+    6. 遗留变量（兼容旧代码）：
+       - gx, gx1, gx2: Y轴像素
+       - gy, gy1, gy2: X轴像素
+       - lmb: [gx1, gx2, gy1, gy2] Local Map边界
     
     Map结构：
     1. Obstacle Map (通道0)
@@ -350,14 +383,19 @@ class Semantic_Mapping(nn.Module):
         ).float().to(self.device)
         
         # Local Map的世界像素范围
-        half_size_px = self.TILE_SIZE // 2
-        agent_px = int(agent_x_m * 100 / self.resolution)
-        agent_py = int(agent_y_m * 100 / self.resolution)
+        # 关键：tensor维度[bs, C, H, W]，H是行（Y轴），W是列（X轴）
+        # px = Y轴像素（行，对应gx），py = X轴像素（列，对应gy）
+        half_size_px = self.TILE_SIZE // 2  # 120像素
         
-        start_px = agent_px - half_size_px
-        end_px = agent_px + half_size_px
-        start_py = agent_py - half_size_px
-        end_py = agent_py + half_size_px
+        # agent世界坐标(m) -> 世界像素
+        agent_px = int(agent_y_m * 100 / self.resolution)  # Y轴像素 = agent_y * 20
+        agent_py = int(agent_x_m * 100 / self.resolution)  # X轴像素 = agent_x * 20
+        
+        # Local Map范围：[agent - 6m, agent + 6m) = [agent - 120px, agent + 120px)
+        start_px = agent_px - half_size_px  # Y轴起始 (gx1)
+        end_px = agent_px + half_size_px    # Y轴结束 (gx2)
+        start_py = agent_py - half_size_px  # X轴起始 (gy1)
+        end_py = agent_py + half_size_px    # X轴结束 (gy2)
         
         # 从各个块中提取数据
         for (tile_x, tile_y) in tiles_needed:
@@ -366,9 +404,10 @@ class Semantic_Mapping(nn.Module):
                 continue
             
             # 块的世界像素范围
-            tile_start_px = tile_x * self.TILE_SIZE
+            # tile_y对应Y轴(gx/px), tile_x对应X轴(gy/py)
+            tile_start_px = tile_y * self.TILE_SIZE  # Y轴像素起始
             tile_end_px = tile_start_px + self.TILE_SIZE
-            tile_start_py = tile_y * self.TILE_SIZE
+            tile_start_py = tile_x * self.TILE_SIZE  # X轴像素起始
             tile_end_py = tile_start_py + self.TILE_SIZE
             
             # 计算交集
@@ -380,25 +419,25 @@ class Semantic_Mapping(nn.Module):
             if copy_start_px >= copy_end_px or copy_start_py >= copy_end_py:
                 continue
             
-            # 块内坐标
-            tile_x_start = copy_start_px - tile_start_px
-            tile_x_end = copy_end_px - tile_start_px
-            tile_y_start = copy_start_py - tile_start_py
-            tile_y_end = copy_end_py - tile_start_py
+            # 块内坐标（tensor: [H,W] = [Y,X]）
+            tile_h_start = copy_start_px - tile_start_px
+            tile_h_end = copy_end_px - tile_start_px
+            tile_w_start = copy_start_py - tile_start_py
+            tile_w_end = copy_end_py - tile_start_py
             
             # Local Map坐标
-            local_x_start = copy_start_px - start_px
-            local_x_end = copy_end_px - start_px
-            local_y_start = copy_start_py - start_py
-            local_y_end = copy_end_py - start_py
+            local_h_start = copy_start_px - start_px
+            local_h_end = copy_end_px - start_px
+            local_w_start = copy_start_py - start_py
+            local_w_end = copy_end_py - start_py
             
-            # 复制数据
+            # 复制数据（tensor索引: [batch, channel, H, W]）
             local_map[:, :,
-                     local_x_start:local_x_end,
-                     local_y_start:local_y_end] = \
+                     local_h_start:local_h_end,
+                     local_w_start:local_w_end] = \
                 tile[:, :,
-                     tile_x_start:tile_x_end,
-                     tile_y_start:tile_y_end]
+                     tile_h_start:tile_h_end,
+                     tile_w_start:tile_w_end]
         
         # 更新lmb（Local Map在世界坐标系中的像素边界）
         # lmb顺序：[gx1, gx2, gy1, gy2] 其中gx是Y方向像素，gy是X方向像素
@@ -437,55 +476,58 @@ class Semantic_Mapping(nn.Module):
         tiles_dict = self.one_step_tiles if is_one_step else self.tiles
         
         # Local Map的世界像素范围（从lmb获取）
-        start_px, end_px, start_py, end_py = self.lmb[env_id]
+        # lmb格式：[gx1, gx2, gy1, gy2] = [Y轴起, Y轴终, X轴起, X轴终]
+        gx1, gx2, gy1, gy2 = self.lmb[env_id]
         
         # 计算涉及的块
-        tile_x_min = start_px // self.TILE_SIZE
-        tile_x_max = (end_px - 1) // self.TILE_SIZE
-        tile_y_min = start_py // self.TILE_SIZE
-        tile_y_max = (end_py - 1) // self.TILE_SIZE
+        # tile_y 对应 Y轴 (gx)，tile_x 对应 X轴 (gy)
+        tile_y_min = gx1 // self.TILE_SIZE
+        tile_y_max = (gx2 - 1) // self.TILE_SIZE
+        tile_x_min = gy1 // self.TILE_SIZE
+        tile_x_max = (gy2 - 1) // self.TILE_SIZE
         
         # 写回数据到各个块
-        for tile_x in range(tile_x_min, tile_x_max + 1):
-            for tile_y in range(tile_y_min, tile_y_max + 1):
+        for tile_y in range(tile_y_min, tile_y_max + 1):
+            for tile_x in range(tile_x_min, tile_x_max + 1):
                 tile = tiles_dict.get((tile_x, tile_y))
                 if tile is None:
                     continue
                 
                 # 块的世界像素范围
-                tile_start_px = tile_x * self.TILE_SIZE
-                tile_end_px = tile_start_px + self.TILE_SIZE
-                tile_start_py = tile_y * self.TILE_SIZE
-                tile_end_py = tile_start_py + self.TILE_SIZE
+                # tile_y对应Y轴(gx), tile_x对应X轴(gy)
+                tile_start_gx = tile_y * self.TILE_SIZE
+                tile_end_gx = tile_start_gx + self.TILE_SIZE
+                tile_start_gy = tile_x * self.TILE_SIZE
+                tile_end_gy = tile_start_gy + self.TILE_SIZE
                 
                 # 计算交集
-                copy_start_px = max(start_px, tile_start_px)
-                copy_end_px = min(end_px, tile_end_px)
-                copy_start_py = max(start_py, tile_start_py)
-                copy_end_py = min(end_py, tile_end_py)
+                copy_start_gx = max(gx1, tile_start_gx)
+                copy_end_gx = min(gx2, tile_end_gx)
+                copy_start_gy = max(gy1, tile_start_gy)
+                copy_end_gy = min(gy2, tile_end_gy)
                 
-                if copy_start_px >= copy_end_px or copy_start_py >= copy_end_py:
+                if copy_start_gx >= copy_end_gx or copy_start_gy >= copy_end_gy:
                     continue
                 
-                # 块内坐标
-                tile_x_start = copy_start_px - tile_start_px
-                tile_x_end = copy_end_px - tile_start_px
-                tile_y_start = copy_start_py - tile_start_py
-                tile_y_end = copy_end_py - tile_start_py
+                # 块内坐标（tensor索引: [H, W] = [Y, X]）
+                tile_h_start = copy_start_gx - tile_start_gx
+                tile_h_end = copy_end_gx - tile_start_gx
+                tile_w_start = copy_start_gy - tile_start_gy
+                tile_w_end = copy_end_gy - tile_start_gy
                 
                 # Local Map坐标
-                local_x_start = copy_start_px - start_px
-                local_x_end = copy_end_px - start_px
-                local_y_start = copy_start_py - start_py
-                local_y_end = copy_end_py - start_py
+                local_h_start = copy_start_gx - gx1
+                local_h_end = copy_end_gx - gx1
+                local_w_start = copy_start_gy - gy1
+                local_w_end = copy_end_gy - gy1
                 
                 # 写回数据（local_map是单个环境的，形状[C, H, W]）
                 tile[env_id, :,
-                     tile_x_start:tile_x_end,
-                     tile_y_start:tile_y_end] = \
+                     tile_h_start:tile_h_end,
+                     tile_w_start:tile_w_end] = \
                     local_map[:,
-                             local_x_start:local_x_end,
-                             local_y_start:local_y_end]
+                             local_h_start:local_h_end,
+                             local_w_start:local_w_end]
     
     def get_full_map_for_rendering(self, crop_size_m=24.0, is_one_step=False):
         """
@@ -527,13 +569,15 @@ class Semantic_Mapping(nn.Module):
         crop_size_px = int(crop_size_m * 100 / self.resolution)
         half_crop = crop_size_px // 2
         
-        agent_px = int(agent_x_m * 100 / self.resolution)
-        agent_py = int(agent_y_m * 100 / self.resolution)
+        # agent世界坐标(m) -> 世界像素
+        # px = Y轴像素，py = X轴像素
+        agent_px = int(agent_y_m * 100 / self.resolution)  # Y轴像素
+        agent_py = int(agent_x_m * 100 / self.resolution)  # X轴像素
         
-        start_px = agent_px - half_crop
-        end_px = agent_px + half_crop
-        start_py = agent_py - half_crop
-        end_py = agent_py + half_crop
+        start_px = agent_px - half_crop  # Y轴起始
+        end_px = agent_px + half_crop    # Y轴结束
+        start_py = agent_py - half_crop  # X轴起始
+        end_py = agent_py + half_crop    # X轴结束
         
         # 创建Full Map
         full_map = torch.zeros(
@@ -548,9 +592,10 @@ class Semantic_Mapping(nn.Module):
                 continue
             
             # 块的世界像素范围
-            tile_start_px = tile_x * self.TILE_SIZE
+            # tile_y对应Y轴(px), tile_x对应X轴(py)
+            tile_start_px = tile_y * self.TILE_SIZE  # Y轴像素起始
             tile_end_px = tile_start_px + self.TILE_SIZE
-            tile_start_py = tile_y * self.TILE_SIZE
+            tile_start_py = tile_x * self.TILE_SIZE  # X轴像素起始
             tile_end_py = tile_start_py + self.TILE_SIZE
             
             # 计算交集
@@ -562,25 +607,25 @@ class Semantic_Mapping(nn.Module):
             if copy_start_px >= copy_end_px or copy_start_py >= copy_end_py:
                 continue
             
-            # 块内坐标
-            tile_x_start = copy_start_px - tile_start_px
-            tile_x_end = copy_end_px - tile_start_px
-            tile_y_start = copy_start_py - tile_start_py
-            tile_y_end = copy_end_py - tile_start_py
+            # 块内坐标（tensor: [H,W] = [Y,X]）
+            tile_h_start = copy_start_px - tile_start_px
+            tile_h_end = copy_end_px - tile_start_px
+            tile_w_start = copy_start_py - tile_start_py
+            tile_w_end = copy_end_py - tile_start_py
             
             # Full Map坐标
-            full_x_start = copy_start_px - start_px
-            full_x_end = copy_end_px - start_px
-            full_y_start = copy_start_py - start_py
-            full_y_end = copy_end_py - start_py
+            full_h_start = copy_start_px - start_px
+            full_h_end = copy_end_px - start_px
+            full_w_start = copy_start_py - start_py
+            full_w_end = copy_end_py - start_py
             
-            # 复制数据
+            # 复制数据（tensor索引: [batch, channel, H, W]）
             full_map[:, :,
-                    full_x_start:full_x_end,
-                    full_y_start:full_y_end] = \
+                    full_h_start:full_h_end,
+                    full_w_start:full_w_end] = \
                 tile[:, :,
-                     tile_x_start:tile_x_end,
-                     tile_y_start:tile_y_end]
+                     tile_h_start:tile_h_end,
+                     tile_w_start:tile_w_end]
         
         # 更新full_w和full_h（用于兼容旧代码）
         self.full_w = crop_size_px
