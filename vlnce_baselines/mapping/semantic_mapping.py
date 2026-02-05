@@ -13,6 +13,7 @@ import copy
 import numpy as np
 from PIL import Image
 import matplotlib.pyplot as plt
+from collections import defaultdict
 
 import torch
 import torch.nn as nn
@@ -53,24 +54,29 @@ class OrderedSet:
 
 class Semantic_Mapping(nn.Module):
     r"""
-    Semantic_Mapping moudle: initialize map and do the projection.
-    Projection procedure: 
-    1. use depth observation to comupte a point cloud
-    2. associate predicted semantic categories with each point in the point cloud
-    3. project point cloud into 3D space to get voxel representation
-    4. summing over height dimension
-    """
+    分块可扩展语义地图 (Tiled Semantic Mapping)
     
+    核心改进：
+    1. 支持负世界坐标 - agent可以向任意方向移动
+    2. 分块存储 - 每个块240×240像素(12m×12m)
+    3. 按需扩展 - 动态创建新块，理论上无限大小
+    4. 内存高效 - 只存储探索过的区域
+    
+    坐标系统：
+    - 世界坐标：agent初始位置为(0, 0)，单位：米，可以是负值
+    - 块索引：(tile_x, tile_y)，可以是负值，如(-1, 0)表示左边的块
+    - 块内坐标：(local_x, local_y)，范围[0, 239]，单位：像素
+    
+    Map结构：
+    1. Obstacle Map (通道0)
+    2. Explored Area (通道1)
+    3. Current Agent Location (通道2)
+    4. Past Agent Locations (通道3)
+    5. Semantic Categories (通道4+，动态扩展)
     """
-    Initialize map variables:
-    Full map consists of multiple channels containing the following:
-    1. Obstacle Map
-    2. Explored Area
-    3. Current Agent Location
-    4. Past Agent Locations
-    5,6,7,.. : Semantic Categories
-    """
-    MAP_CHANNELS = map_channels # map_channels is defined in constant.py
+    MAP_CHANNELS = map_channels
+    TILE_SIZE = 240  # 每个块的尺寸（像素）
+    TILE_SIZE_M = 12.0  # 每个块的物理尺寸（米）
 
     def __init__(self, args):
         super(Semantic_Mapping, self).__init__()
@@ -82,15 +88,16 @@ class Semantic_Mapping(nn.Module):
         self.last_loc = None
         self.vis_classes = []
         
+        # 地图参数
         self.fov = args.HFOV
-        self.min_z = args.MIN_Z # a lager min_z could lost some information on the floor, 2cm is ok
+        self.min_z = args.MIN_Z
         self.device = args.DEVICE
-        self.du_scale = args.DU_SCALE # depth unit
+        self.du_scale = args.DU_SCALE
         self.visualize = args.VISUALIZE
         self.screen_w = args.FRAME_WIDTH
         self.screen_h = args.FRAME_HEIGHT
-        self.vision_range = args.VISION_RANGE # args.vision_range=100(cm)
-        self.resolution = args.MAP_RESOLUTION
+        self.vision_range = args.VISION_RANGE  # 100cm
+        self.resolution = args.MAP_RESOLUTION  # 5cm/pixel
         self.print_images = args.PRINT_IMAGES
         self.z_resolution = args.MAP_RESOLUTION
         self.num_environments = args.NUM_ENVIRONMENTS
@@ -98,43 +105,429 @@ class Semantic_Mapping(nn.Module):
         self.cat_pred_threshold = args.CAT_PRED_THRESHOLD
         self.exp_pred_threshold = args.EXP_PRED_THRESHOLD
         self.map_pred_threshold = args.MAP_PRED_THRESHOLD
-        self.map_shape = (self.args.MAP_SIZE_CM // self.resolution,
-                          self.args.MAP_SIZE_CM // self.resolution)
-        self.map_size_cm = args.MAP_SIZE_CM // args.GLOBAL_DOWNSCALING
+        
+        # 分块地图：{(tile_x, tile_y): tensor[C, 240, 240]}
+        self.tiles = defaultdict(lambda: None)
+        
+        # Local Map尺寸（固定240×240）
+        self.local_w = self.TILE_SIZE
+        self.local_h = self.TILE_SIZE
+        self.map_size_cm = self.TILE_SIZE * self.resolution  # 1200cm = 12m
+        
+        # 兼容旧代码的属性（渲染用）
+        self.full_w = self.TILE_SIZE  # 初始大小，会动态变化
+        self.full_h = self.TILE_SIZE
+        
+        # Agent全局坐标（世界坐标，米，可以是负值）
+        self.agent_global_x = 0.0  # 初始在原点
+        self.agent_global_y = 0.0
+        self.agent_orientation = 0.0  # 弧度
+        
+        # Local Pose（相对Local Map的坐标）
+        self.local_pose = torch.zeros(self.num_environments, 3).float().to(self.device)
+        self.full_pose = torch.zeros(self.num_environments, 3).float().to(self.device)
+        self.curr_loc = torch.zeros(self.num_environments, 3).float().to(self.device)
+        
+        # Origins（Local Map左上角的世界坐标，可以是负值）
+        self.origins = np.zeros((self.num_environments, 3))
+        
+        # Local Map Boundaries（在世界坐标系中的像素范围，可以是负值）
+        self.lmb = np.zeros((self.num_environments, 4)).astype(int)
+        
+        # State (7 dimensions): [global_x, global_y, orientation, gx1, gx2, gy1, gy2]
+        self.state = np.zeros((self.num_environments, 7))
+        
+        # 当前Local Map和Full Map（用于兼容旧接口）
+        self.local_map = None
+        self.one_step_local_map = None
+        self.full_map = None
+        self.one_step_full_map = None
         
         if self.visualize or self.print_images:
             self.vis_image = vu.init_vis_image()
             self.rgb_vis = None
 
-        # 72; 3.6m is about the height of one floor
-        self.max_height = int(360 / self.z_resolution)
-        
-        # -8; we can use negative height to ensure information on the floor is contained
-        self.min_height = int(-40 / self.z_resolution)
-        self.agent_height = args.AGENT_HEIGHT * 100. # 0.88 * 100 = 88cm
-        self.shift_loc = [self.vision_range *
-                          self.resolution // 2, 0, np.pi / 2.0] # [250, 0, pi/2]
-        self.camera_matrix = du.get_camera_matrix(
-            self.screen_w, self.screen_h, self.fov)
+        # 高度参数
+        self.max_height = int(360 / self.z_resolution)  # 72
+        self.min_height = int(-40 / self.z_resolution)  # -8
+        self.agent_height = args.AGENT_HEIGHT * 100.  # 88cm
+        self.shift_loc = [self.vision_range * self.resolution // 2, 0, np.pi / 2.0]
+        self.camera_matrix = du.get_camera_matrix(self.screen_w, self.screen_h, self.fov)
 
-        # feat's first channel is prepared for obstacles;
+        # Feat通道
         self.feat = torch.ones(
-            args.NUM_ENVIRONMENTS, 1, self.screen_h // self.du_scale * self.screen_w // self.du_scale
+            args.NUM_ENVIRONMENTS, 1, 
+            self.screen_h // self.du_scale * self.screen_w // self.du_scale
         ).float().to(self.device)
     
     def reset(self) -> None:
+        """重置地图系统"""
         self.curr_loc = None
         self.last_loc = None
         self.vis_classes = []
+        self.tiles.clear()
+        
+        # 重置agent全局坐标到原点
+        self.agent_global_x = 0.0
+        self.agent_global_y = 0.0
+        self.agent_orientation = 0.0
+        
+        # 重置pose
+        self.local_pose.fill_(0.)
+        self.full_pose.fill_(0.)
+        self.curr_loc.fill_(0.)
+        
+        # 重置origins和lmb
+        self.origins.fill(0.)
+        self.lmb.fill(0.)
+        self.state.fill(0.)
+        
+        # 清空local_map和full_map
+        self.local_map = None
+        self.one_step_local_map = None
+        self.full_map = None
+        self.one_step_full_map = None
+        
         self.feat = torch.ones(
-            self.args.NUM_ENVIRONMENTS, 1, self.screen_h // self.du_scale * self.screen_w // self.du_scale
+            self.args.NUM_ENVIRONMENTS, 1, 
+            self.screen_h // self.du_scale * self.screen_w // self.du_scale
         ).float().to(self.device)
         
         if self.visualize or self.print_images:
             self.vis_image = vu.init_vis_image()
             self.rgb_vis = None
     
+    def _world_to_tile_coords(self, world_x_m, world_y_m):
+        """
+        世界坐标（米）→ 块索引 + 块内像素坐标
+        
+        Args:
+            world_x_m, world_y_m: 世界坐标（米，可以是负值）
+        
+        Returns:
+            tile_x, tile_y: 块索引（可以是负值）
+            local_px, local_py: 块内像素坐标[0, 239]
+        """
+        # 转换为世界像素坐标（可以是负值）
+        world_px = int(world_x_m * 100 / self.resolution)
+        world_py = int(world_y_m * 100 / self.resolution)
+        
+        # 计算块索引（使用floor division处理负数）
+        tile_x = world_px // self.TILE_SIZE
+        tile_y = world_py // self.TILE_SIZE
+        
+        # 块内坐标（使用模运算，确保在[0, 239]范围内）
+        local_px = world_px % self.TILE_SIZE
+        local_py = world_py % self.TILE_SIZE
+        
+        return tile_x, tile_y, local_px, local_py
+    
+    def _tile_to_world_coords(self, tile_x, tile_y, local_px, local_py):
+        """
+        块坐标 → 世界坐标（米）
+        
+        Args:
+            tile_x, tile_y: 块索引（可以是负值）
+            local_px, local_py: 块内像素坐标
+        
+        Returns:
+            world_x_m, world_y_m: 世界坐标（米）
+        """
+        # 计算世界像素坐标
+        world_px = tile_x * self.TILE_SIZE + local_px
+        world_py = tile_y * self.TILE_SIZE + local_py
+        
+        # 转换为米
+        world_x_m = world_px * self.resolution / 100.0
+        world_y_m = world_py * self.resolution / 100.0
+        
+        return world_x_m, world_y_m
+    
+    def _create_empty_tile(self, nc):
+        """创建空白块"""
+        return torch.zeros(
+            self.num_environments, nc,
+            self.TILE_SIZE, self.TILE_SIZE
+        ).float().to(self.device)
+    
+    def _ensure_tiles_exist(self, tile_indices, nc):
+        """确保指定的块存在"""
+        for (tile_x, tile_y) in tile_indices:
+            if self.tiles[(tile_x, tile_y)] is None:
+                self.tiles[(tile_x, tile_y)] = self._create_empty_tile(nc)
+                print(f"🆕 创建新块: tile({tile_x}, {tile_y}) = 世界坐标({tile_x*12:.0f}m, {tile_y*12:.0f}m)")
+    
+    def _get_tiles_for_region(self, center_x_m, center_y_m, size_m):
+        """
+        获取指定区域需要的所有块索引
+        
+        Args:
+            center_x_m, center_y_m: 区域中心世界坐标（米）
+            size_m: 区域尺寸（米）
+        
+        Returns:
+            tiles: 块索引列表 [(tile_x, tile_y), ...]
+        """
+        half_size_m = size_m / 2.0
+        
+        # 区域四角的世界坐标
+        min_x = center_x_m - half_size_m
+        max_x = center_x_m + half_size_m
+        min_y = center_y_m - half_size_m
+        max_y = center_y_m + half_size_m
+        
+        # 转换为块索引
+        tile_x_min = int(np.floor(min_x / self.TILE_SIZE_M))
+        tile_x_max = int(np.floor(max_x / self.TILE_SIZE_M))
+        tile_y_min = int(np.floor(min_y / self.TILE_SIZE_M))
+        tile_y_max = int(np.floor(max_y / self.TILE_SIZE_M))
+        
+        # 生成所有需要的块
+        tiles = [
+            (tx, ty)
+            for tx in range(tile_x_min, tile_x_max + 1)
+            for ty in range(tile_y_min, tile_y_max + 1)
+        ]
+        
+        return tiles
+    
+    def get_local_map_from_tiles(self, nc):
+        """
+        从块中拼接Local Map（240×240，以agent为中心）
+        
+        Returns:
+            local_map: [batch, C, 240, 240]
+        """
+        # 计算agent世界坐标（米）
+        agent_x_m = self.full_pose[0, 0].item()
+        agent_y_m = self.full_pose[0, 1].item()
+        
+        # 获取需要的块
+        tiles_needed = self._get_tiles_for_region(agent_x_m, agent_y_m, self.TILE_SIZE_M)
+        self._ensure_tiles_exist(tiles_needed, nc)
+        
+        # 创建Local Map
+        local_map = torch.zeros(
+            self.num_environments, nc,
+            self.TILE_SIZE, self.TILE_SIZE
+        ).float().to(self.device)
+        
+        # Local Map的世界像素范围
+        half_size_px = self.TILE_SIZE // 2
+        agent_px = int(agent_x_m * 100 / self.resolution)
+        agent_py = int(agent_y_m * 100 / self.resolution)
+        
+        start_px = agent_px - half_size_px
+        end_px = agent_px + half_size_px
+        start_py = agent_py - half_size_px
+        end_py = agent_py + half_size_px
+        
+        # 从各个块中提取数据
+        for (tile_x, tile_y) in tiles_needed:
+            tile = self.tiles[(tile_x, tile_y)]
+            if tile is None:
+                continue
+            
+            # 块的世界像素范围
+            tile_start_px = tile_x * self.TILE_SIZE
+            tile_end_px = tile_start_px + self.TILE_SIZE
+            tile_start_py = tile_y * self.TILE_SIZE
+            tile_end_py = tile_start_py + self.TILE_SIZE
+            
+            # 计算交集
+            copy_start_px = max(start_px, tile_start_px)
+            copy_end_px = min(end_px, tile_end_px)
+            copy_start_py = max(start_py, tile_start_py)
+            copy_end_py = min(end_py, tile_end_py)
+            
+            if copy_start_px >= copy_end_px or copy_start_py >= copy_end_py:
+                continue
+            
+            # 块内坐标
+            tile_x_start = copy_start_px - tile_start_px
+            tile_x_end = copy_end_px - tile_start_px
+            tile_y_start = copy_start_py - tile_start_py
+            tile_y_end = copy_end_py - tile_start_py
+            
+            # Local Map坐标
+            local_x_start = copy_start_px - start_px
+            local_x_end = copy_end_px - start_px
+            local_y_start = copy_start_py - start_py
+            local_y_end = copy_end_py - start_py
+            
+            # 复制数据
+            local_map[:, :,
+                     local_x_start:local_x_end,
+                     local_y_start:local_y_end] = \
+                tile[:, :,
+                     tile_x_start:tile_x_end,
+                     tile_y_start:tile_y_end]
+        
+        # 更新lmb（Local Map在世界坐标系中的像素边界）
+        for e in range(self.num_environments):
+            self.lmb[e] = [start_px, end_px, start_py, end_py]
+            # 更新origins（Local Map左上角的世界坐标）
+            self.origins[e] = [
+                start_py * self.resolution / 100.0,  # Y方向（米）
+                start_px * self.resolution / 100.0,  # X方向（米）
+                0.0
+            ]
+        
+        return local_map
+    
+    def update_tiles_from_local_map(self, local_map):
+        """
+        将更新后的Local Map写回到块中
+        
+        Args:
+            local_map: [batch, C, 240, 240]
+        """
+        # Local Map的世界像素范围（从lmb获取）
+        start_px, end_px, start_py, end_py = self.lmb[0]
+        
+        # 计算涉及的块
+        tile_x_min = start_px // self.TILE_SIZE
+        tile_x_max = (end_px - 1) // self.TILE_SIZE
+        tile_y_min = start_py // self.TILE_SIZE
+        tile_y_max = (end_py - 1) // self.TILE_SIZE
+        
+        # 写回数据到各个块
+        for tile_x in range(tile_x_min, tile_x_max + 1):
+            for tile_y in range(tile_y_min, tile_y_max + 1):
+                tile = self.tiles[(tile_x, tile_y)]
+                if tile is None:
+                    continue
+                
+                # 块的世界像素范围
+                tile_start_px = tile_x * self.TILE_SIZE
+                tile_end_px = tile_start_px + self.TILE_SIZE
+                tile_start_py = tile_y * self.TILE_SIZE
+                tile_end_py = tile_start_py + self.TILE_SIZE
+                
+                # 计算交集
+                copy_start_px = max(start_px, tile_start_px)
+                copy_end_px = min(end_px, tile_end_px)
+                copy_start_py = max(start_py, tile_start_py)
+                copy_end_py = min(end_py, tile_end_py)
+                
+                if copy_start_px >= copy_end_px or copy_start_py >= copy_end_py:
+                    continue
+                
+                # 块内坐标
+                tile_x_start = copy_start_px - tile_start_px
+                tile_x_end = copy_end_px - tile_start_px
+                tile_y_start = copy_start_py - tile_start_py
+                tile_y_end = copy_end_py - tile_start_py
+                
+                # Local Map坐标
+                local_x_start = copy_start_px - start_px
+                local_x_end = copy_end_px - start_px
+                local_y_start = copy_start_py - start_py
+                local_y_end = copy_end_py - start_py
+                
+                # 写回数据
+                tile[:, :,
+                     tile_x_start:tile_x_end,
+                     tile_y_start:tile_y_end] = \
+                    local_map[:, :,
+                             local_x_start:local_x_end,
+                             local_y_start:local_y_end]
+    
+    def get_full_map_for_rendering(self, crop_size_m=24.0):
+        """
+        获取用于渲染的全局地图（以agent为中心裁剪）
+        
+        Args:
+            crop_size_m: 裁剪尺寸（米），默认24m×24m
+        
+        Returns:
+            full_map: [batch, C, H, W]
+            map_size: (H, W) 实际尺寸
+        """
+        # 获取需要的块
+        agent_x_m = self.full_pose[0, 0].item()
+        agent_y_m = self.full_pose[0, 1].item()
+        
+        tiles_needed = self._get_tiles_for_region(agent_x_m, agent_y_m, crop_size_m)
+        
+        if not tiles_needed:
+            # 没有任何块，返回空地图
+            nc = self.MAP_CHANNELS + 1
+            map_size_px = int(crop_size_m * 100 / self.resolution)
+            return torch.zeros(self.num_environments, nc, map_size_px, map_size_px).float().to(self.device), (map_size_px, map_size_px)
+        
+        nc = self.tiles[tiles_needed[0]].shape[1] if self.tiles[tiles_needed[0]] is not None else self.MAP_CHANNELS + 1
+        self._ensure_tiles_exist(tiles_needed, nc)
+        
+        # 计算裁剪区域的世界像素范围
+        crop_size_px = int(crop_size_m * 100 / self.resolution)
+        half_crop = crop_size_px // 2
+        
+        agent_px = int(agent_x_m * 100 / self.resolution)
+        agent_py = int(agent_y_m * 100 / self.resolution)
+        
+        start_px = agent_px - half_crop
+        end_px = agent_px + half_crop
+        start_py = agent_py - half_crop
+        end_py = agent_py + half_crop
+        
+        # 创建Full Map
+        full_map = torch.zeros(
+            self.num_environments, nc,
+            crop_size_px, crop_size_px
+        ).float().to(self.device)
+        
+        # 从各个块中拼接
+        for (tile_x, tile_y) in tiles_needed:
+            tile = self.tiles[(tile_x, tile_y)]
+            if tile is None:
+                continue
+            
+            # 块的世界像素范围
+            tile_start_px = tile_x * self.TILE_SIZE
+            tile_end_px = tile_start_px + self.TILE_SIZE
+            tile_start_py = tile_y * self.TILE_SIZE
+            tile_end_py = tile_start_py + self.TILE_SIZE
+            
+            # 计算交集
+            copy_start_px = max(start_px, tile_start_px)
+            copy_end_px = min(end_px, tile_end_px)
+            copy_start_py = max(start_py, tile_start_py)
+            copy_end_py = min(end_py, tile_end_py)
+            
+            if copy_start_px >= copy_end_px or copy_start_py >= copy_end_py:
+                continue
+            
+            # 块内坐标
+            tile_x_start = copy_start_px - tile_start_px
+            tile_x_end = copy_end_px - tile_start_px
+            tile_y_start = copy_start_py - tile_start_py
+            tile_y_end = copy_end_py - tile_start_py
+            
+            # Full Map坐标
+            full_x_start = copy_start_px - start_px
+            full_x_end = copy_end_px - start_px
+            full_y_start = copy_start_py - start_py
+            full_y_end = copy_end_py - start_py
+            
+            # 复制数据
+            full_map[:, :,
+                    full_x_start:full_x_end,
+                    full_y_start:full_y_end] = \
+                tile[:, :,
+                     tile_x_start:tile_x_end,
+                     tile_y_start:tile_y_end]
+        
+        # 更新full_w和full_h（用于兼容旧代码）
+        self.full_w = crop_size_px
+        self.full_h = crop_size_px
+        
+        return full_map, (crop_size_px, crop_size_px)
+    
     def _dynamic_process(self, num_detected_classes: int) -> None:
+        """
+        动态调整通道数以适应新检测到的类别
+        """
         vr = self.vision_range
         target_channels = 1 + num_detected_classes
         
@@ -155,9 +548,9 @@ class Semantic_Mapping(nn.Module):
             ).float().to(self.device)
             self.feat = torch.cat([self.feat, feat_pad], axis=1)
         elif target_channels < current_feat_channels:
-            # 如果通道数变少（理论上不应该发生），截断
             self.feat = self.feat[:, :target_channels, :]
         
+        # 调整Local Map的通道数
         new_nc = num_detected_classes + self.MAP_CHANNELS
         if new_nc > self.local_map.shape[1]:
             pad_num = new_nc - self.local_map.shape[1]
@@ -165,46 +558,47 @@ class Semantic_Mapping(nn.Module):
                                         pad_num, 
                                         self.local_w, 
                                         self.local_h).float().to(self.device)
-            full_map_pad = torch.zeros(self.num_environments, 
-                                       pad_num, 
-                                       self.full_w, 
-                                       self.full_h).float().to(self.device)
             self.local_map = torch.cat([self.local_map, local_map_pad], axis=1)
             self.one_step_local_map = torch.cat([self.one_step_local_map, local_map_pad], axis=1)
-            self.full_map = torch.cat([self.full_map, full_map_pad], axis=1)
-            self.one_step_full_map = torch.cat([self.one_step_full_map, full_map_pad], axis=1)
+            
+            # 对于分块系统，需要扩展所有tiles的通道数
+            for tile_key, tile in self.tiles.items():
+                if tile is not None:
+                    tile_pad = torch.zeros(self.num_environments,
+                                          pad_num,
+                                          self.TILE_SIZE,
+                                          self.TILE_SIZE).float().to(self.device)
+                    self.tiles[tile_key] = torch.cat([tile, tile_pad], axis=1)
+            for tile_key, tile in self.one_step_tiles.items():
+                if tile is not None:
+                    tile_pad = torch.zeros(self.num_environments,
+                                          pad_num,
+                                          self.TILE_SIZE,
+                                          self.TILE_SIZE).float().to(self.device)
+                    self.one_step_tiles[tile_key] = torch.cat([tile, tile_pad], axis=1)
+            
+            # 更新渲染用的Full Map通道数
+            if hasattr(self, 'full_map') and self.full_map is not None:
+                full_map_pad = torch.zeros(self.num_environments,
+                                          pad_num,
+                                          self.full_map.shape[2],
+                                          self.full_map.shape[3]).float().to(self.device)
+                self.full_map = torch.cat([self.full_map, full_map_pad], axis=1)
+                self.one_step_full_map = torch.cat([self.one_step_full_map, full_map_pad], axis=1)
             
     def _prepare(self, nc: int) -> None:
-        r"""Create empty full_map, local_map, full_pose, local_pose, origins, local map boundries
-        Args:
-        nc: num channels
         """
+        初始化Local Map、姿态、边界等
         
-        r"""
-        Calculating full and local map sizes
-        args.global_downscaling = 2
-        full_w = full_h = 480
-        local_w, local_h = 240
+        注意：分块系统不需要预先创建full_map，tiles按需创建
         """
-        self.full_w, self.full_h = self.map_shape
-        self.local_w = int(self.full_w / self.global_downscaling)
-        self.local_h = int(self.full_h / self.global_downscaling)
-        self.visited_vis = np.zeros(self.map_shape)
+        # Local Map大小：240×240（TILE_SIZE）
+        self.full_w, self.full_h = self.map_shape  # 保持兼容性，但实际不用于tiles
+        self.local_w = self.TILE_SIZE
+        self.local_h = self.TILE_SIZE
+        self.visited_vis = np.zeros(self.map_shape)  # 用于可视化的agent轨迹
         
-        r"""
-        map_size_cm is the real world word map size(cm), i.e. (2400cm, 2400cm) <=> (24m, 24m)
-        each element in the spatial map(full_map) corresponds to a cell of size (5cm, 5cm) in the physical world
-        map_resolution = 5 so, the full_map should be (2400 / 5, 2400 / 5) = (480, 480)
-        local_map is half of full_map, i.e. (240, 240)
-        """
-        self.full_map = torch.zeros(self.num_environments, 
-                                    nc, 
-                                    self.full_w, 
-                                    self.full_h).float().to(self.device)
-        self.one_step_full_map = torch.zeros(self.num_environments, 
-                                             nc, 
-                                             self.full_w, 
-                                             self.full_h).float().to(self.device)
+        # 只创建Local Map（不再创建固定的full_map）
         self.local_map = torch.zeros(self.num_environments, 
                                      nc, 
                                      self.local_w, 
@@ -214,23 +608,22 @@ class Semantic_Mapping(nn.Module):
                                               self.local_w, 
                                               self.local_h).float().to(self.device)
         
-        r"""
-        pose.shape=(3,): [x, y, orientation]
-        full pose: the agent always starts at the center of the map facing east
-        """
+        # full_map和one_step_full_map将在需要时通过get_full_map_for_rendering()生成
+        self.full_map = None
+        self.one_step_full_map = None
+        
+        # 姿态：世界坐标（可以为负）
         self.full_pose = torch.zeros(self.num_environments, 3).float().to(self.device)
         self.local_pose = torch.zeros(self.num_environments, 3).float().to(self.device)
         self.curr_loc = torch.zeros(self.num_environments, 3).float().to(self.device)
         
-        # Origin of local map
+        # Local Map的世界坐标原点（左上角）
         self.origins = np.zeros((self.num_environments, 3))
 
-        # Local Map Boundaries
+        # Local Map边界（世界像素坐标）
         self.lmb = np.zeros((self.num_environments, 4)).astype(int)
         
-        # state has 7 dimensions
-        # 1-3 store continuous global agent location
-        # 4-7 store local map boundaries
+        # state: [x, y, ori, gx1, gx2, gy1, gy2]
         self.state = np.zeros((self.num_environments, 7))
         
     def _get_local_map_boundaries(self, agent_loc, local_sizes, full_sizes):
@@ -257,133 +650,132 @@ class Semantic_Mapping(nn.Module):
         return [gx1, gx2, gy1, gy2]
         
     def init_map_and_pose(self, num_detected_classes: int):
-        r"""
-        1. Initialize full_map as all zeros
-        2. Initialize agent at the middle of the map
-        3. extract the local map from the full map
         """
+        初始化分块地图和agent姿态
         
+        新设计：
+        1. Agent初始世界坐标为(0, 0)，不再是(12, 12)
+        2. 创建初始块tile(0, 0)，覆盖世界坐标[0, 12)m × [0, 12)m
+        3. Agent在块中心(6m, 6m)
+        4. Local Map以agent为中心，范围[-6, 6)m × [-6, 6)m
+        """
         nc = num_detected_classes + self.MAP_CHANNELS
-        self._prepare(nc)
         
-        self.full_map.fill_(0.)
-        self.one_step_full_map.fill_(0.)
-        self.full_pose.fill_(0.) # [bs, 3]
+        # Agent初始世界坐标：(0, 0, 0)
+        self.full_pose.fill_(0.)
+        self.full_pose[:, 0] = 6.0  # X方向 = 6m（块中心）
+        self.full_pose[:, 1] = 6.0  # Y方向 = 6m（块中心）
+        self.full_pose[:, 2] = 0.0  # 朝向东方
         
-        # map_size_cm = 2400
-        # full_pos[0]: [x=12m, y=12m, ori=0], agent always start at the center of the map
-        self.full_pose[:, :2] = self.args.MAP_SIZE_CM / 100.0 / 2.0
-
+        # 创建初始块tile(0, 0)
+        self._ensure_tiles_exist([(0, 0)], nc)
+        
+        # 在初始块中标记agent位置（中心120, 120）
+        for e in range(self.num_environments):
+            tile = self.tiles[(0, 0)]
+            tile[e, 2:4, 119:122, 119:122] = 1.0  # Current & Past location
+        
+        # 获取Local Map（240×240，以agent为中心）
+        self.local_map = self.get_local_map_from_tiles(nc)
+        self.one_step_local_map = self.local_map.clone()
+        
+        # Local Pose：agent相对Local Map的位置
+        # 因为Local Map以agent为中心，所以agent在Local Map中心(6m, 6m)
+        for e in range(self.num_environments):
+            self.local_pose[e] = torch.tensor([6.0, 6.0, 0.0]).float().to(self.device)
+            self.curr_loc[e] = self.full_pose[e].clone()
+        
+        # 更新state
         locs = self.full_pose.cpu().numpy()
-        self.state[:, :3] = locs # state: [x,y,z,gx1,gx2,gy1,gy2]
-        for e in range(self.num_environments):
-            r, c = locs[e, 1], locs[e, 0] # r,c = 12; r is x direction, c is y direction
-            loc_r, loc_c = [int(r * 100.0 / self.resolution), # loc_r, loc_c = 12 * 100 / 5 = 240
-                            int(c * 100.0 / self.resolution)]
-            
-            # current and past agent location: agent takes a (3,3) square in the middle of the (480, 480) map. 
-            # (3, 3) in spatial map <=> (15cm, 15cm) in physical world
-            self.full_map[e, 2:4, loc_r - 1:loc_r + 2, loc_c - 1:loc_c + 2] = 1.0
-            self.one_step_full_map[e, 2:4, loc_r - 1:loc_r + 2, loc_c - 1:loc_c + 2] = 1.0
-
-            # lmb: [gx1, gx2, gy1, gy2]
-            self.lmb[e] = self._get_local_map_boundaries((loc_r, loc_c),
-                                                (self.local_w, self.local_h),
-                                                (self.full_w, self.full_h))
-            self.state[e, 3:] = self.lmb[e]
-            
-            # the origin of the local map is the top-lef corner of local map [6,6,0] meter
-            self.origins[e] = [self.lmb[e][2] * self.resolution / 100.0,
-                            self.lmb[e][0] * self.resolution / 100.0, 0.]
-
-        for e in range(self.num_environments):
-            # extract the local map
-            self.local_map[e] = self.full_map[e, :, self.lmb[e, 0] : self.lmb[e, 1], self.lmb[e, 2] : self.lmb[e, 3]]
-            self.one_step_local_map[e] = self.one_step_full_map[e, :, self.lmb[e, 0] : self.lmb[e, 1], 
-                                                                self.lmb[e, 2] : self.lmb[e, 3]]
-            
-            # local_pose initialized as (6,6,0) meter
-            self.local_pose[e] = self.full_pose[e] - \
-                torch.from_numpy(self.origins[e]).to(self.device).float()
-                
-            self.curr_loc[e] = self.full_pose[e] - \
-                torch.from_numpy(self.origins[e]).to(self.device).float()
+        self.state[:, :3] = locs
+        self.state[:, 3:] = self.lmb[0]  # [gx1, gx2, gy1, gy2]
+        
+        # 获取用于渲染的Full Map
+        self.full_map, _ = self.get_full_map_for_rendering(crop_size_m=24.0)
+        self.one_step_full_map = self.full_map.clone()
+        
+        print(f"✅ 地图初始化完成: Agent@世界(6.0m, 6.0m) = tile(0,0)@块内(120px, 120px)")
                                 
     def update_map(self, step: int, detected_classes: OrderedSet, current_episode_id: int) -> None:
+        """
+        更新分块地图
+        
+        步骤：
+        1. 更新agent在Local Map中的位置标记
+        2. 将Local Map写回到对应的tiles
+        3. 更新full_pose（世界坐标）
+        4. 每CENTER_RESET_STEPS步执行recentering：重新获取Local Map
+        """
         if step == 0:
             self.last_loc = self.state[:, :3]
         else:
             self.last_loc = self.curr_loc
-            
-        # if step == 12:
-        #     self.feat[:, 0, :] = 1.0
-        #     for e in range(self.num_environments):
-        #         self.local_map[e, 0, ...] = 0.0
-                
+        
+        # 更新state：world坐标 = local_pose（relative to Local Map origin）
         locs = self.local_pose.cpu().numpy()
+        # origins保存Local Map左上角的世界坐标
         self.state[:, :3] = locs + self.origins
         self.curr_loc = self.state[:, :3]
-        self.local_map[:, 2, :, :].fill_(0.)  # Resetting current location channel
-        self.one_step_local_map[:, 2, :, :].fill_(0.)  # Resetting current location channel
+        
+        # 清除Local Map中的当前位置标记
+        self.local_map[:, 2, :, :].fill_(0.)
+        self.one_step_local_map[:, 2, :, :].fill_(0.)
+        
+        # 标记agent当前位置
         for e in range(self.num_environments):
-            r, c = locs[e, 1], locs[e, 0]
+            r, c = locs[e, 1], locs[e, 0]  # r=Y, c=X（物理坐标，米）
+            # 转换为Local Map像素坐标（240×240）
             loc_r, loc_c = [int(r * 100.0 / self.resolution),
-                        int(c * 100.0 / self.resolution)]
+                            int(c * 100.0 / self.resolution)]
+            # 在Local Map中标记agent位置（3×3像素）
             self.local_map[e, 2:4, loc_r - 1:loc_r + 2, loc_c - 1:loc_c + 2] = 1.
             self.one_step_local_map[e, 2:4, loc_r - 1:loc_r + 2, loc_c - 1:loc_c + 2] = 1.
             
-            self.full_map[e, :, self.lmb[e, 0]:self.lmb[e, 1], self.lmb[e, 2]:self.lmb[e, 3]] = \
-                    self.local_map[e]
-            self.one_step_full_map[e, :, self.lmb[e, 0]:self.lmb[e, 1], self.lmb[e, 2]:self.lmb[e, 3]] = \
-                    self.one_step_local_map[e]
-            
-            self.full_pose[e] = self.local_pose[e] + \
-                    torch.from_numpy(self.origins[e]).to(self.device).float()
-            
+            # 将更新后的Local Map写回到对应的tiles
+            self.update_tiles_from_local_map(self.local_map[e], self.full_pose[e])
+            self.update_tiles_from_local_map(self.one_step_local_map[e], self.full_pose[e], is_one_step=True)
+        
+        # 定期recentering：当agent偏离Local Map中心时，重新获取Local Map
         if ((step + 1) % self.args.CENTER_RESET_STEPS) == 0:
+            nc = self.local_map.shape[1]
             for e in range(self.num_environments):
-                self.full_map[e, :, self.lmb[e, 0]:self.lmb[e, 1], self.lmb[e, 2]:self.lmb[e, 3]] = \
-                    self.local_map[e]
-                self.one_step_full_map[e, :, self.lmb[e, 0]:self.lmb[e, 1], self.lmb[e, 2]:self.lmb[e, 3]] = \
-                    self.one_step_local_map[e]
+                # 从tiles获取新的Local Map（以当前agent为中心）
+                self.local_map[e] = self.get_local_map_from_tiles(nc, e)
+                self.one_step_local_map[e] = self.get_local_map_from_tiles(nc, e, is_one_step=True)
                 
-                # full_pose is actually global agent position.
-                self.full_pose[e] = self.local_pose[e] + \
-                    torch.from_numpy(self.origins[e]).to(self.device).float()
-                locs = self.full_pose[e].cpu().numpy()
-                r, c = locs[1], locs[0]
-                loc_r, loc_c = [int(r * 100.0 / self.resolution),
-                                int(c * 100.0 / self.resolution)]
-                self.lmb[e] = self._get_local_map_boundaries((loc_r, loc_c),
-                                                  (self.local_w, self.local_h),
-                                                  (self.full_w, self.full_h))
+                # 更新Local Map的世界坐标边界
+                agent_world_x, agent_world_y = self.full_pose[e, 0].item(), self.full_pose[e, 1].item()
+                # Local Map范围：[agent - 6m, agent + 6m)
+                self.lmb[e, 0] = int((agent_world_y - 6.0) * 100.0 / self.resolution)  # gx1
+                self.lmb[e, 1] = int((agent_world_y + 6.0) * 100.0 / self.resolution)  # gx2
+                self.lmb[e, 2] = int((agent_world_x - 6.0) * 100.0 / self.resolution)  # gy1
+                self.lmb[e, 3] = int((agent_world_x + 6.0) * 100.0 / self.resolution)  # gy2
                 self.state[e, 3:] = self.lmb[e]
-                self.origins[e] = [self.lmb[e][2] * self.resolution / 100.0,
-                              self.lmb[e][0] * self.resolution / 100.0, 0.]
-                self.local_map[e] = self.full_map[e, :,
-                                        self.lmb[e, 0]:self.lmb[e, 1],
-                                        self.lmb[e, 2]:self.lmb[e, 3]]
-                self.one_step_local_map[e] = self.one_step_full_map[e, :,
-                                        self.lmb[e, 0]:self.lmb[e, 1],
-                                        self.lmb[e, 2]:self.lmb[e, 3]]
-                self.local_pose[e] = self.full_pose[e] - \
-                    torch.from_numpy(self.origins[e]).to(self.device).float()
-        # frontiers = find_frontiers(self.full_map[0].cpu().numpy(), detected_classes)
-        # if self.print_images:
-        #     plt.imshow(np.flipud(frontiers))
-        #     save_dir = os.path.join(self.args.RESULTS_DIR, "frontiers/eps_%d"%current_episode_id)
-        #     os.makedirs(save_dir, exist_ok=True)
-        #     fn = "{}/step-{}.png".format(save_dir, step)
-        #     plt.savefig(fn)
                 
+                # 更新origins：Local Map左上角的世界坐标
+                self.origins[e] = [
+                    self.lmb[e, 2] * self.resolution / 100.0,  # X方向（米）
+                    self.lmb[e, 0] * self.resolution / 100.0,  # Y方向（米）
+                    0.
+                ]
+                
+                # 更新local_pose：agent相对于新Local Map origin的位置
+                # 因为重新获取的Local Map总是以agent为中心，所以local_pose应该是(6, 6, ori)
+                self.local_pose[e, 0] = 6.0
+                self.local_pose[e, 1] = 6.0
+                # 保持原有朝向
+                self.local_pose[e, 2] = self.full_pose[e, 2]
+        
+        # 生成用于渲染的Full Map（合并所有tiles）
+        self.full_map, _ = self.get_full_map_for_rendering(crop_size_m=24.0)
+        self.one_step_full_map, _ = self.get_full_map_for_rendering(crop_size_m=24.0, is_one_step=True)
+        
         if self.visualize or self.print_images:
             self._visualize(current_episode_id, 
                             id=0,
                             goal=self.goal, 
                             detected_classes=detected_classes,
                             step=step)
-        # torch.save(self.full_map, "/data/ckh/Zero-Shot-VLN-FusionMap/tests/full_maps/full_map%d.pt"%step)
-        # torch.save(self.one_step_full_map, "/data/ckh/Zero-Shot-VLN-FusionMap/tests/one_step_full_maps/full_map%d.pt"%step)
         
         return (self.full_map.cpu().numpy(), 
                 self.full_pose.cpu().numpy(), 
