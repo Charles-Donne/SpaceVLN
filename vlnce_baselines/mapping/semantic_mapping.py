@@ -332,10 +332,12 @@ class Semantic_Mapping(nn.Module):
         max_y = center_y_m + half_size_m
         
         # 转换为块索引
+        # 注意：区域是[min, max)左闭右开，所以max减去一个小量避免包含边界上的下一个块
+        # 例如：[0, 12)m 应该只包含 tile_x=0，不包含 tile_x=1
         tile_x_min = int(np.floor(min_x / self.TILE_SIZE_M))
-        tile_x_max = int(np.floor(max_x / self.TILE_SIZE_M))
+        tile_x_max = int(np.floor((max_x - 0.001) / self.TILE_SIZE_M))
         tile_y_min = int(np.floor(min_y / self.TILE_SIZE_M))
-        tile_y_max = int(np.floor(max_y / self.TILE_SIZE_M))
+        tile_y_max = int(np.floor((max_y - 0.001) / self.TILE_SIZE_M))
         
         # 生成所有需要的块
         tiles = [
@@ -931,15 +933,19 @@ class Semantic_Mapping(nn.Module):
                    goal: Tensor=None, 
                    detected_classes: OrderedSet=None,
                    step: int=None) -> None:
-        """Try to visualize RGB images with segmentation and semantic map
-
+        """可视化RGB图像和语义地图（Local Map + Global Map）
+        
+        布局：
+        ┌────────────────┬──────────────┬──────────────┐
+        │   RGB视图      │  Local Map   │  Global Map  │
+        │   480×640      │  240×240     │  480×480     │
+        └────────────────┴──────────────┴──────────────┘
+        
         Args:
-            id (int): since we are running a batch of environments, 
-            it's resource consuming to render all environments together,
-            so please only choose one environmet to visualize.
+            id (int): 环境ID（batch中的索引）
         """
         
-        # the last item of detected_class is always "not_a_cat"
+        # 更新检测类别
         if len(detected_classes[:-1]) > len(self.vis_classes):
             vis_classes = copy.deepcopy(self.vis_classes)
             for i in range(len(detected_classes[:-1]) - len(vis_classes)):
@@ -950,82 +956,97 @@ class Semantic_Mapping(nn.Module):
                     legend_color_palette)
                 self.vis_classes.append(detected_classes[i])
         
+        # ==================== 渲染 Local Map (240×240) ====================
         local_maps = self.local_map.clone()
         local_maps[:, -1, ...] = 1e-5
-        obstacle_map = local_maps[id, 0, ...].cpu().numpy()
-        explored_map = local_maps[id, 1, ...].cpu().numpy()
-        semantic_map = local_maps[id, 4:, ...].argmax(0).cpu().numpy()
+        local_obstacle = local_maps[id, 0, ...].cpu().numpy()
+        local_explored = local_maps[id, 1, ...].cpu().numpy()
+        local_semantic = local_maps[id, 4:, ...].argmax(0).cpu().numpy()
+        
+        # Agent世界坐标和Local Map边界
         start_x, start_y, start_o, gx1, gx2, gy1, gy2 = self.state[id]
         gx1, gx2, gy1, gy2 = int(gx1), int(gx2), int(gy1), int(gy2)
-        r, c = start_y, start_x
-        start = [int(r * 100.0 / self.resolution - gx1),
-                 int(c * 100.0 / self.resolution - gy1)] # get agent's location in local map
-        start = pu.threshold_poses(start, obstacle_map.shape)
         
-        last_start_x, last_start_y = self.last_loc[id][0], self.last_loc[id][1]
-        gx1, gx2, gy1, gy2 = int(gx1), int(gx2), int(gy1), int(gy2)
-        r, c = last_start_y, last_start_x
-        last_start = [int(r * 100.0 / self.resolution - gx1),
-                        int(c * 100.0 / self.resolution - gy1)]
-        last_start = pu.threshold_poses(last_start, obstacle_map.shape)
-        self.visited_vis[gx1:gx2, gy1:gy2] = vu.draw_line(last_start, start, self.visited_vis[gx1:gx2, gy1:gy2])
+        # 计算agent在Local Map中的像素位置
+        agent_local_r = int(start_y * 100.0 / self.resolution - gx1)  # Y轴像素（行）
+        agent_local_c = int(start_x * 100.0 / self.resolution - gy1)  # X轴像素（列）
         
-        """
-        color palette:
-        0: out of map
-        1: obstacles
-        2: agent trajectory
-        3: goal
-        4 ~ num_detected_class: detected objects
-        """
-        semantic_map += 5
-        not_cat_id = local_maps.shape[1]
-        not_cat_mask = (semantic_map == not_cat_id)
-        obstacle_map_mask = np.rint(obstacle_map) == 1
-        explored_map_mask = np.rint(explored_map) == 1
+        # 生成Local Map可视化
+        local_map_vis = self._render_semantic_map(
+            local_semantic, local_obstacle, local_explored, 
+            (agent_local_r, agent_local_c), 
+            (gx1, gx2, gy1, gy2),
+            detected_classes
+        )
+        local_map_vis = cv2.resize(local_map_vis, (240, 240), interpolation=cv2.INTER_NEAREST)
         
-        semantic_map[not_cat_mask] = 0
-        
-        m_free = np.logical_and(not_cat_mask, explored_map_mask)
-        semantic_map[m_free] = 2
-        
-        m_obstacle = np.logical_and(not_cat_mask, obstacle_map_mask)
-        semantic_map[m_obstacle] = 1
-        
-        vis_mask = self.visited_vis[gx1:gx2, gy1:gy2] == 1
-        semantic_map[vis_mask] = 3
-        color_pal = [int(x * 255.) for x in color_palette]
-        
-        # create a new image using palette mode
-        # (https://pillow.readthedocs.io/en/stable/handbook/concepts.html#concept-modes)
-        # in this mode, we can map colors to picture use a color palette
-        sem_map_vis = Image.new("P", (semantic_map.shape[1], semantic_map.shape[0]))
-        sem_map_vis.putpalette(color_pal)
-        
-        # put the flattened data, so that each instance will be mapped a color according to color palette
-        sem_map_vis.putdata(semantic_map.flatten().astype(np.uint8))
-        sem_map_vis = sem_map_vis.convert("RGB")
-        
-        # flip image up and down, so that agnet's turn in simulator 
-        # is the same as its turn in semantic map visualization
-        sem_map_vis = np.flipud(sem_map_vis)
-        # sem_map_vis = np.array(sem_map_vis)
-        sem_map_vis = sem_map_vis[:, :, [2, 1, 0]] # turn to bgr for opencv
-        sem_map_vis = cv2.resize(sem_map_vis, (480, 480), interpolation=cv2.INTER_NEAREST)
-        self.vis_image[50:530, 15:655] = self.rgb_vis # 480, 640
-        self.vis_image[50:530, 670:1150] = sem_map_vis # 480, 480
-        
-        pos = (
-            (start_x * 100. / self.resolution - gy1) * 480 / obstacle_map.shape[0],
-            (obstacle_map.shape[1] - start_y * 100. / self.resolution + gx1) * 480 / obstacle_map.shape[1],
+        # 在Local Map上绘制agent箭头（居中，因为recentering后agent应该在120, 120附近）
+        local_arrow_pos = (
+            agent_local_c * 240.0 / local_obstacle.shape[1],
+            (local_obstacle.shape[0] - agent_local_r) * 240.0 / local_obstacle.shape[0],
             np.deg2rad(-start_o)
         )
-        agent_arrow = vu.get_contour_points(pos, origin=(670, 50))
-        cv2.waitKey(1)
-        color = (int(color_palette[11] * 255),
-                 int(color_palette[10] * 255),
-                 int(color_palette[9] * 255))
-        cv2.drawContours(self.vis_image, [agent_arrow], 0, color, -1) # draw agent arrow
+        
+        # ==================== 渲染 Global Map (480×480) ====================
+        # Full Map已经在update_map()中生成，以agent为中心的24m×24m区域
+        if self.full_map is not None:
+            global_maps = self.full_map.clone()
+            global_maps[:, -1, ...] = 1e-5
+            global_obstacle = global_maps[id, 0, ...].cpu().numpy()
+            global_explored = global_maps[id, 1, ...].cpu().numpy()
+            global_semantic = global_maps[id, 4:, ...].argmax(0).cpu().numpy()
+            
+            # Agent在Global Map中的位置（agent永远在中心，因为是动态裁剪的）
+            global_center = global_obstacle.shape[0] // 2  # 480 // 2 = 240
+            
+            # 生成Global Map可视化
+            global_map_vis = self._render_semantic_map(
+                global_semantic, global_obstacle, global_explored,
+                (global_center, global_center),  # Agent在中心
+                None,  # Global Map不需要边界信息
+                detected_classes
+            )
+            
+            # Global Map上绘制agent箭头（在中心）
+            global_arrow_pos = (
+                global_center * 480.0 / global_obstacle.shape[1],
+                (global_obstacle.shape[0] - global_center) * 480.0 / global_obstacle.shape[0],
+                np.deg2rad(-start_o)
+            )
+        else:
+            # 如果没有full_map，创建空白图
+            global_map_vis = np.zeros((480, 480, 3), dtype=np.uint8)
+            global_arrow_pos = None
+        
+        # ==================== 合成最终可视化图像 ====================
+        # 布局调整为：RGB(480×640) + Local Map(240×240) + Global Map(480×480)
+        self.vis_image[50:530, 15:655] = self.rgb_vis  # 左侧：RGB视图
+        self.vis_image[50:290, 670:910] = local_map_vis  # 中上：Local Map (240×240)
+        self.vis_image[50:530, 930:1410] = global_map_vis  # 右侧：Global Map (480×480)
+        
+        # 绘制Local Map的agent箭头
+        if local_arrow_pos is not None:
+            arrow = vu.get_contour_points(local_arrow_pos, origin=(670, 50))
+            arrow_color = (int(color_palette[11] * 255),
+                          int(color_palette[10] * 255),
+                          int(color_palette[9] * 255))
+            cv2.drawContours(self.vis_image, [arrow], 0, arrow_color, -1)
+        
+        # 绘制Global Map的agent箭头（永远在中心）
+        if global_arrow_pos is not None:
+            arrow = vu.get_contour_points(global_arrow_pos, origin=(930, 50))
+            arrow_color = (int(color_palette[11] * 255),
+                          int(color_palette[10] * 255),
+                          int(color_palette[9] * 255))
+            cv2.drawContours(self.vis_image, [arrow], 0, arrow_color, -1)
+        
+        # 添加标签
+        cv2.putText(self.vis_image, "RGB", (15, 40), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        cv2.putText(self.vis_image, "Local Map (12m)", (670, 40), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        cv2.putText(self.vis_image, "Global Map (24m)", (930, 40), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         
         if self.visualize:
             # cv2.imwrite('img_debug/ref.png', self.vis_image)
@@ -1038,6 +1059,64 @@ class Semantic_Mapping(nn.Module):
             os.makedirs(save_dir, exist_ok=True)
             fn = "{}/step_{:04d}.png".format(save_dir, step)
             cv2.imwrite(fn, self.vis_image)
+    
+    def _render_semantic_map(self, semantic_map, obstacle_map, explored_map, 
+                            agent_pos, lmb, detected_classes):
+        """
+        渲染语义地图为彩色可视化图像
+        
+        Args:
+            semantic_map: [H, W] 语义类别索引
+            obstacle_map: [H, W] 障碍物地图
+            explored_map: [H, W] 已探索地图
+            agent_pos: (row, col) agent位置
+            lmb: Local Map边界 (gx1, gx2, gy1, gy2) or None
+            detected_classes: 检测到的类别列表
+            
+        Returns:
+            vis_map: [H, W, 3] BGR彩色图像
+        """
+        # 应用颜色编码
+        semantic_map = semantic_map.copy()
+        semantic_map += 5  # 偏移为特殊类别留空间
+        
+        not_cat_id = len(detected_classes) + self.MAP_CHANNELS
+        not_cat_mask = (semantic_map >= not_cat_id + 5)
+        obstacle_mask = np.rint(obstacle_map) == 1
+        explored_mask = np.rint(explored_map) == 1
+        
+        # 未探索区域 -> 0 (黑色)
+        semantic_map[not_cat_mask] = 0
+        
+        # 可行走区域 -> 2 (浅色)
+        free_mask = np.logical_and(not_cat_mask, explored_mask)
+        semantic_map[free_mask] = 2
+        
+        # 障碍物 -> 1 (深色)
+        obstacle_mask = np.logical_and(not_cat_mask, obstacle_mask)
+        semantic_map[obstacle_mask] = 1
+        
+        # 如果有轨迹信息，标记轨迹 -> 3
+        if lmb is not None:
+            gx1, gx2, gy1, gy2 = lmb
+            if hasattr(self, 'visited_vis'):
+                vis_mask = self.visited_vis[gx1:gx2, gy1:gy2] == 1
+                if vis_mask.shape == semantic_map.shape:
+                    semantic_map[vis_mask] = 3
+        
+        # 应用调色板
+        color_pal = [int(x * 255.) for x in color_palette]
+        sem_map_vis = Image.new("P", (semantic_map.shape[1], semantic_map.shape[0]))
+        sem_map_vis.putpalette(color_pal)
+        sem_map_vis.putdata(semantic_map.flatten().astype(np.uint8))
+        sem_map_vis = sem_map_vis.convert("RGB")
+        
+        # 翻转（上下）
+        sem_map_vis = np.flipud(sem_map_vis)
+        # BGR格式（OpenCV）
+        sem_map_vis = sem_map_vis[:, :, [2, 1, 0]]
+        
+        return sem_map_vis
 
     def forward(self, obs: torch.Tensor, pose_obs: torch.Tensor):
         """
