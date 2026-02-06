@@ -440,18 +440,21 @@ class MapVisualizer:
         if current_pose is not None:
             current_x, current_y, current_o = current_pose
             
-            # ===== 关键修复：与local map和轨迹绘制完全一致 =====
-            # 直接使用trajectory_points[-1]，确保agent位置与轨迹终点完美对齐
-            # 这与local map的成功逻辑完全相同
+            # ===== 关键：trajectory_points 现在是局部坐标（相对于 full_map）=====
+            # full_map 是以 agent 为中心的裁剪区域，所以 agent 应该在 (240, 240)
+            # trajectory_points[-1] 应该直接是局部坐标 (px, py) 格式
             if len(trajectory_points) > 0:
-                last_traj_x, last_traj_y = trajectory_points[-1]
-                agent_x = last_traj_y * 480 / w
-                agent_y = (h - 1 - last_traj_x) * 480 / h
+                last_traj_px, last_traj_py = trajectory_points[-1]
+                # trajectory_points 格式: (px, py) = (Y轴像素, X轴像素)
+                # 转换到显示坐标: agent_x = py (水平), agent_y = px (垂直)
+                # 由于 full_map 大小就是 480×480，不需要缩放
+                agent_y = last_traj_px  # Y轴像素 → 垂直位置
+                agent_x = last_traj_py  # X轴像素 → 水平位置
+                # 注意：由于坐标系统修复，agent应该在 (240, 240)
             else:
-                # 回退到使用current_pose（但通常不会执行到这里）
-                position = np.array([current_x, current_y]) * 100.0 / self.resolution
-                agent_x = position[1] * 480 / w  # position[1] → display_x
-                agent_y = (h - 1 - position[0]) * 480 / h  # position[0] → display_y（翻转）
+                # 回退：如果没有轨迹，agent 应该在中心
+                agent_x = 240
+                agent_y = 240
             
             # ===== 变换矩阵数学原理 =====
             # 
@@ -531,10 +534,12 @@ class MapVisualizer:
             if len(trajectory_points) >= 2:
                 # 转换轨迹点到旋转后的坐标系
                 rotated_trajectory = []
-                for x, y in trajectory_points:
-                    # 原始地图坐标 -> 翻转Y轴 -> 缩放到480x480
-                    display_x = y * 480 / w
-                    display_y = (h - 1 - x) * 480 / h
+                for px, py in trajectory_points:
+                    # trajectory_points 现在是局部坐标: (px, py) = (Y轴像素, X轴像素)
+                    # 转换到显示坐标: display_x = py (水平), display_y = px (垂直)
+                    # 由于 full_map 大小就是 480×480，不需要缩放
+                    display_x = py  # X轴像素 → 水平位置
+                    display_y = px  # Y轴像素 → 垂直位置
                     
                     # 应用旋转变换
                     point = np.array([display_x, display_y, 1])
@@ -771,17 +776,18 @@ class MapVisualizer:
         # ===== 阶段3: 旋转地图（Agent朝上居中）=====
         current_x, current_y, current_o = current_pose
         
-        # ===== 关键修复：用轨迹最后一个点作为agent位置 =====
+        # ===== 关键：trajectory_points 现在是局部坐标（相对于 full_map）=====
+        # full_map 是以 agent 为中心的裁剪区域，所以 agent 应该在 (240, 240)
         if len(trajectory_points) > 0:
-            last_traj_x, last_traj_y = trajectory_points[-1]
-            agent_x = last_traj_y * 480 / w
-            agent_y = (h - 1 - last_traj_x) * 480 / h
+            last_traj_px, last_traj_py = trajectory_points[-1]
+            # trajectory_points 格式: (px, py) = (Y轴像素, X轴像素)
+            # 转换到显示坐标: agent_x = py (水平), agent_y = px (垂直)
+            agent_y = last_traj_px  # Y轴像素 → 垂直位置
+            agent_x = last_traj_py  # X轴像素 → 水平位置
         else:
-            # 回退到使用current_pose
-            map_x = int(current_x * 100.0 / self.resolution)
-            map_y = int(current_y * 100.0 / self.resolution)
-            agent_x = map_y * 480 / w
-            agent_y = (h - 1 - map_x) * 480 / h
+            # 回退：如果没有轨迹，agent 应该在中心
+            agent_x = 240
+            agent_y = 240
         
         rotation_angle = 90 - current_o
         rotation_center = (agent_x, agent_y)
@@ -816,10 +822,11 @@ class MapVisualizer:
         # ===== 阶段5: 独立绘制轨迹线 =====
         if len(trajectory_points) >= 2:
             local_trajectory = []
-            for x, y in trajectory_points:
-                # 原始地图坐标 -> 翻转Y轴 -> 缩放
-                display_x = y * 480 / w
-                display_y = (h - 1 - x) * 480 / h
+            for px, py in trajectory_points:
+                # trajectory_points 现在是局部坐标: (px, py) = (Y轴像素, X轴像素)
+                # 转换到显示坐标: display_x = py (水平), display_y = px (垂直)
+                display_x = py  # X轴像素 → 水平位置
+                display_y = px  # Y轴像素 → 垂直位置
                 
                 # 应用旋转变换
                 point = np.array([display_x, display_y, 1])
