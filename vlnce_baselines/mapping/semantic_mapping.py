@@ -1373,7 +1373,7 @@ class Semantic_Mapping(nn.Module):
         # obs[:, 4, ...] = 0.
         self.min_z = int(25 / z_resolution - min_h) # 25 / 5 - (-8) = 13
         # self.min_z = 2 # use grounded-sam to detect floor
-        self.feat[:, 1:, :] = pool(obs[:, 3:, :, :]).view(bs, c - 3, h // self.du_scale * w // self.du_scale)
+        self.feat[:, 1:, :] = pool(obs[:, 4:, :, :]).view(bs, c - 4, h // self.du_scale * w // self.du_scale)
 
         # self.init_grid: [bs, categories + 1, x=vr, y=vr, z=(max_height - min_height)] => [bs, 17, 100, 100, 80]
         # feat: average of all categories's predicted semantic features, [bs, 17, 19200]
