@@ -702,13 +702,6 @@ class MapVisualizer:
             # 在local_map上绘制轨迹（橙色）
             local_map[trajectory_mask] = [0, 140, 255]  # BGR橙色
         
-        # 绘制平滑轨迹线（3像素宽）
-        # 已经从通道2渲染，不需要额外绘制
-            if len(local_trajectory) >= 2:
-                trajectory_array = np.array(local_trajectory, dtype=np.int32)
-                cv2.polylines(local_map, [trajectory_array], isClosed=False,
-                             color=(0, 165, 255), thickness=3, lineType=cv2.LINE_8)
-        
         # ===== 阶段6: 绘制FOV可见区域（考虑障碍物遮挡）=====
         # 480像素 = 12m，所以1像素 = 2.5cm
         # 5米 = 500cm ÷ 2.5cm/pixel = 200像素
