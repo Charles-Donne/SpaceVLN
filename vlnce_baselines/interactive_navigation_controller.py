@@ -179,7 +179,7 @@ class InteractiveNavigationController:
                 episode_id=self.current_episode_id,
                 rgb=rgb_bgr,
                 full_map=map_state['full_map'],
-                trajectory_points=map_state['trajectory_points'],
+                trajectory_points=[],  # 轨迹现在在 full_map Channel 2 中
                 detected_classes=list(self.detected_classes),
                 current_pose=map_state['full_pose'],
                 floor=map_state['floor'],
@@ -195,7 +195,7 @@ class InteractiveNavigationController:
                 waypoint_positions=None,  # action时不传waypoint
                 waypoint_ids=None,
                 phase=phase,
-                global_trajectory_points=map_state['global_trajectory_points']
+                global_trajectory_points=[]  # 轨迹现在在 full_map Channel 2 中
             )
             
             # 保存当前step检测到的landmarks（用于action决策）
@@ -220,7 +220,7 @@ class InteractiveNavigationController:
             'step': self.current_step,
             'episode_id': self.current_episode_id,
             'full_map': map_state['full_map'],
-            'trajectory_points': map_state['trajectory_points'],
+            # 'trajectory_points': map_state['trajectory_points'],  # 已废弃，轨迹在 Channel 2
             'floor': map_state['floor'],
             'detected_classes': list(self.detected_classes),
             'current_pose': map_state['full_pose']

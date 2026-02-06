@@ -407,69 +407,12 @@ class VLMNavigationController(InteractiveNavigationController):
         h, w = image.shape[:2]
         
         # ========== 1. 绘制历史轨迹投影 ==========
-        if hasattr(self, 'mapper') and self.mapper:
-            trajectory_points = self.mapper.mapping_module.get_trajectory()  # List[(map_x, map_y)] 地图像素坐标
-            if len(trajectory_points) > 1:
-                projected_points = []
-                
-                # 获取mapper的转换参数
-                resolution = self.mapper.resolution / 100.0  # cm/像素 → 米/像素
-                map_shape = self.mapper.map_shape  # (H, W)
-                map_min_x = - (map_shape[1] // 2) * resolution  # 地图左边缘的世界X坐标（米）
-                map_min_y = - (map_shape[0] // 2) * resolution  # 地图上边缘的世界Y坐标（米）
-                
-                # 投影轨迹点到当前视角
-                for traj_map_x, traj_map_y in trajectory_points:
-                    # 🔑 关键修复：将地图像素坐标转换为世界坐标（米）
-                    # trajectory_points格式：(map_x, map_y) 对应地图的(y, x)
-                    traj_world_x = map_min_x + traj_map_y * resolution  # map_y → world_x
-                    traj_world_y = map_min_y + traj_map_x * resolution  # map_x → world_y
-                    
-                    # 计算相对于agent的向量
-                    dx = traj_world_x - agent_x
-                    dy = traj_world_y - agent_y
-                    distance = np.sqrt(dx**2 + dy**2)
-                    
-                    if distance < 0.1:
-                        continue
-                    
-                    # 🔑 关键修复：arctan2返回相对于正东的角度
-                    traj_angle_from_east = np.arctan2(dy, dx)
-                    
-                    # 计算相对于当前视图方向的角度差
-                    # view_direction = agent_o + view_offset_rad
-                    angle_diff = traj_angle_from_east - view_direction
-                    angle_diff = np.arctan2(np.sin(angle_diff), np.cos(angle_diff))
-                    
-                    # 只绘制在79度FOV内的轨迹点
-                    if abs(angle_diff) <= camera_fov_half:
-                        # X坐标映射（使用79度FOV）
-                        x_ratio = (angle_diff + camera_fov_half) / (2 * camera_fov_half)
-                        x_pos = int(x_ratio * w)
-                        
-                        # Y坐标映射（距离）
-                        if distance < 1.0:
-                            y_pos = int(h * 0.75)
-                        elif distance < 2.0:
-                            y_pos = int(h * 0.65)
-                        elif distance < 3.0:
-                            y_pos = int(h * 0.55)
-                        elif distance < 5.0:
-                            y_pos = int(h * 0.45)
-                        else:
-                            y_pos = int(h * 0.35)
-                        
-                        projected_points.append((x_pos, y_pos))
-                
-                # 绘制轨迹线（橙色虚线）
-                for i in range(len(projected_points) - 1):
-                    pt1 = projected_points[i]
-                    pt2 = projected_points[i + 1]
-                    cv2.line(image, pt1, pt2, (0, 165, 255), 2)  # 橙色线条
-                
-                # 在轨迹点上绘制小圆点
-                for pt in projected_points:
-                    cv2.circle(image, pt, 3, (0, 140, 255), -1)  # 深橙色点
+        # TODO: 轨迹现在存储在 Channel 2 中，需要从 full_map[2] 提取轨迹点
+        # 暂时禁用此功能
+        # if hasattr(self, 'mapper') and self.mapper:
+        #     trajectory_points = self.mapper.mapping_module.get_trajectory()  # List[(map_x, map_y)] 地图像素坐标
+        #     if len(trajectory_points) > 1:
+        #         ... (轨迹投影代码)
         
         # ========== 2. 绘制last waypoint标记（使用渲染坐标系直接计算） ==========
         # 显示最后一个waypoint（last waypoint）
@@ -501,13 +444,13 @@ class VLMNavigationController(InteractiveNavigationController):
             current_o = np.rad2deg(agent_o)  # 弧度→度
             rotation_angle = 90 - current_o
             
-            # agent在显示坐标系中的位置（trajectory最后一点）
-            trajectory_points = self.mapper.mapping_module.get_trajectory()
-            if len(trajectory_points) == 0:
-                return image
-            last_traj_x, last_traj_y = trajectory_points[-1]
-            agent_display_x = last_traj_y * 480 / w_map
-            agent_display_y = (h_map - 1 - last_traj_x) * 480 / h_map
+            # 使用 full_pose 获取 agent 在地图上的位置
+            full_pose = self.mapper.full_pose  # [x, y, o] 地图坐标
+            agent_map_x, agent_map_y = full_pose[0], full_pose[1]
+            
+            # agent在显示坐标系中的位置
+            agent_display_x = agent_map_y * 480 / w_map
+            agent_display_y = (h_map - 1 - agent_map_x) * 480 / h_map
             
             # 构造旋转矩阵（与visualizer.py逻辑一致）
             rotation_center = (agent_display_x, agent_display_y)
@@ -815,7 +758,7 @@ class VLMNavigationController(InteractiveNavigationController):
                 episode_id=self.current_episode_id,
                 rgb=rgb_bgr,
                 full_map=map_state['full_map'],
-                trajectory_points=map_state['trajectory_points'],
+                trajectory_points=[],  # 轨迹现在在 full_map Channel 2 中
                 detected_classes=list(self.detected_classes),
                 current_pose=map_state['full_pose'],
                 floor=map_state['floor'],
@@ -832,7 +775,7 @@ class VLMNavigationController(InteractiveNavigationController):
                 waypoint_positions=None,  # 环视过程中不传waypoint
                 waypoint_ids=None,
                 phase=phase,
-                global_trajectory_points=map_state['global_trajectory_points'],
+                global_trajectory_points=[],  # 轨迹现在在 full_map Channel 2 中
                 calculate_distances=False  # 环视时不计算距离，加快速度
             )
             
@@ -910,7 +853,7 @@ class VLMNavigationController(InteractiveNavigationController):
                     episode_id=self.current_episode_id,
                     rgb=rgb_bgr,
                     full_map=map_state['full_map'],
-                    trajectory_points=map_state['trajectory_points'],
+                    trajectory_points=[],  # 轨迹现在在 full_map Channel 2 中
                     detected_classes=list(self.detected_classes),
                     current_pose=map_state['full_pose'],
                     floor=map_state['floor'],
@@ -927,7 +870,7 @@ class VLMNavigationController(InteractiveNavigationController):
                     waypoint_positions=wp_positions,
                     waypoint_ids=wp_ids,
                     phase=phase,
-                    global_trajectory_points=map_state['global_trajectory_points'],
+                    global_trajectory_points=[],  # 轨迹现在在 full_map Channel 2 中
                     calculate_distances=False
                 )
                 
