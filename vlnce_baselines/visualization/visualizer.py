@@ -449,8 +449,8 @@ class MapVisualizer:
             global_map_with_trajectory = global_map_rotated.copy()
             
             # 从通道2提取轨迹并渲染（轨迹已经随地图旋转）
-            if full_map_rotated.shape[0] > 2:  # 确保有通道2
-                agent_channel = full_map_rotated[2]  # [H, W] - Agent通道
+            if full_map.shape[0] > 2:  # 确保有通道2
+                agent_channel = full_map[2]  # [H, W] - Agent通道
                 # 提取轨迹（值接近0.5）
                 trajectory_mask = (agent_channel > 0.4) & (agent_channel < 0.6)
                 # 在global_map_with_trajectory上绘制轨迹（橙色）
