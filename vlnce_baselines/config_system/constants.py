@@ -32,10 +32,16 @@ legend_color_palette = [
 # Channel 0: Obstacle (障碍物)
 # Channel 1: Explored (已探索区域)
 # Channel 2: Current Location (当前位置)
-# Channel 3: Past Locations (历史位置)
-# Channel 4+: Semantic Categories (语义类别，动态扩展)
+# Channel 0: Obstacle Map (障碍物)
+# Channel 1: Explored Area (已探索区域)
+# Channel 2: Agent通道（合并当前位置/历史/轨迹，节省空间）
+#   - 0.0 = 无标记
+#   - 0.5 = Trajectory (轨迹线)
+#   - 0.75 = Past Locations (历史位置，保留但不使用)
+#   - 1.0 = Current Location (当前位置)
+# Channel 3+: Semantic Categories (语义类别，动态扩展)
 # 注意：Waypoint不需要独立通道，而是通过轨迹点列表+ID管理
-map_channels = 4  # 基础地图通道数（不含语义类别）
+map_channels = 3  # 基础地图通道数（优化后，不含语义类别）
 
 
 # ========================================

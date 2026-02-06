@@ -357,9 +357,8 @@ class MapVisualizer:
             full_map: [C, H, W] 全局地图
                 [0] = obstacle map (障碍物)
                 [1] = explored map (已探索)
-                [2] = current position
-                [3] = history position
-                [4+] = semantic classes (用于landmark标注，不用于floor渲染)
+                [2] = Agent通道 (合并：0.5=轨迹, 1.0=当前位置)
+                [3+] = semantic classes (用于landmark标注，不用于floor渲染)
             trajectory_points: [(x, y), ...] 轨迹坐标列表（像素坐标）
             detected_classes: 已检测类别列表
             floor: [H, W] floor地图（通过形态学方法计算，像ZS_Evaluator）
@@ -449,11 +448,11 @@ class MapVisualizer:
             # ===== 阶段5: 创建global_map的显示副本（用于绘制轨迹和landmark）=====
             global_map_with_trajectory = global_map_rotated.copy()
             
-            # 从通道4提取轨迹并渲染（轨迹已经随地图旋转）
-            if full_map_rotated.shape[0] > 4:  # 确保有通道4
-                trajectory_channel = full_map_rotated[4]  # [H, W]
-                # 将轨迹标记转换为橙色线条
-                trajectory_mask = trajectory_channel > 0.5
+            # 从通道2提取轨迹并渲染（轨迹已经随地图旋转）
+            if full_map_rotated.shape[0] > 2:  # 确保有通道2
+                agent_channel = full_map_rotated[2]  # [H, W] - Agent通道
+                # 提取轨迹（值接近0.5）
+                trajectory_mask = (agent_channel > 0.4) & (agent_channel < 0.6)
                 # 在global_map_with_trajectory上绘制轨迹（橙色）
                 global_map_with_trajectory[trajectory_mask] = [0, 165, 255]  # BGR橙色
             
@@ -796,14 +795,15 @@ class MapVisualizer:
                          color=border_color, thickness=border_thickness)
         
         # ===== 绘制轨迹（在FOV之上，箭头之下）=====
-        # 轨迹现在存储在通道4中，直接从full_map提取
-        if full_map.shape[0] > 4:  # 确保有通道4
-            trajectory_channel = full_map[4, 120:360, 120:360]  # 裁剪后的区域
-            trajectory_channel_resized = cv2.resize(
-                trajectory_channel, (480, 480), 
+        # 轨迹现在存储在通道2中，直接从full_map提取
+        if full_map.shape[0] > 2:  # 确保有通道2
+            agent_channel = full_map[2, 120:360, 120:360]  # 裁剪后的区域
+            agent_channel_resized = cv2.resize(
+                agent_channel, (480, 480), 
                 interpolation=cv2.INTER_NEAREST
             )
-            trajectory_mask = trajectory_channel_resized > 0.5
+            # 提取轨迹（0.4 < 值 < 0.6）
+            trajectory_mask = (agent_channel_resized > 0.4) & (agent_channel_resized < 0.6)
             # 在local_map上绘制轨迹（橙色）
             local_map[trajectory_mask] = [0, 140, 255]  # BGR橙色
         

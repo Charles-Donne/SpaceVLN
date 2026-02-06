@@ -100,15 +100,17 @@ class Semantic_Mapping(nn.Module):
        - gy, gy1, gy2: X轴像素
        - lmb: [gx1, gx2, gy1, gy2] Local Map边界
     
-    Map结构：
+    Map结构（优化版 - 节省通道）：
     1. Obstacle Map (通道0)
     2. Explored Area (通道1)
-    3. Current Agent Location (通道2)
-    4. Past Agent Locations (通道3)
-    5. Trajectory (通道4) - 轨迹线
-    6. Semantic Categories (通道5+，动态扩展)
+    3. Agent通道 (通道2) - 合并当前位置/历史/轨迹
+       - 0.0 = 无标记
+       - 0.5 = Trajectory (轨迹线)
+       - 0.75 = Past Locations (历史，保留)
+       - 1.0 = Current Location (当前位置)
+    4. Semantic Categories (通道3+，动态扩展)
     """
-    MAP_CHANNELS = 5  # 基础通道数：0-4 (包含轨迹通道)
+    MAP_CHANNELS = 3  # 基础通道数：0-2 (优化后)
     TILE_SIZE = 240  # 每个块的尺寸（像素）
     TILE_SIZE_M = 12.0  # 每个块的物理尺寸（米）
 
@@ -213,22 +215,25 @@ class Semantic_Mapping(nn.Module):
         ).float().to(self.device)
     
     def clear_trajectory(self) -> None:
-        """清空轨迹通道（通道4）"""
-        # 清空所有tiles的轨迹通道
+        """清空轨迹（Agent通道中值为0.5的部分）"""
+        # 清空所有tiles的轨迹（将0.5的值清零，保留1.0的当前位置）
         for tile_key, tile in self.tiles.items():
-            if tile is not None and tile.shape[1] > 4:
-                tile[:, 4, :, :].fill_(0.)
+            if tile is not None and tile.shape[1] > 2:
+                # 只清除轨迹（0.5），保留当前位置标记（1.0）
+                mask = (tile[:, 2, :, :] > 0.4) & (tile[:, 2, :, :] < 0.6)
+                tile[:, 2, :, :][mask] = 0.
         
-        # 清空Local Map的轨迹通道
-        if self.local_map is not None and self.local_map.shape[1] > 4:
-            self.local_map[:, 4, :, :].fill_(0.)
+        # 清空Local Map的轨迹
+        if self.local_map is not None and self.local_map.shape[1] > 2:
+            mask = (self.local_map[:, 2, :, :] > 0.4) & (self.local_map[:, 2, :, :] < 0.6)
+            self.local_map[:, 2, :, :][mask] = 0.
         
         # 重置最后位置
         self.last_trajectory_pos = None
     
     def _draw_line_on_tile(self, tile_key, x0, y0, x1, y1):
         """
-        在tile的通道4上画线（Bresenham算法）
+        在tile的通道2上画线（Bresenham算法）
         
         Args:
             tile_key: (tile_x, tile_y)
@@ -236,7 +241,7 @@ class Semantic_Mapping(nn.Module):
             x1, y1: 终点（tile内局部坐标，px, py）
         """
         tile = self.tiles[tile_key]
-        if tile.shape[1] <= 4:
+        if tile.shape[1] <= 2:
             return
         
         # Bresenham's line algorithm
@@ -248,13 +253,13 @@ class Semantic_Mapping(nn.Module):
         
         x, y = x0, y0
         while True:
-            # 标记当前点及周围（3x3）
+            # 标记当前点及周围（3x3）- 使用0.5表示轨迹
             for dx_mark in [-1, 0, 1]:
                 for dy_mark in [-1, 0, 1]:
                     mark_x = x + dx_mark
                     mark_y = y + dy_mark
                     if 0 <= mark_x < self.TILE_SIZE and 0 <= mark_y < self.TILE_SIZE:
-                        tile[0, 4, mark_x, mark_y] = 1.0
+                        tile[0, 2, mark_x, mark_y] = 0.5
             
             if x == x1 and y == y1:
                 break
@@ -1034,14 +1039,14 @@ class Semantic_Mapping(nn.Module):
                     self.TILE_SIZE, self.TILE_SIZE
                 ).float().to(self.device)
             
-            # 在通道4标记轨迹（标记为1.0）
+            # 在通道2标记轨迹（标记为0.5）
             # 使用3×3的点使轨迹更明显
             for dx in [-1, 0, 1]:
                 for dy in [-1, 0, 1]:
                     mark_px = local_px + dx
                     mark_py = local_py + dy
                     if 0 <= mark_px < self.TILE_SIZE and 0 <= mark_py < self.TILE_SIZE:
-                        self.tiles[tile_key][0, 4, mark_px, mark_py] = 1.0
+                        self.tiles[tile_key][0, 2, mark_px, mark_py] = 0.5
             
             # 如果有上一个位置，绘制连线
             if self.last_trajectory_pos is not None:
@@ -1057,19 +1062,28 @@ class Semantic_Mapping(nn.Module):
             
             self.last_trajectory_pos = current_pos
         
-        # 清除Local Map中的当前位置标记
-        self.local_map[:, 2, :, :].fill_(0.)
-        self.one_step_local_map[:, 2, :, :].fill_(0.)
+        # 清除Local Map中的当前位置标记（保留轨迹0.5）
+        # 只清除值为1.0的当前位置标记
+        self.local_map[:, 2, :, :] = torch.where(
+            self.local_map[:, 2, :, :] > 0.9,
+            torch.zeros_like(self.local_map[:, 2, :, :]),
+            self.local_map[:, 2, :, :]
+        )
+        self.one_step_local_map[:, 2, :, :] = torch.where(
+            self.one_step_local_map[:, 2, :, :] > 0.9,
+            torch.zeros_like(self.one_step_local_map[:, 2, :, :]),
+            self.one_step_local_map[:, 2, :, :]
+        )
         
-        # 标记agent当前位置
+        # 标记agent当前位置（使用1.0）
         for e in range(self.num_environments):
             r, c = locs[e, 1], locs[e, 0]  # r=Y, c=X（物理坐标，米）
             # 转换为Local Map像素坐标（240×240）
             loc_r, loc_c = [int(r * 100.0 / self.resolution),
                             int(c * 100.0 / self.resolution)]
-            # 在Local Map中标记agent位置（3×3像素）
-            self.local_map[e, 2:4, loc_r - 1:loc_r + 2, loc_c - 1:loc_c + 2] = 1.
-            self.one_step_local_map[e, 2:4, loc_r - 1:loc_r + 2, loc_c - 1:loc_c + 2] = 1.
+            # 在Local Map中标记agent位置（3×3像素，值为1.0）
+            self.local_map[e, 2, loc_r - 1:loc_r + 2, loc_c - 1:loc_c + 2] = 1.0
+            self.one_step_local_map[e, 2, loc_r - 1:loc_r + 2, loc_c - 1:loc_c + 2] = 1.0
             
             # 将更新后的Local Map写回到对应的tiles
             self.update_tiles_from_local_map(self.local_map[e], env_id=e, is_one_step=False)
@@ -1359,7 +1373,7 @@ class Semantic_Mapping(nn.Module):
         # obs[:, 4, ...] = 0.
         self.min_z = int(25 / z_resolution - min_h) # 25 / 5 - (-8) = 13
         # self.min_z = 2 # use grounded-sam to detect floor
-        self.feat[:, 1:, :] = pool(obs[:, 4:, :, :]).view(bs, c - 4, h // self.du_scale * w // self.du_scale)
+        self.feat[:, 1:, :] = pool(obs[:, 3:, :, :]).view(bs, c - 3, h // self.du_scale * w // self.du_scale)
 
         # self.init_grid: [bs, categories + 1, x=vr, y=vr, z=(max_height - min_height)] => [bs, 17, 100, 100, 80]
         # feat: average of all categories's predicted semantic features, [bs, 17, 19200]
@@ -1394,9 +1408,9 @@ class Semantic_Mapping(nn.Module):
         y2 = y1 + self.vision_range
         agent_view[:, 0:1, y1:y2, x1:x2] = fp_map_pred # obstacle map
         agent_view[:, 1:2, y1:y2, x1:x2] = fp_exp_pred # explored area
-        agent_view[:, 4:, y1:y2, x1:x2] = torch.clamp(
+        agent_view[:, 3:, y1:y2, x1:x2] = torch.clamp(
             agent_height_proj[:, 1:, :, :] / self.cat_pred_threshold,
-            min=0.0, max=1.0) # semantic categories
+            min=0.0, max=1.0) # semantic categories (从通道3开始)
 
         corrected_pose = pose_obs # sensor pose
 

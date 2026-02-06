@@ -133,7 +133,7 @@ class SemanticMapper:
         """
         从full_map提取floor区域（已弃用：floor现在是语义类别）
         
-        注意：按照ZS_Evaluator的方式，floor现在是full_map[4+]中的第一个语义类别，
+        注意：按照ZS_Evaluator的方式，floor现在是full_map[3+]中的第一个语义类别，
         不再需要通过形态学方法提取。这个方法保留仅用于向后兼容。
         
         Args:
@@ -214,13 +214,13 @@ class SemanticMapper:
     
     def clear_trajectory(self):
         """
-        清空轨迹通道（通道4）
+        清空轨迹（Agent通道中值为0.5的部分）
         
         使用场景：
         - 子任务完成时：清空上一子任务的轨迹，开始记录新子任务轨迹
         - 每个子任务都有独立的轨迹显示，不会累积
         """
-        self.mapping_module.clear_trajectory()  # 清空mapping_module中的通道4
+        self.mapping_module.clear_trajectory()  # 清空Agent通道中的轨迹
     
     # ========== Waypoint管理方法 ==========
     
@@ -316,8 +316,9 @@ class SemanticMapper:
         获取当前地图状态
         
         注意：
-        - floor字段保留用于向后兼容，但实际floor渲染现在从full_map[4+]的
+        - floor字段保留用于向后兼容，但实际floor渲染现在从full_map[3+]的
           语义类别中自动获取（floor是第一个mapping_class，索引为0）
+        - 轨迹现在存储在full_map的通道2中（值为0.5）
         - 轨迹现在存储在full_map的通道4中，不再返回单独的trajectory_points
         
         Returns:
