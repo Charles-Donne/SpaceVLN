@@ -784,9 +784,6 @@ class VLMNavigationController(InteractiveNavigationController):
                     self.current_step_landmarks = {}
                 self.current_step_landmarks[look_step] = detected_landmarks_step
             
-            # 保存最后一次的距离信息（用于后续的planning）
-            self.latest_obstacle_distances = obstacle_distances
-            
             # 保存导航可视化（RGB+俯视图拼接）
             if self.nav_visualizer:
                 subtask_text = self.current_subtask.get('subtask_instruction', '') if self.current_subtask else f"[环视建图 {phase}]"
