@@ -174,7 +174,7 @@ class InteractiveNavigationController:
         if save_vis:
             # action执行时不传waypoint信息，不计算角度（只在环视后计算）
             rgb_bgr = cv2.cvtColor(obs[0]['rgb'], cv2.COLOR_RGB2BGR)
-            _, detected_landmarks_step, _, _ = self.visualizer.save_step_visualization(
+            _, detected_landmarks_step, _ = self.visualizer.save_step_visualization(
                 step=self.current_step,
                 episode_id=self.current_episode_id,
                 rgb=rgb_bgr,

@@ -105,9 +105,10 @@ class Semantic_Mapping(nn.Module):
     2. Explored Area (通道1)
     3. Current Agent Location (通道2)
     4. Past Agent Locations (通道3)
-    5. Semantic Categories (通道4+，动态扩展)
+    5. Trajectory (通道4) - 轨迹线
+    6. Semantic Categories (通道5+，动态扩展)
     """
-    MAP_CHANNELS = map_channels
+    MAP_CHANNELS = 5  # 基础通道数：0-4 (包含轨迹通道)
     TILE_SIZE = 240  # 每个块的尺寸（像素）
     TILE_SIZE_M = 12.0  # 每个块的物理尺寸（米）
 
@@ -175,9 +176,9 @@ class Semantic_Mapping(nn.Module):
         # State (7 dimensions): [global_x, global_y, orientation, gx1, gx2, gy1, gy2]
         self.state = np.zeros((self.num_environments, 7))
         
-        # 轨迹记录（世界像素坐标）
-        self.trajectory_points = []  # [(px, py), ...] 当前子任务轨迹
-        self.global_trajectory_points = []  # [(px, py), ...] 全局完整轨迹
+        # 轨迹现在存储在通道4中，不再需要点列表
+        # 保留用于记录上一个位置，避免重复标记
+        self.last_trajectory_pos = None  # (tile_x, tile_y, local_px, local_py)
         
         # 当前Local Map和Full Map（用于兼容旧接口）
         self.local_map = None
@@ -212,16 +213,59 @@ class Semantic_Mapping(nn.Module):
         ).float().to(self.device)
     
     def clear_trajectory(self) -> None:
-        """清空当前轨迹"""
-        self.trajectory_points = []
+        """清空轨迹通道（通道4）"""
+        # 清空所有tiles的轨迹通道
+        for tile_key, tile in self.tiles.items():
+            if tile is not None and tile.shape[1] > 4:
+                tile[:, 4, :, :].fill_(0.)
+        
+        # 清空Local Map的轨迹通道
+        if self.local_map is not None and self.local_map.shape[1] > 4:
+            self.local_map[:, 4, :, :].fill_(0.)
+        
+        # 重置最后位置
+        self.last_trajectory_pos = None
     
-    def get_trajectory(self) -> List[Tuple[int, int]]:
-        """获取当前轨迹"""
-        return self.trajectory_points.copy()
-    
-    def get_global_trajectory(self) -> List[Tuple[int, int]]:
-        """获取全局轨迹"""
-        return self.global_trajectory_points.copy()
+    def _draw_line_on_tile(self, tile_key, x0, y0, x1, y1):
+        """
+        在tile的通道4上画线（Bresenham算法）
+        
+        Args:
+            tile_key: (tile_x, tile_y)
+            x0, y0: 起点（tile内局部坐标，px, py）
+            x1, y1: 终点（tile内局部坐标，px, py）
+        """
+        tile = self.tiles[tile_key]
+        if tile.shape[1] <= 4:
+            return
+        
+        # Bresenham's line algorithm
+        dx = abs(x1 - x0)
+        dy = abs(y1 - y0)
+        sx = 1 if x0 < x1 else -1
+        sy = 1 if y0 < y1 else -1
+        err = dx - dy
+        
+        x, y = x0, y0
+        while True:
+            # 标记当前点及周围（3x3）
+            for dx_mark in [-1, 0, 1]:
+                for dy_mark in [-1, 0, 1]:
+                    mark_x = x + dx_mark
+                    mark_y = y + dy_mark
+                    if 0 <= mark_x < self.TILE_SIZE and 0 <= mark_y < self.TILE_SIZE:
+                        tile[0, 4, mark_x, mark_y] = 1.0
+            
+            if x == x1 and y == y1:
+                break
+            
+            e2 = 2 * err
+            if e2 > -dy:
+                err -= dy
+                x += sx
+            if e2 < dx:
+                err += dx
+                y += sy
     
     def reset(self) -> None:
         """重置地图系统（分块架构）"""
@@ -231,8 +275,7 @@ class Semantic_Mapping(nn.Module):
         self.one_step_tiles.clear()
         
         # 清空轨迹
-        self.trajectory_points = []
-        self.global_trajectory_points = []
+        self.last_trajectory_pos = None
         
         # 重置pose tensors
         self.local_pose.fill_(0.)
@@ -955,7 +998,7 @@ class Semantic_Mapping(nn.Module):
             self.full_pose[e, 1] = self.state[e, 1]  # 世界Y坐标（米）
             self.full_pose[e, 2] = self.local_pose[e, 2]  # 朝向（度数）
         
-        # 记录轨迹（在提取地图之前记录当前位置）
+        # 标记轨迹（在通道4中）
         # 使用第一个环境的位置（单环境模式）
         agent_x_m = self.full_pose[0, 0].item()
         agent_y_m = self.full_pose[0, 1].item()
@@ -964,13 +1007,55 @@ class Semantic_Mapping(nn.Module):
         agent_px = int(agent_y_m * 100 / self.resolution)  # Y轴像素
         agent_py = int(agent_x_m * 100 / self.resolution)  # X轴像素
         
-        # 添加到当前子任务轨迹
-        if len(self.trajectory_points) == 0 or self.trajectory_points[-1] != (agent_px, agent_py):
-            self.trajectory_points.append((agent_px, agent_py))
+        # 确定agent所在的tile
+        tile_x = int(np.floor(agent_x_m / self.TILE_SIZE_M))
+        tile_y = int(np.floor(agent_y_m / self.TILE_SIZE_M))
         
-        # 同时添加到全局轨迹
-        if len(self.global_trajectory_points) == 0 or self.global_trajectory_points[-1] != (agent_px, agent_py):
-            self.global_trajectory_points.append((agent_px, agent_py))
+        # 计算在tile内的局部坐标
+        tile_start_x_m = tile_x * self.TILE_SIZE_M
+        tile_start_y_m = tile_y * self.TILE_SIZE_M
+        local_px = int((agent_y_m - tile_start_y_m) * 100 / self.resolution)
+        local_py = int((agent_x_m - tile_start_x_m) * 100 / self.resolution)
+        
+        # 限制在tile范围内
+        local_px = max(0, min(self.TILE_SIZE - 1, local_px))
+        local_py = max(0, min(self.TILE_SIZE - 1, local_py))
+        
+        # 只在位置变化时标记（避免重复）
+        current_pos = (tile_x, tile_y, local_px, local_py)
+        if self.last_trajectory_pos != current_pos:
+            # 确保tile存在
+            tile_key = (tile_x, tile_y)
+            if tile_key not in self.tiles or self.tiles[tile_key] is None:
+                # 创建新tile（如果需要）
+                current_nc = self.local_map.shape[1] if self.local_map is not None else self.MAP_CHANNELS
+                self.tiles[tile_key] = torch.zeros(
+                    self.num_environments, current_nc, 
+                    self.TILE_SIZE, self.TILE_SIZE
+                ).float().to(self.device)
+            
+            # 在通道4标记轨迹（标记为1.0）
+            # 使用3×3的点使轨迹更明显
+            for dx in [-1, 0, 1]:
+                for dy in [-1, 0, 1]:
+                    mark_px = local_px + dx
+                    mark_py = local_py + dy
+                    if 0 <= mark_px < self.TILE_SIZE and 0 <= mark_py < self.TILE_SIZE:
+                        self.tiles[tile_key][0, 4, mark_px, mark_py] = 1.0
+            
+            # 如果有上一个位置，绘制连线
+            if self.last_trajectory_pos is not None:
+                last_tile_x, last_tile_y, last_local_px, last_local_py = self.last_trajectory_pos
+                
+                # 如果在同一个tile中，直接连线
+                if last_tile_x == tile_x and last_tile_y == tile_y:
+                    self._draw_line_on_tile(
+                        tile_key, 
+                        last_local_px, last_local_py,
+                        local_px, local_py
+                    )
+            
+            self.last_trajectory_pos = current_pos
         
         # 清除Local Map中的当前位置标记
         self.local_map[:, 2, :, :].fill_(0.)

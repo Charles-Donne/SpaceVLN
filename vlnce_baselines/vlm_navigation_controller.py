@@ -810,7 +810,7 @@ class VLMNavigationController(InteractiveNavigationController):
             # 地图可视化（保存地图+检测landmarks）
             # 环视过程中不传waypoint，不计算角度（环视结束后统一计算）
             rgb_bgr = cv2.cvtColor(obs[0]['rgb'], cv2.COLOR_RGB2BGR)
-            paths, detected_landmarks_step, obstacle_distances, _ = self.visualizer.save_step_visualization(
+            paths, detected_landmarks_step, _ = self.visualizer.save_step_visualization(
                 step=look_step,
                 episode_id=self.current_episode_id,
                 rgb=rgb_bgr,
@@ -881,15 +881,9 @@ class VLMNavigationController(InteractiveNavigationController):
         
         print(f"  扫描完成: +{total_new_classes}类 | 总计{len(self.detected_classes)}类")
         
-        # 360度环视完成，现在更新距离信息（地图已完整扫描）
-        # 1. 先更新12方向距离（用于Thinking阶段）
+        # 360度环视完成，计算12个方向的障碍物距离（用于显示在12张view上）
         print(f"  [更新距离] 360度扫描完成，计算12个方向的障碍物距离...")
         self._update_obstacle_distances_12_directions()
-        
-        # 2. 同时更新7方向距离（用于Action阶段）
-        # 确保即使不转弯，Action也能获得距离信息
-        print(f"  [更新距离] 同时更新7个方向的障碍物距离（供Action使用）...")
-        self._update_obstacle_distances()
         
         # 检查是否完成了完整的12步环视
         if len(lookaround_images) < 12:
@@ -911,7 +905,7 @@ class VLMNavigationController(InteractiveNavigationController):
                 
                 # 调用visualizer渲染地图并计算waypoint角度
                 print(f"\n  [Waypoint角度计算] 环视结束，计算最后waypoint的方向...")
-                _, _, _, last_waypoint_angle = self.visualizer.save_step_visualization(
+                _, _, last_waypoint_angle = self.visualizer.save_step_visualization(
                     step=look_step,  # 使用最后一步的timestep
                     episode_id=self.current_episode_id,
                     rgb=rgb_bgr,
@@ -2009,12 +2003,6 @@ class VLMNavigationController(InteractiveNavigationController):
                     distances[key] = "Unknown"
             
             self.latest_obstacle_distances_12 = distances
-            
-            # 调试信息：打印前方距离
-            if self.current_step <= 3:
-                print(f"  [DEBUG] 12方向距离测量: angle_0(正前方)={distances.get('angle_0', 'N/A')}, "
-                      f"angle_90(左侧)={distances.get('angle_90', 'N/A')}, "
-                      f"angle_270(右侧)={distances.get('angle_270', 'N/A')}")
         except Exception as e:
             import traceback
             print(f"  ⚠️  12方向距离更新失败: {e}")

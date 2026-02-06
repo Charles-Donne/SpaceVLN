@@ -349,8 +349,7 @@ class MapVisualizer:
                          landmark_classes: Optional[List[str]] = None,
                          landmark_config: Optional[Dict] = None,
                          waypoint_positions: Optional[List[Tuple[int, int]]] = None,
-                         waypoint_ids: Optional[List[int]] = None,
-                         calculate_distances: bool = False) -> Tuple[np.ndarray, np.ndarray, List, np.ndarray, Dict[str, str], Optional[float]]:
+                         waypoint_ids: Optional[List[int]] = None) -> Tuple[np.ndarray, np.ndarray, List, np.ndarray, Optional[float]]:
         """
         渲染全局地图（严格按照ZS_Evaluator的渲染逻辑 + 平滑轨迹线）
         
@@ -369,12 +368,11 @@ class MapVisualizer:
             landmark_config: landmark配置 {min_total_pixels, min_area_threshold}
         
         Returns:
-            (sem_map_vis, global_map_with_trajectory, landmarks, global_map_rotated, obstacle_distances, last_waypoint_angle)
+            (sem_map_vis, global_map_with_trajectory, landmarks, global_map_rotated, last_waypoint_angle)
             - sem_map_vis: 基础渲染地图 (480×480)
             - global_map_with_trajectory: 带轨迹的旋转地图 (440×440)
             - landmarks: [(x, y, class_name), ...] 标注列表
             - global_map_rotated: 旋转地图（无轨迹，440×440）
-            - obstacle_distances: {'front': "X.XXm", 'left_30': ..., ...} 5方向距离
             - last_waypoint_angle: 最后一个waypoint相对于正前方的角度（弧度），None表示无waypoint
         
         渲染层次（严格按照ZS_Evaluator）:
@@ -451,22 +449,13 @@ class MapVisualizer:
             # ===== 阶段5: 创建global_map的显示副本（用于绘制轨迹和landmark）=====
             global_map_with_trajectory = global_map_rotated.copy()
             
-            # 先在副本上绘制轨迹线（底层）
-            if len(trajectory_points) >= 2:
-                # trajectory_points 已经在旋转后的坐标系中
-                display_trajectory = []
-                for px, py in trajectory_points:
-                    # trajectory_points 格式: (px, py) = (Y轴像素, X轴像素)
-                    # 转换到显示坐标: display_x = py (水平), display_y = px (垂直)
-                    display_x = int(round(py))  # X轴像素 → 水平位置
-                    display_y = int(round(px))  # Y轴像素 → 垂直位置
-                    display_trajectory.append([display_x, display_y])
-                
-                # 绘制实心轨迹线（2像素宽）
-                if len(display_trajectory) >= 2:
-                    trajectory_array = np.array(display_trajectory, dtype=np.int32)
-                    cv2.polylines(global_map_with_trajectory, [trajectory_array], isClosed=False,
-                                 color=(0, 165, 255), thickness=2, lineType=cv2.LINE_8)
+            # 从通道4提取轨迹并渲染（轨迹已经随地图旋转）
+            if full_map_rotated.shape[0] > 4:  # 确保有通道4
+                trajectory_channel = full_map_rotated[4]  # [H, W]
+                # 将轨迹标记转换为橙色线条
+                trajectory_mask = trajectory_channel > 0.5
+                # 在global_map_with_trajectory上绘制轨迹（橙色）
+                global_map_with_trajectory[trajectory_mask] = [0, 165, 255]  # BGR橙色
             
             # ===== 阶段5.3: 绘制深红色虚线指示正前方（在轨迹之后，箭头之前）=====
             center_x, center_y = 240, 240
@@ -508,13 +497,6 @@ class MapVisualizer:
             
             # 注意：obstacle_mask 现在已经在 full_map 中旋转过了
             # 所以这里直接使用，不需要再旋转
-            
-            # ===== 🎯 可选距离计算（环视时不计算，加快速度）=====
-            obstacle_distances = {}
-            if calculate_distances:
-                obstacle_distances = self.calculate_obstacle_distances_from_rotated_map(
-                    obstacle_mask_display, 240, 240
-                )
             
             # 用黑色覆盖障碍物区域（会覆盖箭头，使障碍物更醒目）
             global_map_with_trajectory[obstacle_mask_display] = [0, 0, 0]  # 黑色BGR
@@ -618,7 +600,7 @@ class MapVisualizer:
             last_waypoint_angle = None
         
         # 返回：基础地图 + 显示副本（带轨迹和landmark+waypoint） + 无轨迹的旋转地图（供local_map裁剪） + 距离信息 + 最后waypoint角度
-        return sem_map_vis, global_map_with_trajectory, landmarks, global_map_rotated, obstacle_distances, last_waypoint_angle
+        return sem_map_vis, global_map_with_trajectory, landmarks, global_map_rotated, last_waypoint_angle
     
     def render_local_map(self, 
                         full_map: np.ndarray,
@@ -708,23 +690,20 @@ class MapVisualizer:
         local_map = local_map[y1:y2, x1:x2].copy()
         local_map = cv2.resize(local_map, (480, 480), interpolation=cv2.INTER_NEAREST)
         
-        # ===== 阶段5: 独立绘制轨迹线 =====
-        if len(trajectory_points) >= 2:
-            local_trajectory = []
-            for px, py in trajectory_points:
-                # trajectory_points 已经在旋转后的坐标系中
-                # 转换到显示坐标: display_x = py (水平), display_y = px (垂直)
-                display_x = py  # X轴像素 → 水平位置
-                display_y = px  # Y轴像素 → 垂直位置
-                
-                # 转换到local_map坐标系（裁剪区域120-360映射到0-480）
-                local_x = (display_x - 120) * 2
-                local_y = (display_y - 120) * 2
-                
-                if 0 <= local_x < 480 and 0 <= local_y < 480:
-                    local_trajectory.append([int(round(local_x)), int(round(local_y))])
-            
-            # 绘制平滑轨迹线（3像素宽）
+        # ===== 阶段5: 从通道4提取轨迹并渲染 =====
+        # 轨迹已经随地图旋转，直接从旋转后的full_map提取
+        if full_map_rotated.shape[0] > 4:  # 确保有通道4
+            trajectory_channel = full_map_rotated[4, 120:360, 120:360]  # 裁剪后的区域
+            trajectory_channel_resized = cv2.resize(
+                trajectory_channel, (480, 480), 
+                interpolation=cv2.INTER_NEAREST
+            )
+            trajectory_mask = trajectory_channel_resized > 0.5
+            # 在local_map上绘制轨迹（橙色）
+            local_map[trajectory_mask] = [0, 140, 255]  # BGR橙色
+        
+        # 绘制平滑轨迹线（3像素宽）
+        # 已经从通道4渲染，不需要额外绘制
             if len(local_trajectory) >= 2:
                 trajectory_array = np.array(local_trajectory, dtype=np.int32)
                 cv2.polylines(local_map, [trajectory_array], isClosed=False,
@@ -817,23 +796,16 @@ class MapVisualizer:
                          color=border_color, thickness=border_thickness)
         
         # ===== 绘制轨迹（在FOV之上，箭头之下）=====
-        if len(trajectory_points) >= 2:
-            rotated_trajectory = []
-            for px, py in trajectory_points:
-                # trajectory_points 已经在旋转后的坐标系中
-                # px = Y轴像素, py = X轴像素
-                display_x = py  # X轴像素 → 水平位置
-                display_y = px  # Y轴像素 → 垂直位置
-                
-                # 转换到local坐标系（裁剪区域是120-360，映射到0-480）
-                local_x = (display_x - 120) * 2
-                local_y = (display_y - 120) * 2
-                rotated_trajectory.append([int(round(local_x)), int(round(local_y))])
-            
-            if len(rotated_trajectory) >= 2:
-                trajectory_array = np.array(rotated_trajectory, dtype=np.int32)
-                cv2.polylines(local_map, [trajectory_array], isClosed=False,
-                            color=(0, 140, 255), thickness=3, lineType=cv2.LINE_AA)  # 橙色轨迹
+        # 轨迹现在存储在通道4中，直接从full_map提取
+        if full_map.shape[0] > 4:  # 确保有通道4
+            trajectory_channel = full_map[4, 120:360, 120:360]  # 裁剪后的区域
+            trajectory_channel_resized = cv2.resize(
+                trajectory_channel, (480, 480), 
+                interpolation=cv2.INTER_NEAREST
+            )
+            trajectory_mask = trajectory_channel_resized > 0.5
+            # 在local_map上绘制轨迹（橙色）
+            local_map[trajectory_mask] = [0, 140, 255]  # BGR橙色
         
         # ===== 绘制深红色虚线指示正前方（在箭头下层）=====
         forward_line_length = 120  # 延伸120像素（约3米）
@@ -1439,8 +1411,7 @@ class MapVisualizer:
                                masks: Optional[np.ndarray] = None,
                                phase: str = "action",
                                global_trajectory_points: Optional[List[Tuple[int, int]]] = None,
-                               controller = None,
-                               calculate_distances: bool = False) -> Tuple[Dict[str, str], List, Dict[str, str], Optional[float]]:  # 兼容旧参数
+                               controller = None) -> Tuple[Dict[str, str], List, Optional[float]]:
         """
         一键保存当前步骤的所有可视化（支持新detection渲染 + 平滑轨迹线 + waypoint标记）
         
@@ -1477,10 +1448,10 @@ class MapVisualizer:
         
         # 2. 渲染并保存全局地图（使用global_trajectory_points或回退到trajectory_points）
         global_traj_to_use = global_trajectory_points if global_trajectory_points is not None else trajectory_points
-        _, global_map_with_trajectory, landmarks, global_map_clean, obstacle_distances, last_waypoint_angle = self.render_global_map(
+        _, global_map_with_trajectory, landmarks, global_map_clean, last_waypoint_angle = self.render_global_map(
             full_map, global_traj_to_use, detected_classes, floor,
             current_pose, landmark_classes, landmark_config,
-            waypoint_positions, waypoint_ids, calculate_distances
+            waypoint_positions, waypoint_ids
         )
         paths['global_map'] = self.save_global_map(step, episode_id, global_map_with_trajectory, phase)
         
@@ -1503,7 +1474,7 @@ class MapVisualizer:
         if masks is not None:
             paths['masks'] = self.save_semantic_masks(step, episode_id, masks, phase)
         
-        return paths, detected_landmarks_step, obstacle_distances, last_waypoint_angle
+        return paths, detected_landmarks_step, last_waypoint_angle
     
     # ========== 辅助方法 ==========
     
