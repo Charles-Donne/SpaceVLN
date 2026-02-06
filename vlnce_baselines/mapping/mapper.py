@@ -317,13 +317,14 @@ class SemanticMapper:
             waypoint_id: 新添加的waypoint ID
         """
         # ===== 关键修复：直接使用trajectory_points[-1]，确保与agent位置完全一致 =====
-        if len(self.trajectory_points) == 0:
+        trajectory_points = self.mapping_module.get_trajectory()
+        if len(trajectory_points) == 0:
             print("  ⚠️  Cannot add waypoint: trajectory is empty")
             return -1
         
         # 直接使用轨迹最后一个点作为waypoint位置
         # trajectory_points存储格式：(map_y, map_x)
-        last_traj_x, last_traj_y = self.trajectory_points[-1]
+        last_traj_x, last_traj_y = trajectory_points[-1]
         
         # waypoint存储为(map_x, map_y)格式
         map_x = last_traj_x  # 从trajectory的x → map_x
@@ -409,8 +410,8 @@ class SemanticMapper:
             'full_map': self.full_map,
             'full_pose': self.full_pose,
             'floor': self.floor,
-            'trajectory_points': self.trajectory_points,
-            'global_trajectory_points': self.global_trajectory_points,
+            'trajectory_points': self.mapping_module.get_trajectory(),
+            'global_trajectory_points': self.mapping_module.get_global_trajectory(),
             'waypoint_positions': self.waypoint_positions,
             'waypoint_ids': self.waypoint_ids,
             'map_shape': self.map_shape,
