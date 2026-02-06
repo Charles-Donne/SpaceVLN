@@ -41,10 +41,8 @@ class SemanticMapper:
         self.map_shape = map_shape
         self.resolution = resolution
         
-        # 轨迹管理（存储轨迹坐标列表，用于绘制平滑曲线）
-        self.trajectory_points = []  # [(x, y), ...] 当前子任务轨迹（用于local map）
-        self.global_trajectory_points = []  # [(x, y), ...] 全局完整轨迹（用于global map，不清空）
-        self.enable_trajectory = True  # 轨迹开关
+        # 轨迹开关（轨迹实际存储在mapping_module中）
+        self.enable_trajectory = True
         
         # Waypoint管理（与轨迹系统集成）
         self.waypoint_positions = []  # [(map_x, map_y), ...] waypoint的地图坐标
@@ -59,8 +57,6 @@ class SemanticMapper:
     
     def reset(self):
         """重置建图器状态"""
-        self.trajectory_points = []  # 清空当前子任务轨迹
-        self.global_trajectory_points = []  # 清空全局轨迹
         self.waypoint_positions = []  # 清空waypoint位置
         self.waypoint_ids = []  # 清空waypoint ID
         self.waypoint_descriptions = []  # 清空waypoint描述
@@ -119,13 +115,13 @@ class SemanticMapper:
         # 3. 提取floor区域
         self.floor = self.extract_floor(self.full_map, detected_classes)
         
-        # 4. 更新轨迹
-        if self.enable_trajectory:
-            self.update_trajectory(self.full_pose)
-        
-        # 5. 清空单步地图（准备下一步）
+        # 4. 清空单步地图（准备下一步）
         self.mapping_module.one_step_full_map.fill_(0.)
         self.mapping_module.one_step_local_map.fill_(0.)
+        
+        # 5. 获取轨迹（已经在mapping_module中记录并转换为世界坐标）
+        trajectory_points = self.mapping_module.get_trajectory()
+        global_trajectory_points = self.mapping_module.get_global_trajectory()
         
         # 6. 转换轨迹坐标：世界坐标 → full_map局部坐标（包含旋转）
         # full_map 是以 agent 为中心的 480×480 裁剪区域，并且已经旋转让agent朝向向上
@@ -134,10 +130,10 @@ class SemanticMapper:
         agent_orientation = self.full_pose[2]  # agent朝向（度数）
         
         local_trajectory_points = self.convert_trajectory_to_local(
-            self.trajectory_points, crop_offset, agent_orientation
+            trajectory_points, crop_offset, agent_orientation
         )
         local_global_trajectory_points = self.convert_trajectory_to_local(
-            self.global_trajectory_points, crop_offset, agent_orientation
+            global_trajectory_points, crop_offset, agent_orientation
         )
         
         return {
@@ -282,37 +278,6 @@ class SemanticMapper:
         
         return local_trajectory
     
-    def update_trajectory(self, full_pose: np.ndarray):
-        """
-        更新轨迹坐标列表（同时更新当前子任务轨迹和全局轨迹）
-        
-        Args:
-            full_pose: [3] (x, y, orientation) 当前位姿（米）
-        """
-        if not self.enable_trajectory:
-            return
-        
-        # 转换位置到世界像素坐标
-        # full_pose[0] = agent_x_m (X轴，米)
-        # full_pose[1] = agent_y_m (Y轴，米)
-        agent_x_m = full_pose[0]
-        agent_y_m = full_pose[1]
-        
-        # 世界像素坐标: px = Y轴像素, py = X轴像素
-        px = int(agent_y_m * 100 / self.resolution)  # Y轴像素
-        py = int(agent_x_m * 100 / self.resolution)  # X轴像素
-        
-        # trajectory_points 存储 (px, py) 即 (Y轴像素, X轴像素)
-        # 这与 semantic_mapping.py 中的坐标系统一致
-        
-        # 添加到当前子任务轨迹（local map使用）
-        if len(self.trajectory_points) == 0 or self.trajectory_points[-1] != (px, py):
-            self.trajectory_points.append((px, py))
-        
-        # 同时添加到全局轨迹（global map使用，不清空）
-        if len(self.global_trajectory_points) == 0 or self.global_trajectory_points[-1] != (px, py):
-            self.global_trajectory_points.append((px, py))
-    
     def toggle_trajectory(self):
         """切换轨迹绘制开关"""
         self.enable_trajectory = not self.enable_trajectory
@@ -333,7 +298,7 @@ class SemanticMapper:
         - 轨迹是动态绘制在地图上的，不会写入底图
         - landmark标注同样是动态绘制，更新landmark_classes即可替换
         """
-        self.trajectory_points = []  # 只清空当前子任务轨迹
+        self.mapping_module.clear_trajectory()  # 清空mapping_module中的当前子任务轨迹
         # global_trajectory_points保持不变，继续累积
     
     # ========== Waypoint管理方法 ==========

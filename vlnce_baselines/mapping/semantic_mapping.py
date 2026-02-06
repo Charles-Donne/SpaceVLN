@@ -175,6 +175,10 @@ class Semantic_Mapping(nn.Module):
         # State (7 dimensions): [global_x, global_y, orientation, gx1, gx2, gy1, gy2]
         self.state = np.zeros((self.num_environments, 7))
         
+        # 轨迹记录（世界像素坐标）
+        self.trajectory_points = []  # [(px, py), ...] 当前子任务轨迹
+        self.global_trajectory_points = []  # [(px, py), ...] 全局完整轨迹
+        
         # 当前Local Map和Full Map（用于兼容旧接口）
         self.local_map = None
         self.one_step_local_map = None
@@ -207,12 +211,28 @@ class Semantic_Mapping(nn.Module):
             self.max_height - self.min_height
         ).float().to(self.device)
     
+    def clear_trajectory(self) -> None:
+        """清空当前轨迹"""
+        self.trajectory_points = []
+    
+    def get_trajectory(self) -> List[Tuple[int, int]]:
+        """获取当前轨迹"""
+        return self.trajectory_points.copy()
+    
+    def get_global_trajectory(self) -> List[Tuple[int, int]]:
+        """获取全局轨迹"""
+        return self.global_trajectory_points.copy()
+    
     def reset(self) -> None:
         """重置地图系统（分块架构）"""
         # 清空分类和tiles
         self.vis_classes = []
         self.tiles.clear()
         self.one_step_tiles.clear()
+        
+        # 清空轨迹
+        self.trajectory_points = []
+        self.global_trajectory_points = []
         
         # 重置pose tensors
         self.local_pose.fill_(0.)
@@ -929,6 +949,29 @@ class Semantic_Mapping(nn.Module):
         self.state[:, :3] = locs + self.origins
         self.curr_loc = self.state[:, :3]
         
+        # 更新full_pose：世界坐标 + 朝向
+        for e in range(self.num_environments):
+            self.full_pose[e, 0] = self.state[e, 0]  # 世界X坐标（米）
+            self.full_pose[e, 1] = self.state[e, 1]  # 世界Y坐标（米）
+            self.full_pose[e, 2] = self.local_pose[e, 2]  # 朝向（度数）
+        
+        # 记录轨迹（在提取地图之前记录当前位置）
+        # 使用第一个环境的位置（单环境模式）
+        agent_x_m = self.full_pose[0, 0].item()
+        agent_y_m = self.full_pose[0, 1].item()
+        
+        # 转换为世界像素坐标
+        agent_px = int(agent_y_m * 100 / self.resolution)  # Y轴像素
+        agent_py = int(agent_x_m * 100 / self.resolution)  # X轴像素
+        
+        # 添加到当前子任务轨迹
+        if len(self.trajectory_points) == 0 or self.trajectory_points[-1] != (agent_px, agent_py):
+            self.trajectory_points.append((agent_px, agent_py))
+        
+        # 同时添加到全局轨迹
+        if len(self.global_trajectory_points) == 0 or self.global_trajectory_points[-1] != (agent_px, agent_py):
+            self.global_trajectory_points.append((agent_px, agent_py))
+        
         # 清除Local Map中的当前位置标记
         self.local_map[:, 2, :, :].fill_(0.)
         self.one_step_local_map[:, 2, :, :].fill_(0.)
@@ -979,9 +1022,9 @@ class Semantic_Mapping(nn.Module):
                 # 保持原有朝向
                 self.local_pose[e, 2] = self.full_pose[e, 2]
         
-        # 生成用于渲染的Full Map（合并所有tiles）
-        self.full_map, _, self.full_map_crop_offset = self.get_full_map_for_rendering(crop_size_m=24.0)
-        self.one_step_full_map, _, self.one_step_full_map_crop_offset = self.get_full_map_for_rendering(crop_size_m=24.0, is_one_step=True)
+        # 生成用于渲染的Full Map（合并所有tiles，并根据agent朝向旋转）
+        self.full_map, _, self.full_map_crop_offset = self.get_full_map_for_rendering(crop_size_m=24.0, rotate_to_agent_heading=True)
+        self.one_step_full_map, _, self.one_step_full_map_crop_offset = self.get_full_map_for_rendering(crop_size_m=24.0, is_one_step=True, rotate_to_agent_heading=True)
         
         if self.visualize or self.print_images:
             self._visualize(current_episode_id, 
