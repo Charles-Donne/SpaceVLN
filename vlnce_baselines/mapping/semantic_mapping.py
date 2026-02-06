@@ -180,6 +180,8 @@ class Semantic_Mapping(nn.Module):
         self.one_step_local_map = None
         self.full_map = None
         self.one_step_full_map = None
+        self.full_map_crop_offset = (0, 0)  # 裁剪区域偏移量（用于坐标转换）
+        self.one_step_full_map_crop_offset = (0, 0)
         
         if self.visualize or self.print_images:
             self.vis_image = vu.init_vis_image()
@@ -644,7 +646,10 @@ class Semantic_Mapping(nn.Module):
         self.full_w = crop_size_px
         self.full_h = crop_size_px
         
-        return full_map, (crop_size_px, crop_size_px)
+        # 返回裁剪区域的世界像素偏移量（用于trajectory_points的坐标转换）
+        crop_offset = (start_px, start_py)
+        
+        return full_map, (crop_size_px, crop_size_px), crop_offset
     
     def _dynamic_process(self, num_detected_classes: int) -> None:
         """
@@ -913,8 +918,8 @@ class Semantic_Mapping(nn.Module):
                 self.local_pose[e, 2] = self.full_pose[e, 2]
         
         # 生成用于渲染的Full Map（合并所有tiles）
-        self.full_map, _ = self.get_full_map_for_rendering(crop_size_m=24.0)
-        self.one_step_full_map, _ = self.get_full_map_for_rendering(crop_size_m=24.0, is_one_step=True)
+        self.full_map, _, self.full_map_crop_offset = self.get_full_map_for_rendering(crop_size_m=24.0)
+        self.one_step_full_map, _, self.one_step_full_map_crop_offset = self.get_full_map_for_rendering(crop_size_m=24.0, is_one_step=True)
         
         if self.visualize or self.print_images:
             self._visualize(current_episode_id, 

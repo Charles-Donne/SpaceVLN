@@ -127,12 +127,19 @@ class SemanticMapper:
         self.mapping_module.one_step_full_map.fill_(0.)
         self.mapping_module.one_step_local_map.fill_(0.)
         
+        # 6. 转换轨迹坐标：世界坐标 → full_map局部坐标
+        # full_map 是以 agent 为中心的 480×480 裁剪区域
+        # 需要将世界坐标系的 trajectory_points 转换为相对于 full_map 的局部坐标
+        crop_offset = self.mapping_module.full_map_crop_offset
+        local_trajectory_points = self.convert_trajectory_to_local(self.trajectory_points, crop_offset)
+        local_global_trajectory_points = self.convert_trajectory_to_local(self.global_trajectory_points, crop_offset)
+        
         return {
             'full_map': self.full_map,
             'full_pose': self.full_pose,
             'floor': self.floor,
-            'trajectory_points': self.trajectory_points,  # 当前子任务轨迹（local map）
-            'global_trajectory_points': self.global_trajectory_points  # 全局完整轨迹（global map）
+            'trajectory_points': local_trajectory_points,  # 转换为局部坐标（相对于full_map）
+            'global_trajectory_points': local_global_trajectory_points  # 转换为局部坐标（相对于full_map）
         }
     
     def extract_floor(self, 
@@ -209,6 +216,31 @@ class SemanticMapper:
         # 静默返回，不输出调试信息
         return floor.astype(np.uint8)
     
+    def convert_trajectory_to_local(self, trajectory_points: List[Tuple[int, int]], crop_offset: Tuple[int, int]) -> List[Tuple[int, int]]:
+        """
+        将世界坐标系的轨迹点转换为相对于裁剪地图的局部坐标
+        
+        Args:
+            trajectory_points: [(world_x, world_y), ...] 世界像素坐标
+            crop_offset: (start_px, start_py) 裁剪区域左上角的世界像素坐标
+        
+        Returns:
+            local_trajectory: [(local_x, local_y), ...] 相对于裁剪地图的局部坐标
+        """
+        start_px, start_py = crop_offset
+        local_trajectory = []
+        
+        for world_x, world_y in trajectory_points:
+            # 世界坐标 → 局部坐标
+            # world坐标: (x, y)是(row, col)格式，即(Y轴, X轴)
+            # 需要转换: local_y = world_x - start_px (Y轴)
+            #           local_x = world_y - start_py (X轴)
+            local_x = world_x - start_px  # Y轴方向
+            local_y = world_y - start_py  # X轴方向
+            local_trajectory.append((local_x, local_y))
+        
+        return local_trajectory
+    
     def update_trajectory(self, full_pose: np.ndarray):
         """
         更新轨迹坐标列表（同时更新当前子任务轨迹和全局轨迹）
@@ -219,18 +251,26 @@ class SemanticMapper:
         if not self.enable_trajectory:
             return
         
-        # 转换位置到像素坐标
-        position = full_pose[:2] * 100 / self.resolution  # 米 → 像素
-        y = int(np.clip(position[0], 0, self.map_shape[0] - 1))
-        x = int(np.clip(position[1], 0, self.map_shape[1] - 1))
+        # 转换位置到世界像素坐标
+        # full_pose[0] = agent_x_m (X轴，米)
+        # full_pose[1] = agent_y_m (Y轴，米)
+        agent_x_m = full_pose[0]
+        agent_y_m = full_pose[1]
+        
+        # 世界像素坐标: px = Y轴像素, py = X轴像素
+        px = int(agent_y_m * 100 / self.resolution)  # Y轴像素
+        py = int(agent_x_m * 100 / self.resolution)  # X轴像素
+        
+        # trajectory_points 存储 (px, py) 即 (Y轴像素, X轴像素)
+        # 这与 semantic_mapping.py 中的坐标系统一致
         
         # 添加到当前子任务轨迹（local map使用）
-        if len(self.trajectory_points) == 0 or self.trajectory_points[-1] != (x, y):
-            self.trajectory_points.append((x, y))
+        if len(self.trajectory_points) == 0 or self.trajectory_points[-1] != (px, py):
+            self.trajectory_points.append((px, py))
         
         # 同时添加到全局轨迹（global map使用，不清空）
-        if len(self.global_trajectory_points) == 0 or self.global_trajectory_points[-1] != (x, y):
-            self.global_trajectory_points.append((x, y))
+        if len(self.global_trajectory_points) == 0 or self.global_trajectory_points[-1] != (px, py):
+            self.global_trajectory_points.append((px, py))
     
     def toggle_trajectory(self):
         """切换轨迹绘制开关"""
