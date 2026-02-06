@@ -381,9 +381,11 @@ class MapVisualizer:
             - 黑色(1): 障碍物（覆盖已探索）
             - 浅绿色(5): Floor（通过形态学计算，覆盖障碍物）
             - 橙色(3): Agent轨迹（在语义层中渲染，覆盖floor）
+            - 蓝色(4): Waypoint（在语义层中渲染，覆盖轨迹）
             
         注意：
-        - 轨迹现在作为语义层的一部分（值=3）在调色板渲染阶段处理
+        - 轨迹作为语义层的一部分（值=3）在调色板渲染阶段处理，存储在Channel 2
+        - Waypoint作为语义层的一部分（值=4）在调色板渲染阶段处理，存储在Channel 3
         - 不渲染bed/chair等语义类别的颜色，只用于landmark标注
         """
         obstacle_map = full_map[0, ...]
@@ -421,8 +423,15 @@ class MapVisualizer:
             trajectory_mask = (agent_channel > 0.4) & (agent_channel < 0.6)
             semantic_map[trajectory_mask] = 3  # 橙色（调色板索引3）
         
+        # Layer 4: Waypoint（蓝色）- 在轨迹之后渲染，从Channel 2提取
+        if full_map.shape[0] > 2:  # 确保有通道2
+            waypoint_channel = full_map[2]  # [H, W] - Agent通道（合并）
+            # 提取waypoint（值>=1.0表示有waypoint）
+            waypoint_mask = waypoint_channel >= 1.0
+            semantic_map[waypoint_mask] = 4  # 蓝色（调色板索引4）
+        
         # ===== 阶段2: PIL调色板渲染 =====
-        # 现在semantic_map包含：0=未知, 1=障碍物, 2=已探索, 3=轨迹, 5=floor
+        # 现在semantic_map包含：0=未知, 1=障碍物, 2=已探索, 3=轨迹, 4=waypoint, 5=floor
         sem_map_vis = Image.new("P", (w, h))
         sem_map_vis.putpalette(self.color_palette)
         sem_map_vis.putdata(semantic_map.flatten().astype(np.uint8))
@@ -551,53 +560,10 @@ class MapVisualizer:
                 
                 # 静默处理，不输出标注统计
             
-            # ===== 阶段7: 绘制Waypoint标记（蓝色圆圈+白色数字）=====
-            last_waypoint_angle = None  # 初始化
-            if waypoint_positions and waypoint_ids and len(waypoint_positions) == len(waypoint_ids) and rotation_matrix is not None and crop_offset is not None:
-                # waypoint坐标转换流程：
-                # 1. waypoint是世界像素坐标(world_py, world_px)，其中py=行，px=列
-                # 2. 减去crop_offset，得到裁剪后地图的局部坐标(local_py, local_px)
-                # 3. 转换到显示坐标系（缩放到480x480，flip Y轴）
-                # 4. 应用旋转矩阵
-                start_px, start_py = crop_offset  # crop_offset=(start_px, start_py)，px=行偏移，py=列偏移
-                
-                for idx, ((world_py, world_px), wp_id) in enumerate(zip(waypoint_positions, waypoint_ids)):
-                    # 1. 转换为裁剪后地图的局部坐标（world坐标 - crop起始偏移）
-                    local_py = world_py - start_px  # 行坐标 - 行偏移
-                    local_px = world_px - start_py  # 列坐标 - 列偏移
-                    
-                    # 2. 转换到显示坐标系 (full_map是[H,W]，full_map[H,W]=[py, px])
-                    display_x = local_px * 480 / w  # px -> display_x
-                    display_y = (h - 1 - local_py) * 480 / h  # py -> display_y（翻y轴）
-                    
-                    # 3. 应用旋转矩阵
-                    point = np.array([display_x, display_y, 1])
-                    rotated_point = rotation_matrix @ point
-                    
-                    # 计算最后一个waypoint的角度（相对于正前方）
-                    if idx == len(waypoint_positions) - 1:
-                        dx = rotated_point[0] - 240
-                        dy = rotated_point[1] - 240
-                        last_waypoint_angle = np.arctan2(dx, -dy)
-                    
-                    # 绘制蓝色圆圈（BGR=(255, 0, 0)）
-                    cv2.circle(global_map_with_trajectory,
-                              (int(rotated_point[0]), int(rotated_point[1])),
-                              8, (255, 0, 0), -1)  # 蓝色填充
-                    cv2.circle(global_map_with_trajectory,
-                              (int(rotated_point[0]), int(rotated_point[1])),
-                              8, (255, 255, 255), 1)  # 白色边框
-                    
-                    # 绘制白色数字ID
-                    text = str(wp_id)
-                    font = cv2.FONT_HERSHEY_SIMPLEX
-                    font_scale = 0.4
-                    thickness = 1
-                    (text_width, text_height), baseline = cv2.getTextSize(text, font, font_scale, thickness)
-                    text_x = int(rotated_point[0]) - text_width // 2
-                    text_y = int(rotated_point[1]) + text_height // 2
-                    cv2.putText(global_map_with_trajectory, text, (text_x, text_y),
-                               font, font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
+            # ===== 阶段7: Waypoint已在调色板渲染阶段处理（蓝色层）=====
+            # Waypoint现在作为semantic_map的一层（值=4，蓝色）在调色板渲染中统一处理
+            # 不再需要手动绘制和坐标转换
+            last_waypoint_angle = None  # 保留用于计算（未来可从Channel 3提取）
             
             # ===== 可选：裁剪到440×440（中心区域）=====
             # 默认关闭裁剪，保持完整的480×480地图
@@ -686,11 +652,18 @@ class MapVisualizer:
             semantic_map[floor_display_mask] = 5
         
         # Layer 3: Agent轨迹（橙色）- 在floor之后渲染
-        if full_map.shape[0] > 2:  # 确保有通道2
-            agent_channel = full_map[2]  # [H, W] - Agent通道
+        if local_map.shape[0] > 2:  # 确保有通道2
+            agent_channel = local_map[2]  # [H, W] - Agent通道
             # 提取轨迹（值接近0.5）
             trajectory_mask = (agent_channel > 0.4) & (agent_channel < 0.6)
             semantic_map[trajectory_mask] = 3  # 橙色（调色板索引3）
+        
+        # Layer 4: Waypoint（蓝色）- 在轨迹之后渲染，从Channel 2提取
+        if local_map.shape[0] > 2:  # 确保有通道2
+            waypoint_channel = local_map[2]  # [H, W] - Agent通道（合并）
+            # 提取waypoint（值>=1.0表示有waypoint）
+            waypoint_mask = waypoint_channel >= 1.0
+            semantic_map[waypoint_mask] = 4  # 蓝色（调色板索引4）
         
         # ===== 阶段2: PIL调色板渲染 =====
         sem_map_vis = Image.new("P", (w, h))

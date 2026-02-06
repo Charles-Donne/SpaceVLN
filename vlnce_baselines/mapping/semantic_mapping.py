@@ -103,11 +103,11 @@ class Semantic_Mapping(nn.Module):
     Map结构（优化版 - 节省通道）：
     1. Obstacle Map (通道0)
     2. Explored Area (通道1)
-    3. Agent通道 (通道2) - 合并当前位置/历史/轨迹
+    3. Agent通道 (通道2) - 合并轨迹/当前/waypoint
        - 0.0 = 无标记
-       - 0.5 = Trajectory (轨迹线)
-       - 0.75 = Past Locations (历史，保留)
-       - 1.0 = Current Location (当前位置)
+       - 0.5 = 历史轨迹线
+       - 0.7 = 当前位置
+       - 1.0, 2.0, 3.0... = Waypoint ID（整数）
     4. Semantic Categories (通道3+，动态扩展)
     """
     MAP_CHANNELS = 3  # 基础通道数：0-2 (优化后)
@@ -271,6 +271,70 @@ class Semantic_Mapping(nn.Module):
             if e2 < dx:
                 err += dx
                 y += sy
+    
+    def mark_waypoint(self, agent_x_m: float, agent_y_m: float, waypoint_id: int, clear_radius_m: float = 2.0):
+        """
+        在世界地图的Channel 2中标记waypoint
+        
+        Channel 2值含义：
+        - 0.5: 历史轨迹
+        - 0.7: 当前位置
+        - 1.0, 2.0, 3.0...: waypoint ID（整数）
+        
+        Args:
+            agent_x_m: Agent世界X坐标（米）
+            agent_y_m: Agent世界Y坐标（米）
+            waypoint_id: Waypoint ID（整数，1, 2, 3...）
+            clear_radius_m: 清除半径（米），默认2米
+        """
+        # 转换为世界像素坐标
+        agent_px = int(agent_y_m * 100 / self.resolution)  # Y轴像素
+        agent_py = int(agent_x_m * 100 / self.resolution)  # X轴像素
+        
+        # 确定agent所在的tile
+        tile_x = int(np.floor(agent_x_m / self.TILE_SIZE_M))
+        tile_y = int(np.floor(agent_y_m / self.TILE_SIZE_M))
+        
+        # 计算在tile内的局部坐标
+        tile_start_x_m = tile_x * self.TILE_SIZE_M
+        tile_start_y_m = tile_y * self.TILE_SIZE_M
+        local_px = int((agent_y_m - tile_start_y_m) * 100 / self.resolution)
+        local_py = int((agent_x_m - tile_start_x_m) * 100 / self.resolution)
+        
+        # 限制在tile范围内
+        local_px = max(0, min(self.TILE_SIZE - 1, local_px))
+        local_py = max(0, min(self.TILE_SIZE - 1, local_py))
+        
+        # 确俟tile存在
+        tile_key = (tile_x, tile_y)
+        if tile_key not in self.tiles or self.tiles[tile_key] is None:
+            current_nc = self.local_map.shape[1] if self.local_map is not None else self.MAP_CHANNELS
+            self.tiles[tile_key] = torch.zeros(
+                self.num_environments, current_nc, 
+                self.TILE_SIZE, self.TILE_SIZE
+            ).float().to(self.device)
+        
+        # 先清除半径内的旧waypoint（避免扎堆）
+        clear_radius_px = int(clear_radius_m * 100 / self.resolution)
+        for dy in range(-clear_radius_px, clear_radius_px + 1):
+            for dx in range(-clear_radius_px, clear_radius_px + 1):
+                clear_px = local_px + dy
+                clear_py = local_py + dx
+                # 检查是否在半径内
+                if dy*dy + dx*dx <= clear_radius_px * clear_radius_px:
+                    if 0 <= clear_px < self.TILE_SIZE and 0 <= clear_py < self.TILE_SIZE:
+                        # 清除Channel 2的旧waypoint（整数部分）
+                        old_val = self.tiles[tile_key][0, 2, clear_px, clear_py].item()
+                        if old_val >= 1.0:  # 只清除waypoint，保留轨迹(0.5)和当前位置(0.7)
+                            self.tiles[tile_key][0, 2, clear_px, clear_py] = 0
+        
+        # 在Channel 2标记新waypoint（5×5的区域）
+        for dx in [-2, -1, 0, 1, 2]:
+            for dy in [-2, -1, 0, 1, 2]:
+                mark_px = local_px + dx
+                mark_py = local_py + dy
+                if 0 <= mark_px < self.TILE_SIZE and 0 <= mark_py < self.TILE_SIZE:
+                    self.tiles[tile_key][0, 2, mark_px, mark_py] = float(waypoint_id)
     
     def reset(self) -> None:
         """重置地图系统（分块架构）"""
@@ -594,13 +658,14 @@ class Semantic_Mapping(nn.Module):
                 local_w_end = copy_end_gy - gy1
                 
                 # 写回数据（local_map是单个环境的，形状[C, H, W]）
-                # 对于通道2（Agent通道），需要保留轨迹值（0.5），只更新当前位置（1.0）
+                # 对于通道2（Agent通道），需要保留轨迹（0.5）和waypoint（>=1.0），只更新当前位置（0.7）
                 if local_map.shape[0] > 2:
-                    # 先保存tile中Channel 2的轨迹数据（值为0.5的像素）
+                    # 先保存tile中Channel 2的轨迹和waypoint数据
                     tile_agent_channel = tile[env_id, 2,
                                              tile_h_start:tile_h_end,
                                              tile_w_start:tile_w_end].clone()
-                    trajectory_mask = (tile_agent_channel > 0.4) & (tile_agent_channel < 0.6)
+                    trajectory_mask = (tile_agent_channel > 0.4) & (tile_agent_channel < 0.6)  # 0.5
+                    waypoint_mask = tile_agent_channel >= 1.0  # 1.0, 2.0, 3.0...
                     
                     # 更新所有通道
                     tile[env_id, :,
@@ -610,15 +675,21 @@ class Semantic_Mapping(nn.Module):
                                  local_h_start:local_h_end,
                                  local_w_start:local_w_end]
                     
-                    # 恢复轨迹值（0.5）到tile的Channel 2
-                    # 只恢复那些在local_map中不是当前位置（<0.9）的轨迹点
+                    # 恢复轨迹值（0.5）和waypoint（>=1.0）到tile的Channel 2
+                    # 只在local_map对应位置不是当前位置（0.7）时恢复
                     local_agent_channel = local_map[2,
                                                     local_h_start:local_h_end,
                                                     local_w_start:local_w_end]
-                    preserve_trajectory = trajectory_mask & (local_agent_channel < 0.9)
+                    not_current = (local_agent_channel < 0.65) | (local_agent_channel > 0.75)
+                    preserve_trajectory = trajectory_mask & not_current
+                    preserve_waypoint = waypoint_mask & not_current
+                    
                     tile[env_id, 2,
                          tile_h_start:tile_h_end,
                          tile_w_start:tile_w_end][preserve_trajectory] = 0.5
+                    tile[env_id, 2,
+                         tile_h_start:tile_h_end,
+                         tile_w_start:tile_w_end][preserve_waypoint] = tile_agent_channel[preserve_waypoint]
                 else:
                     # 没有通道2，直接覆盖
                     tile[env_id, :,
@@ -1089,28 +1160,28 @@ class Semantic_Mapping(nn.Module):
             
             self.last_trajectory_pos = current_pos
         
-        # 清除Local Map中的当前位置标记（保留轨迹0.5）
-        # 只清除值为1.0的当前位置标记
+        # 清除Local Map中的当前位置标记（保留轨迹0.5和waypoint>=1.0）
+        # 只清除值为0.7的当前位置标记
         self.local_map[:, 2, :, :] = torch.where(
-            self.local_map[:, 2, :, :] > 0.9,
+            (self.local_map[:, 2, :, :] > 0.65) & (self.local_map[:, 2, :, :] < 0.75),
             torch.zeros_like(self.local_map[:, 2, :, :]),
             self.local_map[:, 2, :, :]
         )
         self.one_step_local_map[:, 2, :, :] = torch.where(
-            self.one_step_local_map[:, 2, :, :] > 0.9,
+            (self.one_step_local_map[:, 2, :, :] > 0.65) & (self.one_step_local_map[:, 2, :, :] < 0.75),
             torch.zeros_like(self.one_step_local_map[:, 2, :, :]),
             self.one_step_local_map[:, 2, :, :]
         )
         
-        # 标记agent当前位置（使用1.0）
+        # 标记agent当前位置（使用0.7）
         for e in range(self.num_environments):
             r, c = locs[e, 1], locs[e, 0]  # r=Y, c=X（物理坐标，米）
             # 转换为Local Map像素坐标（240×240）
             loc_r, loc_c = [int(r * 100.0 / self.resolution),
                             int(c * 100.0 / self.resolution)]
-            # 在Local Map中标记agent位置（3×3像素，值为1.0）
-            self.local_map[e, 2, loc_r - 1:loc_r + 2, loc_c - 1:loc_c + 2] = 1.0
-            self.one_step_local_map[e, 2, loc_r - 1:loc_r + 2, loc_c - 1:loc_c + 2] = 1.0
+            # 在Local Map中标记agent位置（3×3像素，值为0.7）
+            self.local_map[e, 2, loc_r - 1:loc_r + 2, loc_c - 1:loc_c + 2] = 0.7
+            self.one_step_local_map[e, 2, loc_r - 1:loc_r + 2, loc_c - 1:loc_c + 2] = 0.7
             
             # 将更新后的Local Map写回到对应的tiles
             self.update_tiles_from_local_map(self.local_map[e], env_id=e, is_one_step=False)
