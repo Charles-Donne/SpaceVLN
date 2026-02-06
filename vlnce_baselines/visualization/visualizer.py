@@ -380,9 +380,11 @@ class MapVisualizer:
             - 浅灰色(2): 已探索自由空间（先渲染）
             - 黑色(1): 障碍物（覆盖已探索）
             - 浅绿色(5): Floor（通过形态学计算，覆盖障碍物）
-            - 橙色(3): Agent轨迹（最后覆盖）
+            - 橙色(3): Agent轨迹（在语义层中渲染，覆盖floor）
             
-        注意：不渲染bed/chair等语义类别的颜色，只用于landmark标注
+        注意：
+        - 轨迹现在作为语义层的一部分（值=3）在调色板渲染阶段处理
+        - 不渲染bed/chair等语义类别的颜色，只用于landmark标注
         """
         obstacle_map = full_map[0, ...]
         explored_map = full_map[1, ...]
@@ -412,7 +414,15 @@ class MapVisualizer:
             floor_display_mask = np.logical_and(floor_mask, explored_mask)
             semantic_map[floor_display_mask] = 5  # 浅绿色
         
+        # Layer 3: Agent轨迹（橙色）- 在floor之后渲染
+        if full_map.shape[0] > 2:  # 确保有通道2
+            agent_channel = full_map[2]  # [H, W] - Agent通道
+            # 提取轨迹（值接近0.5）
+            trajectory_mask = (agent_channel > 0.4) & (agent_channel < 0.6)
+            semantic_map[trajectory_mask] = 3  # 橙色（调色板索引3）
+        
         # ===== 阶段2: PIL调色板渲染 =====
+        # 现在semantic_map包含：0=未知, 1=障碍物, 2=已探索, 3=轨迹, 5=floor
         sem_map_vis = Image.new("P", (w, h))
         sem_map_vis.putpalette(self.color_palette)
         sem_map_vis.putdata(semantic_map.flatten().astype(np.uint8))
@@ -446,18 +456,11 @@ class MapVisualizer:
             # 直接使用已旋转的地图
             global_map_rotated = sem_map_vis.copy()
             
-            # ===== 阶段5: 创建global_map的显示副本（用于绘制轨迹和landmark）=====
+            # ===== 阶段5: 创建global_map的显示副本（用于绘制landmark）=====
+            # 轨迹已经在调色板渲染阶段处理，这里只需要复制
             global_map_with_trajectory = global_map_rotated.copy()
             
-            # 从通道2提取轨迹并渲染（轨迹已经随地图旋转）
-            if full_map.shape[0] > 2:  # 确保有通道2
-                agent_channel = full_map[2]  # [H, W] - Agent通道
-                # 提取轨迹（值接近0.5）
-                trajectory_mask = (agent_channel > 0.4) & (agent_channel < 0.6)
-                # 在global_map_with_trajectory上绘制轨迹（橙色）
-                global_map_with_trajectory[trajectory_mask] = [0, 165, 255]  # BGR橙色
-            
-            # ===== 阶段5.3: 绘制深红色虚线指示正前方（在轨迹之后，箭头之前）=====
+            # ===== 阶段5.3: 绘制深红色虚线指示正前方（在箭头之前）=====
             center_x, center_y = 240, 240
             forward_line_length = 120  # 延伸120像素（约3米）
             forward_color = (0, 0, 180)  # 深红色 BGR
@@ -552,16 +555,16 @@ class MapVisualizer:
             last_waypoint_angle = None  # 初始化
             if waypoint_positions and waypoint_ids and len(waypoint_positions) == len(waypoint_ids) and rotation_matrix is not None and crop_offset is not None:
                 # waypoint坐标转换流程：
-                # 1. waypoint是世界像素坐标(world_py, world_px)
+                # 1. waypoint是世界像素坐标(world_py, world_px)，其中py=行，px=列
                 # 2. 减去crop_offset，得到裁剪后地图的局部坐标(local_py, local_px)
                 # 3. 转换到显示坐标系（缩放到480x480，flip Y轴）
                 # 4. 应用旋转矩阵
-                start_py, start_px = crop_offset  # 裁剪区域的世界像素偏移
+                start_px, start_py = crop_offset  # crop_offset=(start_px, start_py)，px=行偏移，py=列偏移
                 
                 for idx, ((world_py, world_px), wp_id) in enumerate(zip(waypoint_positions, waypoint_ids)):
-                    # 1. 转换为裁剪后地图的局部坐标
-                    local_py = world_py - start_py
-                    local_px = world_px - start_px
+                    # 1. 转换为裁剪后地图的局部坐标（world坐标 - crop起始偏移）
+                    local_py = world_py - start_px  # 行坐标 - 行偏移
+                    local_px = world_px - start_py  # 列坐标 - 列偏移
                     
                     # 2. 转换到显示坐标系 (full_map是[H,W]，full_map[H,W]=[py, px])
                     display_x = local_px * 480 / w  # px -> display_x
@@ -682,6 +685,13 @@ class MapVisualizer:
             floor_display_mask = np.logical_and(floor_mask, explored_mask)
             semantic_map[floor_display_mask] = 5
         
+        # Layer 3: Agent轨迹（橙色）- 在floor之后渲染
+        if full_map.shape[0] > 2:  # 确保有通道2
+            agent_channel = full_map[2]  # [H, W] - Agent通道
+            # 提取轨迹（值接近0.5）
+            trajectory_mask = (agent_channel > 0.4) & (agent_channel < 0.6)
+            semantic_map[trajectory_mask] = 3  # 橙色（调色板索引3）
+        
         # ===== 阶段2: PIL调色板渲染 =====
         sem_map_vis = Image.new("P", (w, h))
         sem_map_vis.putpalette(self.color_palette)
@@ -716,18 +726,8 @@ class MapVisualizer:
         local_map = local_map[y1:y2, x1:x2].copy()
         local_map = cv2.resize(local_map, (480, 480), interpolation=cv2.INTER_NEAREST)
         
-        # ===== 阶段5: 从通道2提取轨迹并渲染 =====
-        # 轨迹已经随地图旋转，直接从旋转后的full_map提取
-        if full_map.shape[0] > 2:  # 确保有通道2
-            trajectory_channel = full_map[2, 120:360, 120:360]  # 裁剪后的区域
-            trajectory_channel_resized = cv2.resize(
-                trajectory_channel, (480, 480), 
-                interpolation=cv2.INTER_NEAREST
-            )
-            # 提取轨迹（0.4 < 值 < 0.6）
-            trajectory_mask = (trajectory_channel_resized > 0.4) & (trajectory_channel_resized < 0.6)
-            # 在local_map上绘制轨迹（橙色）
-            local_map[trajectory_mask] = [0, 140, 255]  # BGR橙色
+        # ===== 阶段5: 轨迹已在调色板渲染阶段处理，这里跳过 =====
+        # 轨迹现在作为semantic_map的一层（值=3，橙色）一起渲染
         
         # ===== 阶段6: 绘制FOV可见区域（考虑障碍物遮挡）=====
         # 480像素 = 12m，所以1像素 = 2.5cm
