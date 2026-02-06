@@ -408,7 +408,7 @@ class VLMNavigationController(InteractiveNavigationController):
         
         # ========== 1. 绘制历史轨迹投影 ==========
         if hasattr(self, 'mapper') and self.mapper:
-            trajectory_points = self.mapper.trajectory_points  # List[(map_x, map_y)] 地图像素坐标
+            trajectory_points = self.mapper.mapping_module.get_trajectory()  # List[(map_x, map_y)] 地图像素坐标
             if len(trajectory_points) > 1:
                 projected_points = []
                 
@@ -502,7 +502,7 @@ class VLMNavigationController(InteractiveNavigationController):
             rotation_angle = 90 - current_o
             
             # agent在显示坐标系中的位置（trajectory最后一点）
-            trajectory_points = self.mapper.trajectory_points
+            trajectory_points = self.mapper.mapping_module.get_trajectory()
             if len(trajectory_points) == 0:
                 return image
             last_traj_x, last_traj_y = trajectory_points[-1]
@@ -1904,8 +1904,9 @@ class VLMNavigationController(InteractiveNavigationController):
             ) > 127
             
             # 计算agent位置
-            if len(self.mapper.trajectory_points) > 0:
-                last_x, last_y = self.mapper.trajectory_points[-1]
+            trajectory_points = self.mapper.mapping_module.get_trajectory()
+            if len(trajectory_points) > 0:
+                last_x, last_y = trajectory_points[-1]
                 agent_x, agent_y = last_y * 480 / w, (h - 1 - last_x) * 480 / h
             else:
                 pos = np.array([current_x, current_y]) * 100.0 / self.config.MAP.MAP_RESOLUTION
@@ -1956,8 +1957,9 @@ class VLMNavigationController(InteractiveNavigationController):
             ) > 127
             
             # 计算agent位置
-            if len(self.mapper.trajectory_points) > 0:
-                last_x, last_y = self.mapper.trajectory_points[-1]
+            trajectory_points = self.mapper.mapping_module.get_trajectory()
+            if len(trajectory_points) > 0:
+                last_x, last_y = trajectory_points[-1]
                 agent_x, agent_y = last_y * 480 / w, (h - 1 - last_x) * 480 / h
             else:
                 pos = np.array([current_x, current_y]) * 100.0 / self.config.MAP.MAP_RESOLUTION
