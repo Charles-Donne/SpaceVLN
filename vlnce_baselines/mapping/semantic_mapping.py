@@ -178,7 +178,7 @@ class Semantic_Mapping(nn.Module):
         # State (7 dimensions): [global_x, global_y, orientation, gx1, gx2, gy1, gy2]
         self.state = np.zeros((self.num_environments, 7))
         
-        # 轨迹现在存储在通道4中，不再需要点列表
+        # 轨迹现在存储在通道2中，不再需要点列表
         # 保留用于记录上一个位置，避免重复标记
         self.last_trajectory_pos = None  # (tile_x, tile_y, local_px, local_py)
         
@@ -1003,7 +1003,7 @@ class Semantic_Mapping(nn.Module):
             self.full_pose[e, 1] = self.state[e, 1]  # 世界Y坐标（米）
             self.full_pose[e, 2] = self.local_pose[e, 2]  # 朝向（度数）
         
-        # 标记轨迹（在通道4中）
+        # 标记轨迹（在通道2中）
         # 使用第一个环境的位置（单环境模式）
         agent_x_m = self.full_pose[0, 0].item()
         agent_y_m = self.full_pose[0, 1].item()

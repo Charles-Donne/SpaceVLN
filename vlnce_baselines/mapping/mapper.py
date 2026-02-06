@@ -119,10 +119,10 @@ class SemanticMapper:
         self.mapping_module.one_step_full_map.fill_(0.)
         self.mapping_module.one_step_local_map.fill_(0.)
         
-        # 注意：轨迹现在存储在full_map的通道4中，不再需要单独的trajectory_points列表
+        # 注意：轨迹现在存储在full_map的通道2中，不再需要单独的trajectory_points列表
         
         return {
-            'full_map': self.full_map,  # 轨迹已经在通道4中
+            'full_map': self.full_map,  # 轨迹已经在通道2中
             'full_pose': self.full_pose,
             'floor': self.floor
         }
@@ -202,9 +202,9 @@ class SemanticMapper:
         return floor.astype(np.uint8)
     
     
-    # ===== 轨迹管理（已废弃 - 轨迹现在存储在通道4中）=====
+    # ===== 轨迹管理（已废弃 - 轨迹现在存储在通道2中）=====
     # convert_trajectory_to_local 和相关方法已不再需要
-    # 轨迹直接在tiles的通道4中标记，随地图一起旋转
+    # 轨迹直接在tiles的通道2中标记，随地图一起旋转
     
     def toggle_trajectory(self):
         """切换轨迹绘制开关"""
@@ -319,13 +319,13 @@ class SemanticMapper:
         - floor字段保留用于向后兼容，但实际floor渲染现在从full_map[3+]的
           语义类别中自动获取（floor是第一个mapping_class，索引为0）
         - 轨迹现在存储在full_map的通道2中（值为0.5）
-        - 轨迹现在存储在full_map的通道4中，不再返回单独的trajectory_points
+        - 不再返回单独的trajectory_points
         
         Returns:
             state: 地图状态字典
         """
         return {
-            'full_map': self.full_map,  # 轨迹在通道4中
+            'full_map': self.full_map,  # 轨迹在通道2中
             'full_pose': self.full_pose,
             'floor': self.floor,
             'waypoint_positions': self.waypoint_positions,

@@ -689,20 +689,21 @@ class MapVisualizer:
         local_map = local_map[y1:y2, x1:x2].copy()
         local_map = cv2.resize(local_map, (480, 480), interpolation=cv2.INTER_NEAREST)
         
-        # ===== 阶段5: 从通道4提取轨迹并渲染 =====
+        # ===== 阶段5: 从通道2提取轨迹并渲染 =====
         # 轨迹已经随地图旋转，直接从旋转后的full_map提取
-        if full_map_rotated.shape[0] > 4:  # 确保有通道4
-            trajectory_channel = full_map_rotated[4, 120:360, 120:360]  # 裁剪后的区域
+        if full_map.shape[0] > 2:  # 确保有通道2
+            trajectory_channel = full_map[2, 120:360, 120:360]  # 裁剪后的区域
             trajectory_channel_resized = cv2.resize(
                 trajectory_channel, (480, 480), 
                 interpolation=cv2.INTER_NEAREST
             )
-            trajectory_mask = trajectory_channel_resized > 0.5
+            # 提取轨迹（0.4 < 值 < 0.6）
+            trajectory_mask = (trajectory_channel_resized > 0.4) & (trajectory_channel_resized < 0.6)
             # 在local_map上绘制轨迹（橙色）
             local_map[trajectory_mask] = [0, 140, 255]  # BGR橙色
         
         # 绘制平滑轨迹线（3像素宽）
-        # 已经从通道4渲染，不需要额外绘制
+        # 已经从通道2渲染，不需要额外绘制
             if len(local_trajectory) >= 2:
                 trajectory_array = np.array(local_trajectory, dtype=np.int32)
                 cv2.polylines(local_map, [trajectory_array], isClosed=False,
