@@ -775,7 +775,8 @@ class VLMNavigationController(InteractiveNavigationController):
                 waypoint_positions=None,  # 环视过程中不传waypoint
                 waypoint_ids=None,
                 phase=phase,
-                global_trajectory_points=[]  # 轨迹现在在 full_map Channel 2 中
+                global_trajectory_points=[],  # 轨迹现在在 full_map Channel 2 中
+                crop_offset=map_state.get('crop_offset')  # 新增
             )
             
             # 累积当前step检测到的landmarks
@@ -866,7 +867,8 @@ class VLMNavigationController(InteractiveNavigationController):
                     waypoint_positions=wp_positions,
                     waypoint_ids=wp_ids,
                     phase=phase,
-                    global_trajectory_points=[]  # 轨迹现在在 full_map Channel 2 中
+                    global_trajectory_points=[],  # 轨迹现在在 full_map Channel 2 中
+                    crop_offset=map_state.get('crop_offset')  # 新增：裁剪偏移
                 )
                 
                 # 转换为度数用于view映射

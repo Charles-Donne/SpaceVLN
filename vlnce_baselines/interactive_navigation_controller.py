@@ -195,7 +195,8 @@ class InteractiveNavigationController:
                 waypoint_positions=None,  # action时不传waypoint
                 waypoint_ids=None,
                 phase=phase,
-                global_trajectory_points=[]  # 轨迹现在在 full_map Channel 2 中
+                global_trajectory_points=[],  # 轨迹现在在 full_map Channel 2 中
+                crop_offset=map_state.get('crop_offset')  # 新增
             )
             
             # 保存当前step检测到的landmarks（用于action决策）

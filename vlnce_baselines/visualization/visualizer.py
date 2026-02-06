@@ -349,7 +349,8 @@ class MapVisualizer:
                          landmark_classes: Optional[List[str]] = None,
                          landmark_config: Optional[Dict] = None,
                          waypoint_positions: Optional[List[Tuple[int, int]]] = None,
-                         waypoint_ids: Optional[List[int]] = None) -> Tuple[np.ndarray, np.ndarray, List, np.ndarray, Optional[float]]:
+                         waypoint_ids: Optional[List[int]] = None,
+                         crop_offset: Optional[Tuple[int, int]] = None) -> Tuple[np.ndarray, np.ndarray, List, np.ndarray, Optional[float]]:
         """
         渲染全局地图（严格按照ZS_Evaluator的渲染逻辑 + 平滑轨迹线）
         
@@ -549,14 +550,24 @@ class MapVisualizer:
             
             # ===== 阶段7: 绘制Waypoint标记（蓝色圆圈+白色数字）=====
             last_waypoint_angle = None  # 初始化
-            if waypoint_positions and waypoint_ids and len(waypoint_positions) == len(waypoint_ids) and rotation_matrix is not None:
-                # 静默处理waypoint渲染，不输出详细坐标
-                for idx, ((wp_x, wp_y), wp_id) in enumerate(zip(waypoint_positions, waypoint_ids)):
-                    # waypoint是原始地图坐标(map_x, map_y)，需要：
-                    # 1. 转换到显示坐标系（flip Y轴）
-                    # 2. 应用旋转矩阵（与full_map的旋转一致）
-                    display_x = wp_y * 480 / w
-                    display_y = (h - 1 - wp_x) * 480 / h
+            if waypoint_positions and waypoint_ids and len(waypoint_positions) == len(waypoint_ids) and rotation_matrix is not None and crop_offset is not None:
+                # waypoint坐标转换流程：
+                # 1. waypoint是世界像素坐标(world_py, world_px)
+                # 2. 减去crop_offset，得到裁剪后地图的局部坐标(local_py, local_px)
+                # 3. 转换到显示坐标系（缩放到480x480，flip Y轴）
+                # 4. 应用旋转矩阵
+                start_py, start_px = crop_offset  # 裁剪区域的世界像素偏移
+                
+                for idx, ((world_py, world_px), wp_id) in enumerate(zip(waypoint_positions, waypoint_ids)):
+                    # 1. 转换为裁剪后地图的局部坐标
+                    local_py = world_py - start_py
+                    local_px = world_px - start_px
+                    
+                    # 2. 转换到显示坐标系 (full_map是[H,W]，full_map[H,W]=[py, px])
+                    display_x = local_px * 480 / w  # px -> display_x
+                    display_y = (h - 1 - local_py) * 480 / h  # py -> display_y（翻y轴）
+                    
+                    # 3. 应用旋转矩阵
                     point = np.array([display_x, display_y, 1])
                     rotated_point = rotation_matrix @ point
                     
@@ -626,7 +637,8 @@ class MapVisualizer:
                         landmark_config: Optional[Dict] = None,
                         hfov: float = 90.0,
                         waypoint_positions: Optional[List[Tuple[int, int]]] = None,
-                        waypoint_ids: Optional[List[int]] = None) -> np.ndarray:
+                        waypoint_ids: Optional[List[int]] = None,
+                        crop_offset: Optional[Tuple[int, int]] = None) -> np.ndarray:
         """
         独立渲染局部地图（不继承全局地图，完全独立构建）
         
@@ -1420,7 +1432,8 @@ class MapVisualizer:
                                masks: Optional[np.ndarray] = None,
                                phase: str = "action",
                                global_trajectory_points: Optional[List[Tuple[int, int]]] = None,
-                               controller = None) -> Tuple[Dict[str, str], List, Optional[float]]:
+                               controller = None,
+                               crop_offset: Optional[Tuple[int, int]] = None) -> Tuple[Dict[str, str], List, Optional[float]]:
         """
         一键保存当前步骤的所有可视化（支持新detection渲染 + 平滑轨迹线 + waypoint标记）
         
@@ -1460,7 +1473,7 @@ class MapVisualizer:
         _, global_map_with_trajectory, landmarks, global_map_clean, last_waypoint_angle = self.render_global_map(
             full_map, global_traj_to_use, detected_classes, floor,
             current_pose, landmark_classes, landmark_config,
-            waypoint_positions, waypoint_ids
+            waypoint_positions, waypoint_ids, crop_offset
         )
         paths['global_map'] = self.save_global_map(step, episode_id, global_map_with_trajectory, phase)
         
@@ -1468,7 +1481,7 @@ class MapVisualizer:
         local_map = self.render_local_map(
             full_map, trajectory_points, detected_classes, current_pose,
             floor, landmark_classes, landmark_config, hfov,
-            waypoint_positions, waypoint_ids
+            waypoint_positions, waypoint_ids, crop_offset
         )
         paths['local_map'] = self.save_local_map(step, episode_id, local_map, phase)        # 4. 渲染并保存检测结果
         detected_landmarks_step = []

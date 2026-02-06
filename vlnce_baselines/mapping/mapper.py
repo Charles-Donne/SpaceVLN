@@ -241,18 +241,21 @@ class SemanticMapper:
         agent_x_m = self.full_pose[0]  # 世界X坐标（米）
         agent_y_m = self.full_pose[1]  # 世界Y坐标（米）
         
-        # 转换为像素坐标
-        map_x = int(agent_y_m * 100 / self.resolution)  # Y轴像素
-        map_y = int(agent_x_m * 100 / self.resolution)  # X轴像素
+        # 转换为世界像素坐标
+        # 注意：tensor索引[H, W] = [Y, X]，所以：
+        # pixel_y = agent_y_m转换 = 对应tensor的行坐标（H维度）
+        # pixel_x = agent_x_m转换 = 对应tensor的列坐标（W维度）
+        pixel_y = int(agent_y_m * 100 / self.resolution)  # Y轴像素 (tensor行)
+        pixel_x = int(agent_x_m * 100 / self.resolution)  # X轴像素 (tensor列)
         
         # ===== 新增：移除2m范围内的旧waypoint =====
         distance_threshold_pixels = 200 / self.resolution  # 2m转换为像素（200cm / resolution）
         
         # 查找需要保留的waypoint（2m之外的waypoint）
         waypoints_to_keep = []
-        for i, (old_x, old_y) in enumerate(self.waypoint_positions):
+        for i, (old_py, old_px) in enumerate(self.waypoint_positions):
             # 计算当前位置与旧waypoint的距离
-            distance = np.sqrt((map_x - old_x) ** 2 + (map_y - old_y) ** 2)
+            distance = np.sqrt((pixel_y - old_py) ** 2 + (pixel_x - old_px) ** 2)
             
             if distance >= distance_threshold_pixels:
                 # 距离>=2m，保留
@@ -261,7 +264,7 @@ class SemanticMapper:
                 # 距离<2m，删除（打印日志）
                 old_id = self.waypoint_ids[i]
                 old_desc = self.waypoint_descriptions[i]
-                print(f"  🗑️  Removed nearby Waypoint #{old_id} @ ({old_x}, {old_y}) - {old_desc} (distance: {distance * self.resolution:.1f}cm < 200cm)")
+                print(f"  🗑️  Removed nearby Waypoint #{old_id} @ (py={old_py}, px={old_px}) - {old_desc} (distance: {distance * self.resolution:.1f}cm < 200cm)")
         
         # 更新waypoint列表（只保留2m之外的waypoint）
         if waypoints_to_keep:
@@ -278,12 +281,12 @@ class SemanticMapper:
         self.waypoint_counter += 1
         waypoint_id = self.waypoint_counter
         
-        # 保存新waypoint（只保存位置）
-        self.waypoint_positions.append((map_x, map_y))
+        # 保存新waypoint（保存世界像素坐标：(pixel_y, pixel_x) = (行, 列)）
+        self.waypoint_positions.append((pixel_y, pixel_x))
         self.waypoint_ids.append(waypoint_id)
         self.waypoint_descriptions.append(description)
         
-        print(f"  📍 Waypoint #{waypoint_id} @ ({map_x}, {map_y}) - {description}")
+        print(f"  📍 Waypoint #{waypoint_id} @ (py={pixel_y}, px={pixel_x}) - {description}")
         
         return waypoint_id
     
@@ -292,7 +295,8 @@ class SemanticMapper:
         获取所有waypoint的位置、ID和描述
         
         Returns:
-            positions: [(map_x, map_y), ...] 地图坐标列表
+            positions: [(pixel_y, pixel_x), ...] 世界像素坐标列表
+                      其中 pixel_y=行坐标, pixel_x=列坐标（对应tensor的[H, W]索引）
             ids: [1, 2, 3, ...] waypoint ID列表
             descriptions: ["desc1", "desc2", ...] waypoint描述列表
         """
@@ -320,6 +324,7 @@ class SemanticMapper:
           语义类别中自动获取（floor是第一个mapping_class，索引为0）
         - 轨迹现在存储在full_map的通道2中（值为0.5）
         - 不再返回单独的trajectory_points
+        - crop_offset用于将世界坐标转换为full_map的局部坐标
         
         Returns:
             state: 地图状态字典
@@ -331,7 +336,8 @@ class SemanticMapper:
             'waypoint_positions': self.waypoint_positions,
             'waypoint_ids': self.waypoint_ids,
             'map_shape': self.map_shape,
-            'resolution': self.resolution
+            'resolution': self.resolution,
+            'crop_offset': self.mapping_module.full_map_crop_offset  # (start_py, start_px) 世界像素偏移
         }
     
     def get_current_pose(self) -> Optional[Tuple[float, float, float]]:
