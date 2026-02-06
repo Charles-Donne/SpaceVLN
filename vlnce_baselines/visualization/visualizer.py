@@ -819,15 +819,15 @@ class MapVisualizer:
         # ===== 绘制轨迹（在FOV之上，箭头之下）=====
         if len(trajectory_points) >= 2:
             rotated_trajectory = []
-            for x, y in trajectory_points:
-                display_x = y * 480 / w
-                display_y = (h - 1 - x) * 480 / h
-                point = np.array([display_x, display_y, 1])
-                rotated_point = rotation_matrix @ point
+            for px, py in trajectory_points:
+                # trajectory_points 已经在旋转后的坐标系中
+                # px = Y轴像素, py = X轴像素
+                display_x = py  # X轴像素 → 水平位置
+                display_y = px  # Y轴像素 → 垂直位置
                 
                 # 转换到local坐标系（裁剪区域是120-360，映射到0-480）
-                local_x = (rotated_point[0] - 120) * 2
-                local_y = (rotated_point[1] - 120) * 2
+                local_x = (display_x - 120) * 2
+                local_y = (display_y - 120) * 2
                 rotated_trajectory.append([int(round(local_x)), int(round(local_y))])
             
             if len(rotated_trajectory) >= 2:

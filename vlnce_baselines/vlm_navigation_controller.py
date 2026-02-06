@@ -1942,7 +1942,7 @@ class VLMNavigationController(InteractiveNavigationController):
     
     def _update_obstacle_distances_12_directions(self):
         """更新当前位置的12个方向障碍物距离（用于Thinking模式环视）
-        注意：环视时每转一次只测正前方距离
+        每个方向使用±5°的5条光线取中位数
         """
         try:
             # 检查地图是否已初始化
@@ -1968,18 +1968,60 @@ class VLMNavigationController(InteractiveNavigationController):
             ) > 127
             
             # 注意：full_map 已经旋转过，agent朝向向上，位于(240, 240)
-            # 直接计算正前方距离（-90° = 向上）
-            front_distance = self._raycast_on_rotated_map(
-                obstacle_mask_display, 240, 240, -90  # 正前方
-            )
-            
-            # 环视时只返回正前方距离
-            self.latest_obstacle_distances_12 = {
-                'front': self._format_distance(front_distance)
+            # 定义12个方向（agent朝上=-90°）
+            # angle_0 = 正前方 = -90°
+            # angle_30 = 左前方30° = -120°
+            # angle_60 = 左前方60° = -150°
+            # ...
+            directions = {
+                'angle_0':   -90,   # Front (0°)
+                'angle_30':  -120,  # Left 30° (逆时针)
+                'angle_60':  -150,  # Left 60°
+                'angle_90':  -180,  # Left 90°
+                'angle_120': 150,   # Left 120° (=-210°)
+                'angle_150': 120,   # Left 150° (=-240°)
+                'angle_180': 90,    # Back (180°)
+                'angle_210': 60,    # Right 150° (顺时针150°)
+                'angle_240': 30,    # Right 120°
+                'angle_270': 0,     # Right 90°
+                'angle_300': -30,   # Right 60°
+                'angle_330': -60    # Right 30°
             }
+            
+            distances = {}
+            
+            # 计算12个方向的距离（每个方向用5条光线取中位数）
+            for key, angle in directions.items():
+                ray_distances = []
+                for offset in [-5, -2.5, 0, 2.5, 5]:
+                    test_angle = angle + offset
+                    dist_m = self._raycast_on_rotated_map(
+                        obstacle_mask_display, 240, 240, test_angle
+                    )
+                    if dist_m is not None:
+                        ray_distances.append(dist_m)
+                
+                # 使用中位数距离
+                if ray_distances:
+                    median_dist = np.median(ray_distances)
+                    distances[key] = self._format_distance(median_dist)
+                else:
+                    distances[key] = "Unknown"
+            
+            self.latest_obstacle_distances_12 = distances
+            
+            # 调试信息：打印前方距离
+            if self.current_step <= 3:
+                print(f"  [DEBUG] 12方向距离测量: angle_0(正前方)={distances.get('angle_0', 'N/A')}, "
+                      f"angle_90(左侧)={distances.get('angle_90', 'N/A')}, "
+                      f"angle_270(右侧)={distances.get('angle_270', 'N/A')}")
         except Exception as e:
+            import traceback
             print(f"  ⚠️  12方向距离更新失败: {e}")
-            self.latest_obstacle_distances_12 = {'front': 'Unknown'}
+            print(f"  详细错误: {traceback.format_exc()}")
+            self.latest_obstacle_distances_12 = {
+                f'angle_{i}': 'Unknown' for i in range(0, 360, 30)
+            }
     
     def _update_obstacle_distances(self):
         """更新当前位置的障碍物距离（用于Action模式，7个方向）"""
