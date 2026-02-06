@@ -1879,8 +1879,71 @@ class VLMNavigationController(InteractiveNavigationController):
         
         return result
     
+    def _raycast_on_rotated_map(
+        self,
+        obstacle_mask: np.ndarray,
+        start_x: int,
+        start_y: int,
+        angle_deg: float
+    ) -> Optional[float]:
+        """
+        在旋转后的地图上进行光线投射
+        
+        Args:
+            obstacle_mask: [H, W] bool数组
+            start_x, start_y: 起始位置（像素）
+            angle_deg: 方向角度（度，图像坐标系）
+            
+        Returns:
+            距离（米），如果超出2.0m返回2.1
+        """
+        h, w = obstacle_mask.shape
+        angle_rad = np.deg2rad(angle_deg)
+        
+        # 方向向量（图像坐标系）
+        dx = np.cos(angle_rad)  # X方向（列）
+        dy = np.sin(angle_rad)  # Y方向（行）
+        
+        max_distance_m = 2.0
+        step_size = 0.5  # 0.5像素 = 2.5cm
+        resolution_cm = 5  # 5cm/pixel
+        
+        # 光线步进
+        distance_px = 0.0
+        max_steps = int(max_distance_m * 100 / resolution_cm / step_size)  # 2m / 0.025m = 80步
+        
+        for _ in range(max_steps):
+            distance_px += step_size
+            current_x = start_x + dx * distance_px
+            current_y = start_y + dy * distance_px
+            
+            # 边界检查
+            ix, iy = int(round(current_x)), int(round(current_y))
+            if not (0 <= ix < w and 0 <= iy < h):
+                return 2.1  # 超出地图
+            
+            # 障碍物检测
+            if obstacle_mask[iy, ix]:
+                distance_m = distance_px * resolution_cm / 100.0
+                return distance_m
+        
+        return 2.1  # 超过最大范围
+    
+    def _format_distance(self, distance_m: Optional[float]) -> str:
+        """格式化距离字符串"""
+        if distance_m is None:
+            return "Unknown"
+        elif distance_m > 2.0:
+            return ">2.0m open"
+        elif distance_m < 0.5:
+            return f"{distance_m:.2f}m WARNING"
+        else:
+            return f"{distance_m:.2f}m"
+    
     def _update_obstacle_distances_12_directions(self):
-        """更新当前位置的12个方向障碍物距离（用于Thinking模式环视）"""
+        """更新当前位置的12个方向障碍物距离（用于Thinking模式环视）
+        注意：环视时每转一次只测正前方距离
+        """
         try:
             # 检查地图是否已初始化
             if not hasattr(self, 'mapper') or self.mapper is None:
@@ -1894,43 +1957,29 @@ class VLMNavigationController(InteractiveNavigationController):
             
             obstacle_map = self.mapper.full_map[0, ...]
             h, w = obstacle_map.shape
-            current_x, current_y, current_o = self.mapper.full_pose
             
-            # 预处理obstacle mask
-            obstacle_mask = np.flipud(obstacle_map > 0.5)
-            obstacle_mask = cv2.resize(
-                obstacle_mask.astype(np.uint8) * 255, (480, 480), 
+            # 使用与可视化一致的障碍物掩码（阈值0.5）
+            obstacle_mask_display = obstacle_map > 0.5
+            obstacle_mask_display = np.flipud(obstacle_mask_display)
+            obstacle_mask_display = cv2.resize(
+                obstacle_mask_display.astype(np.uint8) * 255,
+                (480, 480),
                 interpolation=cv2.INTER_NEAREST
             ) > 127
             
-            # 计算agent位置
-            trajectory_points = self.mapper.mapping_module.get_trajectory()
-            if len(trajectory_points) > 0:
-                last_x, last_y = trajectory_points[-1]
-                agent_x, agent_y = last_y * 480 / w, (h - 1 - last_x) * 480 / h
-            else:
-                pos = np.array([current_x, current_y]) * 100.0 / self.config.MAP.MAP_RESOLUTION
-                agent_x, agent_y = pos[1] * 480 / w, (h - 1 - pos[0]) * 480 / h
-            
-            # 旋转地图使箭头朝上
-            rotation_matrix = cv2.getRotationMatrix2D((agent_x, agent_y), 90 - current_o, 1.0)
-            rotated_center = rotation_matrix @ np.array([agent_x, agent_y, 1])
-            rotation_matrix[0:2, 2] += [240, 240] - rotated_center[:2]
-            
-            obstacle_mask_rotated = cv2.warpAffine(
-                obstacle_mask.astype(np.uint8) * 255,
-                rotation_matrix, (480, 480), flags=cv2.INTER_NEAREST
-            ) > 127
-            
-            # 计算12个方向的距离
-            self.latest_obstacle_distances_12 = self.visualizer.calculate_obstacle_distances_12_directions(
-                obstacle_mask_rotated, 240, 240
+            # 注意：full_map 已经旋转过，agent朝向向上，位于(240, 240)
+            # 直接计算正前方距离（-90° = 向上）
+            front_distance = self._raycast_on_rotated_map(
+                obstacle_mask_display, 240, 240, -90  # 正前方
             )
+            
+            # 环视时只返回正前方距离
+            self.latest_obstacle_distances_12 = {
+                'front': self._format_distance(front_distance)
+            }
         except Exception as e:
             print(f"  ⚠️  12方向距离更新失败: {e}")
-            self.latest_obstacle_distances_12 = {
-                f'angle_{i}': 'Unknown' for i in range(0, 360, 30)
-            }
+            self.latest_obstacle_distances_12 = {'front': 'Unknown'}
     
     def _update_obstacle_distances(self):
         """更新当前位置的障碍物距离（用于Action模式，7个方向）"""
@@ -1947,37 +1996,20 @@ class VLMNavigationController(InteractiveNavigationController):
             
             obstacle_map = self.mapper.full_map[0, ...]
             h, w = obstacle_map.shape
-            current_x, current_y, current_o = self.mapper.full_pose
             
-            # 预处理obstacle mask
-            obstacle_mask = np.flipud(obstacle_map > 0.5)
-            obstacle_mask = cv2.resize(
-                obstacle_mask.astype(np.uint8) * 255, (480, 480), 
+            # 使用与可视化一致的障碍物掩码（阈值0.5）
+            obstacle_mask_display = obstacle_map > 0.5
+            obstacle_mask_display = np.flipud(obstacle_mask_display)
+            obstacle_mask_display = cv2.resize(
+                obstacle_mask_display.astype(np.uint8) * 255,
+                (480, 480),
                 interpolation=cv2.INTER_NEAREST
             ) > 127
             
-            # 计算agent位置
-            trajectory_points = self.mapper.mapping_module.get_trajectory()
-            if len(trajectory_points) > 0:
-                last_x, last_y = trajectory_points[-1]
-                agent_x, agent_y = last_y * 480 / w, (h - 1 - last_x) * 480 / h
-            else:
-                pos = np.array([current_x, current_y]) * 100.0 / self.config.MAP.MAP_RESOLUTION
-                agent_x, agent_y = pos[1] * 480 / w, (h - 1 - pos[0]) * 480 / h
-            
-            # 旋转地图使箭头朝上
-            rotation_matrix = cv2.getRotationMatrix2D((agent_x, agent_y), 90 - current_o, 1.0)
-            rotated_center = rotation_matrix @ np.array([agent_x, agent_y, 1])
-            rotation_matrix[0:2, 2] += [240, 240] - rotated_center[:2]
-            
-            obstacle_mask_rotated = cv2.warpAffine(
-                obstacle_mask.astype(np.uint8) * 255,
-                rotation_matrix, (480, 480), flags=cv2.INTER_NEAREST
-            ) > 127
-            
-            # 计算距离
+            # 注意：full_map 已经旋转过，agent朝向向上，位于(240, 240)
+            # 直接计算7个方向距离
             self.latest_obstacle_distances = self.visualizer.calculate_obstacle_distances_from_rotated_map(
-                obstacle_mask_rotated, 240, 240
+                obstacle_mask_display, 240, 240
             )
             print(f"  ✅ 距离更新成功: front={self.latest_obstacle_distances.get('front', 'N/A')}, left_60={self.latest_obstacle_distances.get('left_60', 'N/A')}, right_60={self.latest_obstacle_distances.get('right_60', 'N/A')}")
         except Exception as e:
