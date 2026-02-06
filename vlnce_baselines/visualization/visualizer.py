@@ -435,120 +435,36 @@ class MapVisualizer:
                 landmark_config['min_area_threshold']
             )
         
-        # ===== 阶段4: 旋转调整（箭头朝上，居中240,240）=====
+        # ===== 阶段4: 准备显示（地图已在提取时旋转，agent朝向向上）=====
+        # 注意：从 semantic_mapping.get_full_map_for_rendering() 返回的 full_map
+        # 已经根据 agent 朝向旋转过了，所以：
+        # - Agent 在地图中心 (240, 240)
+        # - Agent 朝向已经是正上方（地图坐标的北）
+        # - trajectory_points 也已经在旋转后的坐标系中
+        # 所以这里不需要再旋转地图，直接使用即可
+        
         global_map_rotated = None
         if current_pose is not None:
-            current_x, current_y, current_o = current_pose
-            
-            # ===== 关键：trajectory_points 现在是局部坐标（相对于 full_map）=====
-            # full_map 是以 agent 为中心的裁剪区域，所以 agent 应该在 (240, 240)
-            # trajectory_points[-1] 应该直接是局部坐标 (px, py) 格式
-            if len(trajectory_points) > 0:
-                last_traj_px, last_traj_py = trajectory_points[-1]
-                # trajectory_points 格式: (px, py) = (Y轴像素, X轴像素)
-                # 转换到显示坐标: agent_x = py (水平), agent_y = px (垂直)
-                # 由于 full_map 大小就是 480×480，不需要缩放
-                agent_y = last_traj_px  # Y轴像素 → 垂直位置
-                agent_x = last_traj_py  # X轴像素 → 水平位置
-                # 注意：由于坐标系统修复，agent应该在 (240, 240)
-            else:
-                # 回退：如果没有轨迹，agent 应该在中心
-                agent_x = 240
-                agent_y = 240
-            
-            # ===== 变换矩阵数学原理 =====
-            # 
-            # 变换矩阵结构（2x3仿射变换矩阵）：
-            #   rotation_matrix = [
-            #       [cos(θ), -sin(θ), tx],   ← 第0行：X方向变换
-            #       [sin(θ),  cos(θ), ty]    ← 第1行：Y方向变换
-            #   ]
-            # 
-            # 对地图上任意点(x, y)，计算变换后的新位置(new_x, new_y)：
-            #   new_x = cos(θ)*x - sin(θ)*y + tx  ← 旋转部分 + 平移部分
-            #   new_y = sin(θ)*x + cos(θ)*y + ty  ← 旋转部分 + 平移部分
-            #          └──────旋转──────┘   └─平移─┘
-            # 
-            # 也就是写成：
-            #   new_x = rotation_matrix[0,0]*x + rotation_matrix[0,1]*y + rotation_matrix[0,2]
-            #   new_y = rotation_matrix[1,0]*x + rotation_matrix[1,1]*y + rotation_matrix[1,2]
-            # 
-            # 所以你的理解完全正确：确实是"相加了两个部分"！
-            # - 前两项 (rotation_matrix[0,0]*x + rotation_matrix[0,1]*y)：旋转
-            # - 最后一项 (rotation_matrix[0,2])：平移
-            # 
-            # ===== 我们的具体操作 =====
-            # 
-            # 步骤1: 创建旋转矩阵（围绕agent位置旋转）
-            #   rotation_matrix = cv2.getRotationMatrix2D((agent_x, agent_y), rotation_angle, 1.0)
-            #   此时 rotation_matrix[0,2] 和 rotation_matrix[1,2] 已经包含了：
-            #   - 围绕(agent_x, agent_y)旋转所需的平移分量
-            #   - 公式：先平移到原点 → 旋转 → 平移回去
-            # 
-            # 步骤2: 计算旋转后agent的实际位置
-            #   rotated_center = rotation_matrix @ [agent_x, agent_y, 1]
-            #   理论上应该还在(agent_x, agent_y)，因为它是旋转中心
-            #   但实际有微小数值误差
-            # 
-            # 步骤3: 添加额外平移，让agent移动到(240, 240)
-            #   translation = [240, 240] - rotated_center[:2]
-            #   rotation_matrix[0, 2] += translation[0]  ← 在原有tx上叠加新的平移
-            #   rotation_matrix[1, 2] += translation[1]  ← 在原有ty上叠加新的平移
-            # 
-            # 步骤4: 应用最终变换到整个地图
-            #   cv2.warpAffine(地图, rotation_matrix, ...)
-            #   对地图每个像素都执行上面的公式计算
-            # 
-            # ===== 最终效果 =====
-            # - agent从(agent_x, agent_y)移动到(240, 240) ← 视觉效果
-            # - 实际是：整个地图背景移动了，agent相对画布的位置改变了
-            # - 轨迹点、landmark等所有元素都跟随地图一起变换
-            
-            # 旋转使箭头朝正上方
-            rotation_angle = 90 - current_o
-            rotation_center = (agent_x, agent_y)  # 围绕agent当前位置旋转
-            rotation_matrix = cv2.getRotationMatrix2D(rotation_center, rotation_angle, 1.0)
-            
-            # 添加平移步骤：将旋转后的agent移动到(240, 240)
-            target_center = np.array([240, 240, 1])  # 目标：agent应该在这里
-            current_center = np.array([agent_x, agent_y, 1])  # agent当前在这里
-            rotated_center = rotation_matrix @ current_center  # 旋转后agent在这里
-            
-            # 计算平移量：从rotated_center到target_center需要移动多少
-            translation = target_center[:2] - rotated_center[:2]
-            rotation_matrix[0, 2] += translation[0]  # 添加X方向平移
-            rotation_matrix[1, 2] += translation[1]  # 添加Y方向平移
-
-            
-            global_map_rotated = cv2.warpAffine(
-                sem_map_vis, rotation_matrix, (480, 480),
-                flags=cv2.INTER_NEAREST,
-                borderMode=cv2.BORDER_CONSTANT,
-                borderValue=(255, 255, 255)
-            )
+            # 直接使用已旋转的地图
+            global_map_rotated = sem_map_vis.copy()
             
             # ===== 阶段5: 创建global_map的显示副本（用于绘制轨迹和landmark）=====
             global_map_with_trajectory = global_map_rotated.copy()
             
             # 先在副本上绘制轨迹线（底层）
             if len(trajectory_points) >= 2:
-                # 转换轨迹点到旋转后的坐标系
-                rotated_trajectory = []
+                # trajectory_points 已经在旋转后的坐标系中
+                display_trajectory = []
                 for px, py in trajectory_points:
-                    # trajectory_points 现在是局部坐标: (px, py) = (Y轴像素, X轴像素)
+                    # trajectory_points 格式: (px, py) = (Y轴像素, X轴像素)
                     # 转换到显示坐标: display_x = py (水平), display_y = px (垂直)
-                    # 由于 full_map 大小就是 480×480，不需要缩放
-                    display_x = py  # X轴像素 → 水平位置
-                    display_y = px  # Y轴像素 → 垂直位置
-                    
-                    # 应用旋转变换
-                    point = np.array([display_x, display_y, 1])
-                    rotated_point = rotation_matrix @ point
-                    rotated_trajectory.append([int(round(rotated_point[0])), int(round(rotated_point[1]))])
+                    display_x = int(round(py))  # X轴像素 → 水平位置
+                    display_y = int(round(px))  # Y轴像素 → 垂直位置
+                    display_trajectory.append([display_x, display_y])
                 
                 # 绘制实心轨迹线（2像素宽）
-                if len(rotated_trajectory) >= 2:
-                    trajectory_array = np.array(rotated_trajectory, dtype=np.int32)
+                if len(display_trajectory) >= 2:
+                    trajectory_array = np.array(display_trajectory, dtype=np.int32)
                     cv2.polylines(global_map_with_trajectory, [trajectory_array], isClosed=False,
                                  color=(0, 165, 255), thickness=2, lineType=cv2.LINE_8)
             
@@ -589,23 +505,20 @@ class MapVisualizer:
                 (480, 480),
                 interpolation=cv2.INTER_NEAREST
             ) > 127
-            # 转换到旋转后的坐标系
-            obstacle_mask_rotated = cv2.warpAffine(
-                obstacle_mask_display.astype(np.uint8) * 255,
-                rotation_matrix, (480, 480),
-                flags=cv2.INTER_NEAREST
-            ) > 127
+            
+            # 注意：obstacle_mask 现在已经在 full_map 中旋转过了
+            # 所以这里直接使用，不需要再旋转
             
             # ===== 🎯 可选距离计算（环视时不计算，加快速度）=====
             obstacle_distances = {}
             if calculate_distances:
                 obstacle_distances = self.calculate_obstacle_distances_from_rotated_map(
-                    obstacle_mask_rotated, 240, 240
+                    obstacle_mask_display, 240, 240
                 )
             
             # 用黑色覆盖障碍物区域（会覆盖箭头，使障碍物更醒目）
-            global_map_with_trajectory[obstacle_mask_rotated] = [0, 0, 0]  # 黑色BGR
-            global_map_rotated[obstacle_mask_rotated] = [0, 0, 0]  # 无轨迹版本也叠加
+            global_map_with_trajectory[obstacle_mask_display] = [0, 0, 0]  # 黑色BGR
+            global_map_rotated[obstacle_mask_display] = [0, 0, 0]  # 无轨迹版本也叠加
             
             # ===== 阶段6: 在显示副本上绘制Landmark标记 =====
             if len(landmarks) > 0:
@@ -773,38 +686,14 @@ class MapVisualizer:
         sem_map_vis = sem_map_vis[:, :, [2, 1, 0]]  # RGB → BGR
         sem_map_vis = cv2.resize(sem_map_vis, (480, 480), interpolation=cv2.INTER_NEAREST)
         
-        # ===== 阶段3: 旋转地图（Agent朝上居中）=====
+        # ===== 阶段3: 准备显示（地图已在提取时旋转）=====
+        # 地图已经旋转好，agent在中心，朝向向上
         current_x, current_y, current_o = current_pose
         
-        # ===== 关键：trajectory_points 现在是局部坐标（相对于 full_map）=====
-        # full_map 是以 agent 为中心的裁剪区域，所以 agent 应该在 (240, 240)
-        if len(trajectory_points) > 0:
-            last_traj_px, last_traj_py = trajectory_points[-1]
-            # trajectory_points 格式: (px, py) = (Y轴像素, X轴像素)
-            # 转换到显示坐标: agent_x = py (水平), agent_y = px (垂直)
-            agent_y = last_traj_px  # Y轴像素 → 垂直位置
-            agent_x = last_traj_py  # X轴像素 → 水平位置
-        else:
-            # 回退：如果没有轨迹，agent 应该在中心
-            agent_x = 240
-            agent_y = 240
+        local_map = sem_map_vis.copy()
         
-        rotation_angle = 90 - current_o
-        rotation_center = (agent_x, agent_y)
-        rotation_matrix = cv2.getRotationMatrix2D(rotation_center, rotation_angle, 1.0)
-        
-        # 添加平移到中心
-        target_center = np.array([240, 240, 1])
-        current_center = np.array([agent_x, agent_y, 1])
-        rotated_center = rotation_matrix @ current_center
-        translation = target_center[:2] - rotated_center[:2]
-        rotation_matrix[0, 2] += translation[0]
-        rotation_matrix[1, 2] += translation[1]
-        
-        local_map = cv2.warpAffine(sem_map_vis, rotation_matrix, (480, 480),
-                                    flags=cv2.INTER_NEAREST,
-                                    borderMode=cv2.BORDER_CONSTANT,
-                                    borderValue=(255, 255, 255))
+        # Agent在中心 (240, 240)
+        center_x, center_y = 240, 240
         
         # ===== 阶段4: 裁剪中心240×240区域并放大到480×480 =====
         center_x, center_y = 240, 240
@@ -823,18 +712,14 @@ class MapVisualizer:
         if len(trajectory_points) >= 2:
             local_trajectory = []
             for px, py in trajectory_points:
-                # trajectory_points 现在是局部坐标: (px, py) = (Y轴像素, X轴像素)
+                # trajectory_points 已经在旋转后的坐标系中
                 # 转换到显示坐标: display_x = py (水平), display_y = px (垂直)
                 display_x = py  # X轴像素 → 水平位置
                 display_y = px  # Y轴像素 → 垂直位置
                 
-                # 应用旋转变换
-                point = np.array([display_x, display_y, 1])
-                rotated_point = rotation_matrix @ point
-                
                 # 转换到local_map坐标系（裁剪区域120-360映射到0-480）
-                local_x = (rotated_point[0] - 120) * 2
-                local_y = (rotated_point[1] - 120) * 2
+                local_x = (display_x - 120) * 2
+                local_y = (display_y - 120) * 2
                 
                 if 0 <= local_x < 480 and 0 <= local_y < 480:
                     local_trajectory.append([int(round(local_x)), int(round(local_y))])
@@ -859,18 +744,16 @@ class MapVisualizer:
         import math
         
         # 先获取旋转后的障碍物掩码（用于raycasting）
+        # 注意：obstacle_map 已经在 full_map 中旋转过了
         obstacle_mask_flipped = np.flipud(obstacle_map > 0.5)
         obstacle_mask_resized = cv2.resize(
             obstacle_mask_flipped.astype(np.uint8) * 255,
             (480, 480),
             interpolation=cv2.INTER_NEAREST
         ) > 127
-        obstacle_mask_rotated = cv2.warpAffine(
-            obstacle_mask_resized.astype(np.uint8) * 255,
-            rotation_matrix, (480, 480),
-            flags=cv2.INTER_NEAREST
-        ) > 127
-        obstacle_crop = obstacle_mask_rotated[y1:y2, x1:x2]
+        
+        # 裁剪中心240×240区域
+        obstacle_crop = obstacle_mask_resized[120:360, 120:360]
         obstacle_local = cv2.resize(obstacle_crop.astype(np.uint8) * 255, 
                                    (480, 480), 
                                    interpolation=cv2.INTER_NEAREST) > 127

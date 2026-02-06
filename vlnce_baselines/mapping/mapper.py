@@ -127,19 +127,25 @@ class SemanticMapper:
         self.mapping_module.one_step_full_map.fill_(0.)
         self.mapping_module.one_step_local_map.fill_(0.)
         
-        # 6. 转换轨迹坐标：世界坐标 → full_map局部坐标
-        # full_map 是以 agent 为中心的 480×480 裁剪区域
-        # 需要将世界坐标系的 trajectory_points 转换为相对于 full_map 的局部坐标
+        # 6. 转换轨迹坐标：世界坐标 → full_map局部坐标（包含旋转）
+        # full_map 是以 agent 为中心的 480×480 裁剪区域，并且已经旋转让agent朝向向上
+        # 需要将世界坐标系的 trajectory_points 转换为相对于 full_map 的局部坐标，并应用相同的旋转
         crop_offset = self.mapping_module.full_map_crop_offset
-        local_trajectory_points = self.convert_trajectory_to_local(self.trajectory_points, crop_offset)
-        local_global_trajectory_points = self.convert_trajectory_to_local(self.global_trajectory_points, crop_offset)
+        agent_orientation = self.full_pose[2]  # agent朝向（度数）
+        
+        local_trajectory_points = self.convert_trajectory_to_local(
+            self.trajectory_points, crop_offset, agent_orientation
+        )
+        local_global_trajectory_points = self.convert_trajectory_to_local(
+            self.global_trajectory_points, crop_offset, agent_orientation
+        )
         
         return {
             'full_map': self.full_map,
             'full_pose': self.full_pose,
             'floor': self.floor,
-            'trajectory_points': local_trajectory_points,  # 转换为局部坐标（相对于full_map）
-            'global_trajectory_points': local_global_trajectory_points  # 转换为局部坐标（相对于full_map）
+            'trajectory_points': local_trajectory_points,  # 转换为局部坐标（相对于full_map，已旋转）
+            'global_trajectory_points': local_global_trajectory_points  # 转换为局部坐标（相对于full_map，已旋转）
         }
     
     def extract_floor(self, 
@@ -216,28 +222,63 @@ class SemanticMapper:
         # 静默返回，不输出调试信息
         return floor.astype(np.uint8)
     
-    def convert_trajectory_to_local(self, trajectory_points: List[Tuple[int, int]], crop_offset: Tuple[int, int]) -> List[Tuple[int, int]]:
+    def convert_trajectory_to_local(self, trajectory_points: List[Tuple[int, int]], crop_offset: Tuple[int, int], agent_orientation: float = None) -> List[Tuple[int, int]]:
         """
-        将世界坐标系的轨迹点转换为相对于裁剪地图的局部坐标
+        将世界坐标系的轨迹点转换为相对于裁剪地图的局部坐标（可选旋转）
         
         Args:
-            trajectory_points: [(world_x, world_y), ...] 世界像素坐标
+            trajectory_points: [(world_px, world_py), ...] 世界像素坐标
             crop_offset: (start_px, start_py) 裁剪区域左上角的世界像素坐标
+            agent_orientation: agent朝向（度数），如果提供则旋转轨迹点
         
         Returns:
-            local_trajectory: [(local_x, local_y), ...] 相对于裁剪地图的局部坐标
+            local_trajectory: [(local_px, local_py), ...] 相对于裁剪地图的局部坐标（已旋转）
         """
+        import math
+        import numpy as np
+        
         start_px, start_py = crop_offset
         local_trajectory = []
         
-        for world_x, world_y in trajectory_points:
-            # 世界坐标 → 局部坐标
-            # world坐标: (x, y)是(row, col)格式，即(Y轴, X轴)
-            # 需要转换: local_y = world_x - start_px (Y轴)
-            #           local_x = world_y - start_py (X轴)
-            local_x = world_x - start_px  # Y轴方向
-            local_y = world_y - start_py  # X轴方向
-            local_trajectory.append((local_x, local_y))
+        # 步骤1: 世界坐标 → 局部坐标（相对于裁剪区域左上角）
+        for world_px, world_py in trajectory_points:
+            # world坐标: (px, py) = (Y轴, X轴)
+            local_px = world_px - start_px  # Y轴方向
+            local_py = world_py - start_py  # X轴方向
+            local_trajectory.append((local_px, local_py))
+        
+        # 步骤2: 如果需要，旋转轨迹点（围绕地图中心旋转）
+        if agent_orientation is not None:
+            # 旋转角度 = 90 - agent_orientation（让agent朝向变成正上方）
+            rotation_angle_deg = 90 - agent_orientation
+            rotation_angle_rad = math.radians(rotation_angle_deg)
+            
+            if abs(rotation_angle_deg) >= 0.1:  # 只有显著旋转才处理
+                cos_theta = math.cos(rotation_angle_rad)
+                sin_theta = math.sin(rotation_angle_rad)
+                
+                # 地图中心（旋转中心）
+                map_size = 480  # full_map 固定480×480
+                center = map_size / 2.0  # 240
+                
+                rotated_trajectory = []
+                for local_px, local_py in local_trajectory:
+                    # 转换到以中心为原点的坐标系
+                    px_centered = local_px - center
+                    py_centered = local_py - center
+                    
+                    # 应用旋转矩阵
+                    # 注意：这里的旋转要与_rotate_map_to_agent_heading中的旋转一致
+                    px_rotated = cos_theta * px_centered - sin_theta * py_centered
+                    py_rotated = sin_theta * px_centered + cos_theta * py_centered
+                    
+                    # 转换回以左上角为原点的坐标系
+                    px_final = px_rotated + center
+                    py_final = py_rotated + center
+                    
+                    rotated_trajectory.append((px_final, py_final))
+                
+                local_trajectory = rotated_trajectory
         
         return local_trajectory
     

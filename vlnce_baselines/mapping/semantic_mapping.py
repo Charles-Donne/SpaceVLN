@@ -533,9 +533,9 @@ class Semantic_Mapping(nn.Module):
                              local_h_start:local_h_end,
                              local_w_start:local_w_end]
     
-    def get_full_map_for_rendering(self, crop_size_m=24.0, is_one_step=False):
+    def get_full_map_for_rendering(self, crop_size_m=24.0, is_one_step=False, rotate_to_agent_heading=True):
         """
-        获取用于渲染的全局地图（以agent为中心裁剪）
+        获取用于渲染的全局地图（以agent为中心裁剪，可选旋转）
         
         仅从已存在的tiles提取数据，不创建空白块（内存优化）
         未探索区域保持为0（黑色/未知）
@@ -543,10 +543,12 @@ class Semantic_Mapping(nn.Module):
         Args:
             crop_size_m: 裁剪尺寸（米），默认24m×24m
             is_one_step: 是否使用one_step_tiles
+            rotate_to_agent_heading: 是否根据agent朝向旋转地图，使agent朝向向上
         
         Returns:
-            full_map: [batch, C, H, W]
+            full_map: [batch, C, H, W] - 如果rotate_to_agent_heading=True，则已旋转
             map_size: (H, W) 实际尺寸
+            crop_offset: (start_px, start_py) 裁剪偏移量（世界坐标）
         """
         # 选择使用的tiles字典
         tiles_dict = self.one_step_tiles if is_one_step else self.tiles
@@ -649,7 +651,67 @@ class Semantic_Mapping(nn.Module):
         # 返回裁剪区域的世界像素偏移量（用于trajectory_points的坐标转换）
         crop_offset = (start_px, start_py)
         
+        # 如果需要，根据agent朝向旋转地图
+        if rotate_to_agent_heading:
+            agent_orientation = self.full_pose[0, 2].item()  # 度数
+            full_map = self._rotate_map_to_agent_heading(full_map, agent_orientation)
+        
         return full_map, (crop_size_px, crop_size_px), crop_offset
+    
+    def _rotate_map_to_agent_heading(self, map_tensor, agent_orientation_deg):
+        """
+        根据agent朝向旋转地图，使agent的前方（朝向）对应地图的正上方
+        
+        使用PyTorch的grid_sample进行高质量旋转，避免OpenCV插值失真
+        
+        Args:
+            map_tensor: [batch, C, H, W] 输入地图
+            agent_orientation_deg: agent朝向（度数，0=东，90=北，180=西，270=南）
+        
+        Returns:
+            rotated_map: [batch, C, H, W] 旋转后的地图，agent朝向向上
+        """
+        import torch.nn.functional as F
+        import math
+        
+        batch, nc, h, w = map_tensor.shape
+        
+        # 计算旋转角度：让agent朝向变成正上方（90度）
+        # agent_orientation: 0=东，90=北
+        # 目标：旋转后agent朝向=90度（正上方）
+        # 所以旋转角度 = 90 - agent_orientation
+        rotation_angle_deg = 90 - agent_orientation_deg
+        rotation_angle_rad = math.radians(rotation_angle_deg)
+        
+        # 如果不需要旋转，直接返回
+        if abs(rotation_angle_deg) < 0.1:
+            return map_tensor
+        
+        # 创建旋转矩阵（围绕中心旋转）
+        cos_theta = math.cos(rotation_angle_rad)
+        sin_theta = math.sin(rotation_angle_rad)
+        
+        # 仿射变换矩阵 (2x3) for PyTorch grid_sample
+        # 注意：PyTorch的grid_sample使用归一化坐标[-1, 1]
+        theta = torch.tensor([
+            [cos_theta, sin_theta, 0],
+            [-sin_theta, cos_theta, 0]
+        ], dtype=torch.float32, device=map_tensor.device)
+        
+        theta = theta.unsqueeze(0).repeat(batch, 1, 1)  # [batch, 2, 3]
+        
+        # 生成采样网格
+        grid = F.affine_grid(theta, map_tensor.size(), align_corners=False)
+        
+        # 采样（使用最近邻插值保持语义清晰度）
+        rotated_map = F.grid_sample(
+            map_tensor, grid, 
+            mode='nearest',  # 最近邻插值，保持语义信息不失真
+            padding_mode='zeros',  # 边界外用0填充（未探索区域）
+            align_corners=False
+        )
+        
+        return rotated_map
     
     def _dynamic_process(self, num_detected_classes: int) -> None:
         """
