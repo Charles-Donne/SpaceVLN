@@ -652,15 +652,15 @@ class MapVisualizer:
             semantic_map[floor_display_mask] = 5
         
         # Layer 3: Agent轨迹（橙色）- 在floor之后渲染
-        if local_map.shape[0] > 2:  # 确保有通道2
-            agent_channel = local_map[2]  # [H, W] - Agent通道
+        if full_map.shape[0] > 2:  # 确保有通道2
+            agent_channel = full_map[2]  # [H, W] - Agent通道
             # 提取轨迹（值接近0.5）
             trajectory_mask = (agent_channel > 0.4) & (agent_channel < 0.6)
             semantic_map[trajectory_mask] = 3  # 橙色（调色板索引3）
         
         # Layer 4: Waypoint（蓝色）- 在轨迹之后渲染，从Channel 2提取
-        if local_map.shape[0] > 2:  # 确保有通道2
-            waypoint_channel = local_map[2]  # [H, W] - Agent通道（合并）
+        if full_map.shape[0] > 2:  # 确保有通道2
+            waypoint_channel = full_map[2]  # [H, W] - Agent通道（合并）
             # 提取waypoint（值>=1.0表示有waypoint）
             waypoint_mask = waypoint_channel >= 1.0
             semantic_map[waypoint_mask] = 4  # 蓝色（调色板索引4）

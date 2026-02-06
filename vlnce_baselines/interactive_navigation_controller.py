@@ -314,7 +314,18 @@ class InteractiveNavigationController:
         return state
     
     def _get_sem_pred(self, rgb: np.ndarray, save_object_detection: bool = False, step: int = None) -> np.ndarray:
-        """语义分割：GroundedSAM检测 + Winner-Takes-All"""
+        """
+        语义分割：GroundedSAM检测 + Winner-Takes-All
+        
+        检测逻辑：
+        - detection_classes = mapping_classes(15个固定) + landmark_classes(动态)
+        - mapping_classes检测结果 → 进入15通道语义地图
+        - landmark_classes检测结果 → 保留但不进入地图，用于可视化标注
+        
+        Returns:
+            semantic_masks: [H, W, 15] 固定15个通道的语义地图
+        """
+        # 使用 detection_classes = mapping + landmark 进行检测
         masks_all, labels_all, annotated_images, current_detections = \
             self.segment_module.segment(rgb, classes=self.classes)
         self.mapper.mapping_module.rgb_vis = annotated_images
@@ -324,39 +335,46 @@ class InteractiveNavigationController:
         self.latest_masks_full = masks_all.copy()  # 保存原始masks用于地面分割
         self.latest_rgb_original = rgb.copy()
         
-        all_masks = []
-        all_labels = []
-        all_confidences = []
+        # 预定义的基础类别（固定15个）
+        predefined_classes = self.mapping_classes
+        
+        # 分类处理检测结果
+        valid_masks = []        # 用于建图的mapping类别
+        valid_labels = []
+        valid_confidences = []
         
         for i, label in enumerate(labels_all):
             parts = label.split()
             label_name = parts[0]
             confidence = float(parts[-1]) if len(parts) > 1 else 0.5
             
-            all_masks.append(masks_all[i])
-            all_labels.append(label_name)
-            all_confidences.append(confidence)
+            # 只有mapping_classes的检测进入语义地图
+            if label_name in predefined_classes:
+                valid_masks.append(masks_all[i])
+                valid_labels.append(label_name)
+                valid_confidences.append(confidence)
+            
+            # 所有检测到的类别都记录（包括landmark）
             self.detected_classes.add(label_name)
         
-        if len(all_masks) == 0:
-            # 当没有检测到任何语义类别时，返回一个全0的语义通道（H, W, 1）
-            # 避免将形状为 (B, 0, H, W) 的张量传入下游的池化操作，导致错误。
-            return np.zeros((self.height, self.width, 1), dtype=np.float32)
+        if len(valid_masks) == 0:
+            # 没有检测到有效的mapping类别，返回全0的15通道
+            return np.zeros((self.height, self.width, len(predefined_classes)), dtype=np.float32)
         
-        all_masks = np.array(all_masks)
-        masks_processed = self._process_masks_with_labels(all_masks, all_labels, all_confidences)
+        # Winner-Takes-All处理（只处理mapping类别）
+        valid_masks = np.array(valid_masks)
+        masks_processed = self._process_masks_with_labels(valid_masks, valid_labels, valid_confidences)
         
-        current_classes = list(dict.fromkeys(all_labels))
-        global_classes = list(self.detected_classes)
-        global_masks = np.zeros((len(global_classes), self.height, self.width), dtype=np.float32)
+        # 按照预定义类别顺序组织mask（固定15通道）
+        global_masks = np.zeros((len(predefined_classes), self.height, self.width), dtype=np.float32)
         
-        for i, cls_name in enumerate(current_classes):
-            if cls_name in global_classes:
-                global_idx = global_classes.index(cls_name)
+        for i, cls_name in enumerate(valid_labels):
+            if cls_name in predefined_classes:
+                global_idx = predefined_classes.index(cls_name)
                 if i < masks_processed.shape[0]:
                     global_masks[global_idx] = masks_processed[i]
         
-        return global_masks.transpose(1, 2, 0)
+        return global_masks.transpose(1, 2, 0)  # [H, W, 15]
     
     def _process_masks_with_labels(self, masks: np.ndarray, labels: list, confidences: list = None) -> np.ndarray:
         """Winner-Takes-All掩码处理"""

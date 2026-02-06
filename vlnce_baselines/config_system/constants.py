@@ -74,24 +74,25 @@ map_channels = 3  # 基础地图通道数（优化后，不含语义类别）
 #   - 使用常见英文词汇，支持短语描述（如"coffee table"）
 #   - 任何在此列表中的物体都可以动态成为landmark
 
-# 室内导航检测类别（精简版 - 25个常用物体）
+# 室内导航基础检测类别（15个）
+# 注意：只检测这15个类别，其他检测结果会被忽略，避免类别数爆炸
 mapping_classes = [
-    # 建筑结构
-    "floor", "wall", "door", "window",
+    # 建筑结构 (3个)
+    "floor", "wall", "door",
     
-    # 大型家具
-    "bed", "sofa", "chair", "table", "desk",
-    "cabinet", "dresser", "bookshelf", "nightstand",
+    # 大型家具 (6个)
+    "bed", "sofa", "chair", "table", 
+    "cabinet", "bookshelf",
     
-    # 电器设备
-    "tv", "refrigerator", "oven", "microwave", "lamp",
+    # 功能设施 (4个)
+    "tv", "sink", "toilet", "plant",
     
-    # 卫浴设施
-    "toilet", "sink", "bathtub", "mirror",
-    
-    # 装饰与其他
-    "plant", "painting", 
+    # 装饰 (2个)
+    "painting", "window",
 ]
+
+# 固定类别数量（建图系统预分配通道数）
+NUM_SEMANTIC_CATEGORIES = len(mapping_classes)  # 15个
 
 # 可扩展的检测类别建议（按需添加）
 # 
