@@ -594,12 +594,39 @@ class Semantic_Mapping(nn.Module):
                 local_w_end = copy_end_gy - gy1
                 
                 # 写回数据（local_map是单个环境的，形状[C, H, W]）
-                tile[env_id, :,
-                     tile_h_start:tile_h_end,
-                     tile_w_start:tile_w_end] = \
-                    local_map[:,
-                             local_h_start:local_h_end,
-                             local_w_start:local_w_end]
+                # 对于通道2（Agent通道），需要保留轨迹值（0.5），只更新当前位置（1.0）
+                if local_map.shape[0] > 2:
+                    # 先保存tile中Channel 2的轨迹数据（值为0.5的像素）
+                    tile_agent_channel = tile[env_id, 2,
+                                             tile_h_start:tile_h_end,
+                                             tile_w_start:tile_w_end].clone()
+                    trajectory_mask = (tile_agent_channel > 0.4) & (tile_agent_channel < 0.6)
+                    
+                    # 更新所有通道
+                    tile[env_id, :,
+                         tile_h_start:tile_h_end,
+                         tile_w_start:tile_w_end] = \
+                        local_map[:,
+                                 local_h_start:local_h_end,
+                                 local_w_start:local_w_end]
+                    
+                    # 恢复轨迹值（0.5）到tile的Channel 2
+                    # 只恢复那些在local_map中不是当前位置（<0.9）的轨迹点
+                    local_agent_channel = local_map[2,
+                                                    local_h_start:local_h_end,
+                                                    local_w_start:local_w_end]
+                    preserve_trajectory = trajectory_mask & (local_agent_channel < 0.9)
+                    tile[env_id, 2,
+                         tile_h_start:tile_h_end,
+                         tile_w_start:tile_w_end][preserve_trajectory] = 0.5
+                else:
+                    # 没有通道2，直接覆盖
+                    tile[env_id, :,
+                         tile_h_start:tile_h_end,
+                         tile_w_start:tile_w_end] = \
+                        local_map[:,
+                                 local_h_start:local_h_end,
+                                 local_w_start:local_w_end]
     
     def get_full_map_for_rendering(self, crop_size_m=24.0, is_one_step=False, rotate_to_agent_heading=True):
         """

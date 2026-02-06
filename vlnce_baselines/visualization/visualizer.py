@@ -502,6 +502,21 @@ class MapVisualizer:
             global_map_rotated[obstacle_mask_display] = [0, 0, 0]  # 无轨迹版本也叠加
             
             # ===== 阶段6: 在显示副本上绘制Landmark标记 =====
+            # 计算旋转矩阵（与semantic_mapping中的旋转保持一致）
+            rotation_matrix = None
+            if current_pose is not None:
+                agent_orientation_deg = current_pose[2]  # 度数
+                rotation_angle_deg = 90 - agent_orientation_deg
+                rotation_angle_rad = np.radians(rotation_angle_deg)
+                cos_theta = np.cos(rotation_angle_rad)
+                sin_theta = np.sin(rotation_angle_rad)
+                # 2D旋转矩阵（围绕中心点240,240旋转）
+                rotation_matrix = np.array([
+                    [cos_theta, -sin_theta, 240 * (1 - cos_theta) + 240 * sin_theta],
+                    [sin_theta, cos_theta, 240 * (1 - sin_theta) - 240 * cos_theta],
+                    [0, 0, 1]
+                ])
+            
             if len(landmarks) > 0:
                 landmark_summary = {}
                 for marker_x, marker_y, cls_name in landmarks:
@@ -516,30 +531,30 @@ class MapVisualizer:
                         landmark_summary[cls_name]['count'] += 1
                         landmark_summary[cls_name]['total_pixels'] += pixel_count
                     
-                    # 转换landmark坐标到旋转后的坐标系
+                    # 转换landmark坐标到显示坐标系（不旋转，因为已经在旋转后的地图上了）
                     # centroids返回(cx, cy)格式，cx是列坐标(map_y方向)，cy是行坐标(map_x方向)
                     # 所以 marker_x=cx(列), marker_y=cy(行)
                     display_x = marker_x * 480 / w  # 列坐标 → display_x
                     display_y = (h - 1 - marker_y) * 480 / h  # 行坐标 → display_y（翻转）
-                    point = np.array([display_x, display_y, 1])
-                    rotated_point = rotation_matrix @ point
                     
                     # 绘制紫色圆球（在显示副本上）
                     cv2.circle(global_map_with_trajectory, 
-                              (int(rotated_point[0]), int(rotated_point[1])), 
+                              (int(display_x), int(display_y)), 
                               landmark_marker_radius, landmark_marker_color, -1)
                     cv2.circle(global_map_with_trajectory, 
-                              (int(rotated_point[0]), int(rotated_point[1])), 
+                              (int(display_x), int(display_y)), 
                               landmark_marker_radius, landmark_marker_border, 1)
                 
                 # 静默处理，不输出标注统计
             
             # ===== 阶段7: 绘制Waypoint标记（蓝色圆圈+白色数字）=====
             last_waypoint_angle = None  # 初始化
-            if waypoint_positions and waypoint_ids and len(waypoint_positions) == len(waypoint_ids):
+            if waypoint_positions and waypoint_ids and len(waypoint_positions) == len(waypoint_ids) and rotation_matrix is not None:
                 # 静默处理waypoint渲染，不输出详细坐标
                 for idx, ((wp_x, wp_y), wp_id) in enumerate(zip(waypoint_positions, waypoint_ids)):
-                    # 转换waypoint坐标到旋转后的坐标系
+                    # waypoint是原始地图坐标(map_x, map_y)，需要：
+                    # 1. 转换到显示坐标系（flip Y轴）
+                    # 2. 应用旋转矩阵（与full_map的旋转一致）
                     display_x = wp_y * 480 / w
                     display_y = (h - 1 - wp_x) * 480 / h
                     point = np.array([display_x, display_y, 1])
