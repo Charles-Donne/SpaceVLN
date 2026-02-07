@@ -55,7 +55,7 @@ fi
 
 # 配置路径
 CONFIG_FILE="vlnce_baselines/config/exp1.yaml"
-RESULTS_DIR="data/vlm_navigation"
+RESULTS_DIR="/root/autodl-tmp/result/mapreact"  # 修改此处可更改结果存储路径
 LLM_CONFIG="vlnce_baselines/vlm/llm_config.yaml"
 VLM_CONFIG="vlnce_baselines/vlm/vlm_config.yaml"
 
