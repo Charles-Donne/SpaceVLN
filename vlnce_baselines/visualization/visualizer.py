@@ -987,36 +987,53 @@ class MapVisualizer:
         
         # ===== 阶段9: 绘制Landmark标记（紫色圆球，最上层，不被遮挡）=====
         if landmark_classes and landmark_config:
+            # 计算旋转矩阵（用于landmark坐标转换）
+            rotation_matrix = None
+            if current_pose is not None:
+                agent_orientation_deg = current_pose[2]  # 度数
+                rotation_angle_deg = 90 - agent_orientation_deg
+                rotation_angle_rad = np.radians(rotation_angle_deg)
+                cos_theta = np.cos(rotation_angle_rad)
+                sin_theta = np.sin(rotation_angle_rad)
+                # 2D旋转矩阵（围绕中心点240,240旋转）
+                rotation_matrix = np.array([
+                    [cos_theta, -sin_theta, 240 * (1 - cos_theta) + 240 * sin_theta],
+                    [sin_theta, cos_theta, 240 * (1 - sin_theta) - 240 * cos_theta],
+                    [0, 0, 1]
+                ])
+            
             landmarks = self._extract_landmarks(
                 full_map, detected_classes, landmark_classes,
                 landmark_config['min_total_pixels'],
                 landmark_config['min_area_threshold']
             )
             
-            for marker_x, marker_y, cls_name in landmarks:
-                # 转换landmark坐标（与全局地图坐标变换一致）
-                # centroids返回(cx, cy)格式，cx是列坐标(map_y方向)，cy是行坐标(map_x方向)
-                display_x = marker_x * 480 / w  # 列坐标 → display_x
-                display_y = (h - 1 - marker_y) * 480 / h  # 行坐标 → display_y（翻转）
-                point = np.array([display_x, display_y, 1])
-                rotated_point = rotation_matrix @ point
-                
-                # 转换到local坐标系（裁剪区域是120-360，映射到0-480）
-                local_x = (rotated_point[0] - 120) * 2
-                local_y = (rotated_point[1] - 120) * 2
-                
-                # 只绘制在可见范围内的landmark
-                if 0 <= local_x < 480 and 0 <= local_y < 480:
-                    # Local map使用更大的landmark标记（10像素）
-                    local_landmark_radius = 10
-                    cv2.circle(local_map, 
-                              (int(local_x), int(local_y)), 
-                              local_landmark_radius, 
-                              landmark_marker_color, -1)
-                    cv2.circle(local_map, 
-                              (int(local_x), int(local_y)), 
-                              local_landmark_radius, 
-                              landmark_marker_border, 1)
+            # 只在有旋转矩阵时绘制landmarks
+            if rotation_matrix is not None:
+                for marker_x, marker_y, cls_name in landmarks:
+                    # 转换landmark坐标（与全局地图坐标变换一致）
+                    # centroids返回(cx, cy)格式，cx是列坐标(map_y方向)，cy是行坐标(map_x方向)
+                    display_x = marker_x * 480 / w  # 列坐标 → display_x
+                    display_y = (h - 1 - marker_y) * 480 / h  # 行坐标 → display_y（翻转）
+                    point = np.array([display_x, display_y, 1])
+                    rotated_point = rotation_matrix @ point
+                    
+                    # 转换到local坐标系（裁剪区域是120-360，映射到0-480）
+                    local_x = (rotated_point[0] - 120) * 2
+                    local_y = (rotated_point[1] - 120) * 2
+                    
+                    # 只绘制在可见范围内的landmark
+                    if 0 <= local_x < 480 and 0 <= local_y < 480:
+                        # Local map使用更大的landmark标记（10像素）
+                        local_landmark_radius = 10
+                        cv2.circle(local_map, 
+                                  (int(local_x), int(local_y)), 
+                                  local_landmark_radius, 
+                                  landmark_marker_color, -1)
+                        cv2.circle(local_map, 
+                                  (int(local_x), int(local_y)), 
+                                  local_landmark_radius, 
+                                  landmark_marker_border, 1)
         
         # ===== 阶段10: 最终裁剪到440×440（中心区域）=====
         # 从480x480裁剪中心440x440区域
@@ -1586,8 +1603,8 @@ class MapVisualizer:
         
         # 2. 渲染并保存全局地图（使用global_trajectory_points或回退到trajectory_points）
         global_traj_to_use = global_trajectory_points if global_trajectory_points is not None else trajectory_points
-        print(f"[DEBUG] Global map trajectory: {len(global_traj_to_use) if global_traj_to_use else 0} points")
-        print(f"[DEBUG] Local map trajectory: {len(trajectory_points) if trajectory_points else 0} points")
+        # print(f"[DEBUG] Global map trajectory: {len(global_traj_to_use) if global_traj_to_use else 0} points")
+        # print(f"[DEBUG] Local map trajectory: {len(trajectory_points) if trajectory_points else 0} points")
         _, global_map_with_trajectory, landmarks, global_map_clean, last_waypoint_angle = self.render_global_map(
             full_map, global_traj_to_use, detected_classes, floor,
             current_pose, landmark_classes, landmark_config,

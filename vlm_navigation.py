@@ -55,10 +55,19 @@ def main():
     
     from vlnce_baselines.config_system import ConfigHelper
     
+    # Episode ID范围验证配置
+    MIN_EPISODE_ID = 1  # 最小episode ID（通常从0或1开始，这里设为1）
+    MAX_EPISODE_ID = 1800  # 最大episode ID（根据数据集设置）
+    
     # 确定要运行的episode列表
     if args.episode_ids:
         # 使用指定的episode ID列表
         episode_ids = [int(x.strip()) for x in args.episode_ids.split(',')]
+        # 验证episode ID范围
+        invalid_ids = [eid for eid in episode_ids if eid < MIN_EPISODE_ID or eid > MAX_EPISODE_ID]
+        if invalid_ids:
+            print(f"\n❌ 错误: 以下episode ID超出有效范围 [{MIN_EPISODE_ID}, {MAX_EPISODE_ID}]: {invalid_ids}")
+            return
         print(f"\n📝 指定运行 {len(episode_ids)} 个episodes")
         print(f"📊 Episodes: {episode_ids}")
     elif args.random:
@@ -67,17 +76,69 @@ def main():
         # 加载数据集获取总episode数
         temp_config = config.clone()
         temp_config.defrost()
-        temp_config.TASK_CONFIG.DATASET.SPLIT = config.TASK_CONFIG.DATASET.SPLIT
+        # 确保数据集路径配置正确
+        if not hasattr(temp_config.TASK_CONFIG.DATASET, 'DATA_PATH') or not temp_config.TASK_CONFIG.DATASET.DATA_PATH:
+            print(f"\n❌ 错误: 数据集路径未配置! 请检查配置文件中的 TASK_CONFIG.DATASET.DATA_PATH")
+            print(f"   当前 SPLIT: {temp_config.TASK_CONFIG.DATASET.SPLIT}")
+            return
         temp_config.freeze()
-        dataset = habitat.datasets.make_dataset(temp_config.TASK_CONFIG.DATASET.TYPE)
-        total_episodes = len(dataset.episodes)
-        episode_ids = random.sample(range(total_episodes), min(args.num_episodes, total_episodes))
-        print(f"\n🎲 随机选择 {len(episode_ids)} 个episodes (共{total_episodes}个可用)")
-        print(f"📊 Episodes: {episode_ids}")
+        
+        try:
+            dataset = habitat.datasets.make_dataset(temp_config.TASK_CONFIG.DATASET.TYPE)
+            total_episodes = len(dataset.episodes)
+            
+            if total_episodes == 0:
+                print(f"\n❌ 错误: 数据集为空! 请检查数据集路径是否正确")
+                print(f"   数据集类型: {temp_config.TASK_CONFIG.DATASET.TYPE}")
+                print(f"   数据集SPLIT: {temp_config.TASK_CONFIG.DATASET.SPLIT}")
+                print(f"   数据集路径: {temp_config.TASK_CONFIG.DATASET.DATA_PATH}")
+                return
+            
+            # 使用有效范围内的episode ID
+            valid_range = range(MIN_EPISODE_ID, min(total_episodes, MAX_EPISODE_ID + 1))
+            if len(valid_range) == 0:
+                print(f"\n❌ 错误: 没有有效的episode ID可选择")
+                print(f"   有效范围: [{MIN_EPISODE_ID}, {MAX_EPISODE_ID}]")
+                print(f"   数据集大小: {total_episodes}")
+                return
+            
+            num_to_sample = min(args.num_episodes, len(valid_range))
+            if num_to_sample == 0:
+                print(f"\n❌ 错误: 请求的episode数量为0")
+                return
+                
+            episode_ids = random.sample(list(valid_range), num_to_sample)
+            print(f"\n🎲 随机选择 {len(episode_ids)} 个episodes (共{total_episodes}个可用, 有效范围[{MIN_EPISODE_ID}, {MAX_EPISODE_ID}])")
+            print(f"📊 Episodes: {episode_ids}")
+        except Exception as e:
+            print(f"\n❌ 错误: 加载数据集失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return
     else:
-        episode_ids = list(range(args.episode_id, args.episode_id + args.num_episodes))
-        print(f"\n📋 连续运行 episodes {args.episode_id} 到 {args.episode_id + args.num_episodes - 1}")
+        # 连续运行模式：验证范围
+        start_id = args.episode_id
+        end_id = args.episode_id + args.num_episodes - 1
+        
+        if start_id < MIN_EPISODE_ID:
+            print(f"\n❌ 错误: 起始episode ID {start_id} 小于最小值 {MIN_EPISODE_ID}")
+            print(f"   建议使用: --episode-id {MIN_EPISODE_ID}")
+            return
+        
+        if end_id > MAX_EPISODE_ID:
+            print(f"\n❌ 错误: 结束episode ID {end_id} 超过最大值 {MAX_EPISODE_ID}")
+            max_num = MAX_EPISODE_ID - start_id + 1
+            print(f"   建议使用: --num-episodes {max_num} (最多可运行到episode {MAX_EPISODE_ID})")
+            return
+        
+        episode_ids = list(range(start_id, end_id + 1))
+        print(f"\n📋 连续运行 episodes {start_id} 到 {end_id}")
         print(f"📊 Episodes: {episode_ids}")
+    
+    # 最终验证：确保有episodes要运行
+    if not episode_ids or len(episode_ids) == 0:
+        print(f"\n❌ 错误: 没有可运行的episodes")
+        return
     
     # 统计结果
     results_summary = []
@@ -164,8 +225,12 @@ def main():
     success_count = sum(1 for r in results_summary if r['success'])
     total_count = len(results_summary)
     
-    print(f"\n✅ 成功: {success_count}/{total_count} ({success_count/total_count*100:.1f}%)")
-    print(f"❌ 失败: {total_count - success_count}/{total_count}")
+    if total_count > 0:
+        success_rate = success_count / total_count * 100
+        print(f"\n✅ 成功: {success_count}/{total_count} ({success_rate:.1f}%)")
+        print(f"❌ 失败: {total_count - success_count}/{total_count}")
+    else:
+        print(f"\n⚠️  没有运行任何episodes")
     
     print("\n详细结果:")
     for r in results_summary:

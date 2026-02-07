@@ -48,9 +48,29 @@ elif [ "$EPISODE_ID" == "list" ]; then
 fi
 
 # 参数验证
+MIN_EPISODE_ID=1
+MAX_EPISODE_ID=1800
+
 if ! [[ "$EPISODE_ID" =~ ^[0-9]+$ ]]; then
     echo "❌ episode_id必须是正整数: $EPISODE_ID"
     exit 1
+fi
+
+# 验证episode ID范围（仅在非random/list模式下）
+if [ -z "$RANDOM_MODE" ] && [ -z "$EPISODE_IDS_MODE" ]; then
+    if [ "$EPISODE_ID" -lt "$MIN_EPISODE_ID" ]; then
+        echo "❌ episode_id不能小于 $MIN_EPISODE_ID: $EPISODE_ID"
+        echo "   建议使用: bash run_r2r/vlm_navigation.sh $MIN_EPISODE_ID ..."
+        exit 1
+    fi
+    
+    END_EPISODE_ID=$((EPISODE_ID + NUM_EPISODES - 1))
+    if [ "$END_EPISODE_ID" -gt "$MAX_EPISODE_ID" ]; then
+        echo "❌ 结束episode ID ($END_EPISODE_ID) 超过最大值 $MAX_EPISODE_ID"
+        MAX_NUM=$((MAX_EPISODE_ID - EPISODE_ID + 1))
+        echo "   建议使用: bash run_r2r/vlm_navigation.sh $EPISODE_ID $MAX_NUM"
+        exit 1
+    fi
 fi
 
 # 配置路径

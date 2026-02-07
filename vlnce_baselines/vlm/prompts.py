@@ -152,7 +152,7 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 **CRITICAL**: Output ONLY valid JSON. No extra text before or after.
 
 {{
-    "current_waypoint": "<Current Area Type> - <Key Surrounding Landmarks and Relationships>",
+    "current_waypoint": "<Current Area/Room> - <Nearby Objects>",
     "waypoint_sequence": "<Current Location> → <Next Waypoint> → ... → <Final Waypoints>. Note: Mark (✓) only for waypoints you've passed through.",
     "task_progress": "<Global task with completed stages marked with ✓, current executing stage marked with (Current), future stages unmarked. CRITICAL: Use (Current) for the stage you are CURRENTLY WORKING ON. When ALL stages are (✓) with no (Current), task is complete. E.g.: 'Turn around(✓) walk through exercise room(Current) into living room. Wait by Table.'>",
     "next_waypoint_direction": "<IMAGE number where next waypoint appears most centered/visible (1-12)>",
@@ -171,7 +171,7 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 **Current Observation:** IMAGE 1 (Front 0°): Bookshelf visible at distance. IMAGE 5 (Left 120°): Exercise room doorway visible with gym equipment inside. IMAGE 10 (Right 270°): Toilet and washbasin visible
 
 {{
-    "current_waypoint": "Restroom - beside exercise room doorway, toilet and washbasin nearby.",
+    "current_waypoint": "Restroom - toilet and washbasin nearby",
     "waypoint_sequence": "Restroom(Current) → Exercise Room → Living Room → Living Room's Table(Goal)",
     "task_progress": "Turn around(✓) walk through the exercise room(Current) into the living room. Wait by the Table.",
     "next_waypoint_direction": "IMAGE 5 (Left 120°)",
@@ -188,7 +188,7 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 **Current Observation:** IMAGE 1 (Front 0°): Open space ahead. IMAGE 2 (Left 30°): Bedroom exit doorway visible, corridor with pictures beyond. IMAGE 4 (Left 90°): Wall nearby
 
 {{
-    "current_waypoint": "Bedroom - near exit",
+    "current_waypoint": "Bedroom - near exit doorway",
     "waypoint_sequence": "Bedroom(Current) → Corridor → Kitchen Entrance → Kitchen  → Bathroom(Goal)",
     "task_progress": "Exit the room(Current) and turn left, head toward the kitchen and turn right. Go through the kitchen and out. Wait right at the bathroom.",
     "next_waypoint_direction": "IMAGE 2 (Left 30°)",
@@ -382,7 +382,7 @@ TURN_LEFT/RIGHT (30-180°), MOVE_FORWARD (0.25-1.5m), STOP (<0.5m from goal)
 **Word Limits**: reasoning MAX 200 words, subtask_instruction MAX 100 words, others 20-50 words
 
 {{
-    "current_waypoint": "<Current Area Type> - <Key Surrounding Landmarks and Relationships>",
+    "current_waypoint": "<Current Area/Room> - <Nearby Objects>",
     "waypoint_sequence": "<Your DYNAMICALLY INFERRED waypoint chain: Completed(✓) → Current → Next Immediate Waypoint → Intermediate Waypoints → Final Goal. Use SPACE names (e.g., Bedroom, Hallway, Living Room's Sofa). Infer intermediate waypoints if final destination not directly reachable. Mark (✓) only waypoints you've PASSED THROUGH or ARE AT (<0.5m). Example: Bedroom(✓) → Hallway(Current) → Living Room → Sofa(Goal)>",
     "task_progress": "<Global task with completed stages marked with ✓, current executing stage marked with (Current), future stages unmarked. CRITICAL: Only ONE stage should have (Current). When ALL stages are (✓) with NO (Current), task is complete. Example: 'Exit bedroom(✓) through hallway(Current) to kitchen. Enter bedroom.' OR when complete: 'Exit bedroom(✓) through hallway(✓) to kitchen(✓). Enter bedroom(✓).'>",
     "next_waypoint_direction": "<IMAGE number where next waypoint appears most centered/visible (1-12)>",
@@ -400,7 +400,7 @@ TURN_LEFT/RIGHT (30-180°), MOVE_FORWARD (0.25-1.5m), STOP (<0.5m from goal)
 **Current Observation:** IMAGE 1 (Front 0°): Exercise equipment surrounding. IMAGE 7 (Back 180°): Restroom visible behind
 
 {{
-    "current_waypoint": "Exercise Room (entrance area) - gym equipment surrounding, restroom 2.0m away (passed)",
+    "current_waypoint": "Exercise Room - gym equipment surrounding",
     "waypoint_sequence": "Restroom(✓) → Exercise Room(Current) → Living Room → Living Room's Table(Goal)",
     "task_progress": "Turn around(✓) walk through the exercise room(Current) into the living room. Wait by the Table.",
     "next_waypoint_direction": "IMAGE 1 (Front 0°)",
@@ -418,7 +418,7 @@ TURN_LEFT/RIGHT (30-180°), MOVE_FORWARD (0.25-1.5m), STOP (<0.5m from goal)
 **Current Observation:** IMAGE 1 (Front 0°): Rug directly ahead < 0.5m, gray couch visible beside rug. IMAGE 10 (Right 270°): Gray couch right beside. IMAGE 7 (Back 180°): Hallway visible behind
 
 {{
-    "current_waypoint": "Living Room - Rug area, standing near rug with gray couch beside",
+    "current_waypoint": "Living Room - near rug and gray couch",
     "waypoint_sequence": "Bedroom Exit(✓) → Hallway(✓) → Living Room with Gray Couch(✓) → Living Room's Rug(Current = Goal)",
     "task_progress": "Exit the bedroom(✓) and turn left(✓). Walk straight passing the gray couch(✓) and stop near the rug(✓).",
     "next_waypoint_direction": "IMAGE 1 (Front 0°)",
@@ -436,7 +436,7 @@ TURN_LEFT/RIGHT (30-180°), MOVE_FORWARD (0.25-1.5m), STOP (<0.5m from goal)
 **Current Observation:** IMAGE 1 (Front 0°): Hallway continues ahead 3.0m. IMAGE 5 (Left 120°): Bedroom doorway visible at distance (~2.5m), bed partially visible inside. IMAGE 7 (Back 180°): Kitchen visible behind
 
 {{
-    "current_waypoint": "Hallway - bedroom doorway 2.5m away (left side), kitchen 3.0m away (passed)",
+    "current_waypoint": "Hallway - bedroom doorway visible",
     "waypoint_sequence": "Kitchen(✓) → Hallway(Current) → Bedroom(Goal)",
     "task_progress": "Walk to the kitchen(✓) through the hallway(Current), then enter the bedroom on your left.",
     "next_waypoint_direction": "IMAGE 5 (Left 120°)",
@@ -454,7 +454,7 @@ TURN_LEFT/RIGHT (30-180°), MOVE_FORWARD (0.25-1.5m), STOP (<0.5m from goal)
 **Current Observation:** IMAGE 1 (Front 0°): Dining table edge visible 0.8m. IMAGE 2 (Left 30°): Living room sofa and chair visible FAR away ~3.5m (small in view). IMAGE 5 (Left 120°): Living room entrance opening at distance ~2.8m. IMAGE 7 (Back 180°): Hallway behind ~2.5m (completed area). IMAGE 12 (Right 330°): Dining area wall/furniture NEAR.
 
 {{
-    "current_waypoint": "Dining Area - dining table 0.8m NEAR, living room entrance 2.8m away (left side)",
+    "current_waypoint": "Dining Area - near dining table",
     "waypoint_sequence": "Bedroom(✓) → Hallway(✓) → Dining Area(Current) → Living Room with TV → Living Room Chair(Goal)",
     "task_progress": "Walk out of the bedroom(✓) through the open door into the hallway(✓). Turn the corner and walk into the dining area(Current). Pass the dining table and walk into the living room area towards the television. Stop near the chair and open sliding doors to outside.",
     "next_waypoint_direction": "IMAGE 2 (Left 30°)",
@@ -472,7 +472,7 @@ TURN_LEFT/RIGHT (30-180°), MOVE_FORWARD (0.25-1.5m), STOP (<0.5m from goal)
 **Current Observation:** IMAGE 1 (Front 0°): Living room chair visible 0.4m, filling view. IMAGE 2 (Left 30°): Chair side visible 0.6m. IMAGE 11 (Right 300°): Chair back visible 0.7m. IMAGE 12 (Right 330°): Sliding doors to outside visible NEAR 0.9m. IMAGE 7 (Back 180°): Living room open area behind ~2.0m.
 
 {{
-    "current_waypoint": "Living Room - AT chair (surrounded: chair 0.4m front, 0.6m left, 0.7m right), sliding doors 0.9m away",
+    "current_waypoint": "Living Room - at chair",
     "waypoint_sequence": "Bedroom(✓) → Hallway(✓) → Dining Area(✓) → Living Room with TV(✓) → Living Room Chair(Current = Final Navigation Goal)",
     "task_progress": "Walk out of the bedroom(✓) through the open door into the hallway(✓). Turn the corner and walk into the dining area(✓). Pass the dining table and walk into the living room area towards the television(✓). Stop near the chair(✓) and open sliding doors to outside.",
     "next_waypoint_direction": "IMAGE 1 (Front 0°)",
