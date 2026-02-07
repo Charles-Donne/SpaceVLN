@@ -189,8 +189,8 @@ class InteractiveNavigationController:
                     'min_total_pixels': self.landmark_min_total_pixels,
                     'min_area_threshold': self.landmark_min_area_threshold
                 },
-                waypoint_positions=None,  # action时不传waypoint
-                waypoint_ids=None,
+                waypoint_positions=map_state.get('waypoint_positions', []),  # 从map_state获取（已旋转）
+                waypoint_ids=map_state.get('waypoint_ids', []),  # 从map_state获取
                 phase=phase,
                 global_trajectory_points=map_state.get('trajectory_points', []),  # 从map_state获取
                 crop_offset=map_state.get('crop_offset')  # 从map_state获取
