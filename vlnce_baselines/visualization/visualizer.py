@@ -464,37 +464,39 @@ class MapVisualizer:
             global_map_with_trajectory = global_map_rotated.copy()
             
             # ===== 阶段5.1: 从trajectory_points绘制轨迹线（橙色）=====
-            if trajectory_points is not None and len(trajectory_points) > 1:
-                # trajectory_points是世界像素坐标 [(px, py), ...]
-                # 需要转换为相对于crop区域的坐标
-                if crop_offset is not None:
-                    crop_start_px, crop_start_py = crop_offset
-                    # 转换所有轨迹点到crop坐标系
-                    trajectory_points_crop = []
-                    for traj_px, traj_py in trajectory_points:
-                        rel_y = traj_px - crop_start_px
-                        rel_x = traj_py - crop_start_py
-                        # 检查是否在crop范围内
-                        if 0 <= rel_y < full_map.shape[1] and 0 <= rel_x < full_map.shape[2]:
-                            trajectory_points_crop.append((rel_x, rel_y))
+            print(f"🔍 [Global Map] trajectory_points: {len(trajectory_points) if trajectory_points else 0} points, crop_offset: {crop_offset}")
+            if trajectory_points is not None and len(trajectory_points) > 1 and crop_offset is not None:
+                crop_start_px, crop_start_py = crop_offset
+                map_h, map_w = full_map.shape[1], full_map.shape[2]
+                trajectory_color = (0, 165, 255)  # 橙色BGR
+                
+                # 转换所有轨迹点到480x480显示坐标系
+                display_points = []
+                for traj_px, traj_py in trajectory_points:
+                    # 计算相对于crop区域的位置（full_map坐标系）
+                    rel_y = traj_px - crop_start_px
+                    rel_x = traj_py - crop_start_py
                     
-                    # 绘制连线（橙色，3像素宽）
-                    trajectory_color = (0, 165, 255)  # 橙色BGR
-                    for i in range(len(trajectory_points_crop) - 1):
-                        pt1_x, pt1_y = trajectory_points_crop[i]
-                        pt2_x, pt2_y = trajectory_points_crop[i + 1]
-                        
+                    # 检查是否在full_map范围内
+                    if 0 <= rel_y < map_h and 0 <= rel_x < map_w:
+                        # 缩放到480x480显示尺寸
+                        display_x = int(rel_x * 480.0 / map_w)
+                        display_y = int(rel_y * 480.0 / map_h)
                         # flipud变换（与地图一致）
-                        pt1_y_display = 480 - 1 - pt1_y
-                        pt2_y_display = 480 - 1 - pt2_y
-                        
-                        # 检查坐标范围
-                        if (0 <= pt1_x < 480 and 0 <= pt1_y_display < 480 and
-                            0 <= pt2_x < 480 and 0 <= pt2_y_display < 480):
-                            cv2.line(global_map_with_trajectory, 
-                                    (int(pt1_x), int(pt1_y_display)),
-                                    (int(pt2_x), int(pt2_y_display)),
-                                    trajectory_color, thickness=3)
+                        display_y = 480 - 1 - display_y
+                        display_points.append((display_x, display_y))
+                
+                print(f"  ✅ Converted {len(display_points)} trajectory points to display coords")
+                # 绘制连线
+                for i in range(len(display_points) - 1):
+                    pt1 = display_points[i]
+                    pt2 = display_points[i + 1]
+                    if (0 <= pt1[0] < 480 and 0 <= pt1[1] < 480 and
+                        0 <= pt2[0] < 480 and 0 <= pt2[1] < 480):
+                        cv2.line(global_map_with_trajectory, pt1, pt2, 
+                                trajectory_color, thickness=3)
+            else:
+                print(f"  ❌ Cannot draw trajectory - conditions not met")
             
             # ===== 阶段5.3: 绘制深红色虚线指示正前方（在箭头之前）=====
             center_x, center_y = 240, 240
@@ -538,10 +540,13 @@ class MapVisualizer:
                 ])
             
             # ===== 阶段5.55: 绘制历史waypoint（蓝色圆圈+ID数字）=====
+            print(f"[DEBUG Global] waypoint_positions: {len(waypoint_positions) if waypoint_positions else 0} waypoints")
+            print(f"[DEBUG Global] waypoint_ids: {waypoint_ids if waypoint_ids else []}")
             if waypoint_positions is not None and waypoint_ids is not None and crop_offset is not None:
                 crop_start_px, crop_start_py = crop_offset
                 map_h, map_w = full_map.shape[1], full_map.shape[2]
                 
+                rendered_count = 0
                 for wp_pos, wp_id in zip(waypoint_positions, waypoint_ids):
                     # waypoint_positions中存储的是世界像素坐标 (pixel_y, pixel_x)
                     wp_pixel_y, wp_pixel_x = wp_pos
@@ -567,6 +572,10 @@ class MapVisualizer:
                             cv2.putText(global_map_with_trajectory, str(wp_id), 
                                        (display_x - 6, display_y + 4),
                                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+                            rendered_count += 1
+                print(f"  ✅ Rendered {rendered_count} waypoints on global map")
+            else:
+                print(f"  ❌ Cannot draw waypoints - conditions not met")
             
             # ===== 阶段5.6: 叠加黑色障碍物层（覆盖在箭头之上，使障碍物更醒目）=====
             # 创建障碍物掩码并叠加到已渲染的地图上
@@ -749,6 +758,7 @@ class MapVisualizer:
         local_map = cv2.resize(local_map, (480, 480), interpolation=cv2.INTER_NEAREST)
         
         # ===== 阶段5: 从trajectory_points绘制轨迹线（橙色）=====
+        print(f"🔍 [Local Map] trajectory_points: {len(trajectory_points) if trajectory_points else 0} points, crop_offset: {crop_offset}")
         if trajectory_points is not None and len(trajectory_points) > 1 and crop_offset is not None:
             crop_start_px, crop_start_py = crop_offset
             trajectory_color = (0, 165, 255)  # 橙色BGR
