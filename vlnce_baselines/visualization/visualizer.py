@@ -464,7 +464,8 @@ class MapVisualizer:
             global_map_with_trajectory = global_map_rotated.copy()
             
             # ===== 阶段5.1: 从trajectory_points绘制轨迹线（橙色）=====
-            # trajectory_points 是世界像素坐标，需要转换到旋转后的full_map坐标
+            # trajectory_points 是世界像素坐标
+            # full_map 已经旋转过了，但trajectory_points是世界坐标，需要手动旋转以匹配
             print(f"🔍 [Global Map] trajectory_points: {len(trajectory_points) if trajectory_points else 0} points, crop_offset: {crop_offset}")
             print(f"🔍 [Global Map] current_pose: {current_pose}, orientation={current_pose[2] if current_pose is not None else 'N/A'}°")
             if trajectory_points is not None and len(trajectory_points) > 1 and crop_offset is not None:
@@ -472,53 +473,27 @@ class MapVisualizer:
                 map_h, map_w = full_map.shape[1], full_map.shape[2]
                 trajectory_color = (0, 165, 255)  # 橙色BGR
                 
-                # 获取旋转参数（current_pose[2]已经是度数）
-                agent_orientation_deg = current_pose[2] if current_pose is not None else 0
-                rotation_angle_deg = 90 - agent_orientation_deg
-                rotation_angle_rad = math.radians(rotation_angle_deg)
-                cos_theta = math.cos(rotation_angle_rad)
-                sin_theta = math.sin(rotation_angle_rad)
-                
-                print(f"🔍 [Global Map] agent_orientation: {agent_orientation_deg:.1f}°, rotation={rotation_angle_deg:.1f}°")
-                
                 start_px, start_py = crop_offset
                 
-                # 转换所有轨迹点到旋转后的坐标系
+                # 方案：直接使用相对坐标，不旋转（测试）
                 display_points = []
-                for idx, (world_px, world_py) in enumerate(trajectory_points):
-                    # 1. 转换为相对坐标（相对于crop区域）
+                for world_px, world_py in trajectory_points:
+                    # 转换为相对坐标
                     rel_px = world_px - start_px
                     rel_py = world_py - start_py
                     
-                    # 边界检查（相对坐标）
+                    # 边界检查
                     if not (0 <= rel_px < map_h and 0 <= rel_py < map_w):
                         continue
                     
-                    # 2. 归一化到[-1, 1]（与PyTorch affine_grid一致）
-                    norm_y = (rel_px / map_h) * 2.0 - 1.0
-                    norm_x = (rel_py / map_w) * 2.0 - 1.0
-                    
-                    # 3. 应用旋转矩阵（与PyTorch相同）
-                    rotated_norm_x = cos_theta * norm_x + sin_theta * norm_y
-                    rotated_norm_y = -sin_theta * norm_x + cos_theta * norm_y
-                    
-                    # 4. 反归一化到像素坐标
-                    rotated_px = (rotated_norm_y + 1.0) * map_h / 2.0
-                    rotated_py = (rotated_norm_x + 1.0) * map_w / 2.0
-                    
-                    # 5. 缩放到480x480显示坐标系
-                    display_x = int(rotated_py * 480.0 / map_w)
-                    display_y = int(rotated_px * 480.0 / map_h)
+                    # 直接缩放到显示坐标（不旋转）
+                    display_x = int(rel_py * 480.0 / map_w)
+                    display_y = int(rel_px * 480.0 / map_h)
                     # flipud变换
                     display_y = 480 - 1 - display_y
-                    
-                    # DEBUG: 打印前3个点的详细转换
-                    if idx < 3:
-                        print(f"    [Traj {idx}] world=({world_px},{world_py}) → rel=({rel_px:.1f},{rel_py:.1f}) → norm=({norm_x:.3f},{norm_y:.3f}) → rot_norm=({rotated_norm_x:.3f},{rotated_norm_y:.3f}) → rot_px=({rotated_px:.1f},{rotated_py:.1f}) → display=({display_x},{display_y})")
-                    
                     display_points.append((display_x, display_y))
                 
-                print(f"  ✅ Converted {len(display_points)}/{len(trajectory_points)} trajectory points (rotation={rotation_angle_deg:.1f}°)")
+                print(f"  ✅ Converted {len(display_points)}/{len(trajectory_points)} trajectory points (no rotation test)")
                 # 绘制连线（细线条）
                 for i in range(len(display_points) - 1):
                     pt1 = display_points[i]
