@@ -263,7 +263,7 @@ class SemanticMapper:
                 # 距离<2m，删除（打印日志）
                 old_id = self.waypoint_ids[i]
                 old_desc = self.waypoint_descriptions[i]
-                print(f"  🗑️  Removed nearby Waypoint #{old_id} @ (py={old_py}, px={old_px}) - {old_desc} (distance: {distance * self.resolution:.1f}cm < 200cm)")
+# print(f"  🗑️  Removed nearby Waypoint #{old_id}")
         
         # 更新waypoint列表（只保留2m之外的waypoint）
         if waypoints_to_keep:
@@ -285,7 +285,15 @@ class SemanticMapper:
         self.waypoint_ids.append(waypoint_id)
         self.waypoint_descriptions.append(description)
         
-        print(f"  📍 Waypoint #{waypoint_id} @ (py={pixel_y}, px={pixel_x}) - {description}")
+        # ===== 关键：写入地图tiles中的Channel 2 =====
+        self.mapping_module.mark_waypoint(
+            agent_x_m=agent_x_m,
+            agent_y_m=agent_y_m,
+            waypoint_id=waypoint_id,
+            clear_radius_m=2.0
+        )
+        
+        # print(f"  📍 Waypoint #{waypoint_id} @ (py={pixel_y}, px={pixel_x}) - {description}")
         
         return waypoint_id
     

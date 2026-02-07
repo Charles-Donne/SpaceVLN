@@ -75,8 +75,6 @@ class InteractiveNavigationController:
         
         self.current_episode_id = None
         self.current_step = 0
-        
-        print("✅ 初始化完成\n")
     
     @property
     def detected_classes(self):
@@ -102,7 +100,7 @@ class InteractiveNavigationController:
     
     def look_around(self) -> None:
         """360度环视建图(12步×30°)，步数0-11"""
-        print("🔄 360°环视...", end="", flush=True)
+# print("🔄 360°环视...", end="", flush=True)
         
         from habitat.sims.habitat_simulator.actions import HabitatSimActions
         
@@ -130,8 +128,7 @@ class InteractiveNavigationController:
         
         self.current_step = 12
         landmarks_found = [cls for cls in self.detected_classes if cls in landmark_classes]
-        print(f" ✅ {len(self.detected_classes)}类" + 
-              (f", Landmarks: {', '.join(landmarks_found[:3])}{'...' if len(landmarks_found) > 3 else ''}" if landmarks_found else ""))
+        # print(f" ✅ {len(self.detected_classes)}类")
     
     def step(self, action: int, save_vis: bool = True, phase: str = "action") -> Dict[str, Any]:
         """执行一步动作，更新地图并保存可视化"""
@@ -169,7 +166,7 @@ class InteractiveNavigationController:
         )
         
         new_classes = len(self.detected_classes) - prev_class_count
-        print(f" +{new_classes}类" if new_classes > 0 else "")
+# print(f" +{new_classes}类" if new_classes > 0 else "")
         
         if save_vis:
             # action执行时不传waypoint信息，不计算角度（只在环视后计算）

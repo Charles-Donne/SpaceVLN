@@ -31,7 +31,7 @@ class ActionExecutor(BaseAPIClient):
         self.turn_angle = turn_angle
         self.move_distance = move_distance
         
-        print(f"✓ Action Executor initialized")
+        # print(f"✓ Action Executor initialized")
         print(f"  Model: {self.config.model}")
         print(f"  Parameters: turn={turn_angle}°, move={move_distance}m")
     

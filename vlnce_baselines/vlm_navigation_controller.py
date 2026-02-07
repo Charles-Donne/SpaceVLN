@@ -69,7 +69,7 @@ class VLMNavigationController(InteractiveNavigationController):
         super().__init__(config)
         
         # 初始化VLM模块
-        print("\n[Init] 初始化VLM模块...")
+# print("\n[Init] 初始化VLM模块...")
         
         # 获取动作参数
         self.turn_angle = config.TASK_CONFIG.SIMULATOR.TURN_ANGLE  # 30°
@@ -136,7 +136,7 @@ class VLMNavigationController(InteractiveNavigationController):
         # PanoramaGenerator（用于全景图拼接和标注）
         self.panorama_generator = PanoramaGenerator()
         
-        print("[Init] VLM模块初始化完成\n")
+        # print("[Init] VLM模块初始化完成\n")
     
     def reset_episode(self, episode_id: int = None):
         """重置Episode，包括VLM状态"""
@@ -171,7 +171,7 @@ class VLMNavigationController(InteractiveNavigationController):
         
         # waypoint已集成到mapper中，mapper.reset()会自动清空
         
-        print(f"[Reset] Episode {self.current_episode_id} 重置完成")
+        # print(f"[Reset] Episode {self.current_episode_id} 重置完成")
         
         # 初始化NavigationVisualizer（用于RGB+俯视图拼接和GIF生成）
         visualization_dir = os.path.join(self.episode_dir, 'visualization')
@@ -706,7 +706,7 @@ class VLMNavigationController(InteractiveNavigationController):
         Returns:
             (image_paths, direction_names) - 4个全景图路径和方向名称
         """
-        print(f"\n[环视建图] {phase}...")
+# print(f"\n[环视建图] {phase}...")
         
         # 注意：不清空landmark，让VLM能看到旧landmark来判断子任务是否完成
         # 轨迹和landmark的清空会在verify_and_replan中VLM输出后进行
@@ -725,7 +725,7 @@ class VLMNavigationController(InteractiveNavigationController):
         for i in range(1, 13):  # 12次旋转
             self.current_step += 1  # 累加总步数
             look_step = self.current_step
-            print(f"  [{i}/12] 第{i}次左转 (30°×{i}={i*30}°)", end="", flush=True)
+# print(f"  [{i}/12] 第{i}次左转")
             
             # 执行旋转
             actions = [{"action": HabitatSimActions.TURN_LEFT}]
@@ -804,10 +804,8 @@ class VLMNavigationController(InteractiveNavigationController):
                     subtask_id=phase
                 )
             
-            if new_classes > 0:
-                print(f" +{new_classes}类")
-            else:
-                print()
+            # New classes detected (静默处理)
+            pass
             
             # 保存所有12张环视图像（用于后续合成全景图）
             lookaround_images.append(rgb_bgr.copy())
@@ -819,10 +817,7 @@ class VLMNavigationController(InteractiveNavigationController):
         # 缓存最后的观察（step 12，回到正前方）
         self.latest_obs = obs[0]
         
-        print(f"  扫描完成: +{total_new_classes}类 | 总计{len(self.detected_classes)}类")
-        
-        # 360度环视完成，计算12个方向的障碍物距离（用于显示在12张view上）
-        print(f"  [更新距离] 360度扫描完成，计算12个方向的障碍物距离...")
+        # 扫描完成，更新距离（静默处理）
         self._update_obstacle_distances_12_directions()
         
         # 检查是否完成了完整的12步环视
@@ -874,7 +869,7 @@ class VLMNavigationController(InteractiveNavigationController):
                 # 转换为度数用于view映射
                 if last_waypoint_angle is not None:
                     last_waypoint_angle_deg = np.degrees(last_waypoint_angle)
-                    print(f"  📍 Last Waypoint角度: {last_waypoint_angle_deg:.1f}° (正=右侧, 负=左侧, 0=正前方)")
+                    # print(f"  📍 Last Waypoint角度: {last_waypoint_angle_deg:.1f}°")
                 
                 # 保存waypoint信息用于绘制在view上（直接保存tuple）
                 waypoint_info = (wp_positions, wp_ids, wp_descriptions)
@@ -932,7 +927,7 @@ class VLMNavigationController(InteractiveNavigationController):
                 
                 # 只在±15度范围内显示waypoint
                 if abs(angle_diff) <= 15:
-                    print(f"    ✓ Waypoint显示在 {direction_name} (waypoint={last_waypoint_angle_deg:.1f}° → view={waypoint_view_angle:.1f}°, diff={angle_diff:.1f}°)")
+                    # print(f"    ✓ Waypoint显示在 {direction_name}")
                     image = self._draw_waypoints_on_view(image, angle, waypoint_info)
             
             # 在图片顶部添加白色背景的角度标注
@@ -979,7 +974,7 @@ class VLMNavigationController(InteractiveNavigationController):
             print(f"  ⚠️  Local Map not found: {self.latest_local_map}")
             self.latest_local_map = None
         
-        print(f"  12方向独立视图已保存 (每张30°) | Step={self.current_step}")
+        # print(f"  12方向独立视图已保存")
         print("="*60 + "\n")
         
         return direction_paths, direction_names

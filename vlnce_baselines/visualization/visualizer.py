@@ -572,9 +572,9 @@ class MapVisualizer:
                 crop_offset = (480 - 440) // 2  # = 20
                 global_map_with_trajectory = global_map_with_trajectory[crop_offset:crop_offset+440, crop_offset:crop_offset+440].copy()
                 global_map_rotated = global_map_rotated[crop_offset:crop_offset+440, crop_offset:crop_offset+440].copy()
-                print(f"✂️  Global Map 裁剪: 480×480 → 440×440")
-            else:
-                print(f"📐 Global Map 尺寸: 480×480 (未裁剪，显示完整地图)")
+                # print(f"✂️  Global Map 裁剪: 480×480 → 440×440")
+            # else:
+                # print(f"📐 Global Map 尺寸: 480×480 (未裁剪，显示完整地图)")
         
         # 添加方位标签到global map
         global_map_with_trajectory = self.add_orientation_labels(global_map_with_trajectory)
@@ -788,18 +788,8 @@ class MapVisualizer:
             cv2.polylines(local_map, [visible_polygon], isClosed=True, 
                          color=border_color, thickness=border_thickness)
         
-        # ===== 绘制轨迹（在FOV之上，箭头之下）=====
-        # 轨迹现在存储在通道2中，直接从full_map提取
-        if full_map.shape[0] > 2:  # 确保有通道2
-            agent_channel = full_map[2, 120:360, 120:360]  # 裁剪后的区域
-            agent_channel_resized = cv2.resize(
-                agent_channel, (480, 480), 
-                interpolation=cv2.INTER_NEAREST
-            )
-            # 提取轨迹（0.4 < 值 < 0.6）
-            trajectory_mask = (agent_channel_resized > 0.4) & (agent_channel_resized < 0.6)
-            # 在local_map上绘制轨迹（橙色）
-            local_map[trajectory_mask] = [0, 140, 255]  # BGR橙色
+        # ===== 轨迹已在PIL调色板阶段渲染，无需重复绘制 =====
+        # 轨迹通过semantic_map（值=3，橙色）统一渲染，和global map保持一致
         
         # ===== 绘制深红色虚线指示正前方（在箭头下层）=====
         forward_line_length = 120  # 延伸120像素（约3米）
