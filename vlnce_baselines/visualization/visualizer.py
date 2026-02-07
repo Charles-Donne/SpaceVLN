@@ -538,43 +538,35 @@ class MapVisualizer:
                 ])
             
             # ===== 阶段5.55: 绘制历史waypoint（蓝色圆圈+ID数字）=====
-            if waypoint_positions is not None and waypoint_ids is not None:
+            if waypoint_positions is not None and waypoint_ids is not None and crop_offset is not None:
+                crop_start_px, crop_start_py = crop_offset
+                map_h, map_w = full_map.shape[1], full_map.shape[2]
+                
                 for wp_pos, wp_id in zip(waypoint_positions, waypoint_ids):
                     # waypoint_positions中存储的是世界像素坐标 (pixel_y, pixel_x)
                     wp_pixel_y, wp_pixel_x = wp_pos
                     
-                    # 转换为相对于agent的坐标（crop区域内）
-                    # full_map是以agent为中心的crop，需要计算相对位置
-                    if crop_offset is not None:
-                        crop_start_px, crop_start_py = crop_offset
-                        # 计算在crop区域内的位置
-                        rel_y = wp_pixel_y - crop_start_px
-                        rel_x = wp_pixel_x - crop_start_py
+                    # 计算相对于crop区域的位置
+                    rel_y = wp_pixel_y - crop_start_px
+                    rel_x = wp_pixel_x - crop_start_py
+                    
+                    # 检查是否在full_map范围内
+                    if 0 <= rel_y < map_h and 0 <= rel_x < map_w:
+                        # 缩放到480x480显示尺寸
+                        display_x = int(rel_x * 480.0 / map_w)
+                        display_y = int(rel_y * 480.0 / map_h)
+                        # flipud变换（与地图一致）
+                        display_y = 480 - 1 - display_y
                         
-                        # 检查是否在可见范围内
-                        if 0 <= rel_y < full_map.shape[1] and 0 <= rel_x < full_map.shape[2]:
-                            # 同样需要旋转坐标（与地图旋转一致）
-                            if rotation_matrix is not None:
-                                # 应用旋转变换
-                                rotated_coords = rotation_matrix @ np.array([rel_x, rel_y, 1])
-                                wp_x_display = int(rotated_coords[0])
-                                wp_y_display = int(rotated_coords[1])
-                            else:
-                                wp_x_display = int(rel_x)
-                                wp_y_display = int(rel_y)
-                            
-                            # flipud变换（与地图一致）
-                            wp_y_display = 480 - 1 - wp_y_display
-                            
-                            # 检查缩放后的坐标是否在范围内
-                            if 0 <= wp_x_display < 480 and 0 <= wp_y_display < 480:
-                                # 绘制蓝色圆圈
-                                cv2.circle(global_map_with_trajectory, (wp_x_display, wp_y_display), 
-                                          radius=8, color=(255, 100, 0), thickness=2)  # 蓝色BGR
-                                # 绘制ID数字（白色）
-                                cv2.putText(global_map_with_trajectory, str(wp_id), 
-                                           (wp_x_display - 6, wp_y_display + 4),
-                                           cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+                        # 检查显示坐标是否在范围内
+                        if 0 <= display_x < 480 and 0 <= display_y < 480:
+                            # 绘制蓝色圆圈
+                            cv2.circle(global_map_with_trajectory, (display_x, display_y), 
+                                      radius=8, color=(255, 100, 0), thickness=2)  # 蓝色BGR
+                            # 绘制ID数字（白色）
+                            cv2.putText(global_map_with_trajectory, str(wp_id), 
+                                       (display_x - 6, display_y + 4),
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
             
             # ===== 阶段5.6: 叠加黑色障碍物层（覆盖在箭头之上，使障碍物更醒目）=====
             # 创建障碍物掩码并叠加到已渲染的地图上
@@ -719,19 +711,8 @@ class MapVisualizer:
             floor_display_mask = np.logical_and(floor_mask, explored_mask)
             semantic_map[floor_display_mask] = 5
         
-        # Layer 3: Agent轨迹（橙色）- 在floor之后渲染
-        if full_map.shape[0] > 2:  # 确保有通道2
-            agent_channel = full_map[2]  # [H, W] - Agent通道
-            # 提取轨迹（值接近0.5）
-            trajectory_mask = (agent_channel > 0.4) & (agent_channel < 0.6)
-            semantic_map[trajectory_mask] = 3  # 橙色（调色板索引3）
-        
-        # Layer 4: Waypoint（蓝色）- 在轨迹之后渲染，从Channel 2提取
-        if full_map.shape[0] > 2:  # 确保有通道2
-            waypoint_channel = full_map[2]  # [H, W] - Agent通道（合并）
-            # 提取waypoint（值>=1.0表示有waypoint）
-            waypoint_mask = waypoint_channel >= 1.0
-            semantic_map[waypoint_mask] = 4  # 蓝色（调色板索引4）
+        # Layer 3: 不渲染轨迹和waypoint（后续用OpenCV绘制轨迹）
+        # Local map不显示历史waypoint，只显示轨迹
         
         # ===== 阶段2: PIL调色板渲染 =====
         sem_map_vis = Image.new("P", (w, h))
@@ -767,8 +748,40 @@ class MapVisualizer:
         local_map = local_map[y1:y2, x1:x2].copy()
         local_map = cv2.resize(local_map, (480, 480), interpolation=cv2.INTER_NEAREST)
         
-        # ===== 阶段5: 轨迹已在调色板渲染阶段处理，这里跳过 =====
-        # 轨迹现在作为semantic_map的一层（值=3，橙色）一起渲染
+        # ===== 阶段5: 从trajectory_points绘制轨迹线（橙色）=====
+        if trajectory_points is not None and len(trajectory_points) > 1 and crop_offset is not None:
+            crop_start_px, crop_start_py = crop_offset
+            trajectory_color = (0, 165, 255)  # 橙色BGR
+            map_h, map_w = full_map.shape[1], full_map.shape[2]
+            
+            # 转换所有轨迹点到显示坐标系（相对于裁剪后的local map）
+            display_points = []
+            for traj_px, traj_py in trajectory_points:
+                # 计算相对于crop区域的位置
+                rel_y = traj_px - crop_start_px
+                rel_x = traj_py - crop_start_py
+                
+                # 检查是否在full_map范围内
+                if 0 <= rel_y < map_h and 0 <= rel_x < map_w:
+                    # 转换到裁剪区域（240x240中心区域）
+                    # full_map是480x480，裁剪区域是中心240x240
+                    crop_rel_x = rel_x * 480.0 / map_w - (240 - 120)
+                    crop_rel_y = rel_y * 480.0 / map_h - (240 - 120)
+                    
+                    # 检查是否在裁剪区域内
+                    if 0 <= crop_rel_x < 240 and 0 <= crop_rel_y < 240:
+                        # 放大到480x480
+                        display_x = int(crop_rel_x * 2.0)
+                        display_y = int(crop_rel_y * 2.0)
+                        display_points.append((display_x, display_y))
+            
+            # 绘制连线
+            for i in range(len(display_points) - 1):
+                pt1 = display_points[i]
+                pt2 = display_points[i + 1]
+                if (0 <= pt1[0] < 480 and 0 <= pt1[1] < 480 and
+                    0 <= pt2[0] < 480 and 0 <= pt2[1] < 480):
+                    cv2.line(local_map, pt1, pt2, trajectory_color, thickness=3)
         
         # ===== 阶段6: 绘制FOV可见区域（考虑障碍物遮挡）=====
         # 480像素 = 12m，所以1像素 = 2.5cm
