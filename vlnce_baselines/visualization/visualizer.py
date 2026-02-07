@@ -576,8 +576,6 @@ class MapVisualizer:
             else:
                 if waypoint_positions is None or len(waypoint_positions) == 0:
                     print(f"  ⚠️  No waypoints to render")
-            else:
-                print(f"  ❌ Cannot draw waypoints - conditions not met")
             
             # ===== 阶段5.6: 叠加黑色障碍物层（覆盖在箭头之上，使障碍物更醒目）=====
             # 创建障碍物掩码并叠加到已渲染的地图上
