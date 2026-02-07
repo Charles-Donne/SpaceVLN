@@ -291,33 +291,22 @@ class SemanticMapper:
     
     def get_waypoints(self) -> Tuple[List[Tuple[int, int]], List[int], List[str]]:
         """
-        从世界地图Channel 2提取waypoint位置和ID
+        获取waypoint位置和ID
         
         Returns:
             positions: [(pixel_y, pixel_x), ...] 世界像素坐标列表
             ids: [1, 2, 3, ...] waypoint ID列表
             descriptions: ["desc1", "desc2", ...] waypoint描述列表
-        
-        注意：这个方法仅用于向后兼容，新的渲染直接从full_map[2]提取
         """
-        # 为了向后兼容，返回空列表（waypoint现在直接从full_map[2]渲染）
-        return [], [], []
+        return self.waypoint_positions, self.waypoint_ids, self.waypoint_descriptions
     
     def clear_waypoints(self):
-        """清空所有waypoint（从地图Channel 2中清除）"""
-        # 清除描述
+        """清空所有waypoint"""
+        # 清除列表即可，不需要操作Channel 2
+        self.waypoint_positions.clear()
+        self.waypoint_ids.clear()
         self.waypoint_descriptions.clear()
         self.waypoint_counter = 0
-        
-        # 清除地图中的waypoint（Channel 2，值>=1.0）
-        for tile_key, tile in self.mapping_module.tiles.items():
-            if tile is not None and tile.shape[1] > 2:
-                # 保留轨迹(0.5)和当前位置(0.7)，只清除waypoint(>=1.0)
-                tile[:, 2, :, :] = torch.where(
-                    tile[:, 2, :, :] >= 1.0,
-                    torch.zeros_like(tile[:, 2, :, :]),
-                    tile[:, 2, :, :]
-                )
     
     def get_waypoint_count(self) -> int:
         """获取waypoint总数"""
