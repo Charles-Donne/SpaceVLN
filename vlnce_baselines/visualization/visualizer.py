@@ -416,27 +416,17 @@ class MapVisualizer:
             floor_display_mask = np.logical_and(floor_mask, explored_mask)
             semantic_map[floor_display_mask] = 5  # 浅绿色
         
-        # Layer 3: Agent轨迹（橙色）- 在floor之后渲染
-        if full_map.shape[0] > 2:  # 确保有通道2
-            agent_channel = full_map[2]  # [H, W] - Agent通道
-            # 提取轨迹（值接近0.5）
-            trajectory_mask = (agent_channel > 0.4) & (agent_channel < 0.6)
-            semantic_map[trajectory_mask] = 3  # 橙色（调色板索引3）
+        # Layer 3: 不再从Channel 2提取轨迹，后续在PIL渲染后用OpenCV连线绘制
         
-        # Layer 4: Waypoint（蓝色）- 在轨迹之后渲染，从Channel 2提取
+        # Layer 4: Waypoint（蓝色）- 从Channel 2提取
         if full_map.shape[0] > 2:  # 确保有通道2
             waypoint_channel = full_map[2]  # [H, W] - Agent通道（合并）
             # 提取waypoint（值>=1.0表示有waypoint）
             waypoint_mask = waypoint_channel >= 1.0
-            waypoint_count = waypoint_mask.sum()
-            if waypoint_count > 0:
-                print(f"  🎨 render_global_map: Found {waypoint_count} waypoint pixels to render (values >= 1.0)")
-                max_wp_val = waypoint_channel[waypoint_mask].max() if waypoint_count > 0 else 0
-                print(f"     Max waypoint value: {max_wp_val:.1f}")
             semantic_map[waypoint_mask] = 4  # 蓝色（调色板索引4）
         
         # ===== 阶段2: PIL调色板渲染 =====
-        # 现在semantic_map包含：0=未知, 1=障碍物, 2=已探索, 3=轨迹, 4=waypoint, 5=floor
+        # 现在semantic_map包含：0=未知, 1=障碍物, 2=已探索, 4=waypoint, 5=floor（轨迹稍后用OpenCV绘制）
         sem_map_vis = Image.new("P", (w, h))
         sem_map_vis.putpalette(self.color_palette)
         sem_map_vis.putdata(semantic_map.flatten().astype(np.uint8))
@@ -470,9 +460,41 @@ class MapVisualizer:
             # 直接使用已旋转的地图
             global_map_rotated = sem_map_vis.copy()
             
-            # ===== 阶段5: 创建global_map的显示副本（用于绘制landmark）=====
-            # 轨迹已经在调色板渲染阶段处理，这里只需要复制
+            # ===== 阶段5: 创建global_map的显示副本（用于绘制trajectory和landmark）=====
             global_map_with_trajectory = global_map_rotated.copy()
+            
+            # ===== 阶段5.1: 从trajectory_points绘制轨迹线（橙色）=====
+            if trajectory_points is not None and len(trajectory_points) > 1:
+                # trajectory_points是世界像素坐标 [(px, py), ...]
+                # 需要转换为相对于crop区域的坐标
+                if crop_offset is not None:
+                    crop_start_px, crop_start_py = crop_offset
+                    # 转换所有轨迹点到crop坐标系
+                    trajectory_points_crop = []
+                    for traj_px, traj_py in trajectory_points:
+                        rel_y = traj_px - crop_start_px
+                        rel_x = traj_py - crop_start_py
+                        # 检查是否在crop范围内
+                        if 0 <= rel_y < full_map.shape[1] and 0 <= rel_x < full_map.shape[2]:
+                            trajectory_points_crop.append((rel_x, rel_y))
+                    
+                    # 绘制连线（橙色，3像素宽）
+                    trajectory_color = (0, 165, 255)  # 橙色BGR
+                    for i in range(len(trajectory_points_crop) - 1):
+                        pt1_x, pt1_y = trajectory_points_crop[i]
+                        pt2_x, pt2_y = trajectory_points_crop[i + 1]
+                        
+                        # flipud变换（与地图一致）
+                        pt1_y_display = 480 - 1 - pt1_y
+                        pt2_y_display = 480 - 1 - pt2_y
+                        
+                        # 检查坐标范围
+                        if (0 <= pt1_x < 480 and 0 <= pt1_y_display < 480 and
+                            0 <= pt2_x < 480 and 0 <= pt2_y_display < 480):
+                            cv2.line(global_map_with_trajectory, 
+                                    (int(pt1_x), int(pt1_y_display)),
+                                    (int(pt2_x), int(pt2_y_display)),
+                                    trajectory_color, thickness=3)
             
             # ===== 阶段5.3: 绘制深红色虚线指示正前方（在箭头之前）=====
             center_x, center_y = 240, 240
@@ -500,6 +522,60 @@ class MapVisualizer:
             agent_arrow = vu.get_contour_points(agent_pos, origin=(0, 0), size=12)
             cv2.drawContours(global_map_with_trajectory, [agent_arrow], 0, (0, 0, 255), -1)
             
+            # ===== 阶段5.52: 计算旋转矩阵（用于后续waypoint和landmark渲染）=====
+            rotation_matrix = None
+            if current_pose is not None:
+                agent_orientation_deg = current_pose[2]  # 度数
+                rotation_angle_deg = 90 - agent_orientation_deg
+                rotation_angle_rad = np.radians(rotation_angle_deg)
+                cos_theta = np.cos(rotation_angle_rad)
+                sin_theta = np.sin(rotation_angle_rad)
+                # 2D旋转矩阵（围绕中心点240,240旋转）
+                rotation_matrix = np.array([
+                    [cos_theta, -sin_theta, 240 * (1 - cos_theta) + 240 * sin_theta],
+                    [sin_theta, cos_theta, 240 * (1 - sin_theta) - 240 * cos_theta],
+                    [0, 0, 1]
+                ])
+            
+            # ===== 阶段5.55: 绘制历史waypoint（蓝色圆圈+ID数字）=====
+            if waypoint_positions is not None and waypoint_ids is not None:
+                for wp_pos, wp_id in zip(waypoint_positions, waypoint_ids):
+                    # waypoint_positions中存储的是世界像素坐标 (pixel_y, pixel_x)
+                    wp_pixel_y, wp_pixel_x = wp_pos
+                    
+                    # 转换为相对于agent的坐标（crop区域内）
+                    # full_map是以agent为中心的crop，需要计算相对位置
+                    if crop_offset is not None:
+                        crop_start_px, crop_start_py = crop_offset
+                        # 计算在crop区域内的位置
+                        rel_y = wp_pixel_y - crop_start_px
+                        rel_x = wp_pixel_x - crop_start_py
+                        
+                        # 检查是否在可见范围内
+                        if 0 <= rel_y < full_map.shape[1] and 0 <= rel_x < full_map.shape[2]:
+                            # 同样需要旋转坐标（与地图旋转一致）
+                            if rotation_matrix is not None:
+                                # 应用旋转变换
+                                rotated_coords = rotation_matrix @ np.array([rel_x, rel_y, 1])
+                                wp_x_display = int(rotated_coords[0])
+                                wp_y_display = int(rotated_coords[1])
+                            else:
+                                wp_x_display = int(rel_x)
+                                wp_y_display = int(rel_y)
+                            
+                            # flipud变换（与地图一致）
+                            wp_y_display = 480 - 1 - wp_y_display
+                            
+                            # 检查缩放后的坐标是否在范围内
+                            if 0 <= wp_x_display < 480 and 0 <= wp_y_display < 480:
+                                # 绘制蓝色圆圈
+                                cv2.circle(global_map_with_trajectory, (wp_x_display, wp_y_display), 
+                                          radius=8, color=(255, 100, 0), thickness=2)  # 蓝色BGR
+                                # 绘制ID数字（白色）
+                                cv2.putText(global_map_with_trajectory, str(wp_id), 
+                                           (wp_x_display - 6, wp_y_display + 4),
+                                           cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+            
             # ===== 阶段5.6: 叠加黑色障碍物层（覆盖在箭头之上，使障碍物更醒目）=====
             # 创建障碍物掩码并叠加到已渲染的地图上
             obstacle_mask_display = obstacle_map > 0.5
@@ -520,20 +596,7 @@ class MapVisualizer:
             global_map_rotated[obstacle_mask_display] = [0, 0, 0]  # 无轨迹版本也叠加
             
             # ===== 阶段6: 在显示副本上绘制Landmark标记 =====
-            # 计算旋转矩阵（与semantic_mapping中的旋转保持一致）
-            rotation_matrix = None
-            if current_pose is not None:
-                agent_orientation_deg = current_pose[2]  # 度数
-                rotation_angle_deg = 90 - agent_orientation_deg
-                rotation_angle_rad = np.radians(rotation_angle_deg)
-                cos_theta = np.cos(rotation_angle_rad)
-                sin_theta = np.sin(rotation_angle_rad)
-                # 2D旋转矩阵（围绕中心点240,240旋转）
-                rotation_matrix = np.array([
-                    [cos_theta, -sin_theta, 240 * (1 - cos_theta) + 240 * sin_theta],
-                    [sin_theta, cos_theta, 240 * (1 - sin_theta) - 240 * cos_theta],
-                    [0, 0, 1]
-                ])
+            # rotation_matrix已在阶段5.52计算
             
             if len(landmarks) > 0:
                 landmark_summary = {}

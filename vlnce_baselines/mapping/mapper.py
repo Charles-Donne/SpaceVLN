@@ -227,8 +227,7 @@ class SemanticMapper:
         """
         添加waypoint到当前位置
         
-        新增机制：如果当前位置2m之内有之前的waypoint，则删除2m之内的旧waypoint，
-        避免同一位置扎堆过多waypoint
+        机制：如果当前位置2m之内有之前的waypoint，则删除2m之内的旧waypoint
         
         Args:
             description: waypoint描述（可选，用于日志）
@@ -241,37 +240,24 @@ class SemanticMapper:
         agent_y_m = self.full_pose[1]  # 世界Y坐标（米）
         
         # 转换为世界像素坐标
-        # 注意：tensor索引[H, W] = [Y, X]，所以：
-        # pixel_y = agent_y_m转换 = 对应tensor的行坐标（H维度）
-        # pixel_x = agent_x_m转换 = 对应tensor的列坐标（W维度）
         pixel_y = int(agent_y_m * 100 / self.resolution)  # Y轴像素 (tensor行)
         pixel_x = int(agent_x_m * 100 / self.resolution)  # X轴像素 (tensor列)
         
-        # ===== 新增：移除2m范围内的旧waypoint =====
-        distance_threshold_pixels = 200 / self.resolution  # 2m转换为像素（200cm / resolution）
+        # ===== 移除2m范围内的旧waypoint =====
+        distance_threshold_pixels = 200 / self.resolution  # 2m转换为像素
         
-        # 查找需要保留的waypoint（2m之外的waypoint）
         waypoints_to_keep = []
         for i, (old_py, old_px) in enumerate(self.waypoint_positions):
-            # 计算当前位置与旧waypoint的距离
             distance = np.sqrt((pixel_y - old_py) ** 2 + (pixel_x - old_px) ** 2)
-            
             if distance >= distance_threshold_pixels:
-                # 距离>=2m，保留
                 waypoints_to_keep.append(i)
-            else:
-                # 距离<2m，删除（打印日志）
-                old_id = self.waypoint_ids[i]
-                old_desc = self.waypoint_descriptions[i]
-# print(f"  🗑️  Removed nearby Waypoint #{old_id}")
         
-        # 更新waypoint列表（只保留2m之外的waypoint）
+        # 更新waypoint列表
         if waypoints_to_keep:
             self.waypoint_positions = [self.waypoint_positions[i] for i in waypoints_to_keep]
             self.waypoint_ids = [self.waypoint_ids[i] for i in waypoints_to_keep]
             self.waypoint_descriptions = [self.waypoint_descriptions[i] for i in waypoints_to_keep]
         else:
-            # 所有旧waypoint都被删除
             self.waypoint_positions = []
             self.waypoint_ids = []
             self.waypoint_descriptions = []

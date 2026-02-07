@@ -178,8 +178,8 @@ class Semantic_Mapping(nn.Module):
         # State (7 dimensions): [global_x, global_y, orientation, gx1, gx2, gy1, gy2]
         self.state = np.zeros((self.num_environments, 7))
         
-        # 轨迹现在存储在通道2中，不再需要点列表
-        # 保留用于记录上一个位置，避免重复标记
+        # 轨迹点列表（只存储坐标，渲染时连线）
+        self.trajectory_points = []  # [(agent_px, agent_py), ...] 世界像素坐标
         self.last_trajectory_pos = None  # (tile_x, tile_y, local_px, local_py)
         
         # 当前Local Map和Full Map（用于兼容旧接口）
@@ -328,17 +328,13 @@ class Semantic_Mapping(nn.Module):
                         if old_val >= 1.0:  # 只清除waypoint，保留轨迹(0.5)和当前位置(0.7)
                             self.tiles[tile_key][0, 2, clear_px, clear_py] = 0
         
-        # 在Channel 2标记新waypoint（5×5的区域）
+        # 在Channel 2标记新waypoint（5×5的区域，更易见）
         for dx in [-2, -1, 0, 1, 2]:
             for dy in [-2, -1, 0, 1, 2]:
                 mark_px = local_px + dx
                 mark_py = local_py + dy
                 if 0 <= mark_px < self.TILE_SIZE and 0 <= mark_py < self.TILE_SIZE:
                     self.tiles[tile_key][0, 2, mark_px, mark_py] = float(waypoint_id)
-        
-        # DEBUG: 确认写入
-        print(f"  ✅ Waypoint #{waypoint_id} marked in tile{tile_key} at local({local_px},{local_py})")
-        print(f"     Tile Channel 2 value at center: {self.tiles[tile_key][0, 2, local_px, local_py].item():.1f}")
     
     def reset(self) -> None:
         """重置地图系统（分块架构）"""
@@ -349,6 +345,7 @@ class Semantic_Mapping(nn.Module):
         
         # 清空轨迹
         self.last_trajectory_pos = None
+        self.trajectory_points = []  # 清空轨迹点列表
         
         # 重置pose tensors
         self.local_pose.fill_(0.)
@@ -778,11 +775,6 @@ class Semantic_Mapping(nn.Module):
             if tile is None:
                 continue
             
-            # DEBUG: 检查tile的Channel 2是否有waypoint
-            waypoint_count = (tile[0, 2] >= 1.0).sum().item()
-            if waypoint_count > 0:
-                print(f"  📍 Tile{(tile_x, tile_y)} has {waypoint_count} waypoint pixels in Channel 2")
-            
             # 块的世界像素范围
             # tile_y对应Y轴(px), tile_x对应X轴(py)
             tile_start_px = tile_y * self.TILE_SIZE  # Y轴像素起始
@@ -1146,26 +1138,12 @@ class Semantic_Mapping(nn.Module):
                     self.TILE_SIZE, self.TILE_SIZE
                 ).float().to(self.device)
             
-            # 在通道2标记轨迹（标记为0.5）
-            # 使用3×3的点使轨迹更明显
-            for dx in [-1, 0, 1]:
-                for dy in [-1, 0, 1]:
-                    mark_px = local_px + dx
-                    mark_py = local_py + dy
-                    if 0 <= mark_px < self.TILE_SIZE and 0 <= mark_py < self.TILE_SIZE:
-                        self.tiles[tile_key][0, 2, mark_px, mark_py] = 0.5
+            # 在通道2标记轨迹（标记为0.5，单个像素点）
+            if 0 <= local_px < self.TILE_SIZE and 0 <= local_py < self.TILE_SIZE:
+                self.tiles[tile_key][0, 2, local_px, local_py] = 0.5
             
-            # 如果有上一个位置，绘制连线
-            if self.last_trajectory_pos is not None:
-                last_tile_x, last_tile_y, last_local_px, last_local_py = self.last_trajectory_pos
-                
-                # 如果在同一个tile中，直接连线
-                if last_tile_x == tile_x and last_tile_y == tile_y:
-                    self._draw_line_on_tile(
-                        tile_key, 
-                        last_local_px, last_local_py,
-                        local_px, local_py
-                    )
+            # 保存轨迹点坐标（用于渲染时连线）
+            self.trajectory_points.append((agent_px, agent_py))
             
             self.last_trajectory_pos = current_pos
         
