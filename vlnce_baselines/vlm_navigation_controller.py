@@ -2366,8 +2366,10 @@ class VLMNavigationController(InteractiveNavigationController):
             'oracle_navigation_error': float(check_inf_nan(metrics_source.get('oracle_navigation_error', float('inf')))),
             'oracle_spl': float(check_inf_nan(metrics_source.get('oracle_spl', 0.0))),
             
-            # 附加信息
-            'detected_classes': list(self.detected_classes),
+            # 语义信息（格式化后的）
+            'detected_objects': sorted(list(self.detected_classes)),  # 检测到的物体类别（排序后的列表）
+            
+            # 导航历史
             'subtask_history': self.subtask_history,
             'thinking_count': len(self.thinking_outputs),
             'action_count': len(self.action_outputs),

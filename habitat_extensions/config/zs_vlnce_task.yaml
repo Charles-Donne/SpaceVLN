@@ -46,6 +46,8 @@ TASK:
     NDTW,
     PATH_LENGTH,
     ORACLE_SUCCESS,
+    ORACLE_NAVIGATION_ERROR,
+    ORACLE_SPL,
     STEPS_TAKEN,
     POSITION
   ]
@@ -60,6 +62,10 @@ TASK:
     SUCCESS_DISTANCE: 3.0
     GT_PATH: /root/autodl-tmp/data/datasets/R2R_VLNCE_v1-3_preprocessed/{split}/{split}_gt.json.gz
   ORACLE_SUCCESS:
+    SUCCESS_DISTANCE: 3.0
+  ORACLE_NAVIGATION_ERROR:
+    SUCCESS_DISTANCE: 3.0
+  ORACLE_SPL:
     SUCCESS_DISTANCE: 3.0
 DATASET:
   TYPE: VLN-CE-v1
