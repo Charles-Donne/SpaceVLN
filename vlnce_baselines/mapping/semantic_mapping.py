@@ -335,6 +335,10 @@ class Semantic_Mapping(nn.Module):
                 mark_py = local_py + dy
                 if 0 <= mark_px < self.TILE_SIZE and 0 <= mark_py < self.TILE_SIZE:
                     self.tiles[tile_key][0, 2, mark_px, mark_py] = float(waypoint_id)
+        
+        # DEBUG: 确认写入
+        print(f"  ✅ Waypoint #{waypoint_id} marked in tile{tile_key} at local({local_px},{local_py})")
+        print(f"     Tile Channel 2 value at center: {self.tiles[tile_key][0, 2, local_px, local_py].item():.1f}")
     
     def reset(self) -> None:
         """重置地图系统（分块架构）"""
@@ -773,6 +777,11 @@ class Semantic_Mapping(nn.Module):
             tile = tiles_dict.get((tile_x, tile_y))
             if tile is None:
                 continue
+            
+            # DEBUG: 检查tile的Channel 2是否有waypoint
+            waypoint_count = (tile[0, 2] >= 1.0).sum().item()
+            if waypoint_count > 0:
+                print(f"  📍 Tile{(tile_x, tile_y)} has {waypoint_count} waypoint pixels in Channel 2")
             
             # 块的世界像素范围
             # tile_y对应Y轴(px), tile_x对应X轴(py)

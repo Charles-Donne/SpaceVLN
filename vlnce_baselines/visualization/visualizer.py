@@ -428,6 +428,11 @@ class MapVisualizer:
             waypoint_channel = full_map[2]  # [H, W] - Agent通道（合并）
             # 提取waypoint（值>=1.0表示有waypoint）
             waypoint_mask = waypoint_channel >= 1.0
+            waypoint_count = waypoint_mask.sum()
+            if waypoint_count > 0:
+                print(f"  🎨 render_global_map: Found {waypoint_count} waypoint pixels to render (values >= 1.0)")
+                max_wp_val = waypoint_channel[waypoint_mask].max() if waypoint_count > 0 else 0
+                print(f"     Max waypoint value: {max_wp_val:.1f}")
             semantic_map[waypoint_mask] = 4  # 蓝色（调色板索引4）
         
         # ===== 阶段2: PIL调色板渲染 =====
