@@ -1586,6 +1586,8 @@ class MapVisualizer:
         
         # 2. 渲染并保存全局地图（使用global_trajectory_points或回退到trajectory_points）
         global_traj_to_use = global_trajectory_points if global_trajectory_points is not None else trajectory_points
+        print(f"[DEBUG] Global map trajectory: {len(global_traj_to_use) if global_traj_to_use else 0} points")
+        print(f"[DEBUG] Local map trajectory: {len(trajectory_points) if trajectory_points else 0} points")
         _, global_map_with_trajectory, landmarks, global_map_clean, last_waypoint_angle = self.render_global_map(
             full_map, global_traj_to_use, detected_classes, floor,
             current_pose, landmark_classes, landmark_config,
