@@ -732,9 +732,12 @@ class VLMNavigationController(InteractiveNavigationController):
             outputs = self.envs.step(actions)
             obs, _, dones, infos = [list(x) for x in zip(*outputs)]
             
+            # 🔑 关键检查：如果episode已结束，立即停止环视并返回空列表
             if dones[0]:
-                print(" - Episode提前结束")
-                break
+                print(f"\n⚠️  Episode已结束（在环视第 {i}/12 步），停止环视")
+                print(f"❌ 无法完成完整的12步环视，返回空列表")
+                # 返回空列表，调用方需要处理这种情况
+                return [], []
             
             # 更新检测和建图（每一步都保存）
             prev_class_count = len(self.detected_classes)
@@ -2217,6 +2220,12 @@ class VLMNavigationController(InteractiveNavigationController):
             
             # 🔑 强制重规划检查：如果达到最大步数，执行完动作后立即触发verify
             if force_replan_after_action:
+                # 🔑 关键：检查episode是否已结束，如果结束则不执行replan
+                if result.get('done', False):
+                    print(f"\n⚠️  [强制重规划] Episode已结束，跳过验证和重规划")
+                    navigation_complete = True
+                    break
+                
                 print(f"\n🔄 [强制重规划] 已执行完 {max_subtask_steps} 步，立即触发验证和重规划")
                 new_subtask, _ = self.verify_and_replan()
                 # 检查是否完成全局任务
