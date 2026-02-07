@@ -1043,9 +1043,9 @@ class Semantic_Mapping(nn.Module):
             self.last_trajectory_pos = current_pos
         
         # Channel 2 已废弃，当前位置直接从 full_pose 获取
-            self.one_step_local_map[e, 2, loc_r - 1:loc_r + 2, loc_c - 1:loc_c + 2] = 0.7
-            
-            # 将更新后的Local Map写回到对应的tiles
+        
+        # 将更新后的Local Map写回到对应的tiles
+        for e in range(self.num_environments):
             self.update_tiles_from_local_map(self.local_map[e], env_id=e, is_one_step=False)
             self.update_tiles_from_local_map(self.one_step_local_map[e], env_id=e, is_one_step=True)
         
