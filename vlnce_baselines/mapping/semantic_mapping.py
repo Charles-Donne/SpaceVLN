@@ -1289,11 +1289,6 @@ class Semantic_Mapping(nn.Module):
         
         return sem_map_vis
 
-    def forward(self, obs: torch.Tensor, pose_obs: torch.Tensor):
-        """
-        Args:
-            obs: (b, c, h, w), b = batch size, c = 3(RGB) + 1(Depth) + num_detected_categories
-        """
     def forward(self, obs, pose_obs, maps_last, poses_last):
         # if use CoCo the number of categories is 16(i.e. c=16), but now open-vocabulary; 
         bs, c, h, w = obs.size()
