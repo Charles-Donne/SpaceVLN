@@ -483,14 +483,14 @@ class MapVisualizer:
                         display_points.append((display_x, display_y))
                 
                 print(f"  ✅ Converted {len(display_points)}/{len(trajectory_points)} trajectory points to display coords")
-                # 绘制连线
+                # 绘制连线（细线条）
                 for i in range(len(display_points) - 1):
                     pt1 = display_points[i]
                     pt2 = display_points[i + 1]
                     if (0 <= pt1[0] < 480 and 0 <= pt1[1] < 480 and
                         0 <= pt2[0] < 480 and 0 <= pt2[1] < 480):
                         cv2.line(global_map_with_trajectory, pt1, pt2, 
-                                trajectory_color, thickness=3)
+                                trajectory_color, thickness=2)  # 从3改为2，更细
             else:
                 print(f"  ❌ Cannot draw trajectory - not enough points")
             

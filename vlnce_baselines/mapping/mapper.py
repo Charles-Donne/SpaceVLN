@@ -133,7 +133,9 @@ class SemanticMapper:
         )
         
         # DEBUG: 检查返回前的数据
-        print(f"  🔎 Mapper.update_map: trajectory_points={len(traj_pts_rotated)}点, waypoint_positions={len(wp_pos_rotated)}点, crop_offset={crop_off}")
+        if len(traj_pts_rotated) > 0:
+            print(f"  🔎 Mapper.update_map: trajectory原始={self.mapping_module.trajectory_points[0]}, 旋转后={traj_pts_rotated[0]}, agent_ori={self.full_pose[2]:.1f}°")
+        print(f"  🔎 Mapper.update_map: trajectory_points={len(traj_pts_rotated)}点, waypoint_positions={len(wp_pos_rotated)}点")
         
         # 6. 返回完整的地图状态（包含旋转后的坐标）
         return {
@@ -224,8 +226,10 @@ class SemanticMapper:
         """
         将世界坐标的点转换到旋转后的地图坐标系（与full_map的旋转保持一致）
         
+        使用与 PyTorch affine_grid 相同的旋转逻辑
+        
         Args:
-            points: List of (px, py) 世界像素坐标
+            points: List of (px, py) 世界像素坐标，px=Y轴，py=X轴
             crop_offset: (start_px, start_py) 裁剪偏移量
             agent_orientation_deg: agent朝向（度数）
         
@@ -239,31 +243,40 @@ class SemanticMapper:
         rotation_angle_deg = 90 - agent_orientation_deg
         rotation_angle_rad = np.radians(rotation_angle_deg)
         
-        # 地图中心（旋转中心）
-        # full_map已经裁剪成24m×24m，中心就是crop_size的一半
+        # 如果不需要旋转，直接返回相对坐标
+        if abs(rotation_angle_deg) < 0.1:
+            return [(pt_px - crop_start_px, pt_py - crop_start_py) for pt_px, pt_py in points]
+        
+        # 地图尺寸（旋转中心）
         crop_size_px = int(24.0 * 100 / self.resolution)
-        center_px = crop_size_px // 2
-        center_py = crop_size_px // 2
+        center = crop_size_px / 2.0  # 使用浮点数，更精确
         
         rotated_points = []
-        for pt_px, pt_py in points:
+        cos_theta = np.cos(rotation_angle_rad)
+        sin_theta = np.sin(rotation_angle_rad)
+        
+        for i, (pt_px, pt_py) in enumerate(points):
             # 1. 转换到相对于crop区域的坐标
-            rel_px = pt_px - crop_start_px
-            rel_py = pt_py - crop_start_py
+            rel_px = pt_px - crop_start_px  # Y方向
+            rel_py = pt_py - crop_start_py  # X方向
             
-            # 2. 转换为相对于中心的坐标
-            dx = rel_py - center_py
-            dy = rel_px - center_px
+            # 2. 归一化到 [-1, 1] 范围（与PyTorch affine_grid一致）
+            norm_y = (rel_px / crop_size_px) * 2.0 - 1.0
+            norm_x = (rel_py / crop_size_px) * 2.0 - 1.0
             
-            # 3. 应用旋转矩阵
-            cos_theta = np.cos(rotation_angle_rad)
-            sin_theta = np.sin(rotation_angle_rad)
-            rotated_dx = cos_theta * dx + sin_theta * dy
-            rotated_dy = -sin_theta * dx + cos_theta * dy
+            # 3. 应用旋转矩阵（与PyTorch相同的变换）
+            # [cos_theta, sin_theta]   [x]
+            # [-sin_theta, cos_theta] * [y]
+            rotated_norm_x = cos_theta * norm_x + sin_theta * norm_y
+            rotated_norm_y = -sin_theta * norm_x + cos_theta * norm_y
             
-            # 4. 转回绝对坐标（相对于旋转后的full_map）
-            rotated_py = rotated_dx + center_py
-            rotated_px = rotated_dy + center_px
+            # 4. 反归一化到像素坐标
+            rotated_px = (rotated_norm_y + 1.0) * crop_size_px / 2.0
+            rotated_py = (rotated_norm_x + 1.0) * crop_size_px / 2.0
+            
+            # DEBUG: 打印前3个点的详细转换过程
+            if i < 3:
+                print(f"    🔎 轨迹点{i}: world=({pt_px:.0f},{pt_py:.0f}) → rel=({rel_px:.1f},{rel_py:.1f}) → norm=({norm_x:.3f},{norm_y:.3f}) → rotated_norm=({rotated_norm_x:.3f},{rotated_norm_y:.3f}) → rotated=({rotated_px:.1f},{rotated_py:.1f})")
             
             rotated_points.append((rotated_px, rotated_py))
         
