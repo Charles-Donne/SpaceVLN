@@ -753,12 +753,17 @@ class VLMNavigationController(InteractiveNavigationController):
             # 地图可视化（保存地图+检测landmarks）
             # 环视过程中不传waypoint，不计算角度（环视结束后统一计算）
             rgb_bgr = cv2.cvtColor(obs[0]['rgb'], cv2.COLOR_RGB2BGR)
+            
+            # DEBUG: 检查map_state中的trajectory_points
+            traj_pts = map_state.get('trajectory_points', [])
+            print(f"  🔎 Controller传递给visualizer: trajectory_points={len(traj_pts)}点, crop_offset={map_state.get('crop_offset')}")
+            
             paths, detected_landmarks_step, _ = self.visualizer.save_step_visualization(
                 step=look_step,
                 episode_id=self.current_episode_id,
                 rgb=rgb_bgr,
                 full_map=map_state['full_map'],
-                trajectory_points=map_state.get('trajectory_points', []),  # 从map_state获取
+                trajectory_points=traj_pts,  # 从map_state获取
                 detected_classes=list(self.detected_classes),
                 current_pose=map_state['full_pose'],
                 floor=map_state['floor'],
@@ -775,7 +780,7 @@ class VLMNavigationController(InteractiveNavigationController):
                 waypoint_positions=None,  # 环视过程中不传waypoint
                 waypoint_ids=None,
                 phase=phase,
-                global_trajectory_points=map_state.get('trajectory_points', []),  # 从map_state获取
+                global_trajectory_points=traj_pts,  # 使用同一个变量
                 crop_offset=map_state.get('crop_offset')  # 从map_state获取
             )
             

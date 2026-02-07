@@ -118,13 +118,18 @@ class SemanticMapper:
         self.mapping_module.one_step_full_map.fill_(0.)
         self.mapping_module.one_step_local_map.fill_(0.)
         
+        # DEBUG: 检查返回前的数据
+        traj_pts = self.mapping_module.trajectory_points
+        crop_off = self.mapping_module.full_map_crop_offset
+        print(f"  🔎 Mapper.update_map 准备返回: trajectory_points={len(traj_pts)}点, crop_offset={crop_off}")
+        
         # 5. 返回完整的地图状态（包含trajectory_points和crop_offset）
         return {
             'full_map': self.full_map,
             'full_pose': self.full_pose,
             'floor': self.floor,
-            'crop_offset': self.mapping_module.full_map_crop_offset,  # 新增
-            'trajectory_points': self.mapping_module.trajectory_points  # 新增
+            'crop_offset': crop_off,  # 新增
+            'trajectory_points': traj_pts  # 新增
         }
     
     def extract_floor(self, 
