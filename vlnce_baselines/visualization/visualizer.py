@@ -519,7 +519,7 @@ class MapVisualizer:
                         cv2.line(global_map_with_trajectory, pt1, pt2, 
                                 trajectory_color, thickness=2)
             
-            # ===== 阶段5.3: 绘制深红色虚线指示正前方（在箭头之前）=====
+            # ===== 阶段5.3: 绘制深红色虚线指示正前方（在waypoint和箭头之前）=====
             center_x, center_y = 240, 240
             forward_line_length = 120  # 延伸120像素（约3米）
             forward_color = (0, 0, 180)  # 深红色 BGR
@@ -539,35 +539,14 @@ class MapVisualizer:
                 cv2.line(global_map_with_trajectory, (240, int(dash_start_y)), 
                         (240, int(dash_end_y)), forward_color, forward_thickness)
             
-            # ===== 阶段5.5: 在中心绘制箭头（在虚线之后）=====
-            arrow_angle = np.deg2rad(-90)  # 朝上
-            agent_pos = (center_x, center_y, arrow_angle)
-            agent_arrow = vu.get_contour_points(agent_pos, origin=(0, 0), size=12)
-            cv2.drawContours(global_map_with_trajectory, [agent_arrow], 0, (0, 0, 255), -1)
-            
-            # ===== 阶段5.52: 计算旋转矩阵（用于后续waypoint和landmark渲染）=====
-            rotation_matrix = None
-            if current_pose is not None:
-                agent_orientation_deg = current_pose[2]  # 度数
-                rotation_angle_deg = 90 - agent_orientation_deg
-                rotation_angle_rad = np.radians(rotation_angle_deg)
-                cos_theta = np.cos(rotation_angle_rad)
-                sin_theta = np.sin(rotation_angle_rad)
-                # 2D旋转矩阵（围绕中心点240,240旋转）
-                rotation_matrix = np.array([
-                    [cos_theta, -sin_theta, 240 * (1 - cos_theta) + 240 * sin_theta],
-                    [sin_theta, cos_theta, 240 * (1 - sin_theta) - 240 * cos_theta],
-                    [0, 0, 1]
-                ])
-            
-            # ===== 阶段5.55: 绘制历史waypoint（蓝色圆圈+ID数字）=====
+            # ===== 阶段5.4: 绘制历史waypoint（蓝色圆圈+ID数字，在箭头之前的倒数第二层）=====
             # waypoint_positions 是世界像素坐标，需要转换到旋转后的full_map坐标
-            if waypoint_positions is not None and waypoint_ids is not None and len(waypoint_positions) > 0 and crop_offset is not None:
+            if waypoint_positions is not None and waypoint_ids is not None and len(waypoint_positions) > 0 and crop_offset is not None and current_pose is not None:
                 import math
                 map_h, map_w = full_map.shape[1], full_map.shape[2]
                 
                 # 获取旋转参数（修改：反向旋转）
-                agent_orientation_deg = current_pose[2] if current_pose is not None else 0
+                agent_orientation_deg = current_pose[2]
                 rotation_angle_deg = agent_orientation_deg - 90  # 修改：反向旋转
                 rotation_angle_rad = math.radians(rotation_angle_deg)
                 cos_theta = math.cos(rotation_angle_rad)
@@ -576,9 +555,11 @@ class MapVisualizer:
                 start_px, start_py = crop_offset
                 
                 rendered_count = 0
-                for wp_pos, wp_id in zip(waypoint_positions, waypoint_ids):
+                # 遍历所有waypoint，ID使用列表索引（从1开始，保证连续）
+                for idx, wp_pos in enumerate(waypoint_positions):
                     # waypoint_positions 是世界坐标 (world_px, world_py)
                     world_px, world_py = wp_pos
+                    display_id = idx + 1  # ID从1开始，连续编号
                     
                     # 1. 转换为相对坐标
                     rel_px = world_px - start_px
@@ -611,13 +592,19 @@ class MapVisualizer:
                         # 绘制实心蓝色圆圈
                         cv2.circle(global_map_with_trajectory, (display_x, display_y), 
                                   radius=10, color=(255, 0, 0), thickness=-1)  # 纯蓝色BGR，实心
-                        # 绘制ID数字（白色，增大字体并居中）
-                        text = str(wp_id)
+                        # 绘制ID数字（白色，增大字体并居中）- 使用连续编号
+                        text = str(display_id)
                         (text_w, text_h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
                         cv2.putText(global_map_with_trajectory, text, 
                                    (display_x - text_w // 2, display_y + text_h // 2),
                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
                         rendered_count += 1
+            
+            # ===== 阶段5.5: 在中心绘制箭头（最后一层，覆盖waypoint）=====
+            arrow_angle = np.deg2rad(-90)  # 朝上
+            agent_pos = (center_x, center_y, arrow_angle)
+            agent_arrow = vu.get_contour_points(agent_pos, origin=(0, 0), size=12)
+            cv2.drawContours(global_map_with_trajectory, [agent_arrow], 0, (0, 0, 255), -1)
             
             # ===== 阶段5.6: 叠加黑色障碍物层（覆盖在箭头之上，使障碍物更醒目）=====
             # 创建障碍物掩码并叠加到已渲染的地图上

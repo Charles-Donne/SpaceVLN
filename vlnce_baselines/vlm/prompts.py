@@ -173,7 +173,7 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 {{
     "current_waypoint": "Restroom - toilet and washbasin nearby",
     "waypoint_sequence": "Restroom(Current) → Exercise Room → Living Room → Living Room's Table(Goal)",
-    "task_progress": "Turn around(✓) walk through the exercise room(Current) into the living room. Wait by the Table.",
+    "task_progress": "Turn around walk through the exercise room(Current) into the living room. Wait by the Table.",
     "next_waypoint_direction": "IMAGE 5 (Left 120°)",
     "next_waypoint_destination": "exercise room",
     "subtask_instruction": "Move forward through the doorway to enter the exercise room.",
@@ -402,7 +402,7 @@ TURN_LEFT/RIGHT (30-180°), MOVE_FORWARD (0.25-1.5m), STOP (<0.5m from goal)
 {{
     "current_waypoint": "Exercise Room - gym equipment surrounding",
     "waypoint_sequence": "Restroom(✓) → Exercise Room(Current) → Living Room → Living Room's Table(Goal)",
-    "task_progress": "Turn around(✓) walk through the exercise room(Current) into the living room. Wait by the Table.",
+    "task_progress": "Turn around walk through the exercise room(Current) into the living room. Wait by the Table.",
     "next_waypoint_direction": "IMAGE 1 (Front 0°)",
     "next_waypoint_destination": "living room",
     "subtask_instruction": "Move forward through the exercise room to reach the living room exit",

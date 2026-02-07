@@ -72,49 +72,21 @@ def main():
         print(f"📊 Episodes: {episode_ids}")
     elif args.random:
         import random
-        import habitat
-        # 加载数据集获取总episode数
-        temp_config = config.clone()
-        temp_config.defrost()
-        # 确保数据集路径配置正确
-        if not hasattr(temp_config.TASK_CONFIG.DATASET, 'DATA_PATH') or not temp_config.TASK_CONFIG.DATASET.DATA_PATH:
-            print(f"\n❌ 错误: 数据集路径未配置! 请检查配置文件中的 TASK_CONFIG.DATASET.DATA_PATH")
-            print(f"   当前 SPLIT: {temp_config.TASK_CONFIG.DATASET.SPLIT}")
-            return
-        temp_config.freeze()
+        # 随机模式：不加载数据集，直接从有效范围随机选择
+        # 注意：如果选择的episode ID不存在，运行时会跳过
+        print(f"\n🎲 随机选择模式（从有效范围 [{MIN_EPISODE_ID}, {MAX_EPISODE_ID}] 中选择）")
+        print(f"   ⚠️  不验证episode是否存在，不存在的会自动跳过")
         
-        try:
-            dataset = habitat.datasets.make_dataset(temp_config.TASK_CONFIG.DATASET.TYPE)
-            total_episodes = len(dataset.episodes)
-            
-            if total_episodes == 0:
-                print(f"\n❌ 错误: 数据集为空! 请检查数据集路径是否正确")
-                print(f"   数据集类型: {temp_config.TASK_CONFIG.DATASET.TYPE}")
-                print(f"   数据集SPLIT: {temp_config.TASK_CONFIG.DATASET.SPLIT}")
-                print(f"   数据集路径: {temp_config.TASK_CONFIG.DATASET.DATA_PATH}")
-                return
-            
-            # 使用有效范围内的episode ID
-            valid_range = range(MIN_EPISODE_ID, min(total_episodes, MAX_EPISODE_ID + 1))
-            if len(valid_range) == 0:
-                print(f"\n❌ 错误: 没有有效的episode ID可选择")
-                print(f"   有效范围: [{MIN_EPISODE_ID}, {MAX_EPISODE_ID}]")
-                print(f"   数据集大小: {total_episodes}")
-                return
-            
-            num_to_sample = min(args.num_episodes, len(valid_range))
-            if num_to_sample == 0:
-                print(f"\n❌ 错误: 请求的episode数量为0")
-                return
-                
-            episode_ids = random.sample(list(valid_range), num_to_sample)
-            print(f"\n🎲 随机选择 {len(episode_ids)} 个episodes (共{total_episodes}个可用, 有效范围[{MIN_EPISODE_ID}, {MAX_EPISODE_ID}])")
-            print(f"📊 Episodes: {episode_ids}")
-        except Exception as e:
-            print(f"\n❌ 错误: 加载数据集失败: {e}")
-            import traceback
-            traceback.print_exc()
+        # 使用配置的有效范围
+        valid_range = range(MIN_EPISODE_ID, MAX_EPISODE_ID + 1)
+        num_to_sample = min(args.num_episodes, len(valid_range))
+        
+        if num_to_sample == 0:
+            print(f"\n❌ 错误: 请求的episode数量为0")
             return
+        
+        episode_ids = random.sample(list(valid_range), num_to_sample)
+        print(f"📊 随机选择了 {len(episode_ids)} 个episodes: {episode_ids}")
     else:
         # 连续运行模式：验证范围
         start_id = args.episode_id
