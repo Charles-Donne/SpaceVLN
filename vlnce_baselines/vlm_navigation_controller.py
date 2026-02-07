@@ -848,7 +848,7 @@ class VLMNavigationController(InteractiveNavigationController):
                     episode_id=self.current_episode_id,
                     rgb=rgb_bgr,
                     full_map=map_state['full_map'],
-                    trajectory_points=map_state.get('trajectory_points', []),  # 旋转后的坐标
+                    trajectory_points=map_state.get('subtask_trajectory_points', []),  # local map用子任务轨迹
                     detected_classes=list(self.detected_classes),
                     current_pose=map_state['full_pose'],
                     floor=map_state['floor'],
@@ -865,7 +865,7 @@ class VLMNavigationController(InteractiveNavigationController):
                     waypoint_positions=wp_positions,  # 旋转后的坐标
                     waypoint_ids=wp_ids,
                     phase=phase,
-                    global_trajectory_points=map_state.get('trajectory_points', []),  # 旋转后的坐标
+                    global_trajectory_points=map_state.get('global_trajectory_points', []),  # global map用全局轨迹
                     crop_offset=map_state.get('crop_offset')  # 从map_state获取
                 )
                 
