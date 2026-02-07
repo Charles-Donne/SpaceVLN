@@ -466,21 +466,20 @@ class MapVisualizer:
             # ===== 阶段5.1: 从trajectory_points绘制轨迹线（橙色）=====
             # trajectory_points 是世界像素坐标，需要转换到旋转后的full_map坐标
             print(f"🔍 [Global Map] trajectory_points: {len(trajectory_points) if trajectory_points else 0} points, crop_offset: {crop_offset}")
-            print(f"🔍 [Global Map] current_pose: {current_pose}, orientation={current_pose[2] if current_pose is not None else 'N/A'} rad")
+            print(f"🔍 [Global Map] current_pose: {current_pose}, orientation={current_pose[2] if current_pose is not None else 'N/A'}°")
             if trajectory_points is not None and len(trajectory_points) > 1 and crop_offset is not None:
                 import math
                 map_h, map_w = full_map.shape[1], full_map.shape[2]
                 trajectory_color = (0, 165, 255)  # 橙色BGR
                 
-                # 获取旋转参数（current_pose[2]是弧度，需要转换成度数）
-                agent_orientation_rad = current_pose[2] if current_pose is not None else 0
-                agent_orientation_deg = math.degrees(agent_orientation_rad)  # 弧度→度数
+                # 获取旋转参数（current_pose[2]已经是度数）
+                agent_orientation_deg = current_pose[2] if current_pose is not None else 0
                 rotation_angle_deg = 90 - agent_orientation_deg
                 rotation_angle_rad = math.radians(rotation_angle_deg)
                 cos_theta = math.cos(rotation_angle_rad)
                 sin_theta = math.sin(rotation_angle_rad)
                 
-                print(f"🔍 [Global Map] agent_orientation: {agent_orientation_rad:.4f}rad = {agent_orientation_deg:.1f}°, rotation={rotation_angle_deg:.1f}°")
+                print(f"🔍 [Global Map] agent_orientation: {agent_orientation_deg:.1f}°, rotation={rotation_angle_deg:.1f}°")
                 
                 start_px, start_py = crop_offset
                 
@@ -584,9 +583,8 @@ class MapVisualizer:
                 map_h, map_w = full_map.shape[1], full_map.shape[2]
                 print(f"[DEBUG Global] map_size=({map_h}, {map_w})")
                 
-                # 获取旋转参数（current_pose[2]是弧度，需要转换成度数）
-                agent_orientation_rad = current_pose[2] if current_pose is not None else 0
-                agent_orientation_deg = math.degrees(agent_orientation_rad)  # 弧度→度数
+                # 获取旋转参数（current_pose[2]已经是度数）
+                agent_orientation_deg = current_pose[2] if current_pose is not None else 0
                 rotation_angle_deg = 90 - agent_orientation_deg
                 rotation_angle_rad = math.radians(rotation_angle_deg)
                 cos_theta = math.cos(rotation_angle_rad)
@@ -826,18 +824,20 @@ class MapVisualizer:
         # ===== 阶段5: 从trajectory_points绘制轨迹线（橙色）=====
         # trajectory_points 是世界像素坐标，需要转换到旋转后的full_map坐标
         print(f"🔍 [Local Map] trajectory_points: {len(trajectory_points) if trajectory_points else 0} points")
+        print(f"🔍 [Local Map] current_pose: {current_pose}, orientation={current_pose[2] if current_pose is not None else 'N/A'}°")
         if trajectory_points is not None and len(trajectory_points) > 1 and crop_offset is not None:
             import math
             trajectory_color = (0, 165, 255)  # 橙色BGR
             map_h, map_w = full_map.shape[1], full_map.shape[2]
             
-            # 获取旋转参数（current_pose[2]是弧度，需要转换成度数）
-            agent_orientation_rad = current_pose[2] if current_pose is not None else 0
-            agent_orientation_deg = math.degrees(agent_orientation_rad)  # 弧度→度数
+            # 获取旋转参数（current_pose[2]已经是度数）
+            agent_orientation_deg = current_pose[2] if current_pose is not None else 0
             rotation_angle_deg = 90 - agent_orientation_deg
             rotation_angle_rad = math.radians(rotation_angle_deg)
             cos_theta = math.cos(rotation_angle_rad)
             sin_theta = math.sin(rotation_angle_rad)
+            
+            print(f"🔍 [Local Map] agent_orientation: {agent_orientation_deg:.1f}°, rotation={rotation_angle_deg:.1f}°")
             
             start_px, start_py = crop_offset
             
