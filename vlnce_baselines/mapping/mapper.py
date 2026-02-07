@@ -333,6 +333,9 @@ class SemanticMapper:
         Returns:
             state: 地图状态字典
         """
+        crop_offset = self.mapping_module.full_map_crop_offset
+        trajectory_pts = self.mapping_module.trajectory_points
+        print(f"  📊 get_map_state: trajectory_points={len(trajectory_pts)}, crop_offset={crop_offset}")
         return {
             'full_map': self.full_map,  # 轨迹在通道2中
             'full_pose': self.full_pose,
@@ -341,7 +344,7 @@ class SemanticMapper:
             'waypoint_ids': self.waypoint_ids,
             'map_shape': self.map_shape,
             'resolution': self.resolution,
-            'crop_offset': self.mapping_module.full_map_crop_offset  # (start_py, start_px) 世界像素偏移
+            'crop_offset': crop_offset  # (start_py, start_px) 世界像素偏移
         }
     
     def get_current_pose(self) -> Optional[Tuple[float, float, float]]:

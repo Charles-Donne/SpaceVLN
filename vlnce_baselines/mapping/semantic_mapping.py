@@ -1144,6 +1144,7 @@ class Semantic_Mapping(nn.Module):
             
             # 保存轨迹点坐标（用于渲染时连线）
             self.trajectory_points.append((agent_px, agent_py))
+            print(f"  📍 Added trajectory point ({agent_px}, {agent_py}), total: {len(self.trajectory_points)}")
             
             self.last_trajectory_pos = current_pos
         
@@ -1209,6 +1210,8 @@ class Semantic_Mapping(nn.Module):
         # 生成用于渲染的Full Map（合并所有tiles，并根据agent朝向旋转）
         self.full_map, _, self.full_map_crop_offset = self.get_full_map_for_rendering(crop_size_m=24.0, rotate_to_agent_heading=True)
         self.one_step_full_map, _, self.one_step_full_map_crop_offset = self.get_full_map_for_rendering(crop_size_m=24.0, is_one_step=True, rotate_to_agent_heading=True)
+        
+        print(f"  📊 update_map完成: trajectory_points={len(self.trajectory_points)}, crop_offset={self.full_map_crop_offset}")
         
         if self.visualize or self.print_images:
             self._visualize(current_episode_id, 
@@ -1417,6 +1420,8 @@ class Semantic_Mapping(nn.Module):
         Args:
             obs: (b, c, h, w), b = batch size, c = 3(RGB) + 1(Depth) + num_detected_categories
         """
+        print(f"  🎯 forward()开始: 当前trajectory_points={len(self.trajectory_points)}点")
+        
         # if use CoCo the number of categories is 16(i.e. c=16), but now open-vocabulary; 
         bs, c, h, w = obs.size()
         depth = obs[:, 3, :, :] # depth.shape = (bs, H, W)
