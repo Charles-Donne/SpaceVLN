@@ -93,7 +93,7 @@ class SemanticMapper:
                 - visited_vis: [H, W]
         """
         # 1. 调用底层mapping_module更新
-        self.mapping_module(batch_obs, poses)
+        self.mapping_module(batch_obs, poses, self.mapping_module.local_map, self.mapping_module.local_pose)
         
         # 2. 获取更新后的地图
         full_map, full_pose, one_step_full_map = self.mapping_module.update_map(
