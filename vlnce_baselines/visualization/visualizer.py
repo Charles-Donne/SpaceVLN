@@ -482,7 +482,7 @@ class MapVisualizer:
                 
                 # 转换所有轨迹点到旋转后的坐标系
                 display_points = []
-                for world_px, world_py in trajectory_points:
+                for idx, (world_px, world_py) in enumerate(trajectory_points):
                     # 1. 转换为相对坐标（相对于crop区域）
                     rel_px = world_px - start_px
                     rel_py = world_py - start_py
@@ -508,6 +508,11 @@ class MapVisualizer:
                     display_y = int(rotated_px * 480.0 / map_h)
                     # flipud变换
                     display_y = 480 - 1 - display_y
+                    
+                    # DEBUG: 打印前3个点的详细转换
+                    if idx < 3:
+                        print(f"    [Traj {idx}] world=({world_px},{world_py}) → rel=({rel_px:.1f},{rel_py:.1f}) → norm=({norm_x:.3f},{norm_y:.3f}) → rot_norm=({rotated_norm_x:.3f},{rotated_norm_y:.3f}) → rot_px=({rotated_px:.1f},{rotated_py:.1f}) → display=({display_x},{display_y})")
+                    
                     display_points.append((display_x, display_y))
                 
                 print(f"  ✅ Converted {len(display_points)}/{len(trajectory_points)} trajectory points (rotation={rotation_angle_deg:.1f}°)")
@@ -620,9 +625,9 @@ class MapVisualizer:
                     
                     # 检查显示坐标是否在范围内
                     if 0 <= display_x < 480 and 0 <= display_y < 480:
-                        # 绘制蓝色圆圈
+                        # 绘制实心蓝色圆圈
                         cv2.circle(global_map_with_trajectory, (display_x, display_y), 
-                                  radius=8, color=(255, 100, 0), thickness=2)  # 蓝色BGR
+                                  radius=8, color=(255, 0, 0), thickness=-1)  # 纯蓝色BGR，实心
                         # 绘制ID数字（白色）
                         cv2.putText(global_map_with_trajectory, str(wp_id), 
                                    (display_x - 6, display_y + 4),
