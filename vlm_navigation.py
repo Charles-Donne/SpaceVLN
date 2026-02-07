@@ -72,9 +72,15 @@ def main():
         print(f"📊 Episodes: {episode_ids}")
     elif args.random:
         import random
+        import time
         # 随机模式：不加载数据集，直接从有效范围随机选择
         # 注意：如果选择的episode ID不存在，运行时会跳过
+        
+        # 使用当前时间戳作为随机种子，确保每次运行结果不同
+        random_seed = int(time.time() * 1000) % (2**32)  # 使用毫秒级时间戳
+        random.seed(random_seed)
         print(f"\n🎲 随机选择模式（从有效范围 [{MIN_EPISODE_ID}, {MAX_EPISODE_ID}] 中选择）")
+        print(f"   🎯 随机种子: {random_seed}")
         print(f"   ⚠️  不验证episode是否存在，不存在的会自动跳过")
         
         # 使用配置的有效范围
