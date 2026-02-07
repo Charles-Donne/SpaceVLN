@@ -324,25 +324,27 @@ class SemanticMapper:
         注意：
         - floor字段保留用于向后兼容，但实际floor渲染现在从full_map[3+]的
           语义类别中自动获取（floor是第一个mapping_class，索引为0）
-        - 轨迹现在存储在full_map的通道2中（值为0.5）
-        - 不再返回单独的trajectory_points
+        - 返回两个独立的轨迹列表：global_trajectory_points（全局，永不清空）和 subtask_trajectory_points（子任务，可清空）
         - crop_offset用于将世界坐标转换为full_map的局部坐标
         
         Returns:
             state: 地图状态字典
         """
         crop_offset = self.mapping_module.full_map_crop_offset
-        trajectory_pts = self.mapping_module.trajectory_points
-        print(f"  📊 get_map_state: trajectory_points={len(trajectory_pts)}, crop_offset={crop_offset}")
+        global_traj = self.mapping_module.global_trajectory_points  # 全局轨迹
+        subtask_traj = self.mapping_module.subtask_trajectory_points  # 子任务轨迹
+        print(f"  📊 get_map_state: global_trajectory={len(global_traj)}, subtask_trajectory={len(subtask_traj)}, crop_offset={crop_offset}")
         return {
-            'full_map': self.full_map,  # 轨迹在通道2中
+            'full_map': self.full_map,
             'full_pose': self.full_pose,
             'floor': self.floor,
             'waypoint_positions': self.waypoint_positions,
             'waypoint_ids': self.waypoint_ids,
             'map_shape': self.map_shape,
             'resolution': self.resolution,
-            'crop_offset': crop_offset  # (start_py, start_px) 世界像素偏移
+            'crop_offset': crop_offset,  # (start_py, start_px) 世界像素偏移
+            'global_trajectory_points': global_traj,  # 全局轨迹（global map用）
+            'subtask_trajectory_points': subtask_traj  # 子任务轨迹（local map用）
         }
     
     def get_current_pose(self) -> Optional[Tuple[float, float, float]]:
