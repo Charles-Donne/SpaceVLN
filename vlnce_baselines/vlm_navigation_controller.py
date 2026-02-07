@@ -837,10 +837,12 @@ class VLMNavigationController(InteractiveNavigationController):
         waypoint_info = None
         last_waypoint_angle_deg = None
         if phase != "initial" and hasattr(self, 'mapper') and self.mapper:
-            wp_positions, wp_ids, wp_descriptions = self.mapper.get_waypoints()
+            # 获取当前地图状态（包含旋转后的waypoint坐标）
+            map_state = self.mapper.get_map_state()
+            wp_positions = map_state.get('waypoint_positions', [])
+            wp_ids = map_state.get('waypoint_ids', [])
+            
             if wp_positions:  # 如果有waypoint
-                # 获取当前地图状态和RGB
-                map_state = self.mapper.get_map_state()
                 rgb_bgr = cv2.cvtColor(obs[0]['rgb'], cv2.COLOR_RGB2BGR)
                 
                 # 调用visualizer渲染地图并计算waypoint角度
@@ -850,7 +852,7 @@ class VLMNavigationController(InteractiveNavigationController):
                     episode_id=self.current_episode_id,
                     rgb=rgb_bgr,
                     full_map=map_state['full_map'],
-                    trajectory_points=map_state.get('trajectory_points', []),  # 从map_state获取
+                    trajectory_points=map_state.get('trajectory_points', []),  # 旋转后的坐标
                     detected_classes=list(self.detected_classes),
                     current_pose=map_state['full_pose'],
                     floor=map_state['floor'],
@@ -864,10 +866,10 @@ class VLMNavigationController(InteractiveNavigationController):
                         'min_total_pixels': self.landmark_min_total_pixels,
                         'min_area_threshold': self.landmark_min_area_threshold
                     },
-                    waypoint_positions=wp_positions,
+                    waypoint_positions=wp_positions,  # 旋转后的坐标
                     waypoint_ids=wp_ids,
                     phase=phase,
-                    global_trajectory_points=map_state.get('trajectory_points', []),  # 从map_state获取
+                    global_trajectory_points=map_state.get('trajectory_points', []),  # 旋转后的坐标
                     crop_offset=map_state.get('crop_offset')  # 从map_state获取
                 )
                 
@@ -876,7 +878,9 @@ class VLMNavigationController(InteractiveNavigationController):
                     last_waypoint_angle_deg = np.degrees(last_waypoint_angle)
                     # print(f"  📍 Last Waypoint角度: {last_waypoint_angle_deg:.1f}°")
                 
-                # 保存waypoint信息用于绘制在view上（直接保存tuple）
+                # 保存waypoint信息用于绘制在view上
+                # 注意：这里保存原始世界坐标（用于waypoint描述）
+                _, orig_wp_ids, wp_descriptions = self.mapper.get_waypoints()
                 waypoint_info = (wp_positions, wp_ids, wp_descriptions)
         
         # 保存12张独立图片（不拼接），每张图片添加角度标注 + waypoint标记

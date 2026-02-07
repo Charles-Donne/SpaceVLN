@@ -726,10 +726,11 @@ class Semantic_Mapping(nn.Module):
         # 返回裁剪区域的世界像素偏移量（用于trajectory_points的坐标转换）
         crop_offset = (start_px, start_py)
         
-        # 如果需要，根据agent朝向旋转地图
+        # 如果需要，根据agent朝向旋转地图（同时旋转trajectory_points坐标）
         if rotate_to_agent_heading:
             agent_orientation = self.full_pose[0, 2].item()  # 度数
             full_map = self._rotate_map_to_agent_heading(full_map, agent_orientation)
+            # 注意：crop_offset 保持不变（旋转前的偏移量），在mapper中使用时会一起转换trajectory_points
         
         return full_map, (crop_size_px, crop_size_px), crop_offset
     

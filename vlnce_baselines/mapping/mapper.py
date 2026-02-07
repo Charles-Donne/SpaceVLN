@@ -118,18 +118,32 @@ class SemanticMapper:
         self.mapping_module.one_step_full_map.fill_(0.)
         self.mapping_module.one_step_local_map.fill_(0.)
         
-        # DEBUG: 检查返回前的数据
-        traj_pts = self.mapping_module.trajectory_points
+        # 5. 转换trajectory_points和waypoint_positions到旋转后的坐标系
+        # （与full_map的旋转保持一致）
         crop_off = self.mapping_module.full_map_crop_offset
-        print(f"  🔎 Mapper.update_map 准备返回: trajectory_points={len(traj_pts)}点, crop_offset={crop_off}")
+        traj_pts_rotated = self._transform_points_to_rotated_map(
+            self.mapping_module.trajectory_points, 
+            crop_off, 
+            self.full_pose[2]
+        )
+        wp_pos_rotated = self._transform_points_to_rotated_map(
+            self.waypoint_positions,
+            crop_off,
+            self.full_pose[2]
+        )
         
-        # 5. 返回完整的地图状态（包含trajectory_points和crop_offset）
+        # DEBUG: 检查返回前的数据
+        print(f"  🔎 Mapper.update_map: trajectory_points={len(traj_pts_rotated)}点, waypoint_positions={len(wp_pos_rotated)}点, crop_offset={crop_off}")
+        
+        # 6. 返回完整的地图状态（包含旋转后的坐标）
         return {
             'full_map': self.full_map,
             'full_pose': self.full_pose,
             'floor': self.floor,
-            'crop_offset': crop_off,  # 新增
-            'trajectory_points': traj_pts  # 新增
+            'crop_offset': crop_off,
+            'trajectory_points': traj_pts_rotated,  # 旋转后的坐标
+            'waypoint_positions': wp_pos_rotated,   # 旋转后的坐标
+            'waypoint_ids': self.waypoint_ids
         }
     
     def extract_floor(self, 
@@ -206,6 +220,54 @@ class SemanticMapper:
         # 静默返回，不输出调试信息
         return floor.astype(np.uint8)
     
+    def _transform_points_to_rotated_map(self, points, crop_offset, agent_orientation_deg):
+        """
+        将世界坐标的点转换到旋转后的地图坐标系（与full_map的旋转保持一致）
+        
+        Args:
+            points: List of (px, py) 世界像素坐标
+            crop_offset: (start_px, start_py) 裁剪偏移量
+            agent_orientation_deg: agent朝向（度数）
+        
+        Returns:
+            List of (px, py) 旋转后的相对坐标
+        """
+        if not points or crop_offset is None:
+            return []
+        
+        crop_start_px, crop_start_py = crop_offset
+        rotation_angle_deg = 90 - agent_orientation_deg
+        rotation_angle_rad = np.radians(rotation_angle_deg)
+        
+        # 地图中心（旋转中心）
+        # full_map已经裁剪成24m×24m，中心就是crop_size的一半
+        crop_size_px = int(24.0 * 100 / self.resolution)
+        center_px = crop_size_px // 2
+        center_py = crop_size_px // 2
+        
+        rotated_points = []
+        for pt_px, pt_py in points:
+            # 1. 转换到相对于crop区域的坐标
+            rel_px = pt_px - crop_start_px
+            rel_py = pt_py - crop_start_py
+            
+            # 2. 转换为相对于中心的坐标
+            dx = rel_py - center_py
+            dy = rel_px - center_px
+            
+            # 3. 应用旋转矩阵
+            cos_theta = np.cos(rotation_angle_rad)
+            sin_theta = np.sin(rotation_angle_rad)
+            rotated_dx = cos_theta * dx + sin_theta * dy
+            rotated_dy = -sin_theta * dx + cos_theta * dy
+            
+            # 4. 转回绝对坐标（相对于旋转后的full_map）
+            rotated_py = rotated_dx + center_py
+            rotated_px = rotated_dy + center_px
+            
+            rotated_points.append((rotated_px, rotated_py))
+        
+        return rotated_points
     
     # ===== 轨迹管理（已废弃 - 轨迹现在存储在通道2中）=====
     # convert_trajectory_to_local 和相关方法已不再需要
