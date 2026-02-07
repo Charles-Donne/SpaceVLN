@@ -464,25 +464,53 @@ class MapVisualizer:
             global_map_with_trajectory = global_map_rotated.copy()
             
             # ===== 阶段5.1: 从trajectory_points绘制轨迹线（橙色）=====
-            # trajectory_points 已经是旋转后的坐标（与full_map一致）
-            print(f"🔍 [Global Map] trajectory_points: {len(trajectory_points) if trajectory_points else 0} points")
-            if trajectory_points is not None and len(trajectory_points) > 1:
+            # trajectory_points 是世界像素坐标，需要转换到旋转后的full_map坐标
+            print(f"🔍 [Global Map] trajectory_points: {len(trajectory_points) if trajectory_points else 0} points, crop_offset: {crop_offset}")
+            if trajectory_points is not None and len(trajectory_points) > 1 and crop_offset is not None:
+                import math
                 map_h, map_w = full_map.shape[1], full_map.shape[2]
                 trajectory_color = (0, 165, 255)  # 橙色BGR
                 
-                # 转换所有轨迹点到480x480显示坐标系
-                display_points = []
-                for rotated_px, rotated_py in trajectory_points:
-                    # 坐标已经是旋转后的，直接检查范围并缩放
-                    if 0 <= rotated_px < map_h and 0 <= rotated_py < map_w:
-                        # 缩放到480x480显示尺寸
-                        display_x = int(rotated_py * 480.0 / map_w)
-                        display_y = int(rotated_px * 480.0 / map_h)
-                        # flipud变换（与地图一致）
-                        display_y = 480 - 1 - display_y
-                        display_points.append((display_x, display_y))
+                # 获取旋转参数
+                agent_orientation_deg = current_pose[2] if current_pose is not None else 0
+                rotation_angle_deg = 90 - agent_orientation_deg
+                rotation_angle_rad = math.radians(rotation_angle_deg)
+                cos_theta = math.cos(rotation_angle_rad)
+                sin_theta = math.sin(rotation_angle_rad)
                 
-                print(f"  ✅ Converted {len(display_points)}/{len(trajectory_points)} trajectory points to display coords")
+                start_px, start_py = crop_offset
+                
+                # 转换所有轨迹点到旋转后的坐标系
+                display_points = []
+                for world_px, world_py in trajectory_points:
+                    # 1. 转换为相对坐标（相对于crop区域）
+                    rel_px = world_px - start_px
+                    rel_py = world_py - start_py
+                    
+                    # 边界检查（相对坐标）
+                    if not (0 <= rel_px < map_h and 0 <= rel_py < map_w):
+                        continue
+                    
+                    # 2. 归一化到[-1, 1]（与PyTorch affine_grid一致）
+                    norm_y = (rel_px / map_h) * 2.0 - 1.0
+                    norm_x = (rel_py / map_w) * 2.0 - 1.0
+                    
+                    # 3. 应用旋转矩阵（与PyTorch相同）
+                    rotated_norm_x = cos_theta * norm_x + sin_theta * norm_y
+                    rotated_norm_y = -sin_theta * norm_x + cos_theta * norm_y
+                    
+                    # 4. 反归一化到像素坐标
+                    rotated_px = (rotated_norm_y + 1.0) * map_h / 2.0
+                    rotated_py = (rotated_norm_x + 1.0) * map_w / 2.0
+                    
+                    # 5. 缩放到480x480显示坐标系
+                    display_x = int(rotated_py * 480.0 / map_w)
+                    display_y = int(rotated_px * 480.0 / map_h)
+                    # flipud变换
+                    display_y = 480 - 1 - display_y
+                    display_points.append((display_x, display_y))
+                
+                print(f"  ✅ Converted {len(display_points)}/{len(trajectory_points)} trajectory points (rotation={rotation_angle_deg:.1f}°)")
                 # 绘制连线（细线条）
                 for i in range(len(display_points) - 1):
                     pt1 = display_points[i]
@@ -490,9 +518,9 @@ class MapVisualizer:
                     if (0 <= pt1[0] < 480 and 0 <= pt1[1] < 480 and
                         0 <= pt2[0] < 480 and 0 <= pt2[1] < 480):
                         cv2.line(global_map_with_trajectory, pt1, pt2, 
-                                trajectory_color, thickness=2)  # 从3改为2，更细
+                                trajectory_color, thickness=2)
             else:
-                print(f"  ❌ Cannot draw trajectory - not enough points")
+                print(f"  ❌ Cannot draw trajectory - not enough points or missing crop_offset")
             
             # ===== 阶段5.3: 绘制深红色虚线指示正前方（在箭头之前）=====
             center_x, center_y = 240, 240
@@ -536,30 +564,58 @@ class MapVisualizer:
                 ])
             
             # ===== 阶段5.55: 绘制历史waypoint（蓝色圆圈+ID数字）=====
-            # waypoint_positions 已经是旋转后的坐标（与full_map一致）
+            # waypoint_positions 是世界像素坐标，需要转换到旋转后的full_map坐标
             print(f"[DEBUG Global] waypoint_positions: {len(waypoint_positions) if waypoint_positions else 0} waypoints")
             print(f"[DEBUG Global] waypoint_ids: {waypoint_ids if waypoint_ids else []}")
             if waypoint_positions is not None and len(waypoint_positions) > 0:
                 print(f"[DEBUG Global] First waypoint: pos={waypoint_positions[0]}, id={waypoint_ids[0] if waypoint_ids else 'N/A'}")
             
-            if waypoint_positions is not None and waypoint_ids is not None and len(waypoint_positions) > 0:
+            if waypoint_positions is not None and waypoint_ids is not None and len(waypoint_positions) > 0 and crop_offset is not None:
+                import math
                 map_h, map_w = full_map.shape[1], full_map.shape[2]
                 print(f"[DEBUG Global] map_size=({map_h}, {map_w})")
                 
+                # 获取旋转参数（与轨迹相同）
+                agent_orientation_deg = current_pose[2] if current_pose is not None else 0
+                rotation_angle_deg = 90 - agent_orientation_deg
+                rotation_angle_rad = math.radians(rotation_angle_deg)
+                cos_theta = math.cos(rotation_angle_rad)
+                sin_theta = math.sin(rotation_angle_rad)
+                
+                start_px, start_py = crop_offset
+                
                 rendered_count = 0
                 for wp_pos, wp_id in zip(waypoint_positions, waypoint_ids):
-                    # waypoint_positions 已经是旋转后的坐标 (rotated_px, rotated_py)
-                    rotated_px, rotated_py = wp_pos
+                    # waypoint_positions 是世界坐标 (world_px, world_py)
+                    world_px, world_py = wp_pos
                     
-                    # 检查是否在full_map范围内
-                    if 0 <= rotated_px < map_h and 0 <= rotated_py < map_w:
-                        # 缩放到480x480显示尺寸
-                        display_x = int(rotated_py * 480.0 / map_w)
-                        display_y = int(rotated_px * 480.0 / map_h)
-                        # flipud变换（与地图一致）
-                        display_y = 480 - 1 - display_y
-                        
-                        if rendered_count == 0:
+                    # 1. 转换为相对坐标
+                    rel_px = world_px - start_px
+                    rel_py = world_py - start_py
+                    
+                    # 边界检查
+                    if not (0 <= rel_px < map_h and 0 <= rel_py < map_w):
+                        continue
+                    
+                    # 2. 归一化到[-1, 1]
+                    norm_y = (rel_px / map_h) * 2.0 - 1.0
+                    norm_x = (rel_py / map_w) * 2.0 - 1.0
+                    
+                    # 3. 应用旋转矩阵
+                    rotated_norm_x = cos_theta * norm_x + sin_theta * norm_y
+                    rotated_norm_y = -sin_theta * norm_x + cos_theta * norm_y
+                    
+                    # 4. 反归一化到像素坐标
+                    rotated_px = (rotated_norm_y + 1.0) * map_h / 2.0
+                    rotated_py = (rotated_norm_x + 1.0) * map_w / 2.0
+                    
+                    # 5. 缩放到480x480显示尺寸
+                    display_x = int(rotated_py * 480.0 / map_w)
+                    display_y = int(rotated_px * 480.0 / map_h)
+                    # flipud变换
+                    display_y = 480 - 1 - display_y
+                    
+                    if rendered_count == 0:
                             print(f"[DEBUG Global] WP#{wp_id}: rotated=({rotated_px:.1f}, {rotated_py:.1f}), display=({display_x}, {display_y})")
                         
                         # 检查显示坐标是否在范围内
@@ -758,28 +814,56 @@ class MapVisualizer:
         local_map = cv2.resize(local_map, (480, 480), interpolation=cv2.INTER_NEAREST)
         
         # ===== 阶段5: 从trajectory_points绘制轨迹线（橙色）=====
-        # trajectory_points 已经是旋转后的坐标（与full_map一致）
+        # trajectory_points 是世界像素坐标，需要转换到旋转后的full_map坐标
         print(f"🔍 [Local Map] trajectory_points: {len(trajectory_points) if trajectory_points else 0} points")
-        if trajectory_points is not None and len(trajectory_points) > 1:
+        if trajectory_points is not None and len(trajectory_points) > 1 and crop_offset is not None:
+            import math
             trajectory_color = (0, 165, 255)  # 橙色BGR
             map_h, map_w = full_map.shape[1], full_map.shape[2]
             
-            # 转换所有轨迹点到显示坐标系（相对于裁剪后的local map）
+            # 获取旋转参数（与global map相同）
+            agent_orientation_deg = current_pose[2] if current_pose is not None else 0
+            rotation_angle_deg = 90 - agent_orientation_deg
+            rotation_angle_rad = math.radians(rotation_angle_deg)
+            cos_theta = math.cos(rotation_angle_rad)
+            sin_theta = math.sin(rotation_angle_rad)
+            
+            start_px, start_py = crop_offset
+            
+            # 转换所有轨迹点到旋转后的坐标系，然后裁剪到local map
             display_points = []
-            for rotated_px, rotated_py in trajectory_points:
-                # 坐标已经是旋转后的，直接检查范围
-                if 0 <= rotated_px < map_h and 0 <= rotated_py < map_w:
-                    # 转换到裁剪区域（240x240中心区域）
-                    # full_map是480x480（假设crop_size=24m），裁剪区域是中心240x240
-                    crop_rel_x = rotated_py * 480.0 / map_w - (240 - 120)
-                    crop_rel_y = rotated_px * 480.0 / map_h - (240 - 120)
-                    
-                    # 检查是否在裁剪区域内
-                    if 0 <= crop_rel_x < 240 and 0 <= crop_rel_y < 240:
-                        # 放大到480x480
-                        display_x = int(crop_rel_x * 2.0)
-                        display_y = int(crop_rel_y * 2.0)
-                        display_points.append((display_x, display_y))
+            for world_px, world_py in trajectory_points:
+                # 1. 转换为相对坐标
+                rel_px = world_px - start_px
+                rel_py = world_py - start_py
+                
+                # 边界检查
+                if not (0 <= rel_px < map_h and 0 <= rel_py < map_w):
+                    continue
+                
+                # 2. 归一化到[-1, 1]
+                norm_y = (rel_px / map_h) * 2.0 - 1.0
+                norm_x = (rel_py / map_w) * 2.0 - 1.0
+                
+                # 3. 应用旋转矩阵
+                rotated_norm_x = cos_theta * norm_x + sin_theta * norm_y
+                rotated_norm_y = -sin_theta * norm_x + cos_theta * norm_y
+                
+                # 4. 反归一化到像素坐标
+                rotated_px = (rotated_norm_y + 1.0) * map_h / 2.0
+                rotated_py = (rotated_norm_x + 1.0) * map_w / 2.0
+                
+                # 5. 转换到裁剪区域（240x240中心区域）
+                # full_map是480x480（假设crop_size=24m），裁剪区域是中心240x240
+                crop_rel_x = rotated_py * 480.0 / map_w - (240 - 120)
+                crop_rel_y = rotated_px * 480.0 / map_h - (240 - 120)
+                
+                # 检查是否在裁剪区域内
+                if 0 <= crop_rel_x < 240 and 0 <= crop_rel_y < 240:
+                    # 放大到480x480
+                    display_x = int(crop_rel_x * 2.0)
+                    display_y = int(crop_rel_y * 2.0)
+                    display_points.append((display_x, display_y))
             
             # 绘制连线
             for i in range(len(display_points) - 1):

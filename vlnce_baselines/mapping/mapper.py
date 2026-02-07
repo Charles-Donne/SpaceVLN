@@ -118,33 +118,22 @@ class SemanticMapper:
         self.mapping_module.one_step_full_map.fill_(0.)
         self.mapping_module.one_step_local_map.fill_(0.)
         
-        # 5. 转换trajectory_points和waypoint_positions到旋转后的坐标系
-        # （与full_map的旋转保持一致）
+        # 5. 获取世界坐标（不旋转！full_map已经旋转过，坐标在visualizer中转换）
         crop_off = self.mapping_module.full_map_crop_offset
-        traj_pts_rotated = self._transform_points_to_rotated_map(
-            self.mapping_module.trajectory_points, 
-            crop_off, 
-            self.full_pose[2]
-        )
-        wp_pos_rotated = self._transform_points_to_rotated_map(
-            self.waypoint_positions,
-            crop_off,
-            self.full_pose[2]
-        )
+        traj_pts_world = self.mapping_module.trajectory_points  # 保持世界坐标
+        wp_pos_world = self.waypoint_positions  # 保持世界坐标
         
         # DEBUG: 检查返回前的数据
-        if len(traj_pts_rotated) > 0:
-            print(f"  🔎 Mapper.update_map: trajectory原始={self.mapping_module.trajectory_points[0]}, 旋转后={traj_pts_rotated[0]}, agent_ori={self.full_pose[2]:.1f}°")
-        print(f"  🔎 Mapper.update_map: trajectory_points={len(traj_pts_rotated)}点, waypoint_positions={len(wp_pos_rotated)}点")
+        print(f"  📊 update_map完成: trajectory_points={len(traj_pts_world)}, crop_offset={crop_off}")
         
-        # 6. 返回完整的地图状态（包含旋转后的坐标）
+        # 6. 返回完整的地图状态（包含世界坐标，visualizer会根据需要转换）
         return {
             'full_map': self.full_map,
             'full_pose': self.full_pose,
             'floor': self.floor,
             'crop_offset': crop_off,
-            'trajectory_points': traj_pts_rotated,  # 旋转后的坐标
-            'waypoint_positions': wp_pos_rotated,   # 旋转后的坐标
+            'trajectory_points': traj_pts_world,  # 世界坐标
+            'waypoint_positions': wp_pos_world,   # 世界坐标
             'waypoint_ids': self.waypoint_ids
         }
     
@@ -222,69 +211,9 @@ class SemanticMapper:
         # 静默返回，不输出调试信息
         return floor.astype(np.uint8)
     
-    def _transform_points_to_rotated_map(self, points, crop_offset, agent_orientation_deg):
-        """
-        将世界坐标的点转换到旋转后的地图坐标系（与full_map的旋转保持一致）
-        
-        使用与 PyTorch affine_grid 相同的旋转逻辑
-        
-        Args:
-            points: List of (px, py) 世界像素坐标，px=Y轴，py=X轴
-            crop_offset: (start_px, start_py) 裁剪偏移量
-            agent_orientation_deg: agent朝向（度数）
-        
-        Returns:
-            List of (px, py) 旋转后的相对坐标
-        """
-        if not points or crop_offset is None:
-            return []
-        
-        crop_start_px, crop_start_py = crop_offset
-        rotation_angle_deg = 90 - agent_orientation_deg
-        rotation_angle_rad = np.radians(rotation_angle_deg)
-        
-        # 如果不需要旋转，直接返回相对坐标
-        if abs(rotation_angle_deg) < 0.1:
-            return [(pt_px - crop_start_px, pt_py - crop_start_py) for pt_px, pt_py in points]
-        
-        # 地图尺寸（旋转中心）
-        crop_size_px = int(24.0 * 100 / self.resolution)
-        center = crop_size_px / 2.0  # 使用浮点数，更精确
-        
-        rotated_points = []
-        cos_theta = np.cos(rotation_angle_rad)
-        sin_theta = np.sin(rotation_angle_rad)
-        
-        for i, (pt_px, pt_py) in enumerate(points):
-            # 1. 转换到相对于crop区域的坐标
-            rel_px = pt_px - crop_start_px  # Y方向
-            rel_py = pt_py - crop_start_py  # X方向
-            
-            # 2. 归一化到 [-1, 1] 范围（与PyTorch affine_grid一致）
-            norm_y = (rel_px / crop_size_px) * 2.0 - 1.0
-            norm_x = (rel_py / crop_size_px) * 2.0 - 1.0
-            
-            # 3. 应用旋转矩阵（与PyTorch相同的变换）
-            # [cos_theta, sin_theta]   [x]
-            # [-sin_theta, cos_theta] * [y]
-            rotated_norm_x = cos_theta * norm_x + sin_theta * norm_y
-            rotated_norm_y = -sin_theta * norm_x + cos_theta * norm_y
-            
-            # 4. 反归一化到像素坐标
-            rotated_px = (rotated_norm_y + 1.0) * crop_size_px / 2.0
-            rotated_py = (rotated_norm_x + 1.0) * crop_size_px / 2.0
-            
-            # DEBUG: 打印前3个点的详细转换过程
-            if i < 3:
-                print(f"    🔎 轨迹点{i}: world=({pt_px:.0f},{pt_py:.0f}) → rel=({rel_px:.1f},{rel_py:.1f}) → norm=({norm_x:.3f},{norm_y:.3f}) → rotated_norm=({rotated_norm_x:.3f},{rotated_norm_y:.3f}) → rotated=({rotated_px:.1f},{rotated_py:.1f})")
-            
-            rotated_points.append((rotated_px, rotated_py))
-        
-        return rotated_points
-    
-    # ===== 轨迹管理（已废弃 - 轨迹现在存储在通道2中）=====
-    # convert_trajectory_to_local 和相关方法已不再需要
-    # 轨迹直接在tiles的通道2中标记，随地图一起旋转
+    # ===== 轨迹管理 =====
+    # 轨迹现在直接存储在mapping_module.trajectory_points列表中（世界坐标）
+    # 渲染时在visualizer中转换为旋转后的坐标（与full_map一致）
     
     def toggle_trajectory(self):
         """切换轨迹绘制开关"""
