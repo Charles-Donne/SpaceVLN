@@ -610,7 +610,7 @@ class MapVisualizer:
                     if 0 <= display_x < 480 and 0 <= display_y < 480:
                         # 绘制实心蓝色圆圈
                         cv2.circle(global_map_with_trajectory, (display_x, display_y), 
-                                  radius=8, color=(255, 0, 0), thickness=-1)  # 纯蓝色BGR，实心
+                                  radius=10, color=(255, 0, 0), thickness=-1)  # 纯蓝色BGR，实心
                         # 绘制ID数字（白色，增大字体并居中）
                         text = str(wp_id)
                         (text_w, text_h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
@@ -799,16 +799,15 @@ class MapVisualizer:
         local_map = local_map[y1:y2, x1:x2].copy()
         local_map = cv2.resize(local_map, (480, 480), interpolation=cv2.INTER_NEAREST)
         
-        # ===== 阶段5: 从trajectory_points绘制轨迹线（橙色）=====
-        # trajectory_points 是世界像素坐标，需要转换到旋转后的full_map坐标
+        # ===== 阶段5: 先准备轨迹点数据，稍后在FOV之后绘制 =====
+        trajectory_display_points = []
         if trajectory_points is not None and len(trajectory_points) > 1 and crop_offset is not None:
             import math
-            trajectory_color = (0, 165, 255)  # 橙色BGR
             map_h, map_w = full_map.shape[1], full_map.shape[2]
             
-            # 获取旋转参数（修改：反向旋转）
+            # 获取旋转参数
             agent_orientation_deg = current_pose[2] if current_pose is not None else 0
-            rotation_angle_deg = agent_orientation_deg - 90  # 修改：反向旋转
+            rotation_angle_deg = agent_orientation_deg - 90
             rotation_angle_rad = math.radians(rotation_angle_deg)
             cos_theta = math.cos(rotation_angle_rad)
             sin_theta = math.sin(rotation_angle_rad)
@@ -816,7 +815,6 @@ class MapVisualizer:
             start_px, start_py = crop_offset
             
             # 转换所有轨迹点到旋转后的坐标系，然后裁剪到local map
-            display_points = []
             for world_px, world_py in trajectory_points:
                 # 1. 转换为相对坐标
                 rel_px = world_px - start_px
@@ -848,15 +846,7 @@ class MapVisualizer:
                     # 放大到480x480
                     display_x = int(crop_rel_x * 2.0)
                     display_y = int(crop_rel_y * 2.0)
-                    display_points.append((display_x, display_y))
-            
-            # 绘制连线
-            for i in range(len(display_points) - 1):
-                pt1 = display_points[i]
-                pt2 = display_points[i + 1]
-                if (0 <= pt1[0] < 480 and 0 <= pt1[1] < 480 and
-                    0 <= pt2[0] < 480 and 0 <= pt2[1] < 480):
-                    cv2.line(local_map, pt1, pt2, trajectory_color, thickness=3)
+                    trajectory_display_points.append((display_x, display_y))
         
         # ===== 阶段6: 绘制FOV可见区域（考虑障碍物遮挡）=====
         # 480像素 = 12m，所以1像素 = 2.5cm
@@ -944,8 +934,15 @@ class MapVisualizer:
             cv2.polylines(local_map, [visible_polygon], isClosed=True, 
                          color=border_color, thickness=border_thickness)
         
-        # ===== 轨迹已在PIL调色板阶段渲染，无需重复绘制 =====
-        # 轨迹通过semantic_map（值=3，橙色）统一渲染，和global map保持一致
+        # ===== 阶段6.5: 绘制轨迹线（在FOV之后，确保轨迹可见）=====
+        if len(trajectory_display_points) > 1:
+            trajectory_color = (0, 165, 255)  # 橙色BGR
+            for i in range(len(trajectory_display_points) - 1):
+                pt1 = trajectory_display_points[i]
+                pt2 = trajectory_display_points[i + 1]
+                if (0 <= pt1[0] < 480 and 0 <= pt1[1] < 480 and
+                    0 <= pt2[0] < 480 and 0 <= pt2[1] < 480):
+                    cv2.line(local_map, pt1, pt2, trajectory_color, thickness=3)
         
         # ===== 绘制深红色虚线指示正前方（在箭头下层）=====
         forward_line_length = 120  # 延伸120像素（约3米）

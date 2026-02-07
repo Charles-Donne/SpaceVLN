@@ -179,7 +179,8 @@ class Semantic_Mapping(nn.Module):
         self.state = np.zeros((self.num_environments, 7))
         
         # 轨迹点列表（只存储坐标，渲染时连线）
-        self.trajectory_points = []  # [(agent_px, agent_py), ...] 世界像素坐标
+        self.global_trajectory_points = []  # 全局轨迹，永不清空，用于global map
+        self.subtask_trajectory_points = []  # 子任务轨迹，子任务开始时清空，用于local map
         self.last_trajectory_pos = None  # (tile_x, tile_y, local_px, local_py)
         
         # 当前Local Map和Full Map（用于兼容旧接口）
@@ -215,9 +216,9 @@ class Semantic_Mapping(nn.Module):
         ).float().to(self.device)
     
     def clear_trajectory(self) -> None:
-        """清空轨迹点列表"""
-        self.trajectory_points.clear()
-        self.last_trajectory_pos = None
+        """清空子任务轨迹点列表（用于local map，global map的轨迹保留）"""
+        self.subtask_trajectory_points.clear()
+        # 注意：不清空 global_trajectory_points，它用于global map显示完整历史
     
     def _draw_line_on_tile(self, tile_key, x0, y0, x1, y1):
         """
@@ -1038,8 +1039,8 @@ class Semantic_Mapping(nn.Module):
         current_pos = (tile_x, tile_y, local_px, local_py)
         if self.last_trajectory_pos != current_pos:
             # 保存轨迹点的世界坐标（用于渲染时连线）
-            self.trajectory_points.append((agent_px, agent_py))
-            print(f"  📍 Added trajectory point ({agent_px}, {agent_py}), total: {len(self.trajectory_points)}")
+            self.global_trajectory_points.append((agent_px, agent_py))  # 全局轨迹，永不清空
+            self.subtask_trajectory_points.append((agent_px, agent_py))  # 子任务轨迹，可清空
             
             self.last_trajectory_pos = current_pos
         
@@ -1085,8 +1086,6 @@ class Semantic_Mapping(nn.Module):
         # 生成用于渲染的Full Map（合并所有tiles，并根据agent朝向旋转）
         self.full_map, _, self.full_map_crop_offset = self.get_full_map_for_rendering(crop_size_m=24.0, rotate_to_agent_heading=True)
         self.one_step_full_map, _, self.one_step_full_map_crop_offset = self.get_full_map_for_rendering(crop_size_m=24.0, is_one_step=True, rotate_to_agent_heading=True)
-        
-        print(f"  📊 update_map完成: trajectory_points={len(self.trajectory_points)}, crop_offset={self.full_map_crop_offset}")
         
         if self.visualize or self.print_images:
             self._visualize(current_episode_id, 
@@ -1295,8 +1294,7 @@ class Semantic_Mapping(nn.Module):
         Args:
             obs: (b, c, h, w), b = batch size, c = 3(RGB) + 1(Depth) + num_detected_categories
         """
-        print(f"  🎯 forward()开始: 当前trajectory_points={len(self.trajectory_points)}点")
-        
+    def forward(self, obs, pose_obs, maps_last, poses_last):
         # if use CoCo the number of categories is 16(i.e. c=16), but now open-vocabulary; 
         bs, c, h, w = obs.size()
         depth = obs[:, 3, :, :] # depth.shape = (bs, H, W)

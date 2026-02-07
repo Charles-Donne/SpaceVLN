@@ -120,11 +120,9 @@ class SemanticMapper:
         
         # 5. 获取世界坐标（不旋转！full_map已经旋转过，坐标在visualizer中转换）
         crop_off = self.mapping_module.full_map_crop_offset
-        traj_pts_world = self.mapping_module.trajectory_points  # 保持世界坐标
+        global_traj = self.mapping_module.global_trajectory_points  # 全局轨迹（用于global map）
+        subtask_traj = self.mapping_module.subtask_trajectory_points  # 子任务轨迹（用于local map）
         wp_pos_world = self.waypoint_positions  # 保持世界坐标
-        
-        # DEBUG: 检查返回前的数据
-        print(f"  📊 update_map完成: trajectory_points={len(traj_pts_world)}, crop_offset={crop_off}")
         
         # 6. 返回完整的地图状态（包含世界坐标，visualizer会根据需要转换）
         return {
@@ -132,7 +130,8 @@ class SemanticMapper:
             'full_pose': self.full_pose,
             'floor': self.floor,
             'crop_offset': crop_off,
-            'trajectory_points': traj_pts_world,  # 世界坐标
+            'global_trajectory_points': global_traj,  # 全局轨迹（global map用）
+            'subtask_trajectory_points': subtask_traj,  # 子任务轨迹（local map用）
             'waypoint_positions': wp_pos_world,   # 世界坐标
             'waypoint_ids': self.waypoint_ids
         }
