@@ -616,18 +616,18 @@ class MapVisualizer:
                     display_y = 480 - 1 - display_y
                     
                     if rendered_count == 0:
-                            print(f"[DEBUG Global] WP#{wp_id}: rotated=({rotated_px:.1f}, {rotated_py:.1f}), display=({display_x}, {display_y})")
-                        
-                        # 检查显示坐标是否在范围内
-                        if 0 <= display_x < 480 and 0 <= display_y < 480:
-                            # 绘制蓝色圆圈
-                            cv2.circle(global_map_with_trajectory, (display_x, display_y), 
-                                      radius=8, color=(255, 100, 0), thickness=2)  # 蓝色BGR
-                            # 绘制ID数字（白色）
-                            cv2.putText(global_map_with_trajectory, str(wp_id), 
-                                       (display_x - 6, display_y + 4),
-                                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
-                            rendered_count += 1
+                        print(f"[DEBUG Global] WP#{wp_id}: rotated=({rotated_px:.1f}, {rotated_py:.1f}), display=({display_x}, {display_y})")
+                    
+                    # 检查显示坐标是否在范围内
+                    if 0 <= display_x < 480 and 0 <= display_y < 480:
+                        # 绘制蓝色圆圈
+                        cv2.circle(global_map_with_trajectory, (display_x, display_y), 
+                                  radius=8, color=(255, 100, 0), thickness=2)  # 蓝色BGR
+                        # 绘制ID数字（白色）
+                        cv2.putText(global_map_with_trajectory, str(wp_id), 
+                                   (display_x - 6, display_y + 4),
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+                        rendered_count += 1
                 print(f"  ✅ Rendered {rendered_count}/{len(waypoint_positions)} waypoints on global map")
             else:
                 if waypoint_positions is None or len(waypoint_positions) == 0:
