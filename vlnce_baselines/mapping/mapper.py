@@ -118,12 +118,13 @@ class SemanticMapper:
         self.mapping_module.one_step_full_map.fill_(0.)
         self.mapping_module.one_step_local_map.fill_(0.)
         
-        # 注意：轨迹现在存储在full_map的通道2中，不再需要单独的trajectory_points列表
-        
+        # 5. 返回完整的地图状态（包含trajectory_points和crop_offset）
         return {
-            'full_map': self.full_map,  # 轨迹已经在通道2中
+            'full_map': self.full_map,
             'full_pose': self.full_pose,
-            'floor': self.floor
+            'floor': self.floor,
+            'crop_offset': self.mapping_module.full_map_crop_offset,  # 新增
+            'trajectory_points': self.mapping_module.trajectory_points  # 新增
         }
     
     def extract_floor(self, 

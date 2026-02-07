@@ -758,7 +758,7 @@ class VLMNavigationController(InteractiveNavigationController):
                 episode_id=self.current_episode_id,
                 rgb=rgb_bgr,
                 full_map=map_state['full_map'],
-                trajectory_points=self.mapper.mapping_module.trajectory_points,  # 从mapping模块获取轨迹点
+                trajectory_points=map_state.get('trajectory_points', []),  # 从map_state获取
                 detected_classes=list(self.detected_classes),
                 current_pose=map_state['full_pose'],
                 floor=map_state['floor'],
@@ -775,8 +775,8 @@ class VLMNavigationController(InteractiveNavigationController):
                 waypoint_positions=None,  # 环视过程中不传waypoint
                 waypoint_ids=None,
                 phase=phase,
-                global_trajectory_points=self.mapper.mapping_module.trajectory_points,  # 从mapping模块获取轨迹点
-                crop_offset=map_state.get('crop_offset')  # 新增
+                global_trajectory_points=map_state.get('trajectory_points', []),  # 从map_state获取
+                crop_offset=map_state.get('crop_offset')  # 从map_state获取
             )
             
             # 累积当前step检测到的landmarks
@@ -845,7 +845,7 @@ class VLMNavigationController(InteractiveNavigationController):
                     episode_id=self.current_episode_id,
                     rgb=rgb_bgr,
                     full_map=map_state['full_map'],
-                    trajectory_points=self.mapper.mapping_module.trajectory_points,  # 从 mapping模块获取轨迹点
+                    trajectory_points=map_state.get('trajectory_points', []),  # 从map_state获取
                     detected_classes=list(self.detected_classes),
                     current_pose=map_state['full_pose'],
                     floor=map_state['floor'],
@@ -862,8 +862,8 @@ class VLMNavigationController(InteractiveNavigationController):
                     waypoint_positions=wp_positions,
                     waypoint_ids=wp_ids,
                     phase=phase,
-                    global_trajectory_points=self.mapper.mapping_module.trajectory_points,  # 从mapping模块获取轨迹点
-                    crop_offset=map_state.get('crop_offset')  # 新增：裁剪偏移
+                    global_trajectory_points=map_state.get('trajectory_points', []),  # 从map_state获取
+                    crop_offset=map_state.get('crop_offset')  # 从map_state获取
                 )
                 
                 # 转换为度数用于view映射
