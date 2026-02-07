@@ -466,8 +466,6 @@ class MapVisualizer:
             # ===== 阶段5.1: 从trajectory_points绘制轨迹线（橙色）=====
             # trajectory_points 是世界像素坐标
             # full_map 已经旋转过了，但trajectory_points是世界坐标，需要手动旋转以匹配
-            print(f"🔍 [Global Map] trajectory_points: {len(trajectory_points) if trajectory_points else 0} points, crop_offset: {crop_offset}")
-            print(f"🔍 [Global Map] current_pose: {current_pose}, orientation={current_pose[2] if current_pose is not None else 'N/A'}°")
             if trajectory_points is not None and len(trajectory_points) > 1 and crop_offset is not None:
                 import math
                 map_h, map_w = full_map.shape[1], full_map.shape[2]
@@ -479,8 +477,6 @@ class MapVisualizer:
                 rotation_angle_rad = math.radians(rotation_angle_deg)
                 cos_theta = math.cos(rotation_angle_rad)
                 sin_theta = math.sin(rotation_angle_rad)
-                
-                print(f"🔍 [Global Map] agent_orientation: {agent_orientation_deg:.1f}°, rotation={rotation_angle_deg:.1f}°")
                 
                 start_px, start_py = crop_offset
                 
@@ -514,7 +510,6 @@ class MapVisualizer:
                     display_y = 480 - 1 - display_y
                     display_points.append((display_x, display_y))
                 
-                print(f"  ✅ Converted {len(display_points)}/{len(trajectory_points)} trajectory points (rotation={rotation_angle_deg:.1f}°)")
                 # 绘制连线（细线条）
                 for i in range(len(display_points) - 1):
                     pt1 = display_points[i]
@@ -523,8 +518,6 @@ class MapVisualizer:
                         0 <= pt2[0] < 480 and 0 <= pt2[1] < 480):
                         cv2.line(global_map_with_trajectory, pt1, pt2, 
                                 trajectory_color, thickness=2)
-            else:
-                print(f"  ❌ Cannot draw trajectory - not enough points or missing crop_offset")
             
             # ===== 阶段5.3: 绘制深红色虚线指示正前方（在箭头之前）=====
             center_x, center_y = 240, 240
@@ -569,15 +562,9 @@ class MapVisualizer:
             
             # ===== 阶段5.55: 绘制历史waypoint（蓝色圆圈+ID数字）=====
             # waypoint_positions 是世界像素坐标，需要转换到旋转后的full_map坐标
-            print(f"[DEBUG Global] waypoint_positions: {len(waypoint_positions) if waypoint_positions else 0} waypoints")
-            print(f"[DEBUG Global] waypoint_ids: {waypoint_ids if waypoint_ids else []}")
-            if waypoint_positions is not None and len(waypoint_positions) > 0:
-                print(f"[DEBUG Global] First waypoint: pos={waypoint_positions[0]}, id={waypoint_ids[0] if waypoint_ids else 'N/A'}")
-            
             if waypoint_positions is not None and waypoint_ids is not None and len(waypoint_positions) > 0 and crop_offset is not None:
                 import math
                 map_h, map_w = full_map.shape[1], full_map.shape[2]
-                print(f"[DEBUG Global] map_size=({map_h}, {map_w})")
                 
                 # 获取旋转参数（修改：反向旋转）
                 agent_orientation_deg = current_pose[2] if current_pose is not None else 0
@@ -619,23 +606,18 @@ class MapVisualizer:
                     # flipud变换
                     display_y = 480 - 1 - display_y
                     
-                    if rendered_count == 0:
-                        print(f"[DEBUG Global] WP#{wp_id}: rotated=({rotated_px:.1f}, {rotated_py:.1f}), display=({display_x}, {display_y})")
-                    
                     # 检查显示坐标是否在范围内
                     if 0 <= display_x < 480 and 0 <= display_y < 480:
                         # 绘制实心蓝色圆圈
                         cv2.circle(global_map_with_trajectory, (display_x, display_y), 
                                   radius=8, color=(255, 0, 0), thickness=-1)  # 纯蓝色BGR，实心
-                        # 绘制ID数字（白色）
-                        cv2.putText(global_map_with_trajectory, str(wp_id), 
-                                   (display_x - 6, display_y + 4),
-                                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+                        # 绘制ID数字（白色，增大字体并居中）
+                        text = str(wp_id)
+                        (text_w, text_h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+                        cv2.putText(global_map_with_trajectory, text, 
+                                   (display_x - text_w // 2, display_y + text_h // 2),
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
                         rendered_count += 1
-                print(f"  ✅ Rendered {rendered_count}/{len(waypoint_positions)} waypoints on global map")
-            else:
-                if waypoint_positions is None or len(waypoint_positions) == 0:
-                    print(f"  ⚠️  No waypoints to render")
             
             # ===== 阶段5.6: 叠加黑色障碍物层（覆盖在箭头之上，使障碍物更醒目）=====
             # 创建障碍物掩码并叠加到已渲染的地图上
@@ -819,8 +801,6 @@ class MapVisualizer:
         
         # ===== 阶段5: 从trajectory_points绘制轨迹线（橙色）=====
         # trajectory_points 是世界像素坐标，需要转换到旋转后的full_map坐标
-        print(f"🔍 [Local Map] trajectory_points: {len(trajectory_points) if trajectory_points else 0} points")
-        print(f"🔍 [Local Map] current_pose: {current_pose}, orientation={current_pose[2] if current_pose is not None else 'N/A'}°")
         if trajectory_points is not None and len(trajectory_points) > 1 and crop_offset is not None:
             import math
             trajectory_color = (0, 165, 255)  # 橙色BGR
@@ -832,8 +812,6 @@ class MapVisualizer:
             rotation_angle_rad = math.radians(rotation_angle_deg)
             cos_theta = math.cos(rotation_angle_rad)
             sin_theta = math.sin(rotation_angle_rad)
-            
-            print(f"🔍 [Local Map] agent_orientation: {agent_orientation_deg:.1f}°, rotation={rotation_angle_deg:.1f}°")
             
             start_px, start_py = crop_offset
             
