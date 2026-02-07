@@ -2220,9 +2220,17 @@ class VLMNavigationController(InteractiveNavigationController):
             
             # 🔑 强制重规划检查：如果达到最大步数，执行完动作后立即触发verify
             if force_replan_after_action:
-                # 🔑 关键：检查episode是否已结束，如果结束则不执行replan
+                # 🔑 关键：检查episode是否已结束，如果结束则发送STOP给Habitat
                 if result.get('done', False):
-                    print(f"\n⚠️  [强制重规划] Episode已结束，跳过验证和重规划")
+                    print(f"\n⚠️  [强制重规划] Episode已结束（达到MAX_EPISODE_STEPS），发送STOP给Habitat")
+                    # 向Habitat发送STOP action以正确结束episode
+                    actions = [{"action": HabitatSimActions.STOP}]
+                    outputs = self.envs.step(actions)
+                    _, _, dones, infos = [list(x) for x in zip(*outputs)]
+                    # 获取最终metrics
+                    if infos and len(infos) > 0:
+                        self.latest_info = infos[0]
+                    print(f"✓ 已向Habitat发送STOP，Episode正式结束")
                     navigation_complete = True
                     break
                 
@@ -2239,8 +2247,17 @@ class VLMNavigationController(InteractiveNavigationController):
             if navigation_complete:
                 break
             
+            # 🔑 检查episode是否自动结束（达到MAX_EPISODE_STEPS）
             if result['done']:
-                print("\nEpisode自动完成")
+                print("\n⚠️  Episode自动完成（达到MAX_EPISODE_STEPS），发送STOP给Habitat")
+                # 向Habitat发送STOP action以正确结束episode
+                actions = [{"action": HabitatSimActions.STOP}]
+                outputs = self.envs.step(actions)
+                _, _, dones, infos = [list(x) for x in zip(*outputs)]
+                # 获取最终metrics
+                if infos and len(infos) > 0:
+                    self.latest_info = infos[0]
+                print(f"✓ 已向Habitat发送STOP，Episode正式结束")
                 navigation_complete = True
                 break
         
