@@ -466,7 +466,7 @@ class MapVisualizer:
             # ===== 阶段5.1: 从trajectory_points绘制轨迹线（橙色）=====
             # trajectory_points 是世界像素坐标，需要转换到旋转后的full_map坐标
             print(f"🔍 [Global Map] trajectory_points: {len(trajectory_points) if trajectory_points else 0} points, crop_offset: {crop_offset}")
-            print(f"🔍 [Global Map] current_pose: {current_pose}, orientation={current_pose[2] if current_pose else 'N/A'} rad")
+            print(f"🔍 [Global Map] current_pose: {current_pose}, orientation={current_pose[2] if current_pose is not None else 'N/A'} rad")
             if trajectory_points is not None and len(trajectory_points) > 1 and crop_offset is not None:
                 import math
                 map_h, map_w = full_map.shape[1], full_map.shape[2]
