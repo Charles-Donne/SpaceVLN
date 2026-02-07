@@ -1042,6 +1042,8 @@ class Semantic_Mapping(nn.Module):
             self.global_trajectory_points.append((agent_px, agent_py))  # 全局轨迹，永不清空
             self.subtask_trajectory_points.append((agent_px, agent_py))  # 子任务轨迹，可清空
             
+            print(f"[Trajectory] 记录轨迹点: ({agent_px}, {agent_py}) | 全局:{len(self.global_trajectory_points)}, 子任务:{len(self.subtask_trajectory_points)}")
+            
             self.last_trajectory_pos = current_pos
         
         # Channel 2 已废弃，当前位置直接从 full_pose 获取

@@ -165,6 +165,8 @@ class InteractiveNavigationController:
             list(self.detected_classes), self.current_episode_id
         )
         
+        print(f"[Controller.step] 从mapper接收轨迹: 全局={len(map_state.get('global_trajectory_points', []))}, 子任务={len(map_state.get('subtask_trajectory_points', []))}")
+        
         new_classes = len(self.detected_classes) - prev_class_count
 # print(f" +{new_classes}类" if new_classes > 0 else "")
         
@@ -176,7 +178,7 @@ class InteractiveNavigationController:
                 episode_id=self.current_episode_id,
                 rgb=rgb_bgr,
                 full_map=map_state['full_map'],
-                trajectory_points=map_state.get('trajectory_points', []),  # 从map_state获取
+                trajectory_points=map_state.get('subtask_trajectory_points', []),  # 从map_state获取（local map用子任务轨迹）
                 detected_classes=list(self.detected_classes),
                 current_pose=map_state['full_pose'],
                 floor=map_state['floor'],
@@ -192,7 +194,7 @@ class InteractiveNavigationController:
                 waypoint_positions=map_state.get('waypoint_positions', []),  # 从map_state获取（已旋转）
                 waypoint_ids=map_state.get('waypoint_ids', []),  # 从map_state获取
                 phase=phase,
-                global_trajectory_points=map_state.get('trajectory_points', []),  # 从map_state获取
+                global_trajectory_points=map_state.get('global_trajectory_points', []),  # 从map_state获取（global map用全局轨迹）
                 crop_offset=map_state.get('crop_offset')  # 从map_state获取
             )
             

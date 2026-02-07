@@ -124,6 +124,8 @@ class SemanticMapper:
         subtask_traj = self.mapping_module.subtask_trajectory_points  # 子任务轨迹（用于local map）
         wp_pos_world = self.waypoint_positions  # 保持世界坐标
         
+        print(f"[Mapper.update_map] 返回轨迹: 全局={len(global_traj)}, 子任务={len(subtask_traj)}")
+        
         # 6. 返回完整的地图状态（包含世界坐标，visualizer会根据需要转换）
         return {
             'full_map': self.full_map,
