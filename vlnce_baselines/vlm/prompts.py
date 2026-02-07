@@ -261,77 +261,65 @@ Verify previous subtask completion and plan next navigation step using the 5-par
 # Reasoning Structure (6 Parts - MANDATORY)
 
 **1) 12-View Observation Analysis (CRITICAL - Each Image Separately)**
-- **MANDATORY**: Analyze EACH IMAGE (1-12) individually and systematically:
-  - **Image Number**: IMAGE X
-  - **Direction & Angle**: Exact direction label and angle (e.g., "Front 0°", "Left 90°", "Back 180°")
-  - **Scene Composition**: What room/space is this? What objects are visible?
-  - **Object Details**: List ALL visible objects with their approximate distances
-  - **Obstacle Distance**: Distance to nearest obstacle (from image label, e.g., "1.5m", "0.3m")
-  - **Distance Classification**: NEAR (<1.0m, large in view) or FAR (>1.5m, small in view)
+- **MANDATORY**: Analyze EACH IMAGE (1-12) individually:
+  - IMAGE X (Direction Angle°): room/space, visible objects with distances, obstacle_distance from label, NEAR/FAR classification
   
 - **Format Example**: 
   - "IMAGE 1 (Front 0°): hallway corridor, wall 3.0m, picture 2.5m. Obstacle: 3.0m FAR (safe)"
   - "IMAGE 7 (Back 180°): kitchen area, counter 0.8m, Blue Circle #1. Obstacle: 0.8m NEAR"
 
-- **CRITICAL RULES**:
-  - Analyze ALL 12 images, do NOT skip any
-  - Match IMAGE number to exact angle (IMAGE 1=0°, IMAGE 2=30°, IMAGE 3=60°, IMAGE 4=90°, IMAGE 5=120°, IMAGE 6=150°, IMAGE 7=180°, IMAGE 8=210°, IMAGE 9=240°, IMAGE 10=270°, IMAGE 11=300°, IMAGE 12=330°)
-  - Use obstacle distances from image labels for path safety decisions
-  - Do NOT hallucinate objects - only describe what is actually visible in each image
+- **CRITICAL - NO HALLUCINATION**:
+  - Analyze ALL 12 images systematically (IMAGE 1=0°, 2=30°, 3=60°, 4=90°, 5=120°, 6=150°, 7=180°, 8=210°, 9=240°, 10=270°, 11=300°, 12=330°)
+  - ONLY describe what is ACTUALLY VISIBLE - if you see a wall, say "wall", don't guess what's beyond
+  - Use obstacle distances from image labels for safety
+  - NEAR (<1.0m, large in view) vs FAR (>1.5m, small in view)
 
-**2) Global Map Analysis (Based on Map Only - No IMAGE References)**
-- **Waypoint History Analysis (Based on Blue Circles on Global Map)**:
-  - Locate EACH blue circle on the global map
-  - For each blue circle, determine: Which direction relative to current position? (front/back/left/right/front-left/back-right etc.)
-  - Identify the space/room at that waypoint (e.g., "Bedroom", "Hallway", "Kitchen")
+**2) Map Analysis (Local + Global with History)**
+- **Local Map (Detailed)**: 
+  - **Deep green circle (0.5m)**: What's inside? (obstacles, furniture, goal objects?)
+  - **Surrounding obstacles**: Nearby walls, furniture blocking paths?
+  - **Spatial layout**: What room/area am I in based on local map shape?
+  - **Orientation & Open space**: Which direction facing? Blue FOV area (navigable space ahead)?
   
-- **Current Position Spatial Analysis (Based on Global Map)**:
-  - Where am I on the global map? (e.g., "At corridor center", "In doorway between rooms")
-  - **Front direction**: What region/room is ahead on the map?
-  - **Back direction**: What region/room is behind on the map?
-  - **Left/Right directions**: What regions/rooms are on the sides?
-  - Describe position context precisely (e.g., "At narrow passage between dining and living room", "At bedroom-hallway doorway")
-  
-- **Trajectory Path Analysis (Orange Line on Global Map)**:
-  - Trace the orange trajectory line: From where to where?
-  - Which waypoints (blue circles) did the trajectory pass through?
-  - Current trajectory endpoint position?
-  
-- **Spatial Structure Summary**:
-  - Overall layout understanding from global map
-  - Room sequence and relationships (e.g., "Bedroom(back) → Hallway(middle) → Living room(front)")
+- **Global Map (With Navigation History)**: 
+  - **Blue Circles (Waypoint History)**: Locate each on map, determine direction/distance/room from current position
+    - Example: "Blue Circle #1: back-right ~4.0m, bedroom. Blue Circle #2: behind ~2.5m, hallway"
+  - **Trajectory (Orange Line)**: Trace path from-where-to-where, which blue circles passed through, endpoint position
+  - **Current Position**: Where am I on map? (e.g., "In dining area center", "At hallway-kitchen doorway")
+  - **Spatial Structure**: What regions are front/back/left/right? Room sequence? (e.g., "Bedroom(back-right, passed) → Hallway(back, passed) → Dining(current) → Living room(front)")
+  - **Obstacle distribution & Safe paths**: Black areas blocking which directions? Green navigable areas leading where?
 
-- **CRITICAL RULES**:
-  - Base analysis ONLY on the global map visualization
-  - Do NOT reference IMAGE numbers here (that's Part 1)
-  - Blue circles show waypoint history - locate them on the map and analyze spatially
-  - Be precise about directions (front/back/left/right relative to current red arrow direction)
+- **CRITICAL - NO IMAGE MIXING**:
+  - Base analysis ONLY on map visualization - do NOT reference IMAGE numbers in Part 2
+  - Do NOT hallucinate rooms or waypoints not visible on the map
 
-**3) Current Position & Waypoint/Task Chain (Multi-factor Analysis)**
-- **Position Determination (Combine Part 1 + Part 2)**:
-  - Step 1: NEAR objects (<1.0m) from Part 1 → What objects surround me?
-  - Step 2: Trajectory path from Part 2 → Where does orange line end?
-  - Step 3: Blue circles from Part 2 → Which waypoints are behind me (passed)?
-  - Step 4: Map spatial structure from Part 2 → Overall position context?
-  - Step 5: **Conclusion**: WHERE AM I NOW? (synthesize all factors)
+**3) Current Position & Goal Arrival (Synthesize Part 1 + Part 2)**
+- **Position Determination (5-Step Analysis)**:
+  1. NEAR objects (<1.0m) from Part 1 → What surrounds me?
+  2. Trajectory endpoint from Part 2 → Where does orange line end?
+  3. Blue circles from Part 2 → Which waypoints are behind (passed)?
+  4. Map spatial structure from Part 2 → Overall position context?
+  5. **Conclusion**: WHERE AM I NOW?
 
-- **Goal Arrival Judgment (CRITICAL - Must Be SURROUNDED)**:
-  - **FAR (>1.5m)**: Goal visible but far away in images → NOT arrived, must continue
-  - **NEAR (<1.0m) in MULTIPLE images + SURROUNDED**: Goal visible close in multiple directions → ARRIVED, can stop
-  - **Trajectory passed goal area + goal not visible**: May have overshot, check surroundings carefully
-  - **CRITICAL**: Seeing goal far away (small in one image) ≠ Arriving at goal (large in multiple images, surrounded)!
+- **Goal Arrival Judgment (CRITICAL - Prevent Two Errors)**:
+  - **Error 1 - Stopping Too Early (Seeing ≠ Arriving)**:
+    - If goal FAR (>1.5m, small in only 1-2 images): NOT arrived, MUST continue!
+    - Example: "Chair visible 3.5m away in IMAGE 2" → Continue moving, don't stop!
+  - **Error 2 - Missing Arrival (Already Surrounded)**:
+    - If goal NEAR (<1.0m in MULTIPLE images, large views, occupying significant areas): SURROUNDED, MUST stop!
+    - Example: "Chair 0.4m in IMAGE 1, 0.6m in IMAGE 2, 0.7m in IMAGE 11" → STOP now, you're AT goal!
+  - **Overshoot Check**: If trajectory passed goal area on map but goal not visible in images → May have walked past it, check if need to turn back
+  - **Decision**: 
+    - NEAR + SURROUNDED (goal <1m in 3+ directions) → STOP (global_task_finish=true if final goal)
+    - FAR (goal >1.5m or only in 1 direction) → CONTINUE moving
+
+- **Waypoint Sequence**: Completed(✓) → Current → Future (unmarked)
+  - Mark (✓) ONLY if passed through (blue circles behind)
+  - Current = NOW (based on NEAR objects + trajectory endpoint)
+  - If backtracked (blue circles ahead), ROLLBACK markers!
   
-- **Waypoint Sequence**: Completed(✓) → Current → Future
-  - ✓ = Passed waypoints (blue circles that are BEHIND based on Part 2 analysis)
-  - Current = NOW (where NEAR objects from Part 1 indicate I am)
-  - Future = Unmarked (not yet reached)
-  
-- **Task Progress**: completed=(✓), current=(Current), future=unmarked
-  - Use task stages from Global Task instruction
-  - Only ONE stage should have (Current) marker
-  - When ALL stages are (✓) with NO (Current), task is complete
-  
-- **Backtracking Detection**: If blue circles appear ahead on map (Part 2), you went backwards → ROLLBACK markers!
+- **Task Progress**: Only ONE (Current), rest are (✓) or unmarked
+  - When ALL are (✓) with NO (Current) → task complete
 
 **4) Next Waypoint Direction Selection**
 - **Based on Part 1 (12 images) + Part 2 (map spatial structure)**
