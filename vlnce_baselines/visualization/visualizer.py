@@ -473,12 +473,21 @@ class MapVisualizer:
                 map_h, map_w = full_map.shape[1], full_map.shape[2]
                 trajectory_color = (0, 165, 255)  # 橙色BGR
                 
+                # 获取旋转参数（旋转方向修正：用agent_orientation_deg - 90而不是90 - agent_orientation_deg）
+                agent_orientation_deg = current_pose[2] if current_pose is not None else 0
+                rotation_angle_deg = agent_orientation_deg - 90  # 修改：反向旋转
+                rotation_angle_rad = math.radians(rotation_angle_deg)
+                cos_theta = math.cos(rotation_angle_rad)
+                sin_theta = math.sin(rotation_angle_rad)
+                
+                print(f"🔍 [Global Map] agent_orientation: {agent_orientation_deg:.1f}°, rotation={rotation_angle_deg:.1f}°")
+                
                 start_px, start_py = crop_offset
                 
-                # 方案：直接使用相对坐标，不旋转（测试）
+                # 转换所有轨迹点到旋转后的坐标系
                 display_points = []
                 for world_px, world_py in trajectory_points:
-                    # 转换为相对坐标
+                    # 1. 转换为相对坐标
                     rel_px = world_px - start_px
                     rel_py = world_py - start_py
                     
@@ -486,14 +495,26 @@ class MapVisualizer:
                     if not (0 <= rel_px < map_h and 0 <= rel_py < map_w):
                         continue
                     
-                    # 直接缩放到显示坐标（不旋转）
-                    display_x = int(rel_py * 480.0 / map_w)
-                    display_y = int(rel_px * 480.0 / map_h)
+                    # 2. 归一化到[-1, 1]
+                    norm_y = (rel_px / map_h) * 2.0 - 1.0
+                    norm_x = (rel_py / map_w) * 2.0 - 1.0
+                    
+                    # 3. 应用旋转矩阵（与PyTorch相同）
+                    rotated_norm_x = cos_theta * norm_x + sin_theta * norm_y
+                    rotated_norm_y = -sin_theta * norm_x + cos_theta * norm_y
+                    
+                    # 4. 反归一化到像素坐标
+                    rotated_px = (rotated_norm_y + 1.0) * map_h / 2.0
+                    rotated_py = (rotated_norm_x + 1.0) * map_w / 2.0
+                    
+                    # 5. 缩放到480x480显示坐标系
+                    display_x = int(rotated_py * 480.0 / map_w)
+                    display_y = int(rotated_px * 480.0 / map_h)
                     # flipud变换
                     display_y = 480 - 1 - display_y
                     display_points.append((display_x, display_y))
                 
-                print(f"  ✅ Converted {len(display_points)}/{len(trajectory_points)} trajectory points (no rotation test)")
+                print(f"  ✅ Converted {len(display_points)}/{len(trajectory_points)} trajectory points (rotation={rotation_angle_deg:.1f}°)")
                 # 绘制连线（细线条）
                 for i in range(len(display_points) - 1):
                     pt1 = display_points[i]
@@ -558,9 +579,9 @@ class MapVisualizer:
                 map_h, map_w = full_map.shape[1], full_map.shape[2]
                 print(f"[DEBUG Global] map_size=({map_h}, {map_w})")
                 
-                # 获取旋转参数（current_pose[2]已经是度数）
+                # 获取旋转参数（修改：反向旋转）
                 agent_orientation_deg = current_pose[2] if current_pose is not None else 0
-                rotation_angle_deg = 90 - agent_orientation_deg
+                rotation_angle_deg = agent_orientation_deg - 90  # 修改：反向旋转
                 rotation_angle_rad = math.radians(rotation_angle_deg)
                 cos_theta = math.cos(rotation_angle_rad)
                 sin_theta = math.sin(rotation_angle_rad)
@@ -805,9 +826,9 @@ class MapVisualizer:
             trajectory_color = (0, 165, 255)  # 橙色BGR
             map_h, map_w = full_map.shape[1], full_map.shape[2]
             
-            # 获取旋转参数（current_pose[2]已经是度数）
+            # 获取旋转参数（修改：反向旋转）
             agent_orientation_deg = current_pose[2] if current_pose is not None else 0
-            rotation_angle_deg = 90 - agent_orientation_deg
+            rotation_angle_deg = agent_orientation_deg - 90  # 修改：反向旋转
             rotation_angle_rad = math.radians(rotation_angle_deg)
             cos_theta = math.cos(rotation_angle_rad)
             sin_theta = math.sin(rotation_angle_rad)
