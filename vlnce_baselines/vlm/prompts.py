@@ -122,6 +122,7 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 
 **Step 3: Match Position with Task**
 - Completed=(✓) | Current=(Current) ONLY ONE | Remaining=unmarked
+- **Check task chain direction**: Follow sequence forward to NEXT waypoint, not back to previous
 
 **Step 4: Build Waypoint Chain**
 - Format: Current → Next → ... → Goal | Mark: Behind=(✓), Now=(Current), Ahead=unmarked
@@ -134,8 +135,10 @@ INITIAL_PLANNING_PROMPT = """You are a Vision-Language Navigation planning modul
 A) From Part 3 → NEXT destination + task direction?
 B) Scan 12 IMAGEs → Which show waypoint?
 C) Verify Task Direction (CRITICAL): "Opposite X" (X at IMAGE 7 → choose IMAGE 1) | "Left" (IMAGEs 2-6 NOT 8-12) | "Through X" (traverse interior)
-D) Eliminate: Obstacles <0.5m | backtracking
+D) Eliminate: Obstacles <0.5m | **backtracking (AVOID IMAGE 7/180° unless wrong path or FRONT blocked)**
 E) Choose Best: Task direction > Waypoint visible > Safe > Map aligned
+
+**AVOID Unnecessary Backtracking**: Do NOT choose IMAGE 7 (Back 180°) unless: 1) Wrong direction (need return), OR 2) FRONT severely blocked. Follow task chain FORWARD to next waypoint.
 
 **5) Near-term Plan**
 - Auto-rotation to chosen direction
@@ -340,6 +343,10 @@ Verify previous subtask completion and plan next navigation step using the 5-par
 
 **Step 3: Match Position with Task**
 - Completed=(✓) | Current=(Current) ONLY ONE | Remaining=unmarked
+- **CRITICAL - Check Task Chain Direction**: 
+  - Example: "Bedroom(✓) → Hallway(✓) → Kitchen(Current) → Hallway after cabinets(Goal)"
+  - Current in Kitchen, Goal is "Hallway AFTER cabinets" (forward direction, NOT back to previous hallway)
+  - Don't confuse with already-passed hallway - follow chain forward to NEXT waypoint
 
 **Step 4: Build Waypoint Chain**
 - Format: (✓) → Current → Next → Goal | Align: Blue circles behind=(✓)
@@ -354,8 +361,13 @@ A) From Part 3 → NEXT destination + task direction?
 B) Scan 12 IMAGEs → Which show waypoint?
 C) Verify Task Direction (CRITICAL): "Opposite X" (X at IMAGE 7 → choose IMAGE 1) | "Left" (IMAGEs 2-6 NOT 8-12) | "Through X" (traverse interior)
 D) Check Map: Green path? Avoid blue circles?
-E) Eliminate: Obstacles <0.5m | backtracking
+E) Eliminate: Obstacles <0.5m | **backtracking (AVOID IMAGE 7/Back 180° unless wrong path or severe obstacle ahead)**
 F) Choose Best: Task direction > Waypoint visible > Safe > Map aligned
+
+**CRITICAL - Avoid Unnecessary Backtracking**:
+- **Do NOT choose IMAGE 7 (Back 180°)** unless: 1) You went wrong direction (need to return), OR 2) FRONT severely blocked (<0.5m obstacle)
+- **Follow task chain FORWARD**: If chain shows Bedroom(✓)→Hallway(✓)→Kitchen(Current)→Hallway after cabinets(Goal), go FORWARD to "after cabinets" hallway, NOT BACK to previous hallway
+- **Default: Continue forward** - Unless clear evidence of wrong path, keep moving toward next unmarked waypoint in sequence
 
 **5) Near-term Plan**
 - System will auto-rotate to chosen direction
