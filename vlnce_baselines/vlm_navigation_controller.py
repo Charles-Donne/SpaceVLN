@@ -1129,8 +1129,8 @@ class VLMNavigationController(InteractiveNavigationController):
         self.save_manager.save_thinking_response(thinking_record, thinking_dir)
         print(f"  💾 已保存响应: {thinking_dir}/response.json")
         
-        # 记录到内存
-        self.thinking_outputs.append(thinking_record)
+        # 不再保存到内存记录，减少内存开销
+        # self.thinking_outputs.append(thinking_record)
         
         # 保存子任务并初始化计数
         self.current_subtask = response
@@ -1150,13 +1150,9 @@ class VLMNavigationController(InteractiveNavigationController):
         waypoint_desc = response.get('current_waypoint', 'Unknown location')
         waypoint_id = self.mapper.add_waypoint(waypoint_desc)
         
-        # 保存waypoint摘要（用于后续LLM提示词）
-        waypoint_summary = self._get_waypoint_summary()
-        self.save_manager.save_waypoint_memory(
-            waypoint_summary,
-            self.current_instruction,
-            self.current_step
-        )
+        # Waypoint记忆不再保存到文件，减少IO开销
+        # waypoint_summary = self._get_waypoint_summary()
+        # self.save_manager.save_waypoint_memory(...)
         
         # 动态更新目标landmark（直接使用VLM输出的next_waypoint_landmark）
         next_waypoint_landmark = response.get('next_waypoint_landmark', None)
@@ -1429,8 +1425,8 @@ class VLMNavigationController(InteractiveNavigationController):
         self.save_manager.save_thinking_response(thinking_record, thinking_dir)
         print(f"  💾 已保存响应: {thinking_dir}/response.json")
         
-        # 记录到内存
-        self.thinking_outputs.append(thinking_record)
+        # 不再保存到内存记录，减少内存开销
+        # self.thinking_outputs.append(thinking_record)
         
         # 打印LLM的response关键信息
         attempt_letter = chr(ord('a') + self.subtask_attempt)
@@ -1460,12 +1456,10 @@ class VLMNavigationController(InteractiveNavigationController):
             # 保存waypoint
             waypoint_desc = response.get('current_waypoint', 'Unknown location')
             waypoint_id = self.mapper.add_waypoint(waypoint_desc)
-            waypoint_summary = self._get_waypoint_summary()
-            self.save_manager.save_waypoint_memory(
-                waypoint_summary,
-                self.current_instruction,
-                self.current_step
-            )
+            
+            # Waypoint记忆不再保存到文件，减少IO开销
+            # waypoint_summary = self._get_waypoint_summary()
+            # self.save_manager.save_waypoint_memory(...)
             
             # 清空旧状态（为新子任务准备）
             print("\n[状态清理] 清空旧landmark和轨迹（准备新子任务）")
@@ -1735,7 +1729,8 @@ class VLMNavigationController(InteractiveNavigationController):
         action_record["response"] = response
         action_record["prompt"] = prompt
         
-        self.action_outputs.append(action_record)
+        # 不再保存到内存记录，减少内存开销
+        # self.action_outputs.append(action_record)
         self.save_manager.save_action_response(action_record)
         print(f"  ✓ 已保存响应: {action_name}")
         
@@ -2378,8 +2373,7 @@ class VLMNavigationController(InteractiveNavigationController):
             
             # 导航历史
             'subtask_history': self.subtask_history,
-            'thinking_count': len(self.thinking_outputs),
-            'action_count': len(self.action_outputs),
+            # thinking/action counts removed - no longer tracking in memory
             'timestamp': datetime.now().isoformat()
         }
         

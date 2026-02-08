@@ -355,19 +355,21 @@ Verify previous subtask completion and plan next navigation step using the 5-par
 **Step 5: Arrived?**
 - FAR (>1.5m, 1-2 views)=Continue | SURROUNDED (<1.0m, 3+ views)=STOP
 
-**4) Next Waypoint Direction Selection**
+**4) Next Waypoint Direction Selection (CRITICAL - Exploration Priority)**
 
 A) From Part 3 → NEXT destination + task direction?
 B) Scan 12 IMAGEs → Which show waypoint?
 C) Verify Task Direction (CRITICAL): "Opposite X" (X at IMAGE 7 → choose IMAGE 1) | "Left" (IMAGEs 2-6 NOT 8-12) | "Through X" (traverse interior)
-D) Check Map: Green path? Avoid blue circles?
-E) Eliminate: Obstacles <0.5m | **backtracking (AVOID IMAGE 7/Back 180° unless wrong path or severe obstacle ahead)**
-F) Choose Best: Task direction > Waypoint visible > Safe > Map aligned
+D) Check Map: Green path? **Blue circles = already explored, AVOID going back**
+E) Eliminate: Obstacles <0.5m | **IMAGE 7/Back 180° (FORBIDDEN unless wrong path or FRONT blocked)**
+F) Choose Best: Task direction > **Unexplored areas (no blue circles)** > Waypoint visible > Safe > Map aligned
 
-**CRITICAL - Avoid Unnecessary Backtracking**:
-- **Do NOT choose IMAGE 7 (Back 180°)** unless: 1) You went wrong direction (need to return), OR 2) FRONT severely blocked (<0.5m obstacle)
-- **Follow task chain FORWARD**: If chain shows Bedroom(✓)→Hallway(✓)→Kitchen(Current)→Hallway after cabinets(Goal), go FORWARD to "after cabinets" hallway, NOT BACK to previous hallway
-- **Default: Continue forward** - Unless clear evidence of wrong path, keep moving toward next unmarked waypoint in sequence
+**CRITICAL - Replan = Explore Forward, NOT Backward**:
+- **FORBIDDEN: IMAGE 7 (Back 180°)** - Only if: 1) Confirmed wrong direction, OR 2) FRONT completely blocked (<0.5m)
+- **Priority: Explore NEW areas** - Avoid blue circle regions (already visited). Choose directions WITHOUT blue circles in map.
+- **Default: Move FORWARD** - Continue toward next unmarked waypoint. Do NOT retreat to previous waypoints.
+- **Task Chain Logic**: Bedroom(✓)→Hallway(✓)→Kitchen(Current)→Hallway after cabinets(Goal) = Go FORWARD to "after" hallway, NOT back
+- **When replanning**: Find alternative FORWARD paths (IMAGEs 1-6, 8-12), avoid IMAGE 7 unless absolutely necessary
 
 **5) Near-term Plan**
 - System will auto-rotate to chosen direction

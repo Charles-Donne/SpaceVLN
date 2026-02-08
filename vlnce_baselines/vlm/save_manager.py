@@ -106,10 +106,6 @@ class SaveManager:
         if 'response' in thinking_record:
             with open(os.path.join(thinking_dir, "response.json"), 'w', encoding='utf-8') as f:
                 json.dump(thinking_record['response'], f, ensure_ascii=False, indent=2)
-        
-        # 更新汇总文件到records/（排除input_images和prompt，避免文件过大）
-        self._update_summary_file("thinking_summary.json", thinking_record, 
-                                 exclude_keys=['input_images', 'prompt'])
     
     def save_thinking(self, thinking_record: Dict):
         """
@@ -195,10 +191,6 @@ class SaveManager:
         # 保存response
         with open(os.path.join(action_dir, "response.json"), 'w', encoding='utf-8') as f:
             json.dump(action_record.get('response', {}), f, ensure_ascii=False, indent=2)
-        
-        # 更新汇总文件到records/（排除input_images和prompt，避免文件过大）
-        self._update_summary_file("action_summary.json", action_record, 
-                                 exclude_keys=['input_images', 'prompt'])
     
     def save_action(self, action_record: Dict, subtask_info: Optional[Dict] = None):
         """
@@ -217,18 +209,8 @@ class SaveManager:
     
     def save_waypoint_memory(self, waypoint_memory: List[Dict], 
                             instruction: str, current_step: int):
-        """保存路径点记忆到records/"""
-        data = {
-            "episode_id": self.episode_id,
-            "instruction": instruction,
-            "waypoints": waypoint_memory,
-            "total_waypoints": len(waypoint_memory),
-            "last_updated_step": current_step
-        }
-        
-        filepath = os.path.join(self.records_dir, 'waypoint_memory.json')
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+        """保存路径点记忆到records/ - DISABLED for performance"""
+        pass  # 不再保存waypoint_memory，减少IO开销
     
     def save_result(self, result: Dict):
         """
@@ -281,51 +263,7 @@ class SaveManager:
     
     def _update_summary_file(self, filename: str, record: Dict, exclude_keys: List[str] = None):
         """
-        更新records/目录下的汇总JSON文件
-        
-        结构:
-        - thinking_summary.json: 按子任务分组 {subtask_id: {phase: record}}
-        - action_summary.json: 按子任务分组 {subtask_id: {step: record}}
+        DEPRECATED - Summary files removed for performance
+        保留此方法以保持向后兼容
         """
-        filepath = os.path.join(self.records_dir, filename)
-        
-        # 过滤不需要的键
-        if exclude_keys:
-            summary_record = {k: v for k, v in record.items() if k not in exclude_keys}
-        else:
-            summary_record = record
-        
-        # 读取现有记录
-        if os.path.exists(filepath):
-            with open(filepath, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-        else:
-            data = {}
-        
-        # 根据文件类型组织结构
-        if filename == "thinking_summary.json":
-            # thinking: {subtask_id: {phase: record}}
-            subtask_id = summary_record.get('subtask_id', f"{summary_record.get('subtask_count', 1)}a")
-            phase = summary_record.get('phase', 'unknown')
-            
-            if subtask_id not in data:
-                data[subtask_id] = {}
-            data[subtask_id][phase] = summary_record
-            
-        elif filename == "action_summary.json":
-            # action: {subtask_id: {step_X: record}}
-            subtask_id = summary_record.get('subtask_id', f"{summary_record.get('subtask_count', 1)}a")
-            step = summary_record.get('step', 0)
-            
-            if subtask_id not in data:
-                data[subtask_id] = {}
-            data[subtask_id][f"step_{step}"] = summary_record
-        else:
-            # 其他文件保持列表格式
-            if not isinstance(data, list):
-                data = []
-            data.append(summary_record)
-        
-        # 保存
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        pass  # 不再生成summary文件，减少IO开销
