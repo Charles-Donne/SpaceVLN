@@ -65,16 +65,106 @@ class BaseAPIClient(ABC):
     
     def __init__(self, config: APIConfig):
         self.config = config
+        # 压缩配置（默认启用）
+        self.compress_images = True
+        self.compression_max_size = 384  # 最大边长（像素）
+        self.compression_quality = 80    # JPEG质量
+    
+    def set_compression_config(self, enabled: bool = True, max_size: int = 384, quality: int = 80):
+        """
+        设置图片压缩配置
+        
+        Args:
+            enabled: 是否启用压缩
+            max_size: 最大边长（推荐：384=高节省，512=平衡，768=高质量）
+            quality: JPEG质量（推荐：75=高节省，80=平衡，85=高质量）
+        """
+        self.compress_images = enabled
+        self.compression_max_size = max_size
+        self.compression_quality = quality
+        print(f"🗜️  图片压缩配置: {'启用' if enabled else '禁用'} | 分辨率: {max_size}px | 质量: {quality}")
     
     @staticmethod
-    def encode_image_base64(image_path: str) -> str:
-        """编码图像为base64"""
+    def compress_image(image_path: str, max_size: int = 384, quality: int = 80) -> str:
+        """
+        压缩图片并返回临时路径
+        
+        Args:
+            image_path: 原始图片路径
+            max_size: 最大边长（默认384px，原始可能是1024px）
+            quality: JPEG质量（80可节省50%大小而保持清晰）
+        
+        Returns:
+            压缩后的临时文件路径
+        """
+        from PIL import Image
+        import tempfile
+        
+        try:
+            img = Image.open(image_path)
+            
+            # 等比例缩放
+            if max(img.size) > max_size:
+                ratio = max_size / max(img.size)
+                new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
+                img = img.resize(new_size, Image.LANCZOS)
+            
+            # 保存为临时文件
+            tmp = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False)
+            img.convert('RGB').save(tmp.name, 'JPEG', quality=quality, optimize=True)
+            tmp.close()
+            
+            # 输出压缩统计
+            original_size = os.path.getsize(image_path)
+            compressed_size = os.path.getsize(tmp.name)
+            ratio = (1 - compressed_size / original_size) * 100
+            # print(f"  🗜️  {os.path.basename(image_path)}: {original_size/1024:.0f}KB → {compressed_size/1024:.0f}KB (-{ratio:.0f}%)")
+            
+            return tmp.name
+        except Exception as e:
+            print(f"⚠️  Image compression failed: {e}, using original")
+            return image_path
+    
+    def encode_image_base64(self, image_path: str, compress: bool = None) -> str:
+        """
+        编码图像为base64
+        
+        Args:
+            image_path: 图片路径
+            compress: 是否压缩（None=使用self.compress_images，True=强制压缩，False=不压缩）
+        
+        Returns:
+            base64编码字符串
+        """
         import os
-        file_size = os.path.getsize(image_path)
-        if file_size > 5 * 1024 * 1024:  # 5MB
-            print(f"⚠️  Large image: {os.path.basename(image_path)} ({file_size / 1024 / 1024:.2f}MB)")
-        with open(image_path, "rb") as f:
-            return base64.b64encode(f.read()).decode("utf-8")
+        
+        # 确定是否压缩
+        should_compress = compress if compress is not None else self.compress_images
+        
+        # 处理图片
+        if should_compress:
+            compressed_path = self.compress_image(
+                image_path, 
+                max_size=self.compression_max_size,
+                quality=self.compression_quality
+            )
+            with open(compressed_path, "rb") as f:
+                result = base64.b64encode(f.read()).decode("utf-8")
+            
+            # 清理临时文件（如果不是原始文件）
+            if compressed_path != image_path:
+                try:
+                    os.remove(compressed_path)
+                except:
+                    pass
+            return result
+        else:
+            # 不压缩，直接编码
+            file_size = os.path.getsize(image_path)
+            if file_size > 5 * 1024 * 1024:  # 5MB
+                print(f"⚠️  Large image: {os.path.basename(image_path)} ({file_size / 1024 / 1024:.2f}MB)")
+            with open(image_path, "rb") as f:
+                return base64.b64encode(f.read()).decode("utf-8")
     
     @staticmethod
     def clean_json_response(text: str) -> str:
