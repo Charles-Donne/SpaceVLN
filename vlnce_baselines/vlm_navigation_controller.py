@@ -2168,14 +2168,10 @@ class VLMNavigationController(InteractiveNavigationController):
                 
                 # 🔑 检查episode是否自动结束（Habitat内部判断，如达到MAX_EPISODE_STEPS）
                 if result['done']:
-                    print(f"\n⚠️  Episode自动完成（Habitat done=True），发送STOP给Habitat")
-                    from habitat.sims.habitat_simulator.actions import HabitatSimActions
-                    actions = [{"action": HabitatSimActions.STOP}]
-                    outputs = self.envs.step(actions)
-                    _, _, dones, infos = [list(x) for x in zip(*outputs)]
-                    if infos and len(infos) > 0:
-                        self.latest_info = infos[0]
-                    print(f"✓ 已向Habitat发送STOP，Episode正式结束")
+                    print(f"\n⚠️  Episode自动完成（Habitat done=True）")
+                    print(f"   Episode已结束，使用当前指标（无需再调用STOP）")
+                    # 不要尝试调用step(STOP)，因为episode已经done，会触发AssertionError
+                    # latest_info已在step_with_vlm中更新，包含最终指标
                     navigation_complete = True
                     break
             
