@@ -36,28 +36,31 @@ ACTION_EXECUTION_PROMPT = """You are executing navigation to reach {next_waypoin
 
 # Decision Process (Execute in Order)
 
-**Step 0: What Room Am I In?** (Position Foundation)
-- Analyze NEAR objects (< 1.0m, large in RGB) to identify current room
-- Format: "[room]'s [object] distance" - Example: "kitchen's counter 0.8m, kitchen's sink 1.0m - I am in KITCHEN"
+**Step 0: Observation Analysis** (What Do I See?)
+- **RGB View**: What objects/rooms visible? NEAR (<1.0m, large) vs FAR (>1.5m, small)? Where is destination?
+- **Distance Labels**: 7 directions obstacle distances - which clear (>1.0m)? which blocked (<0.5m)?
+- **Local Map**: Red arrow position? Green safe areas? Black obstacles? Orange trajectory path?
+- **NO HALLUCINATION**: Only describe what's ACTUALLY visible in images
 
-**Step 1: Where Am I Relative to Destination?** (Distance Check)
-- Current room vs destination room? Same or different?
-- Is destination visible in RGB? If yes: NEAR (< 1.0m, large) or FAR (> 1.5m, small)?
-- Format destination as: "[room]'s [object] distance"
+**Step 1: Position Determination** (Where Am I? - Detailed Location)
+- Analyze NEAR objects (<1.0m, large in RGB) + map position → identify current room AND specific position within room
+- **Format**: "I am in [ROOM] near [specific object]" - Example: "kitchen's counter 0.8m, kitchen's sink 1.0m, kitchen's refrigerator 1.5m → I am in KITCHEN near counter and sink"
+- **Be Specific**: Not just "in living room", but "in living room near sofa", "in living room between coffee table and TV"
+- **Compare with Destination**: Current position vs destination position - Example: "I am in living room near sofa, destination is living room's dining table"
 
-**Step 2: Arrival Check** (VISUAL ANALYSIS PRIMARY)
-- **Look at RGB view**: Is destination FILLING VIEW or OCCUPYING MAJOR PORTION?
-  * Filling/occupying view (close, prominent, "in my face") → **STOP immediately**
-  * Small/distant in view (far away) → continue navigation
-- **Local map is auxiliary only** - Visual judgment dominates decision
+**Step 2: Arrival & Destination Check** (Critical Decision Point)
+- **Case A - Arrived**: Destination FILLING VIEW (close, prominent, "in my face") → **STOP immediately**
+- **Case B - Destination Far**: Destination visible but SMALL/DISTANT in view → continue navigation
+- **Case C - Cannot Find Destination**: Destination not visible OR confused about location → **STOP immediately** (avoid wandering)
+- **Visual judgment is primary**, map is auxiliary
 
-**Step 3: Detailed Obstacle Analysis & Navigation Decision** (if not arrived)
-- Analyze ALL 7 directions: "DIRECTION: [room]'s [object] distance"
+**Step 3: Navigation Decision** (if Case B - destination far, continue navigation)
+- Analyze 7 directions: "DIRECTION: [room]'s [object] distance" 
 - Navigation logic:
-  * FRONT ≥ 1.0m clear + destination ahead → MOVE_FORWARD
-  * FRONT < 0.5m blocked → TURN toward clearer side (compare Left/Right 30-60°)
-  * Destination at side angles → TURN toward it first
-- Distance rules: < 0.5m blocked, 1.0-2.0m safe, > 2.0m very clear
+  * FRONT ≥1.0m clear + destination ahead → MOVE_FORWARD
+  * FRONT <0.5m blocked → TURN toward clearer side
+  * Destination at side angles → TURN toward it
+- Distance rules: <0.5m blocked, 1.0-2.0m safe, >2.0m very clear
 
 # Available Actions
 
@@ -68,7 +71,7 @@ ACTION_EXECUTION_PROMPT = """You are executing navigation to reach {next_waypoin
 # Output (JSON only)
 
 {{
-    "reasoning": "<4-step reasoning: 0) What Room Am I In?: Analyze NEAR objects (< 1.0m, large in RGB) to identify room. Format: '[room]'s [object] distance'. Example: 'kitchen's counter 0.8m, kitchen's sink 1.0m - I am in KITCHEN'. 1) Where Am I Relative to Destination?: Current room? Destination room? Destination visible? Format destination as '[room]'s [object]'. If visible: NEAR (< 1.0m, large) or FAR (> 1.5m, small)? 2) Arrival Check - VISUAL ANALYSIS: Look at RGB view - Is destination RIGHT IN FRONT filling/occupying major portion of view? If destination PROMINENT and CLOSE in RGB (not small/distant) → AT destination, STOP. If destination small/distant in RGB → NOT arrived. Local map is auxiliary only. 3) Navigation Decision (if not arrived): Analyze obstacles with room context. FRONT: [room]'s [object] distance. All 7 directions. Decision: move forward / turn left/right / why?>",
+    "reasoning": "<4-step reasoning: 0) Observation Analysis: RGB shows what? Distance labels show which directions clear/blocked? Map shows position where? Destination visible where? NO HALLUCINATION - only describe actual observations. 1) Position Determination: NEAR objects (<1.0m, large in RGB) indicate room AND specific position. Format: 'I am in [ROOM] near [specific object]'. Compare with destination position. Example: 'I am in living room near sofa, destination is living room's dining table'. 2) Arrival & Destination Check: Case A (Arrived) - Destination FILLING VIEW (prominent, close) → STOP. Case B (Far) - Destination SMALL/DISTANT → continue. Case C (Cannot Find) - Destination not visible OR confused → STOP immediately. 3) Navigation Decision (if Case B): Analyze 7 directions with room context. FRONT: [room]'s [object] distance. Decision: move forward / turn / why?>",
     "action_analysis": "<1-2 sentences: Why this action with room context?>",
     "action": "STOP" | "MOVE_FORWARD" | "TURN_LEFT" | "TURN_RIGHT",
     "degrees": <30-180> (TURN only),
@@ -86,7 +89,7 @@ ACTION_EXECUTION_PROMPT = """You are executing navigation to reach {next_waypoin
 **Observation**: RGB shows table directly in front view very close, Detection FRONT 0.3m, Map shows trajectory approaching table
 
 {{
-    "reasoning": "0) What Room Am I In?: RGB view shows kitchen's counter 0.9m NEAR (large in view), kitchen's cabinets 1.0m, kitchen's sink 1.2m - I am in KITCHEN room. 1) Where Am I Relative to Destination?: Current room: KITCHEN. Destination: kitchen's table. RGB view shows kitchen's table directly in FRONT VERY NEAR (0.3m, large, occupying most of view). 2) Arrival Check - VISUAL ANALYSIS: RGB view shows kitchen's table FILLING ENTIRE VIEW (extremely close, occupying most of visual field, RIGHT IN FRONT of me, not small/distant). Visual judgment: table is IN MY FACE - AT destination! Local map confirms (inside green circle) but visual analysis is primary. Must STOP. 3) Navigation: Not needed - visually AT kitchen's table (filling view).",
+    "reasoning": "0) Observation Analysis: RGB shows kitchen's table directly ahead VERY CLOSE (large, filling most of view), kitchen's counter 0.9m, kitchen's cabinets 1.0m. Distance labels: FRONT 0.3m. Map: red arrow inside green circle near table. NO HALLUCINATION - only actual objects visible. 1) Position Determination: NEAR objects kitchen's counter 0.9m, kitchen's cabinets 1.0m, kitchen's sink 1.2m → I am in KITCHEN near counter and cabinets. Destination: kitchen's table 0.3m directly ahead. Position comparison: very close to destination object. 2) Arrival & Destination Check: Destination kitchen's table FILLING ENTIRE VIEW (extremely close, RIGHT IN FRONT, prominent) → Case A (Arrived). Visual judgment: table IN MY FACE. Map confirms inside green circle. STOP immediately. 3) Navigation: Not needed - arrived.",
     "action_analysis": "Arrived at kitchen's table (NEAR 0.3m, filling RGB view, inside green circle). Stop.",
     "action": "STOP"
 }}
@@ -98,7 +101,7 @@ ACTION_EXECUTION_PROMPT = """You are executing navigation to reach {next_waypoin
 **Observation**: RGB shows living room visible ahead-left through doorway, wall on right. Detection FRONT 0.70m (wall), Left-30 >2.0m open, Right-30 0.78m, Left-60 1.65m, Right-60 1.00m, Left-90 >2.0m open, Right-90 0.85m
 
 {{
-    "reasoning": "0) What Room Am I In?: RGB view shows doorway's frame 0.7m ahead, hallway's wall 0.78m on right - I am at DOORWAY THRESHOLD between hallway and living room. 1) Where Am I Relative to Destination?: Current position: doorway threshold. Destination: living room (through doorway opening). RGB view shows living room's furniture visible ahead-left FAR (through opening), living room not entered yet. 2) Arrival Check - VISUAL ANALYSIS: RGB view shows living room SMALL/DISTANT through doorway opening (not filling view, not prominent, far away). Visually NOT at destination yet - living room space is distant, not surrounding me. Not inside room yet. 3) Navigation Decision: Analyze obstacles - FRONT: doorway's wall edge 0.70m (partially blocked, not clear). Left-30°: living room's open floor >2.0m (very clear, doorway opening toward destination!). Right-30°: hallway's wall 0.78m. Left-60°: living room's floor 1.65m clear. Right-60°: hallway's wall 1.00m. Left-90°: living room's space >2.0m open. Right-90°: hallway's wall 0.85m. Decision: FRONT not clear (0.70m). LEFT directions show living room's open space (>2.0m clear) - this is doorway opening toward destination. Turn LEFT 30° to align with living room's doorway opening path.",
+    "reasoning": "0) Observation Analysis: RGB shows doorway's frame 0.7m ahead, hallway's wall on right 0.78m, living room's furniture visible ahead-left through opening. Distance labels: FRONT 0.70m, Left-30° >2.0m open, Right-30° 0.78m. Map: red arrow at doorway threshold. 1) Position Determination: Doorway's frame 0.7m, hallway's wall 0.78m → I am at DOORWAY THRESHOLD between hallway and living room, standing at entrance. Destination: inside living room (need to pass through doorway). Position comparison: at doorway entrance, destination is inside room beyond. 2) Arrival & Destination Check: Living room's furniture SMALL/DISTANT through opening (not filling view, far away) → Case B (Far). Not inside room yet, destination distant. Continue navigation. 3) Navigation Decision: FRONT doorway's wall 0.70m (partially blocked). Left-30° living room's opening >2.0m clear (toward destination). Right-30° hallway's wall 0.78m. Turn LEFT 30° to align with living room's doorway opening.",
     "action_analysis": "Doorway's wall blocks FRONT (0.70m). Left-30° shows living room's opening (>2.0m). Turn left to align.",
     "action": "TURN_LEFT",
     "degrees": 30
@@ -111,7 +114,7 @@ ACTION_EXECUTION_PROMPT = """You are executing navigation to reach {next_waypoin
 **Observation**: RGB shows table ahead, Detection FRONT 1.5m clear, Left-30 1.2m, Right-30 1.0m, Left-60 0.9m, Right-60 1.1m, Left-90 0.8m, Right-90 1.2m
 
 {{
-    "reasoning": "0) What Room Am I In?: RGB view shows living room's sofa 1.1m, living room's coffee table 1.3m - I am in LIVING ROOM near kitchen entrance. 1) Where Am I Relative to Destination?: Current room: living room. Destination: kitchen's table. RGB view shows kitchen's table visible ahead FAR (~1.5m, small in view, not NEAR). 2) Arrival Check - VISUAL ANALYSIS: RGB view shows kitchen's table SMALL and DISTANT ahead (not filling view, not prominent, far away). Visually NOT at destination - table appears small/distant in view, not close. Not AT destination. 3) Navigation Decision: FRONT: kitchen's table direction 1.5m clear (safe, > 1.0m). Left-30°: living room's wall 1.2m. Right-30°: kitchen's doorway 1.0m. Left-60°: living room's furniture 0.9m. Right-60°: kitchen's counter 1.1m. Left-90°: living room's cabinet 0.8m. Right-90°: kitchen's appliances 1.2m. Path clear ahead (FRONT 1.5m > 1.0m), no obstacles blocking. Move forward 0.75m toward kitchen's table.",
+    "reasoning": "0) Observation Analysis: RGB shows kitchen's table ahead FAR (small, ~1.5m), living room's sofa 1.1m, living room's coffee table 1.3m. Distance labels: FRONT 1.5m clear, Left-30° 1.2m, Right-30° 1.0m. Map: red arrow in living room near kitchen entrance. 1) Position Determination: Living room's sofa 1.1m, living room's coffee table 1.3m → I am in LIVING ROOM near sofa and coffee table area, close to kitchen entrance. Destination: kitchen's table ahead. Position comparison: in living room near sofa, destination is kitchen's table (different area/room). 2) Arrival & Destination Check: Kitchen's table SMALL/DISTANT ahead (not filling view, far away) → Case B (Far). Not at destination, continue navigation. 3) Navigation Decision: FRONT kitchen's table direction 1.5m clear (>1.0m safe). Left-30° living room's wall 1.2m. Right-30° kitchen's doorway 1.0m. Path clear ahead. Move forward 0.75m toward kitchen's table.",
     "action_analysis": "Kitchen's table ahead FAR. FRONT clear 1.5m. Advance toward destination.",
     "action": "MOVE_FORWARD",
     "meters": 0.75
@@ -124,7 +127,7 @@ ACTION_EXECUTION_PROMPT = """You are executing navigation to reach {next_waypoin
 **Observation**: RGB shows doorway ahead-right but furniture blocking, Detection FRONT 0.4m blocked, Left-30 0.6m, Right-30 1.8m clear, Left-60 0.8m, Right-60 2.0m, Left-90 1.0m, Right-90 1.5m
 
 {{
-    "reasoning": "0) What Room Am I In?: RGB view shows hallway's wall 0.6m on left, hallway's furniture 0.4m ahead blocking - I am in HALLWAY corridor. 1) Where Am I Relative to Destination?: Current room: hallway. Destination: bedroom's doorway. RGB view shows bedroom's doorway visible ahead-right FAR (~2.0m) but hallway's furniture blocking direct path. 2) Arrival Check - VISUAL ANALYSIS: RGB view shows bedroom's doorway SMALL/DISTANT in side view (not filling view, not prominent, far away). Visually NOT at destination - doorway appears distant. Still in hallway. 3) Navigation Decision: FRONT: hallway's furniture 0.4m BLOCKED (< 0.5m, too close). Left-30°: hallway's wall 0.6m (not good). Right-30°: hallway's open path 1.8m clear (safe, > 1.0m). Left-60°: hallway's wall 0.8m. Right-60°: bedroom's doorway direction 2.0m very clear. Left-90°: hallway's picture 1.0m. Right-90°: hallway's corner 1.5m. Decision: FRONT blocked by hallway's furniture (0.4m < 0.5m). RIGHT directions clearer (Right-30° 1.8m, Right-60° 2.0m toward bedroom's doorway). Turn RIGHT 30° to bypass hallway's furniture obstacle.",
+    "reasoning": "0) Observation Analysis: RGB shows hallway's furniture 0.4m ahead blocking, hallway's wall 0.6m left, bedroom's doorway visible ahead-right FAR. Distance labels: FRONT 0.4m blocked, Left-30° 0.6m, Right-30° 1.8m clear, Right-60° 2.0m. Map: red arrow in hallway. 1) Position Determination: Hallway's wall 0.6m, hallway's furniture 0.4m → I am in HALLWAY corridor, blocked by furniture obstacle ahead. Destination: bedroom's doorway (ahead-right direction). Position comparison: in narrow hallway with furniture blocking, destination is bedroom doorway beyond obstacle. 2) Arrival & Destination Check: Bedroom's doorway SMALL/DISTANT in side view (not filling view, far away) → Case B (Far). Still in hallway, continue. 3) Navigation Decision: FRONT hallway's furniture 0.4m BLOCKED (<0.5m). Right-30° hallway's open path 1.8m clear. Right-60° bedroom's doorway direction 2.0m clear. Turn RIGHT 30° to bypass furniture obstacle.",
     "action_analysis": "Hallway's furniture blocks FRONT (0.4m). Right-30° clear 1.8m toward bedroom's doorway. Turn right to avoid.",
     "action": "TURN_RIGHT",
     "degrees": 30
@@ -148,7 +151,7 @@ ACTION_EXECUTION_PROMPT = """You are executing navigation to reach {next_waypoin
 **Observation**: RGB shows doorway now at left side, Detection FRONT 2.0m clear, Left-30 1.5m, Right-30 1.2m, Left-60 1.8m, Right-60 1.0m, Left-90 1.6m, Right-90 0.9m
 
 {{
-    "reasoning": "0) What Room Am I In?: RGB view shows hallway's wall 1.5m on left, hallway's furniture 0.9m behind on right (passed) - I am still in HALLWAY corridor. 1) Where Am I Relative to Destination?: Current room: hallway. Destination: bedroom's doorway. RGB view shows bedroom's doorway now visible at LEFT side (~1.5m). Hallway's furniture obstacle now behind me (bypassed). 2) Arrival Check - VISUAL ANALYSIS: RGB view shows bedroom's doorway at LEFT side, SMALL/DISTANT (not filling view, not right in front, not prominent). Visually NOT at destination - doorway appears distant at side angle. Still in hallway. 3) Navigation Decision: FRONT: hallway's wall 2.0m clear (not toward destination). Left-30°: bedroom's doorway direction 1.5m (destination here, clear). Right-30°: hallway's corner 1.2m. Left-60°: bedroom's door frame 1.8m (destination closer). Right-60°: hallway's furniture 1.0m (obstacle). Left-90°: bedroom's entrance 1.6m. Right-90°: hallway's furniture 0.9m (passed obstacle). Decision: Hallway's furniture obstacle bypassed successfully. Bedroom's doorway now at LEFT angles (Left-30° 1.5m, Left-60° 1.8m). FRONT goes to hallway's wall (not destination). Turn LEFT 30° to realign toward bedroom's doorway direction.",
+    "reasoning": "0) Observation Analysis: RGB shows bedroom's doorway at LEFT side (~1.5m), hallway's wall 1.5m left, hallway's furniture 0.9m behind (passed). Distance labels: FRONT 2.0m, Left-30° 1.5m, Left-60° 1.8m. Map: red arrow in hallway past obstacle. 1) Position Determination: Hallway's wall 1.5m, hallway's furniture 0.9m behind → I am in HALLWAY corridor, past the furniture obstacle. Destination: bedroom's doorway at left side. Position comparison: in hallway clear area, destination doorway now visible to left. 2) Arrival & Destination Check: Bedroom's doorway SMALL/DISTANT at left side (not filling view, not prominent) → Case B (Far). Still in hallway, continue. 3) Navigation Decision: FRONT hallway's wall 2.0m (not toward destination). Left-30° bedroom's doorway direction 1.5m clear. Turn LEFT 30° to realign toward bedroom's doorway.",
     "action_analysis": "Hallway's furniture bypassed. Bedroom's doorway at left 1.5m. Turn left to realign toward destination.",
     "action": "TURN_LEFT",
     "degrees": 30
@@ -161,21 +164,21 @@ ACTION_EXECUTION_PROMPT = """You are executing navigation to reach {next_waypoin
 **Observation**: RGB shows gym equipment inside room (treadmill, weights), Map shows red arrow in new expanded green area
 
 {{
-    "reasoning": "0) What Room Am I In?: RGB view shows exercise room's treadmill 0.8m NEAR (large in view), exercise room's weights 0.9m, exercise room's mat 1.0m - I am INSIDE EXERCISE ROOM. 1) Where Am I Relative to Destination?: Current room: exercise room (just entered). Destination: exercise room. RGB view confirms exercise room's gym equipment all around me defining this space. 2) Arrival Check - VISUAL ANALYSIS: RGB view shows exercise room's equipment SURROUNDING ME (large, close, filling view, prominent in all directions). Visually INSIDE exercise room - equipment occupies major portion of view, not small/distant. Room destination achieved! AT destination. 3) Navigation: Not needed - visually confirmed inside exercise room (equipment surrounding).",
+    "reasoning": "0) Observation Analysis: RGB shows exercise room's treadmill 0.8m NEAR (large), exercise room's weights 0.9m, exercise room's mat 1.0m - gym equipment SURROUNDING. Distance labels confirm close objects. Map: red arrow in expanded green area (new room). 1) Position Determination: Exercise room's treadmill 0.8m, exercise room's weights 0.9m, exercise room's mat 1.0m → I am INSIDE EXERCISE ROOM, surrounded by gym equipment (treadmill and weights nearby). Destination: exercise room. Position comparison: inside exercise room with equipment all around - at destination. 2) Arrival & Destination Check: Destination exercise room. Equipment SURROUNDING ME (large, filling view, prominent in all directions) → Case A (Arrived). Room destination achieved, INSIDE exercise room. STOP immediately. 3) Navigation: Not needed - arrived.",
     "action_analysis": "Exercise room destination reached (inside room, exercise room's equipment surrounding, map confirms space transition). Stop.",
     "action": "STOP"
 }}
 
 **Critical Rules**:
 1. **Room Context MANDATORY**: Every object → [room]'s [object] distance (prevents confusion: kitchen's chair vs living room's chair)
-2. **Position Awareness First**: Always identify "What Room Am I In?" using NEAR objects (< 1.0m, large in RGB)
-3. **Arrival = Visual Analysis**: Is destination filling/occupying major portion of RGB view?
-   - Filling view (close, prominent) → STOP immediately
-   - Small/distant in view → continue navigation
-   - Local map is auxiliary only, visual dominates
-4. **Obstacle Analysis**: Analyze all 7 directions with [room]'s [object] format
-5. **Real-time Tracking**: State current room → destination room → visual distance → arrived or not
-6. **Distance Rules**: < 0.5m blocked, 1.0-2.0m safe, > 2.0m very clear"""
+2. **4-Step Process**: 0) Observe (what's visible?) → 1) Position (where am I?) → 2) Arrival (arrived/far/cannot find?) → 3) Navigate (if far)
+3. **NO HALLUCINATION**: Only describe what's ACTUALLY visible in RGB + map
+4. **Arrival Decision (Step 2)**:
+   - Case A: Destination FILLING VIEW (close, prominent) → STOP immediately
+   - Case B: Destination SMALL/DISTANT → continue navigation
+   - Case C: Cannot find destination OR confused about location → STOP immediately (avoid wandering)
+5. **Focus on Visual + Map**: Analyze RGB view and local map carefully to determine position and destination status
+6. **Distance Rules**: <0.5m blocked, 1.0-2.0m safe, >2.0m very clear"""
 
 
 def get_action_execution_prompt(next_waypoint_destination: str,

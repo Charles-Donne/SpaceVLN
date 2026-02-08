@@ -2071,7 +2071,12 @@ class VLMNavigationController(InteractiveNavigationController):
         subtask_steps = 0
         navigation_complete = False
         
-        while total_steps < max_steps:
+        while True:
+            # 🔑 检查退出条件（执行action之前）
+            # 如果任务已完成（VLM判断或Habitat设置done），直接退出
+            if navigation_complete:
+                break
+            
             # VLM决策动作（失败则重试）
             max_retries = 3
             action_id = None
@@ -2166,8 +2171,16 @@ class VLMNavigationController(InteractiveNavigationController):
                         self.dtg_history = []
                     self.dtg_history.append(dtg)
                 
+                # 🔑 检查episode是否自动结束（Habitat内部判断，如达到MAX_EPISODE_STEPS）
                 if result['done']:
-                    print("\nEpisode自动完成")
+                    print(f"\n⚠️  Episode自动完成（Habitat done=True），发送STOP给Habitat")
+                    from habitat.sims.habitat_simulator.actions import HabitatSimActions
+                    actions = [{"action": HabitatSimActions.STOP}]
+                    outputs = self.envs.step(actions)
+                    _, _, dones, infos = [list(x) for x in zip(*outputs)]
+                    if infos and len(infos) > 0:
+                        self.latest_info = infos[0]
+                    print(f"✓ 已向Habitat发送STOP，Episode正式结束")
                     navigation_complete = True
                     break
             
@@ -2220,20 +2233,6 @@ class VLMNavigationController(InteractiveNavigationController):
             
             # 🔑 强制重规划检查：如果达到最大步数，执行完动作后立即触发verify
             if force_replan_after_action:
-                # 🔑 关键：检查episode是否已结束，如果结束则发送STOP给Habitat
-                if result.get('done', False):
-                    print(f"\n⚠️  [强制重规划] Episode已结束（达到MAX_EPISODE_STEPS），发送STOP给Habitat")
-                    # 向Habitat发送STOP action以正确结束episode
-                    actions = [{"action": HabitatSimActions.STOP}]
-                    outputs = self.envs.step(actions)
-                    _, _, dones, infos = [list(x) for x in zip(*outputs)]
-                    # 获取最终metrics
-                    if infos and len(infos) > 0:
-                        self.latest_info = infos[0]
-                    print(f"✓ 已向Habitat发送STOP，Episode正式结束")
-                    navigation_complete = True
-                    break
-                
                 print(f"\n🔄 [强制重规划] 已执行完 {max_subtask_steps} 步，立即触发验证和重规划")
                 new_subtask, _ = self.verify_and_replan()
                 # 检查是否完成全局任务
@@ -2246,27 +2245,9 @@ class VLMNavigationController(InteractiveNavigationController):
             
             if navigation_complete:
                 break
-            
-            # 🔑 检查episode是否自动结束（达到MAX_EPISODE_STEPS）
-            if result['done']:
-                print("\n⚠️  Episode自动完成（达到MAX_EPISODE_STEPS），发送STOP给Habitat")
-                # 向Habitat发送STOP action以正确结束episode
-                actions = [{"action": HabitatSimActions.STOP}]
-                outputs = self.envs.step(actions)
-                _, _, dones, infos = [list(x) for x in zip(*outputs)]
-                # 获取最终metrics
-                if infos and len(infos) > 0:
-                    self.latest_info = infos[0]
-                print(f"✓ 已向Habitat发送STOP，Episode正式结束")
-                navigation_complete = True
-                break
         
         # 主循环结束 - 记录退出原因和DTG轨迹统计
-        if total_steps >= max_steps:
-            print(f"\n⚠️  已达到最大步数限制: {total_steps}/{max_steps}")
-            print("导航循环结束，开始生成结果...")
-        elif navigation_complete:
-            print(f"\n✅ 导航任务完成，总步数: {total_steps}")
+        print(f"\n✅ 导航循环结束，总步数: {total_steps}")
         
         # 🔍 打印DTG轨迹统计（用于调试）
         if hasattr(self, 'dtg_history') and self.dtg_history:

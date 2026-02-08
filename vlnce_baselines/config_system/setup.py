@@ -51,10 +51,21 @@ class ConfigHelper:
         config.MAP.NUM_ENVIRONMENTS = num_environments
         config.MAP.RESULTS_DIR = config.RESULTS_DIR
         
-        # ===== 启用TOP_DOWN_MAP_VLNCE测量（俯视图可视化必需） =====
-        if "TOP_DOWN_MAP_VLNCE" not in config.TASK_CONFIG.TASK.MEASUREMENTS:
-            config.TASK_CONFIG.TASK.MEASUREMENTS.append("TOP_DOWN_MAP_VLNCE")
-            print("[Config] 已启用 TOP_DOWN_MAP_VLNCE 测量")
+        # ===== 启用必要的Habitat测量指标 =====
+        required_measurements = [
+            "TOP_DOWN_MAP_VLNCE",         # 俯视图可视化必需
+            "DISTANCE_TO_GOAL",           # 距离目标点的距离
+            "SUCCESS",                    # 是否成功（3米内）
+            "SPL",                        # Success weighted by Path Length
+            "ORACLE_NAVIGATION_ERROR",    # 轨迹中与目标的最小距离
+            "ORACLE_SUCCESS",             # 轨迹中是否曾到达目标
+            "ORACLE_SPL"                  # 基于oracle_success的SPL
+        ]
+        
+        for measurement in required_measurements:
+            if measurement not in config.TASK_CONFIG.TASK.MEASUREMENTS:
+                config.TASK_CONFIG.TASK.MEASUREMENTS.append(measurement)
+                print(f"[Config] 已启用 {measurement} 测量")
         
         config.freeze()
         return config
