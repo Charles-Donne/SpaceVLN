@@ -23,15 +23,24 @@ ACTION_EXECUTION_PROMPT = """You are executing navigation to reach {next_waypoin
 - Distance: <0.5m blocked | >1.0m safe | >1.5m clear
 **IMAGE 3 - Local Map**: Red arrow=position | Green circle=0.5m arrival | Black=obstacles | Green=safe | Orange=trajectory
 
-# Decision Process
+# Decision Process (3 Steps)
 
-**Step 0: Observe** - RGB/Detection/Map show what? NO HALLUCINATION
-**Step 1: Position** - NEAR objects (<1.0m) + map → "I am in [ROOM] near [object]". Compare with destination.
-**Step 2: Arrival Check**
-- Case A: Destination FILLING VIEW → STOP
-- Case B: Destination SMALL/DISTANT → continue
-- Case C: Cannot find OR confused → STOP
-**Step 3: Navigate** (if Case B) - Analyze 7 directions. FRONT ≥1.0m clear + ahead → MOVE. FRONT <0.5m → TURN clearer side.
+**Step 1: Find Destination in View**
+- **Where**: Destination visible? Front/Left/Right? Which angle? (Front center/Left 30°/Right 60°/...)
+- **Distance**: How far? NEAR(<1m filling view)/MEDIUM(1-2m)/FAR(>2m small)/NOT VISIBLE
+- **Example**: "Kitchen table: Front center, 0.4m NEAR" OR "Bedroom door: Left 30°, 3.0m FAR" OR "Target: NOT VISIBLE"
+
+**Step 2: Decide Action Based on Position & Distance**
+- **NEAR (<1m, filling view)** → STOP (arrived)
+- **NOT VISIBLE** → STOP (lost/confused)
+- **Left side (30-150°)** → TURN_LEFT (align toward destination)
+- **Right side (210-330°)** → TURN_RIGHT (align toward destination)
+- **Front (330-30°, center) + clear path** → MOVE_FORWARD (advance)
+- **Front + blocked** → TURN to clearer side
+
+**Step 3: Verify Safety**
+- Check obstacle distances in chosen direction
+- Adjust action if blocked (<0.5m)
 
 # Available Actions
 
@@ -42,8 +51,8 @@ ACTION_EXECUTION_PROMPT = """You are executing navigation to reach {next_waypoin
 # Output (JSON only)
 
 {{
-    "reasoning": "<0) Observe: RGB/Detection/Map show what? NO HALLUCINATION. 1) Position: NEAR objects → I am in [ROOM] near [object]. Destination: [object]. 2) Arrival: Case A/B/C? 3) Navigate (if B): 7 directions analysis>",
-    "action_analysis": "<1-2 sentences>",
+    "reasoning": "<Step 1: Find Destination - Where is [destination]? (Front center/Left 30°/Right 60°/...) Distance? (NEAR<1m/MEDIUM 1-2m/FAR>2m/NOT VISIBLE). Step 2: Decide Action - NEAR→STOP | NOT VISIBLE→STOP | Left side→TURN_LEFT | Right side→TURN_RIGHT | Front+clear→MOVE_FORWARD | Front+blocked→TURN. Step 3: Safety - Check obstacle distances in chosen direction>",
+    "action_analysis": "<1-2 sentences: Destination location + distance → action>",
     "action": "STOP" | "MOVE_FORWARD" | "TURN_LEFT" | "TURN_RIGHT",
     "degrees": <30-180> (TURN only),
     "meters": <0.25-1.0> (MOVE only)
@@ -51,58 +60,58 @@ ACTION_EXECUTION_PROMPT = """You are executing navigation to reach {next_waypoin
 
 # Examples
 
-## Ex1 - Arrived:
+## Ex1 - Arrived (NEAR, STOP):
 {{
-    "reasoning": "0) RGB: kitchen's table VERY CLOSE filling view, counter 0.9m, cabinets 1.0m. Detection: FRONT 0.3m. Map: inside green circle. 1) Position: NEAR counter 0.9m, cabinets 1.0m → in KITCHEN near counter. Destination: kitchen's table 0.3m ahead. 2) Arrival: Table FILLING VIEW → Case A. STOP. 3) N/A.",
-    "action_analysis": "Arrived at kitchen's table (0.3m, filling view). Stop.",
+    "reasoning": "Step 1: Kitchen table - Front center, 0.3m NEAR (filling entire view, very close). Step 2: NEAR (<1m) → STOP (arrived). Step 3: N/A.",
+    "action_analysis": "Kitchen table 0.3m NEAR filling view → arrived, STOP.",
     "action": "STOP"
 }}
 
-## Ex2 - Turn toward opening:
+## Ex2 - Turn toward left opening:
 {{
-    "reasoning": "0) RGB: doorway 0.7m, hallway's wall 0.78m right, living room visible ahead-left. Detection: FRONT 0.70m, L30° >2.0m, R30° 0.78m. Map: at threshold. 1) Position: at DOORWAY THRESHOLD between hallway/living room. Destination: inside living room. 2) Arrival: Living room SMALL/DISTANT → Case B. 3) Navigate: FRONT 0.70m blocked. L30° >2.0m clear toward destination. Turn LEFT 30°.",
-    "action_analysis": "L30° shows living room opening (>2.0m). Turn left.",
+    "reasoning": "Step 1: Living room opening - Left 30°, 2.0m MEDIUM (doorway visible left side). Step 2: Left side (30°) → TURN_LEFT to align. Step 3: L30° >2.0m clear, safe to turn.",
+    "action_analysis": "Living room opening at Left 30°, 2.0m → turn left 30° to align.",
     "action": "TURN_LEFT",
     "degrees": 30
 }}
 
-## Ex3 - Move forward:
+## Ex3 - Move forward to distant target:
 {{
-    "reasoning": "0) RGB: kitchen's table FAR small, living room's sofa 1.1m, coffee table 1.3m. Detection: FRONT 1.5m clear. Map: in living room. 1) Position: in LIVING ROOM near sofa/coffee table. Destination: kitchen's table ahead. 2) Arrival: Table SMALL/DISTANT → Case B. 3) Navigate: FRONT 1.5m clear toward table. Move forward 0.75m.",
-    "action_analysis": "Kitchen's table ahead FAR. FRONT clear 1.5m. Advance.",
+    "reasoning": "Step 1: Kitchen table - Front center, 3.5m FAR (small, visible ahead). Step 2: Front + FAR → MOVE_FORWARD to approach. Step 3: FRONT 1.5m clear, safe to advance 0.75m.",
+    "action_analysis": "Kitchen table 3.5m FAR ahead, path clear → move forward 0.75m.",
     "action": "MOVE_FORWARD",
     "meters": 0.75
 }}
 
-## Ex4 - Bypass obstacle:
+## Ex4 - Turn right toward target:
 {{
-    "reasoning": "0) RGB: hallway's furniture 0.4m blocking, bedroom's doorway FAR right. Detection: FRONT 0.4m blocked, R30° 1.8m clear, R60° 2.0m. 1) Position: in HALLWAY, blocked by furniture. Destination: bedroom's doorway ahead-right. 2) Arrival: Doorway SMALL/DISTANT → Case B. 3) Navigate: FRONT 0.4m BLOCKED. R30° 1.8m clear toward doorway. Turn RIGHT 30°.",
-    "action_analysis": "Furniture blocks FRONT. R30° clear 1.8m. Turn right.",
+    "reasoning": "Step 1: Bedroom doorway - Right 30°, 1.8m MEDIUM (visible right side). Step 2: Right side (30°) → TURN_RIGHT to align. Step 3: R30° 1.8m clear, safe to turn.",
+    "action_analysis": "Bedroom doorway at Right 30°, 1.8m → turn right 30° to align.",
     "action": "TURN_RIGHT",
     "degrees": 30
 }}
 
-## Ex5 - Realign:
+## Ex5 - Target not visible (STOP):
 {{
-    "reasoning": "0) RGB: bedroom's doorway LEFT 1.5m, hallway's wall left, furniture 0.9m behind. Detection: FRONT 2.0m, L30° 1.5m. Map: past obstacle. 1) Position: in HALLWAY past furniture. Destination: bedroom's doorway left. 2) Arrival: Doorway SMALL/DISTANT left → Case B. 3) Navigate: L30° 1.5m toward doorway. Turn LEFT 30°.",
-    "action_analysis": "Obstacle bypassed. Doorway at left. Realign.",
-    "action": "TURN_LEFT",
-    "degrees": 30
-}}
-
-## Ex6 - Entered room:
-{{
-    "reasoning": "0) RGB: exercise room's treadmill 0.8m NEAR, weights 0.9m, mat 1.0m SURROUNDING. Map: in expanded green area. 1) Position: INSIDE EXERCISE ROOM surrounded by equipment. Destination: exercise room. 2) Arrival: Equipment SURROUNDING → Case A. STOP. 3) N/A.",
-    "action_analysis": "Inside exercise room, equipment surrounding. Stop.",
+    "reasoning": "Step 1: Exercise room - NOT VISIBLE (cannot find in any direction, lost). Step 2: NOT VISIBLE → STOP (confused/lost). Step 3: N/A.",
+    "action_analysis": "Exercise room NOT VISIBLE in view → lost, STOP for replan.",
     "action": "STOP"
 }}
 
+## Ex6 - Front blocked, turn to bypass:
+{{
+    "reasoning": "Step 1: Hallway ahead - Front center, 2.0m MEDIUM (visible but furniture blocking 0.4m). Step 2: Front but FRONT 0.4m blocked → TURN to clearer side. Right 30° 1.8m clear toward destination → TURN_RIGHT. Step 3: R30° 1.8m clear, safe.",
+    "action_analysis": "Hallway ahead but FRONT blocked 0.4m → Right 30° clear 1.8m, turn right.",
+    "action": "TURN_RIGHT",
+    "degrees": 30
+}}
+
 **Critical Rules**:
-1. **Room Context**: [room]'s [object] distance (kitchen's chair ≠ living room's chair)
-2. **4-Step**: 0) Observe → 1) Position (near what?) → 2) Arrival (A/B/C?) → 3) Navigate
-3. **NO HALLUCINATION**: Only describe actual visible content
-4. **Arrival**: A) FILLING VIEW → STOP | B) SMALL/DISTANT → continue | C) Cannot find/confused → STOP
-5. **Distance**: <0.5m blocked | 1.0-2.0m safe | >2.0m clear"""
+1. **3-Step Logic**: 1) Find destination (where? distance?) → 2) Decide action (NEAR→STOP, Left→TURN_LEFT, Right→TURN_RIGHT, Front+clear→MOVE, NOT VISIBLE→STOP) → 3) Verify safety
+2. **Distance Classification**: NEAR<1m (filling view, STOP) | MEDIUM 1-2m | FAR>2m (small) | NOT VISIBLE (STOP)
+3. **Direction Mapping**: Left side (30-150°)→TURN_LEFT | Right side (210-330°)→TURN_RIGHT | Front center (330-30°)→MOVE_FORWARD
+4. **NO HALLUCINATION**: Only describe what's actually visible in images
+5. **Priority**: Destination location > Obstacle avoidance. Always move toward destination unless blocked"""
 
 
 def get_action_execution_prompt(next_waypoint_destination: str,
