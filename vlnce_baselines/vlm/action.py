@@ -7,9 +7,6 @@ from typing import Dict, Tuple, Optional
 from vlnce_baselines.vlm.api_client import APIConfig, BaseAPIClient
 from vlnce_baselines.vlm.action_prompt import get_action_execution_prompt
 from vlnce_baselines.visualization.visualizer import MapVisualizer
-from PIL import Image
-import tempfile
-import os
 
 
 class ActionExecutor(BaseAPIClient):
@@ -42,30 +39,13 @@ class ActionExecutor(BaseAPIClient):
         print(f"  Model: {self.config.model}")
         print(f"  Image: Detection only, {self.compression_resolution}px Q{self.compression_quality}")
         print(f"  Parameters: turn={turn_angle}°, move={move_distance}m")
-    
-    def compress_image(self, image_path: str) -> str:
-        """压缩图片以节省token（使用BaseAPIClient的静态方法）
         
-        Args:
-            image_path: 原始图片路径
-            
-        Returns:
-            压缩后的临时文件路径
-        """
-        if not self.enable_compression or not os.path.exists(image_path):
-            return image_path
-        
-        try:
-            # 调用父类的静态压缩方法
-            return BaseAPIClient.compress_image(
-                image_path, 
-                max_size=self.compression_resolution, 
-                quality=self.compression_quality
-            )
-        except Exception as e:
-            print(f"⚠️ Compression failed: {e}")
-            return image_path
-    
+        # 配置父类的压缩参数（父类的encode_image_base64会自动使用）
+        self.set_compression_config(
+            enabled=self.enable_compression,
+            max_size=self.compression_resolution,
+            quality=self.compression_quality
+        )
     
     def validate_response(self, response: Dict) -> bool:
         """验证VLM响应是否包含所有必需字段"""
@@ -259,36 +239,21 @@ class ActionExecutor(BaseAPIClient):
             distance_right_90=obstacle_distances['right_90']
         )
         
-        # 只使用Detection图（优化token）
+        # 只使用Detection图（优化token）- 父类encode_image_base64会自动压缩
         images = []
-        temp_files = []
         
         if detection_image and os.path.exists(detection_image):
-            compressed_det = self.compress_image(detection_image)
-            images.append(compressed_det)
-            if compressed_det != detection_image:
-                temp_files.append(compressed_det)
+            images.append(detection_image)
         else:
             # 如果没有detection，回退到RGB
             print("⚠️ No detection, using RGB")
             if os.path.exists(first_person_image):
-                compressed_rgb = self.compress_image(first_person_image)
-                images.append(compressed_rgb)
-                if compressed_rgb != first_person_image:
-                    temp_files.append(compressed_rgb)
+                images.append(first_person_image)
         
         print(f"🖼️ Sending {len(images)} image (Detection, {self.compression_resolution}px Q{self.compression_quality})")
         
-        # 调用API
+        # 调用API（父类call_api → build_message_content → encode_image_base64 → compress_image）
         response = self.call_api(prompt, images)
-        
-        # 清理临时文件
-        for temp_file in temp_files:
-            try:
-                if os.path.exists(temp_file):
-                    os.remove(temp_file)
-            except:
-                pass
         
         if not response:
             print("✗ No response from VLM")
