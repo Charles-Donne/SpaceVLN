@@ -7,6 +7,9 @@ from typing import Dict, Tuple, Optional
 from vlnce_baselines.vlm.api_client import APIConfig, BaseAPIClient
 from vlnce_baselines.vlm.action_prompt import get_action_execution_prompt
 from vlnce_baselines.visualization.visualizer import MapVisualizer
+from PIL import Image
+import tempfile
+import os
 
 
 class ActionExecutor(BaseAPIClient):
@@ -31,9 +34,44 @@ class ActionExecutor(BaseAPIClient):
         self.turn_angle = turn_angle
         self.move_distance = move_distance
         
-        # print(f"✓ Action Executor initialized")
+        # 图片压缩配置（节省token）
+        self.enable_compression = True
+        self.compression_resolution = 512  # 降低到512px
+        self.compression_quality = 75      # JPEG质量75
+        
         print(f"  Model: {self.config.model}")
+        print(f"  Image: Detection only, {self.compression_resolution}px Q{self.compression_quality}")
         print(f"  Parameters: turn={turn_angle}°, move={move_distance}m")
+    
+    def compress_image(self, image_path: str) -> str:
+        """压缩图片以节省token
+        
+        Args:
+            image_path: 原始图片路径
+            
+        Returns:
+            压缩后的临时文件路径
+        """
+        if not self.enable_compression or not os.path.exists(image_path):
+            return image_path
+        
+        try:
+            img = Image.open(image_path)
+            
+            # 等比缩放
+            if max(img.size) > self.compression_resolution:
+                ratio = self.compression_resolution / max(img.size)
+                new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
+                img = img.resize(new_size, Image.Resampling.LANCZOS)
+            
+            # 保存到临时文件
+            tmp = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False, mode='wb')
+            img.convert('RGB').save(tmp.name, 'JPEG', quality=self.compression_quality, optimize=True)
+            tmp.close()
+            return tmp.name
+        except Exception as e:
+            print(f"⚠️ Compression failed: {e}")
+            return image_path
     
     def validate_response(self, response: Dict) -> bool:
         """验证VLM响应是否包含所有必需字段"""
@@ -213,7 +251,7 @@ class ActionExecutor(BaseAPIClient):
         distance_summary = MapVisualizer.get_distance_summary(obstacle_distances)
         print(f"📏 Obstacle Distances: {distance_summary}")
         
-        # 构建prompt
+        # 构建prompt（精简版）
         prompt = get_action_execution_prompt(
             next_waypoint_destination=next_waypoint_destination,
             subtask_instruction=subtask_instruction,
@@ -223,21 +261,40 @@ class ActionExecutor(BaseAPIClient):
             distance_front=obstacle_distances['front'],
             distance_left_30=obstacle_distances['left_30'],
             distance_right_30=obstacle_distances['right_30'],
-            distance_left_60=obstacle_distances.get('left_60', 'Unknown'),
-            distance_right_60=obstacle_distances.get('right_60', 'Unknown'),
             distance_left_90=obstacle_distances['left_90'],
             distance_right_90=obstacle_distances['right_90']
         )
         
-        # 组合图像：RGB + Detection + Local Map
-        images = [first_person_image]
-        if detection_image:
-            images.append(detection_image)
-        if local_map_image:
-            images.append(local_map_image)
+        # 只使用Detection图（优化token）
+        images = []
+        temp_files = []
+        
+        if detection_image and os.path.exists(detection_image):
+            compressed_det = self.compress_image(detection_image)
+            images.append(compressed_det)
+            if compressed_det != detection_image:
+                temp_files.append(compressed_det)
+        else:
+            # 如果没有detection，回退到RGB
+            print("⚠️ No detection, using RGB")
+            if os.path.exists(first_person_image):
+                compressed_rgb = self.compress_image(first_person_image)
+                images.append(compressed_rgb)
+                if compressed_rgb != first_person_image:
+                    temp_files.append(compressed_rgb)
+        
+        print(f"🖼️ Sending {len(images)} image (Detection, {self.compression_resolution}px Q{self.compression_quality})")
         
         # 调用API
         response = self.call_api(prompt, images)
+        
+        # 清理临时文件
+        for temp_file in temp_files:
+            try:
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
+            except:
+                pass
         
         if not response:
             print("✗ No response from VLM")
