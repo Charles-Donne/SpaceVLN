@@ -25,9 +25,8 @@ model: "gpt-4o"
 # 较低的值使输出更确定性
 temperature: 0.1
 
-# 最大输出token数（可选，默认800）
-# Thinking任务：降低到800可节省成本（原2000太高）
-max_tokens: 800
+# 最大输出token数（可选，默认2000）
+max_tokens: 2000
 
 # API超时时间（可选，默认60秒）
 timeout: 60
