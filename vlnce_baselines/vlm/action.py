@@ -44,7 +44,7 @@ class ActionExecutor(BaseAPIClient):
         print(f"  Parameters: turn={turn_angle}°, move={move_distance}m")
     
     def compress_image(self, image_path: str) -> str:
-        """压缩图片以节省token
+        """压缩图片以节省token（使用BaseAPIClient的静态方法）
         
         Args:
             image_path: 原始图片路径
@@ -56,22 +56,16 @@ class ActionExecutor(BaseAPIClient):
             return image_path
         
         try:
-            img = Image.open(image_path)
-            
-            # 等比缩放
-            if max(img.size) > self.compression_resolution:
-                ratio = self.compression_resolution / max(img.size)
-                new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
-                img = img.resize(new_size, Image.Resampling.LANCZOS)
-            
-            # 保存到临时文件
-            tmp = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False, mode='wb')
-            img.convert('RGB').save(tmp.name, 'JPEG', quality=self.compression_quality, optimize=True)
-            tmp.close()
-            return tmp.name
+            # 调用父类的静态压缩方法
+            return BaseAPIClient.compress_image(
+                image_path, 
+                max_size=self.compression_resolution, 
+                quality=self.compression_quality
+            )
         except Exception as e:
             print(f"⚠️ Compression failed: {e}")
             return image_path
+    
     
     def validate_response(self, response: Dict) -> bool:
         """验证VLM响应是否包含所有必需字段"""
