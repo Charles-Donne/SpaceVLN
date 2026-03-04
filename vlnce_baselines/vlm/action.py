@@ -218,7 +218,9 @@ class ActionExecutor(BaseAPIClient):
             obstacle_distances = {
                 'front': 'Unknown',
                 'left_30': 'Unknown',
+                'left_60': 'Unknown',
                 'right_30': 'Unknown',
+                'right_60': 'Unknown',
                 'left_90': 'Unknown',
                 'right_90': 'Unknown'
             }
@@ -235,7 +237,9 @@ class ActionExecutor(BaseAPIClient):
             previous_action_reason=previous_action_reason,
             distance_front=obstacle_distances['front'],
             distance_left_30=obstacle_distances['left_30'],
+            distance_left_60=obstacle_distances.get('left_60', 'Unknown'),
             distance_right_30=obstacle_distances['right_30'],
+            distance_right_60=obstacle_distances.get('right_60', 'Unknown'),
             distance_left_90=obstacle_distances['left_90'],
             distance_right_90=obstacle_distances['right_90']
         )

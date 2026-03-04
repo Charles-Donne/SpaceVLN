@@ -17,7 +17,7 @@ ACTION_EXECUTION_PROMPT = """Navigate to {next_waypoint_destination}.
 
 # Detection Image
 Detection view with distance lines:
-**Distances**: FRONT {distance_front} | L30° {distance_left_30} | R30° {distance_right_30} | L90° {distance_left_90} | R90° {distance_right_90}
+**Distances**: FRONT {distance_front} | L30° {distance_left_30} | L60° {distance_left_60} | R30° {distance_right_30} | R60° {distance_right_60} | L90° {distance_left_90} | R90° {distance_right_90}
 (<0.5m blocked | >1.0m safe)
 
 # Decision
@@ -63,7 +63,9 @@ def get_action_execution_prompt(next_waypoint_destination: str,
         progress_summary=progress_summary,
         distance_front=distance_front,
         distance_left_30=distance_left_30,
+        distance_left_60=distance_left_60,
         distance_right_30=distance_right_30,
+        distance_right_60=distance_right_60,
         distance_left_90=distance_left_90,
         distance_right_90=distance_right_90
     )
