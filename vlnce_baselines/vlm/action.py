@@ -3,6 +3,7 @@ VLM动作执行模块
 ===============
 低层动作决策：基于视觉和地图输出具体动作
 """
+import os
 from typing import Dict, Tuple, Optional
 from vlnce_baselines.vlm.api_client import APIConfig, BaseAPIClient
 from vlnce_baselines.vlm.action_prompt import get_action_execution_prompt

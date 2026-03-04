@@ -2078,19 +2078,21 @@ class VLMNavigationController(InteractiveNavigationController):
             vlm_response = None
             
             for retry in range(max_retries):
+                print(f"  🎯 VLM Action (attempt {retry+1}/{max_retries})...")
                 action_id, action_name, should_stop, repeat_count, vlm_response = self.execute_action_with_vlm()
                 
                 if action_id is not None:
                     break
                 
                 if retry < max_retries - 1:
-                    print(f"VLM决策失败，重试 ({retry + 1}/{max_retries - 1})...")
+                    wait = (retry + 1) * 2
+                    print(f"  ✗ VLM Action failed, retry in {wait}s ({retry + 1}/{max_retries - 1})...")
                     import time
-                    time.sleep(1)
+                    time.sleep(wait)
             
             # 所有重试都失败，跳过此步
             if action_id is None:
-                print("✗ VLM决策失败，已达最大重试次数，跳过此步")
+                print("✗ VLM Action failed after all retries, skipping step")
                 continue
             
             # 🔑 关键检查：在执行任何action之前，检查VLM响应中的global_task_finish

@@ -8,6 +8,7 @@ import yaml
 import base64
 import json
 import re
+import time
 import requests
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional
@@ -230,7 +231,8 @@ class BaseAPIClient(ABC):
         return content
     
     def call_api(self, prompt: str, image_paths: List[str]) -> Optional[Dict]:
-        """调用API"""
+        """调用API（带计时和速度统计）"""
+        t_start = time.time()
         try:
             payload = {
                 "model": self.config.model,
@@ -242,51 +244,85 @@ class BaseAPIClient(ABC):
                 "max_tokens": self.config.max_tokens
             }
             
+            # 构建headers（支持OpenRouter优化）
+            headers = self.config.get_headers()
+            is_openrouter = 'openrouter' in self.config.base_url.lower()
+            if is_openrouter:
+                # OpenRouter: 选择最快的provider
+                headers["X-Title"] = "MapReAct-VLN"
+                payload["provider"] = {
+                    "sort": "throughput",        # 按吞吐量排序，选最快provider
+                    "allow_fallbacks": True       # 允许回退到其他provider
+                }
+            
             response = requests.post(
                 f"{self.config.base_url}/chat/completions",
-                headers=self.config.get_headers(),
+                headers=headers,
                 json=payload,
                 timeout=self.config.timeout
             )
             
+            t_response = time.time()
+            latency = t_response - t_start
+            
             if response.status_code != 200:
-                print(f"✗ API error: {response.status_code}")
+                print(f"✗ API error: {response.status_code} ({latency:.1f}s)")
                 print(f"✗ Response: {response.text[:500]}")
                 return None
             
             result = response.json()
             content = result['choices'][0]['message']['content']
             
-            # 打印原始响应以便调试
+            # 提取token用量
+            usage = result.get('usage', {})
+            prompt_tokens = usage.get('prompt_tokens', 0)
+            completion_tokens = usage.get('completion_tokens', 0)
+            total_tokens = usage.get('total_tokens', prompt_tokens + completion_tokens)
+            
+            # 计算速度
+            tokens_per_sec = completion_tokens / latency if latency > 0 and completion_tokens > 0 else 0
+            
+            # 打印速度统计
+            model_short = self.config.model.split('/')[-1][:30]
+            speed_info = f"⚡ {model_short} | {latency:.1f}s | {prompt_tokens}→{completion_tokens} tokens | {tokens_per_sec:.0f} tok/s"
+            
+            # OpenRouter额外信息
+            if is_openrouter:
+                provider = result.get('provider', '')
+                if provider:
+                    speed_info += f" | via {provider}"
+            
+            print(speed_info)
+            
+            # 检查响应
             if not content or len(content.strip()) < 10:
                 print(f"✗ Empty or too short API response: {content}")
-                print(f"✗ Full result: {result}")
                 return None
             
-            # 检查是否有finish_reason提示截断
+            # 检查截断
             finish_reason = result['choices'][0].get('finish_reason', 'unknown')
             if finish_reason == 'length':
-                print(f"⚠️  API response truncated due to length limit")
-                print(f"⚠️  Content length: {len(content)}")
+                print(f"⚠️  Response truncated (max_tokens={self.config.max_tokens})")
             
             parsed = self.parse_json_response(content)
             
             if parsed is None:
-                print(f"✗ Failed to parse JSON from API response")
-                print(f"✗ Raw response (first 500 chars): {content[:500]}")
-                print(f"✗ Raw response (last 500 chars): {content[-500:]}")
+                print(f"✗ JSON parse failed | Raw (first 300): {content[:300]}")
                 
             return parsed
             
         except requests.exceptions.Timeout:
-            print(f"✗ API timeout after {self.config.timeout}s")
+            elapsed = time.time() - t_start
+            print(f"✗ API timeout after {elapsed:.1f}s (limit={self.config.timeout}s)")
             return None
         except json.JSONDecodeError as e:
-            print(f"✗ JSON decode error: {e}")
-            print(f"✗ Response text: {response.text[:500]}")
+            elapsed = time.time() - t_start
+            print(f"✗ JSON decode error ({elapsed:.1f}s): {e}")
+            print(f"✗ Response text: {response.text[:300]}")
             return None
         except Exception as e:
-            print(f"✗ API call failed: {e}")
+            elapsed = time.time() - t_start
+            print(f"✗ API call failed ({elapsed:.1f}s): {e}")
             return None
     
     def validate_fields(self, response: Dict, required_fields: List[str]) -> bool:

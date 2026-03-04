@@ -106,17 +106,20 @@ class LLMPlanner(BaseAPIClient):
         # 添加重试机制
         max_retries = 3
         for retry in range(max_retries):
+            print(f"  🧠 LLM Planning (attempt {retry+1}/{max_retries})...")
             response = self.call_api(prompt, images)
             
             if response and self.validate_response(response, mode='initial'):
+                print(f"  ✅ LLM Planning succeeded")
                 return response, prompt
             
             if retry < max_retries - 1:
-                print(f"  ⚠️  初始规划API调用失败，重试 ({retry + 1}/{max_retries - 1})...")
+                wait = (retry + 1) * 2  # 2s, 4s 递增等待
+                print(f"  ⚠️  LLM Planning failed, retry in {wait}s ({retry + 1}/{max_retries - 1})...")
                 import time
-                time.sleep(2)
+                time.sleep(wait)
         
-        print(f"  ✗ 初始规划API调用失败，已达最大重试次数")
+        print(f"  ✗ LLM Planning failed after {max_retries} attempts")
         return None, prompt
     
     def verify_and_replan(self,
@@ -193,16 +196,18 @@ class LLMPlanner(BaseAPIClient):
         # 添加重试机制
         max_retries = 3
         for retry in range(max_retries):
+            print(f"  🧠 LLM Verify (attempt {retry+1}/{max_retries})...")
             response = self.call_api(prompt, images)
             
             if response and self.validate_response(response, mode='verify'):
-                # 只返回response，由模型的global_task_finish决定是否完成
+                print(f"  ✅ LLM Verify succeeded")
                 return response, prompt
             
             if retry < max_retries - 1:
-                print(f"  ⚠️  验证API调用失败，重试 ({retry + 1}/{max_retries - 1})...")
+                wait = (retry + 1) * 2
+                print(f"  ⚠️  LLM Verify failed, retry in {wait}s ({retry + 1}/{max_retries - 1})...")
                 import time
-                time.sleep(2)  # 等待2秒后重试
+                time.sleep(wait)
         
-        print(f"  ✗ 验证API调用失败，已达最大重试次数")
+        print(f"  ✗ LLM Verify failed after {max_retries} attempts")
         return None, None
