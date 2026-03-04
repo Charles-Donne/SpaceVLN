@@ -1,34 +1,40 @@
 # LLM Configuration Template
-# LLM配置模板 - 用于高层规划
+# LLM配置模板 - 用于高层规划（分析12方向图像+地图→生成子任务）
 # 
 # 使用方法：
 # 1. 复制此文件为 llm_config.yaml
 # 2. 填入你的API密钥和模型信息
+#
+# ⚠️ LLM需要视觉模型（接收12张方向图+地图）
 
-# API密钥（必填）
-api_key: "your-openrouter-api-key-here"
+# ========================
+# 方案1: 阿里DashScope直连（推荐 - 国内最快最便宜）
+# ========================
+# 申请地址: https://dashscope.console.aliyun.com/
+api_key: "sk-your-dashscope-api-key"
+base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+# Qwen-VL 视觉模型（LLM规划必须用视觉模型）:
+#   qwen-vl-max-latest     - 最强，$2.8/M input (推荐)
+#   qwen-vl-max            - 强，稳定版
+#   qwen-vl-plus-latest    - 快+便宜，$0.56/M input
+#   qwen-vl-plus           - 快+便宜，稳定版
+model: "qwen-vl-max-latest"
 
-# API基础URL（必填）
-# OpenRouter: https://openrouter.ai/api/v1
-# OpenAI: https://api.openai.com/v1
-base_url: "https://openrouter.ai/api/v1"
+# ========================
+# 方案2: OpenRouter（海外节点，模型选择多）
+# ========================
+# api_key: "sk-or-your-openrouter-key"
+# base_url: "https://openrouter.ai/api/v1"
+# model: "qwen/qwen-2.5-vl-72b-instruct"
 
-# 模型名称（必填）
-# OpenRouter Qwen3 (推荐 - 快速+便宜+支持视觉):
-#   qwen/qwen-2.5-vl-72b-instruct    - 最强视觉理解
-#   qwen/qwen3-235b-a22b              - 最强推理
-#   qwen/qwen3-32b                    - 性价比最高
-# OpenAI: gpt-4o, gpt-4o-mini
-# Claude: anthropic/claude-3.5-sonnet
-model: "qwen/qwen3-235b-a22b"
+# ========================
+# 方案3: OpenAI
+# ========================
+# api_key: "sk-your-openai-key"
+# base_url: "https://api.openai.com/v1"
+# model: "gpt-4o"
 
-# 温度参数（可选，默认0.1）
+# 通用参数
 temperature: 0.1
-
-# 最大输出token数（可选）
-# LLM规划需要充足的输出空间（分析6部分reasoning）
-max_tokens: 4096
-
-# API超时时间（可选，默认60秒）
-# Qwen3响应较快，可以设短一点
-timeout: 120
+max_tokens: 4096      # LLM规划需要充足输出空间（6部分reasoning）
+timeout: 120          # DashScope大模型可能需要较长时间

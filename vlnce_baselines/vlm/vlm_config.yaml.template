@@ -1,37 +1,39 @@
 # VLM Configuration Template
-# VLM配置模板 - 用于低层动作执行
+# VLM配置模板 - 用于低层动作执行（看Detection图→输出动作）
 # 
 # 使用方法：
 # 1. 复制此文件为 vlm_config.yaml
 # 2. 填入你的API密钥和模型信息
 #
-# 注意：VLM和LLM可以使用相同的模型和配置，
-# 也可以使用不同的模型（如LLM用大模型规划，VLM用小模型执行）
+# 💡 VLM只需处理1张Detection图，可以用较小/快速的模型
+# 💡 VLM和LLM可以用同一个API key，只换模型名
 
-# API密钥（必填）
-api_key: "your-openrouter-api-key-here"
+# ========================
+# 方案1: 阿里DashScope直连（推荐 - 国内最快最便宜）
+# ========================
+api_key: "sk-your-dashscope-api-key"
+base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+# Qwen-VL 视觉模型（Action需要看图）:
+#   qwen-vl-plus-latest    - 快+便宜 $0.56/M input (推荐Action用)
+#   qwen-vl-plus           - 快+便宜，稳定版
+#   qwen-vl-max-latest     - 最强（和LLM用同一个也行）
+model: "qwen-vl-plus-latest"
 
-# API基础URL（必填）
-# OpenRouter: https://openrouter.ai/api/v1
-base_url: "https://openrouter.ai/api/v1"
+# ========================
+# 方案2: OpenRouter
+# ========================
+# api_key: "sk-or-your-openrouter-key"
+# base_url: "https://openrouter.ai/api/v1"
+# model: "qwen/qwen-2.5-vl-72b-instruct"
 
-# 模型名称（必填）
-# Action执行可以用较小模型（更快，更便宜）
-# OpenRouter Qwen (推荐 - 快速):
-#   qwen/qwen-2.5-vl-72b-instruct    - 视觉理解最佳
-#   qwen/qwen-2.5-vl-7b-instruct     - 最快最便宜
-#   qwen/qwen3-32b                    - 性价比最高
-#   qwen/qwen3-8b                     - 极速
-# OpenAI: gpt-4o-mini (快速), gpt-4o (精确)
-model: "qwen/qwen-2.5-vl-72b-instruct"
+# ========================
+# 方案3: OpenAI
+# ========================
+# api_key: "sk-your-openai-key"
+# base_url: "https://api.openai.com/v1"
+# model: "gpt-4o-mini"
 
-# 温度参数（可选，默认0.1）
+# 通用参数
 temperature: 0.1
-
-# 最大输出token数（可选）
-# Action执行输出较短，300已足够
-max_tokens: 300
-
-# API超时时间（可选）
-# Action执行需要快速响应
-timeout: 30
+max_tokens: 300       # Action输出很短，300足够
+timeout: 30           # Action需要快速响应
