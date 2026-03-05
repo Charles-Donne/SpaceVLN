@@ -243,8 +243,9 @@ class BaseAPIClient(ABC):
             })
             
             # 保存压缩后的图片（从base64解码回来，即模型实际看到的）
+            # 用 img_XX_ 前缀避免不同目录同名文件碰撞（如global_map/和local_map/都叫step_0012_initial.png）
             if save_dir:
-                img_filename = os.path.basename(img_path)
+                img_filename = f"img_{idx:02d}_{os.path.basename(img_path)}"
                 save_path = os.path.join(save_dir, img_filename)
                 with open(save_path, 'wb') as f:
                     f.write(base64.b64decode(img_base64))
