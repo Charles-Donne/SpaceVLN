@@ -242,16 +242,18 @@ class ActionExecutor(BaseAPIClient):
             distance_right_90=obstacle_distances['right_90']
         )
         
-        # 只使用Detection图（优化token）- 父类encode_image_base64会自动压缩
+        # Detection + Local Map（不发RGB节省token）
         images = []
         
         if detection_image and os.path.exists(detection_image):
             images.append(detection_image)
         else:
-            # 如果没有detection，回退到RGB
-            print(f"  [WARN] No detection, using RGB")
-            if os.path.exists(first_person_image):
-                images.append(first_person_image)
+            print(f"  [WARN] No detection image found")
+        
+        if local_map_image and os.path.exists(local_map_image):
+            images.append(local_map_image)
+        else:
+            print(f"  [WARN] No local map found")
         
         # 调用API（父类call_api → build_message_content → encode_image_base64 → compress_image）
         # save_dir: 在发送时同步保存压缩后的图片+prompt

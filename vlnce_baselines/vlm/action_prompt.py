@@ -19,11 +19,10 @@ ACTION_EXECUTION_PROMPT = """You are the action execution module for Vision-Lang
 
 # Visual Observations
 
-You are provided with 3 images:
+You are provided with 2 images:
 
-**IMAGE 1: First-person RGB View** - Current facing direction view
-**IMAGE 2: Object Detection View** - Detected objects with bounding boxes (landmark: {detected_landmarks})
-**IMAGE 3: Local Semantic Map** - Nearby region top-down view
+**IMAGE 1: Object Detection View** - Detected objects with bounding boxes (landmark: {detected_landmarks})
+**IMAGE 2: Local Semantic Map** - Nearby region top-down view
 
 # Local Map
 
@@ -47,14 +46,13 @@ You are provided with 3 images:
 Analyze the 3 images to decide the next action for collision avoidance and navigation.
 
 **Decision Process**:
-1. **RGB View**: What do you see? Where is the destination?
-2. **Detection View**: Are there relevant landmarks detected?
-3. **Local Map**: 
+1. **Detection View**: Are there relevant landmarks? Where is the destination relative to center?
+2. **Local Map**: 
    - Check immediate path ahead (black = obstacle)
    - Verify direction to destination
    - Plan collision-free path
-4. **Distance Estimation**: How far to destination? (e.g., "~3m", "<0.5m")
-5. **Action Decision**: Choose safest action toward destination
+3. **Distance Estimation**: How far to destination? (e.g., "~3m", "<0.5m")
+4. **Action Decision**: Choose safest action toward destination
 
 **STOP Conditions** (ALL required):
 - Moved ≥2 times
@@ -79,8 +77,8 @@ Analyze the 3 images to decide the next action for collision avoidance and navig
 }}
 
 **Parameter rules**:
-- MOVE_FORWARD: "value" = meters (0.25 ~ 1.5)
-- TURN_LEFT / TURN_RIGHT: "value" = degrees (30 ~ 180, multiples of 30)
+- MOVE_FORWARD: "value" = meters (0.25 ~ 1)
+- TURN_LEFT / TURN_RIGHT: "value" = degrees (30 ~ 90, multiples of 30)
 - STOP: "value" = 0
 
 # Examples
