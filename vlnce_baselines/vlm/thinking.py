@@ -106,8 +106,6 @@ class LLMPlanner(BaseAPIClient):
         # 添加重试机制
         max_retries = 3
         for retry in range(max_retries):
-            if retry > 0:
-                print(f"  [LLM] Planning retry {retry+1}/{max_retries}...")
             # Only save on first attempt (avoid duplicate saves on retry)
             response = self.call_api(prompt, images, save_dir=save_dir if retry == 0 else None)
             
@@ -116,7 +114,7 @@ class LLMPlanner(BaseAPIClient):
             
             if retry < max_retries - 1:
                 wait = (retry + 1) * 2  # 2s, 4s 递增等待
-                print(f"  [WARN] LLM Planning failed, retry in {wait}s ({retry + 1}/{max_retries - 1})...")
+                print(f"  [WARN] LLM Planning failed, retry {retry+1}/{max_retries-1} in {wait}s...")
                 import time
                 time.sleep(wait)
         
@@ -195,8 +193,6 @@ class LLMPlanner(BaseAPIClient):
         # 添加重试机制
         max_retries = 3
         for retry in range(max_retries):
-            if retry > 0:
-                print(f"  [LLM] Verify retry {retry+1}/{max_retries}...")
             response = self.call_api(prompt, images, save_dir=save_dir if retry == 0 else None)
             
             if response and self.validate_response(response, mode='verify'):
@@ -204,7 +200,7 @@ class LLMPlanner(BaseAPIClient):
             
             if retry < max_retries - 1:
                 wait = (retry + 1) * 2
-                print(f"  [WARN] LLM Verify failed, retry in {wait}s ({retry + 1}/{max_retries - 1})...")
+                print(f"  [WARN] LLM Verify failed, retry {retry+1}/{max_retries-1} in {wait}s...")
                 import time
                 time.sleep(wait)
         

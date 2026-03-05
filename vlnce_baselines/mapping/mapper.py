@@ -335,8 +335,7 @@ class SemanticMapper:
         crop_offset = self.mapping_module.full_map_crop_offset
         global_traj = self.mapping_module.global_trajectory_points  # 全局轨迹
         subtask_traj = self.mapping_module.subtask_trajectory_points  # 子任务轨迹
-        print(f"  📊 get_map_state: global_trajectory={len(global_traj)}, subtask_trajectory={len(subtask_traj)}, crop_offset={crop_offset}")
-        return {
+        # print(f"  get_map_state: global_trajectory={len(global_traj)}, subtask_trajectory={len(subtask_traj)}, crop_offset={crop_offset}")        return {
             'full_map': self.full_map,
             'full_pose': self.full_pose,
             'floor': self.floor,

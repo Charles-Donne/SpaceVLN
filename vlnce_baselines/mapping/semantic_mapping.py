@@ -387,7 +387,7 @@ class Semantic_Mapping(nn.Module):
             if tiles_dict.get((tile_x, tile_y)) is None:
                 tiles_dict[(tile_x, tile_y)] = self._create_empty_tile(nc)
                 if not is_one_step:  # 只在主tiles创建时打印
-                    print(f"🆕 创建新块: tile({tile_x}, {tile_y}) = 世界坐标({tile_x*12:.0f}m, {tile_y*12:.0f}m)")
+                    pass  # tile 创建不再打印
     
     def _get_tiles_for_region(self, center_x_m, center_y_m, size_m):
         """
