@@ -983,7 +983,6 @@ class VLMNavigationController(InteractiveNavigationController):
             self.latest_local_map = None
         
         # print(f"  12方向独立视图已保存")
-        print("="*60 + "\n")
         
         return direction_paths, direction_names
     
@@ -1056,7 +1055,7 @@ class VLMNavigationController(InteractiveNavigationController):
             print("✗ LLM Planner未初始化")
             return None
         
-        print(f"\n[LLM规划] 生成初始子任务...")
+        print(f"\n🧠 LLM Planning...")
         
         # 从 vlm/observations/ 获取全景图和地图
         image_paths, direction_names, global_map, local_map = self.get_observations_and_maps("initial")
@@ -1106,9 +1105,8 @@ class VLMNavigationController(InteractiveNavigationController):
         )
         thinking_record["prompt"] = prompt
         
-        # 1️⃣ 先保存输入（图片 + prompt）
+        # 1️⃣ 先保存输入
         thinking_dir = self.save_manager.save_thinking_input(thinking_record)
-        print(f"  💾 已保存输入: {thinking_dir}")
         
         # 2️⃣ 调用LLM生成初始子任务
         response, _ = self.planner.generate_initial_subtask(
@@ -1121,13 +1119,12 @@ class VLMNavigationController(InteractiveNavigationController):
         )
         
         if not response:
-            print("✗ LLM未返回有效响应")
+            print("✗ LLM Planning failed")
             return None
         
         # 3️⃣ 保存response
         thinking_record["response"] = response
         self.save_manager.save_thinking_response(thinking_record, thinking_dir)
-        print(f"  💾 已保存响应: {thinking_dir}/response.json")
         
         # 不再保存到内存记录，减少内存开销
         # self.thinking_outputs.append(thinking_record)
@@ -1161,11 +1158,9 @@ class VLMNavigationController(InteractiveNavigationController):
         if next_waypoint_landmark:
             self.landmark_classes = [next_waypoint_landmark]
             self.target_landmark = next_waypoint_landmark
-            print(f"  🎯 Target Landmark: {self.target_landmark}")
         else:
             self.target_landmark = None
             self.landmark_classes = []
-            print(f"  ℹ️  No target landmark")
         
         # ⚠️ 重要：self.classes始终保持为所有mapping_classes，用于完整的语义建图
         # landmark_classes只用于可视化标注和导航决策
@@ -1217,8 +1212,6 @@ class VLMNavigationController(InteractiveNavigationController):
             print(f"  ⚠️  无法识别方向: {waypoint_direction}")
             return False, []
         
-        print(f"\n[自动旋转] 解析waypoint方向: {direction} {angle}°")
-        
         # 生成动作序列（每次30度）
         num_turns = angle // 30
         action_sequence = []
@@ -1229,7 +1222,6 @@ class VLMNavigationController(InteractiveNavigationController):
                 "degrees": 30
             })
         
-        print(f"  生成动作序列: {num_turns}次 TURN_{direction} 30°")
         return True, action_sequence
     
     def execute_rotation_sequence(self, action_sequence: List[Dict]) -> bool:
@@ -1247,8 +1239,6 @@ class VLMNavigationController(InteractiveNavigationController):
         for i, action_dict in enumerate(action_sequence):
             action_name = action_dict["action"]
             degrees = action_dict["degrees"]
-            
-            print(f"  旋转 {i+1}/{len(action_sequence)}: {action_name} {degrees}°")
             
             # 转换为habitat action ID
             if action_name == "TURN_LEFT":
@@ -1271,7 +1261,6 @@ class VLMNavigationController(InteractiveNavigationController):
                 print(f"    ⚠️  Episode在旋转过程中结束")
                 return False
         
-        print(f"  ✓ 旋转完成，已面向waypoint方向")
         return True
     
     def verify_and_replan(self) -> Tuple[bool, Optional[Dict], Optional[str]]:
@@ -1297,7 +1286,7 @@ class VLMNavigationController(InteractiveNavigationController):
         # 使用attempt字母标识（a=0, b=1, c=2...）
         attempt_letter = chr(ord('a') + self.subtask_attempt)
         phase = f"verify_{self.subtask_count}{attempt_letter}"
-        print(f"\n[验证] 子任务#{self.subtask_count}{attempt_letter} - 重新环视（step {self.current_step + 1}-{self.current_step + 12}）...")
+        print(f"\n🔄 Verify #{self.subtask_count}{attempt_letter} (lookaround step {self.current_step + 1}-{self.current_step + 12})")
         image_paths, direction_names = self.look_around_and_collect(phase)
         
         if not image_paths:
@@ -1391,9 +1380,8 @@ class VLMNavigationController(InteractiveNavigationController):
         )
         thinking_record["prompt"] = prompt
         
-        # 1️⃣ 先保存输入（图片 + prompt）
+        # 1️⃣ 先保存输入
         thinking_dir = self.save_manager.save_thinking_input(thinking_record)
-        print(f"  💾 已保存输入: {thinking_dir}")
         
         # 2️⃣ 调用LLM验证（全局地图必需，局部地图可选，传递实际检测到的类别）
         response, _ = self.planner.verify_and_replan(
@@ -1408,10 +1396,8 @@ class VLMNavigationController(InteractiveNavigationController):
             obstacle_distances=obstacle_distances
         )
         
-        print(f"  🏷️  Detected landmarks: {detected_landmarks if detected_landmarks else 'None'}")
-        
         if not response:
-            print("✗ LLM验证未返回有效响应")
+            print("✗ LLM Verify failed")
             return None, None
         
         # 更新next_subtask_id
@@ -1423,35 +1409,17 @@ class VLMNavigationController(InteractiveNavigationController):
         # 3️⃣ 保存response
         thinking_record["response"] = response
         self.save_manager.save_thinking_response(thinking_record, thinking_dir)
-        print(f"  💾 已保存响应: {thinking_dir}/response.json")
         
-        # 不再保存到内存记录，减少内存开销
-        # self.thinking_outputs.append(thinking_record)
-        
-        # 打印LLM的response关键信息
-        attempt_letter = chr(ord('a') + self.subtask_attempt)
-        print(f"\n[子任务验证] #{self.subtask_count}{attempt_letter}")
-        print(f"  📍 Current Waypoint: {response.get('current_waypoint', 'N/A')}")
-        print(f"  📍 Waypoint Sequence: {response.get('waypoint_sequence', 'N/A')}")
-        print(f"  🎯 Next Waypoint Destination: {response.get('next_waypoint_destination', 'N/A')}")
-        print(f"  📝 Subtask Instruction: {response.get('subtask_instruction', 'N/A')}")
-        
-        # 检查是否完成全局任务（由模型判断）
+        # 打印关键信息（精简）
         task_finished = response.get('global_task_finish', False)
-        print(f"  🎯 global_task_finish: {task_finished}")
+        attempt_letter = chr(ord('a') + self.subtask_attempt)
+        print(f"  📍 #{self.subtask_count}{attempt_letter} → {response.get('next_waypoint_destination', 'N/A')} | finish={task_finished}")
         
         if task_finished:
-            print("\n" + "="*60)
-            print("🏆 全局任务完成 - 模型判断所有导航任务已完成！")
-            print("="*60)
-            print(f"  📍 Final Waypoint: {response.get('current_waypoint', 'N/A')}")
-            print(f"  📍 Waypoint Sequence: {response.get('waypoint_sequence', 'N/A')}")
-            print(f"  💭 Reasoning: {response.get('reasoning', 'N/A')}")
-            print("="*60)
-            # 直接返回response，标记任务完成
+            print("🏆 全局任务完成")
             return response, prompt
         else:
-            print(f"  ➡️  继续下一个子任务（#{self.subtask_count + 1}a）")
+            print(f"  ➡️  下一子任务 #{self.subtask_count + 1}a: {response.get('subtask_instruction', 'N/A')[:60]}")
             
             # 保存waypoint
             waypoint_desc = response.get('current_waypoint', 'Unknown location')
@@ -1462,7 +1430,6 @@ class VLMNavigationController(InteractiveNavigationController):
             # self.save_manager.save_waypoint_memory(...)
             
             # 清空旧状态（为新子任务准备）
-            print("\n[状态清理] 清空旧landmark和轨迹（准备新子任务）")
             self.mapper.clear_trajectory()
             self.landmark_classes = []
             self.progress_summary = ""
@@ -1493,11 +1460,9 @@ class VLMNavigationController(InteractiveNavigationController):
             if next_waypoint_landmark:
                 self.landmark_classes = [next_waypoint_landmark]
                 self.target_landmark = next_waypoint_landmark
-                print(f"  🎯 New Target Landmark: {self.target_landmark}")
             else:
                 self.target_landmark = None
                 self.landmark_classes = []
-                print(f"  ℹ️  No target landmark")
             
             # ⚠️ 重要：self.classes始终保持为所有mapping_classes，用于完整的语义建图
             
@@ -1506,15 +1471,10 @@ class VLMNavigationController(InteractiveNavigationController):
             # 子任务完成后，自动旋转到新的waypoint方向
             next_waypoint_direction = response.get('next_waypoint_direction', '')
             if next_waypoint_direction and 'Front' not in next_waypoint_direction:
-                print(f"\n[两阶段导航] 新子任务 - 阶段1: 旋转到waypoint方向")
                 success, action_sequence = self.auto_rotate_to_waypoint(next_waypoint_direction)
                 
                 if success and action_sequence:
-                    # 执行旋转动作序列
-                    rotation_success = self.execute_rotation_sequence(action_sequence)
-                    
-                    if rotation_success:
-                        print(f"  ✓ 旋转完成，waypoint应该在前方，直接开始Action")
+                    self.execute_rotation_sequence(action_sequence)
         
         # 返回response和prompt
         return response, prompt
@@ -1688,9 +1648,8 @@ class VLMNavigationController(InteractiveNavigationController):
             "timestamp": datetime.now().isoformat()
         }
         
-        # 1️⃣ 先保存输入（图片 + prompt稍后在decide_action中生成后保存）
+        # 1️⃣ 先保存输入
         action_dir = self.save_manager.save_action_input(action_record, subtask_info)
-        print(f"  💾 已保存输入: {action_dir}")
         
         # 2️⃣ 调用VLM决策（不传递pose，使用当前progress_summary）
         result = self.action_executor.decide_action(
@@ -1730,7 +1689,6 @@ class VLMNavigationController(InteractiveNavigationController):
         # 不再保存到内存记录，减少内存开销
         # self.action_outputs.append(action_record)
         self.save_manager.save_action_response(action_record)
-        print(f"  ✓ 已保存响应: {action_name}")
         
         # 保存planned action参数，供后续计算actual progress使用
         self.last_planned_degrees = degrees
@@ -1941,8 +1899,6 @@ class VLMNavigationController(InteractiveNavigationController):
             self.latest_obstacle_distances_12 = distances
         except Exception as e:
             import traceback
-            print(f"  ⚠️  12方向距离更新失败: {e}")
-            print(f"  详细错误: {traceback.format_exc()}")
             self.latest_obstacle_distances_12 = {
                 f'angle_{i}': 'Unknown' for i in range(0, 360, 30)
             }
@@ -1979,8 +1935,6 @@ class VLMNavigationController(InteractiveNavigationController):
             )
         except Exception as e:
             import traceback
-            print(f"  ⚠️  距离更新失败: {e}")
-            print(f"  详细错误: {traceback.format_exc()}")
             self.latest_obstacle_distances = {
                 'front': 'Unknown',
                 'left_30': 'Unknown',
@@ -2004,12 +1958,10 @@ class VLMNavigationController(InteractiveNavigationController):
         # 从 Habitat 配置读取最大步数限制
         max_steps = self.config.TASK_CONFIG.ENVIRONMENT.MAX_EPISODE_STEPS
         
-        print("\n" + "="*60)
-        print("启动VLM自动导航")
-        print("="*60)
-        print(f"指令: {self.current_instruction}")
-        print(f"最大步数: {max_steps} (从 Habitat 配置读取) | 子任务最大步数: {max_subtask_steps}")
-        print("="*60 + "\n")
+        print(f"\n{'='*60}")
+        print(f"🚀 VLM Navigation | max_steps={max_steps} | subtask_steps={max_subtask_steps}")
+        print(f"📝 {self.current_instruction}")
+        print(f"{'='*60}")
         
         # 1. 环视建图 + 收集观察（占用step 1-12）
         image_paths, direction_names = self.look_around_and_collect()
@@ -2043,20 +1995,10 @@ class VLMNavigationController(InteractiveNavigationController):
         # 2.5 自动旋转到waypoint方向
         next_waypoint_direction = subtask.get('next_waypoint_direction', '')
         if next_waypoint_direction and 'Front' not in next_waypoint_direction:
-            print(f"\n[两阶段导航] 阶段1: 旋转到waypoint方向")
             success, action_sequence = self.auto_rotate_to_waypoint(next_waypoint_direction)
             
-            if not success or not action_sequence:
-                print("  ✗ 自动旋转解析失败")
-                # 继续执行，让ActionVLM处理
-            else:
-                # 执行旋转动作序列
-                rotation_success = self.execute_rotation_sequence(action_sequence)
-                
-                if not rotation_success:
-                    print("  ✗ 旋转执行失败")
-                else:
-                    print(f"  ✓ 旋转完成，waypoint应该在前方，直接开始Action")
+            if success and action_sequence:
+                self.execute_rotation_sequence(action_sequence)
         
         # 3. 主导航循环
         total_steps = self.current_step
@@ -2075,7 +2017,6 @@ class VLMNavigationController(InteractiveNavigationController):
             vlm_response = None
             
             for retry in range(max_retries):
-                print(f"  🎯 VLM Action (attempt {retry+1}/{max_retries})...")
                 action_id, action_name, should_stop, repeat_count, vlm_response = self.execute_action_with_vlm()
                 
                 if action_id is not None:
@@ -2094,32 +2035,20 @@ class VLMNavigationController(InteractiveNavigationController):
             
             # 🔑 关键检查：在执行任何action之前，检查VLM响应中的global_task_finish
             if vlm_response and vlm_response.get('global_task_finish', False):
-                print("\n" + "="*60)
-                print("🏆 检测到global_task_finish=true（在action响应中）")
-                print("="*60)
-                print(f"  📍 Action: {action_name}")
-                print(f"  📊 总步数: {total_steps}")
-                print(f"  📊 子任务数: {self.subtask_count}")
-                print("  ⚠️  任务已完成，不再执行此action，立即保存结果")
-                print("="*60)
+                print(f"🏆 Task complete (action response) | steps={total_steps}")
                 navigation_complete = True
                 break
             
             # 如果VLM决定停止 → 验证子任务
             if should_stop:
-                print("\n[VLM输出STOP] 开始验证子任务...")
+                print("\n🔄 STOP → Verify...")
                 
                 # verify_and_replan会调用thinking模型检查任务是否完成
                 new_subtask, _ = self.verify_and_replan()
                 
                 # 检查模型是否判断全局任务完成
                 if new_subtask and new_subtask.get('global_task_finish', False):
-                    print("\n" + "="*60)
-                    print("🛑 模型判断：全局任务完成 - 立即终止导航")
-                    print("="*60)
-                    print(f"  📊 总步数: {total_steps}")
-                    print(f"  📊 子任务数: {self.subtask_count}")
-                    print("="*60)
+                    print(f"🏆 Task complete (verify) | steps={total_steps} | subtasks={self.subtask_count}")
                     navigation_complete = True
                     break
                 
@@ -2129,12 +2058,10 @@ class VLMNavigationController(InteractiveNavigationController):
             
             # VLM决策计数（每次调用action模型算1步）
             subtask_steps += 1
-            print(f"  [步数统计] 当前子任务已执行 {subtask_steps}/{max_subtask_steps} 步")
             
             # 🔑 关键修复：在执行action后检查步数限制
             # 如果达到最大步数（例如5步），执行完当前动作后立即强制replan
             if subtask_steps >= max_subtask_steps:
-                print(f"\n⚠️  [强制重规划] 子任务已达到最大步数 ({max_subtask_steps}步)，执行完当前动作后将触发验证")
                 # 继续执行当前动作，但标记下一轮要replan
                 force_replan_after_action = True
             else:
@@ -2143,7 +2070,6 @@ class VLMNavigationController(InteractiveNavigationController):
             # 执行动作前记录pose（用于后续计算实际变化）
             if self.pose_before_action is None:
                 self.pose_before_action = self._get_agent_pose()
-                print(f"[Pose] 初始化pose_before: {self.pose_before_action}")
             pose_before_action_batch = self._get_agent_pose()
             
             # 执行动作（可能需要重复多次）
@@ -2151,12 +2077,10 @@ class VLMNavigationController(InteractiveNavigationController):
                 result = self.step_with_vlm(action_id, action_name=action_name, save_vis=True)
                 total_steps = self.current_step
                 
-                if i == 0 and repeat_count > 1:
-                    print(f"[Step {total_steps}] {action_name} (1/{repeat_count}) | VLM决策次数: {subtask_steps}")
-                elif repeat_count > 1:
-                    print(f"[Step {total_steps}] {action_name} ({i+1}/{repeat_count}) | VLM决策次数: {subtask_steps}")
+                if repeat_count > 1:
+                    print(f"  [Step {total_steps}] {action_name} ({i+1}/{repeat_count})")
                 else:
-                    print(f"[Step {total_steps}] {action_name} | VLM决策次数: {subtask_steps}")
+                    print(f"  [Step {total_steps}] {action_name} | subtask {subtask_steps}/{max_subtask_steps}")
                 
                 # 🔍 记录DTG轨迹（每步记录）
                 if self.latest_info:
@@ -2167,8 +2091,7 @@ class VLMNavigationController(InteractiveNavigationController):
                 
                 # 🔑 检查episode是否自动结束（Habitat内部判断，如达到MAX_EPISODE_STEPS）
                 if result['done']:
-                    print(f"\n⚠️  Episode自动完成（Habitat done=True）")
-                    print(f"   Episode已结束，使用当前指标（无需再调用STOP）")
+                    print(f"⚠️  Episode done (Habitat)")
                     # 不要尝试调用step(STOP)，因为episode已经done，会触发AssertionError
                     # latest_info已在step_with_vlm中更新，包含最终指标
                     navigation_complete = True
@@ -2216,18 +2139,18 @@ class VLMNavigationController(InteractiveNavigationController):
                     actual_meters=actual_meters
                 )
                 
-                print(f"[Progress] {self.last_action_name} planned:{self.last_planned_degrees}°/{self.last_planned_meters}m, actual:{actual_degrees:.1f}°/{actual_meters:.2f}m → {self.progress_summary}")
+                # Progress tracked internally
                 
                 # 更新pose_before为当前pose（供下次计算使用）
                 self.pose_before_action = pose_after_action_batch
             
             # 🔑 强制重规划检查：如果达到最大步数，执行完动作后立即触发verify
             if force_replan_after_action:
-                print(f"\n🔄 [强制重规划] 已执行完 {max_subtask_steps} 步，立即触发验证和重规划")
+                print(f"\n🔄 Force replan after {max_subtask_steps} steps")
                 new_subtask, _ = self.verify_and_replan()
                 # 检查是否完成全局任务
                 if new_subtask and new_subtask.get('global_task_finish', False):
-                    print("🛑 强制重规划后：模型判断任务完成")
+                    print(f"🏆 Task complete (force replan) | steps={total_steps}")
                     navigation_complete = True
                     break
                 subtask_steps = 0  # 重置步数
@@ -2237,35 +2160,19 @@ class VLMNavigationController(InteractiveNavigationController):
                 break
         
         # 主循环结束 - 记录退出原因和DTG轨迹统计
-        print(f"\n✅ 导航循环结束，总步数: {total_steps}")
-        
-        # 🔍 打印DTG轨迹统计（用于调试）
+        # DTG统计
         if hasattr(self, 'dtg_history') and self.dtg_history:
             valid_dtgs = [d for d in self.dtg_history if d >= 0]
             if valid_dtgs:
-                print(f"\n📊 Distance to Goal 轨迹统计:")
-                print(f"   最小距离: {min(valid_dtgs):.3f}m")
-                print(f"   最终距离: {valid_dtgs[-1]:.3f}m")
-                print(f"   平均距离: {sum(valid_dtgs)/len(valid_dtgs):.3f}m")
-                print(f"   是否进入3米内: {'是' if min(valid_dtgs) < 3.0 else '否'}")
+                print(f"\n📊 DTG: min={min(valid_dtgs):.2f}m final={valid_dtgs[-1]:.2f}m")
         
         # 4. 生成GIF动画
-        print("\n" + "="*60)
-        print("📊 开始生成最终结果...")
-        print("="*60)
         
         gif_path = None
         if self.nav_visualizer:
-            print("🎬 正在生成GIF动画...")
             gif_path = self.nav_visualizer.save_gif(fps=2)
-            if gif_path:
-                print(f"✓ GIF动画已保存: {gif_path}")
-            else:
-                print("✗ GIF动画生成失败")
         
-        # 5. 🔑 关键修复：调用finish_episode()执行STOP并获取最终指标
-        print("\n💾 正在保存导航结果...")
-        print("\n🛑 调用finish_episode()执行STOP动作...")
+        # 5. 调用finish_episode()执行STOP并获取最终指标
         final_metrics = self.finish_episode(
             success=navigation_complete, 
             stop_action=True  # 总是调用STOP以获得正确的Success判定
@@ -2274,26 +2181,17 @@ class VLMNavigationController(InteractiveNavigationController):
         # 使用STOP后的最终指标
         env_metrics = final_metrics if final_metrics else {}
         if not env_metrics:
-            print(f"⚠️  未获取到STOP后的指标，尝试从环境直接获取...")
             try:
                 if hasattr(self.envs, 'call_at'):
                     env_metrics = self.envs.call_at(0, "get_metrics")
-                    print(f"✅ 从环境获取指标成功")
             except Exception as e:
-                print(f"❌ 无法获取环境指标: {e}")
                 env_metrics = {}
         
         final_result = self._save_navigation_result(navigation_complete, total_steps, env_metrics)
         
-        print("\n" + "="*60)
-        print("🎉 导航完成！所有结果已保存")
-        print("="*60)
-        print(f"  Success: {navigation_complete}")
-        print(f"  Total Steps: {total_steps}")
-        print(f"  Result File: {final_result}")
-        if gif_path:
-            print(f"  GIF File: {gif_path}")
-        print("="*60 + "\n")
+        print(f"\n{'='*60}")
+        print(f"{'✅' if navigation_complete else '❌'} Done | steps={total_steps} | subtasks={self.subtask_count}")
+        print(f"{'='*60}")
         
         return {
             'success': navigation_complete,
@@ -2440,12 +2338,9 @@ class VLMNavigationController(InteractiveNavigationController):
         else:
             title = f"Subtask #{self.subtask_count}{attempt_letter}"
         
-        print(f"\n{'='*60}")
-        print(f"{title}")
-        print(f"Global Instruction: {self.current_instruction}")
-        print(f"{'-'*60}")
-        print(json.dumps(response, indent=2, ensure_ascii=False))
-        print(f"{'='*60}\n")
+        dest = response.get('next_waypoint_destination', 'N/A')
+        instr = response.get('subtask_instruction', 'N/A')[:80]
+        print(f"  📋 {title}: {dest} | {instr}")
     
     # ========== Waypoint辅助方法 ==========
     

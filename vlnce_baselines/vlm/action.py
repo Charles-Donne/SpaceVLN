@@ -37,7 +37,7 @@ class ActionExecutor(BaseAPIClient):
         self.compression_resolution = 512  # 降低到512px
         self.compression_quality = 75      # JPEG质量75
         
-        print(f"  🎯 VLM Action: {self.config.model} | {self.compression_resolution}px Q{self.compression_quality}")
+        print(f"  ActionVLM: {self.config.model} | {self.compression_resolution}px Q{self.compression_quality}")
         
         # 配置父类的压缩参数（父类的encode_image_base64会自动使用）
         self.set_compression_config(
@@ -248,7 +248,7 @@ class ActionExecutor(BaseAPIClient):
             images.append(detection_image)
         else:
             # 如果没有detection，回退到RGB
-            print("⚠️ No detection, fallback RGB")
+            print("⚠️ No detection, using RGB")
             if os.path.exists(first_person_image):
                 images.append(first_person_image)
         
@@ -309,21 +309,22 @@ class ActionExecutor(BaseAPIClient):
             actual_meters=actual_meters
         )
         
-        # 打印动作决策（精简版：1行搞定）
-        action_str = action_name
-        if action_name in ['TURN_LEFT', 'TURN_RIGHT']:
-            action_str = f"{action_name} {degrees}°"
+        # 简洁输出：动作 + 执行结果
+        if action_name in ('TURN_LEFT', 'TURN_RIGHT'):
+            info = f"{action_name} {degrees}°"
             if actual_degrees is not None:
                 diff = abs(degrees - actual_degrees)
-                status = "✓" if diff < 5 else ("⚠" if diff < 15 else "✗")
-                action_str += f" → {actual_degrees:.0f}° [{status}]"
+                ratio = actual_degrees / degrees if degrees > 0 else 0
+                tag = "✓" if diff < 5 else (f"⚠{ratio*100:.0f}%" if diff < 15 else f"✗{ratio*100:.0f}%")
+                info += f" → {actual_degrees:.1f}° [{tag}]"
         elif action_name == 'MOVE_FORWARD':
-            action_str = f"{action_name} {meters}m"
+            info = f"{action_name} {meters}m"
             if actual_meters is not None:
                 ratio = actual_meters / meters if meters > 0 else 0
-                status = "✓" if ratio > 0.9 else ("⚠" if ratio > 0.5 else "✗COLL")
-                action_str += f" → {actual_meters:.2f}m [{status}]"
-        
-        print(f"  → {action_str} | {response['action_analysis']}")
+                tag = "✓" if ratio > 0.9 else (f"⚠{ratio*100:.0f}%" if ratio > 0.5 else f"✗COLL {ratio*100:.0f}%")
+                info += f" → {actual_meters:.2f}m [{tag}]"
+        else:
+            info = action_name
+        print(f"  🎯 {info} | {response.get('reasoning', '')[:60]}")
         
         return action_id, action_name, updated_progress, response, degrees, meters, prompt

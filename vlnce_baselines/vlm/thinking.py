@@ -34,7 +34,7 @@ class LLMPlanner(BaseAPIClient):
         self.action_space = action_space or "MOVE_FORWARD (0.25m), TURN_LEFT (30°), TURN_RIGHT (30°), STOP"
         
         # print(f"✓ LLM Planner initialized")
-        print(f"  🧠 LLM Plan: {self.config.model}")
+        print(f"  LLMPlanner: {self.config.model}")
     
     def validate_response(self, response: Dict, mode: str = 'initial') -> bool:
         """验证响应字段"""
@@ -105,11 +105,11 @@ class LLMPlanner(BaseAPIClient):
         # 添加重试机制
         max_retries = 3
         for retry in range(max_retries):
-            print(f"  🧠 LLM Planning (attempt {retry+1}/{max_retries})...")
+            if retry > 0:
+                print(f"  🧠 LLM Planning retry {retry+1}/{max_retries}...")
             response = self.call_api(prompt, images)
             
             if response and self.validate_response(response, mode='initial'):
-                print(f"  ✅ LLM Planning succeeded")
                 return response, prompt
             
             if retry < max_retries - 1:
@@ -192,11 +192,11 @@ class LLMPlanner(BaseAPIClient):
         # 添加重试机制
         max_retries = 3
         for retry in range(max_retries):
-            print(f"  🧠 LLM Verify (attempt {retry+1}/{max_retries})...")
+            if retry > 0:
+                print(f"  🧠 LLM Verify retry {retry+1}/{max_retries}...")
             response = self.call_api(prompt, images)
             
             if response and self.validate_response(response, mode='verify'):
-                print(f"  ✅ LLM Verify succeeded")
                 return response, prompt
             
             if retry < max_retries - 1:
