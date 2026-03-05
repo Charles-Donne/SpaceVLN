@@ -8,37 +8,109 @@
 - MOVE_FORWARD: 0.25m
 """
 
-ACTION_EXECUTION_PROMPT = """Navigate to {next_waypoint_destination}.
+ACTION_EXECUTION_PROMPT = """You are the action execution module for Vision-Language Navigation. Analyze the environment and decide the next action.
 
-# Task
-**Destination**: {next_waypoint_destination}
+# Current Subtask
+**Destination**: {subtask_destination}
 **Instruction**: {subtask_instruction}
-**Progress**: {progress_summary}
 
-# Detection Image
-Detection view with distance lines:
-**Distances**: FRONT {distance_front} | L30° {distance_left_30} | L60° {distance_left_60} | R30° {distance_right_30} | R60° {distance_right_60} | L90° {distance_left_90} | R90° {distance_right_90}
-(<0.5m blocked | >1.0m safe)
+# Progress Summary
+{progress_summary}
 
-# Decision
-1. Find destination: Location? Distance? (NEAR<1m/FAR>1m/NONE)
-2. Action: NEAR→STOP | NONE→STOP | Left→TURN_LEFT | Right→TURN_RIGHT | Front+clear→MOVE
-3. Safety check
-# Actions
-TURN_LEFT/RIGHT (30-180°), MOVE_FORWARD (0.25-1.0m), STOP
+# Visual Observations
 
-# Output JSON
+You are provided with 3 images:
+
+**IMAGE 1: First-person RGB View** - Current facing direction view
+**IMAGE 2: Object Detection View** - Detected objects with bounding boxes (landmark: {detected_landmarks})
+**IMAGE 3: Local Semantic Map** - Nearby region top-down view
+
+# Local Map
+
+**Map Orientation**: 
+- Top of map = Agent's Front direction
+- Map rotates with agent - front is always up
+- Agent is at center
+
+**Color Legend**:
+- **White**: Unexplored/unknown areas
+- **Black**: Obstacles (walls, furniture) - AVOID
+- **Green**: Floor areas (safe to navigate) - OK TO MOVE
+- **Orange line**: Recent trajectory 
+- **Red arrow at center**: Agent position and facing direction (arrow = Front)
+- **Blue semi-circle**: Current field of view
+  - Opening direction = Front view
+  - Objects within blue region are visible in IMAGE 1
+
+# Your Task
+
+Analyze the 3 images to decide the next action for collision avoidance and navigation.
+
+**Decision Process**:
+1. **RGB View**: What do you see? Where is the destination?
+2. **Detection View**: Are there relevant landmarks detected?
+3. **Local Map**: 
+   - Check immediate path ahead (black = obstacle)
+   - Verify direction to destination
+   - Plan collision-free path
+4. **Distance Estimation**: How far to destination? (e.g., "~3m", "<0.5m")
+5. **Action Decision**: Choose safest action toward destination
+
+**STOP Conditions** (ALL required):
+- Moved ≥2 times
+- Destination within 0.5m
+
+**Safety Priority**: Avoid obstacles shown as black regions on local map
+
+# Available Actions
+- MOVE_FORWARD: Move {move_distance}m forward
+- TURN_LEFT: Rotate {turn_angle}° counterclockwise
+- TURN_RIGHT: Rotate {turn_angle}° clockwise
+- STOP: Declare arrival at subtask destination
+
+# Output Format (JSON only)
+
 {{
-    "reasoning": "1. Destination: [location][distance] 2. Action: [why] 3. Safety: [check]",
-    "action_analysis": "Brief summary",
-    "action": "STOP|MOVE_FORWARD|TURN_LEFT|TURN_RIGHT",
-    "degrees": 30,
-    "meters": 0.25
+    "reasoning": "Logic: (1) Destination location and distance (2) Movement count (3) Action decision",
+    "action": "MOVE_FORWARD" | "TURN_LEFT" | "TURN_RIGHT" | "STOP",
+    "progress_summary": "Updated action history for current subtask"
 }}
 
-Example: {{"reasoning": "1. Table: Front 2m 2. Front+clear→MOVE 3. Safe", "action_analysis": "Table ahead→move 0.5m", "action": "MOVE_FORWARD", "meters": 0.5}}
+# Examples
 
-Rules: NEAR<1m→STOP | Left→TURN_LEFT | Right→TURN_RIGHT | Front+clear→MOVE | NONE→STOP"""
+**Ex1 - Clear path ahead**
+{{
+    "reasoning": "Local map shows safe green floor ahead. Destination visible. Move forward.",
+    "action": "MOVE_FORWARD",
+    "progress_summary": "Moved forward 1x toward doorway"
+}}
+
+**Ex2 - Obstacle detected**
+{{
+    "reasoning": "Local map shows black obstacle directly ahead. Must turn to find clear path.",
+    "action": "TURN_RIGHT",
+    "progress_summary": "Turned right to avoid chair obstacle"
+}}
+
+**Ex3 - Approaching destination**
+{{
+    "reasoning": "Movement: 3, Distance: ~1m. Local map clear. Continue approach.",
+    "action": "MOVE_FORWARD",
+    "progress_summary": "Moved forward 4x approaching sofa"
+}}
+
+**Ex4 - At destination**
+{{
+    "reasoning": "Movement: 4 (✓≥2), Distance: <0.5m (✓), Fills view (✓). ALL MET.",
+    "action": "STOP",
+    "progress_summary": "Moved forward 4x, reached sofa"
+}}
+
+**Critical Rules**:
+- Move ≥2 times before STOP
+- STOP only when distance ≤0.5m
+- When uncertain, MOVE_FORWARD
+"""
 
 
 def get_action_execution_prompt(next_waypoint_destination: str,

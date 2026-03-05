@@ -34,8 +34,7 @@ class LLMPlanner(BaseAPIClient):
         self.action_space = action_space or "MOVE_FORWARD (0.25m), TURN_LEFT (30°), TURN_RIGHT (30°), STOP"
         
         # print(f"✓ LLM Planner initialized")
-        print(f"  Model: {self.config.model}")
-        print(f"  Action space: {self.action_space}")
+        print(f"  🧠 LLM Plan: {self.config.model}")
     
     def validate_response(self, response: Dict, mode: str = 'initial') -> bool:
         """验证响应字段"""
@@ -189,9 +188,6 @@ class LLMPlanner(BaseAPIClient):
         
         if local_map_image:
             images.append(local_map_image)
-            print(f"  📍 Images: 4 directions (updated) + Global map + Local map")
-        else:
-            print(f"  📍 Images: 4 directions (updated) + Global map")
         
         # 添加重试机制
         max_retries = 3

@@ -37,9 +37,7 @@ class ActionExecutor(BaseAPIClient):
         self.compression_resolution = 512  # 降低到512px
         self.compression_quality = 75      # JPEG质量75
         
-        print(f"  Model: {self.config.model}")
-        print(f"  Image: Detection only, {self.compression_resolution}px Q{self.compression_quality}")
-        print(f"  Parameters: turn={turn_angle}°, move={move_distance}m")
+        print(f"  🎯 VLM Action: {self.config.model} | {self.compression_resolution}px Q{self.compression_quality}")
         
         # 配置父类的压缩参数（父类的encode_image_base64会自动使用）
         self.set_compression_config(
@@ -226,7 +224,6 @@ class ActionExecutor(BaseAPIClient):
             }
         
         distance_summary = MapVisualizer.get_distance_summary(obstacle_distances)
-        print(f"📏 Obstacle Distances: {distance_summary}")
         
         # 构建prompt（精简版）
         prompt = get_action_execution_prompt(
@@ -251,11 +248,9 @@ class ActionExecutor(BaseAPIClient):
             images.append(detection_image)
         else:
             # 如果没有detection，回退到RGB
-            print("⚠️ No detection, using RGB")
+            print("⚠️ No detection, fallback RGB")
             if os.path.exists(first_person_image):
                 images.append(first_person_image)
-        
-        print(f"🖼️ Sending {len(images)} image (Detection, {self.compression_resolution}px Q{self.compression_quality})")
         
         # 调用API（父类call_api → build_message_content → encode_image_base64 → compress_image）
         response = self.call_api(prompt, images)
@@ -314,42 +309,21 @@ class ActionExecutor(BaseAPIClient):
             actual_meters=actual_meters
         )
         
-        # 打印推理过程（包含位姿验证信息）
-        print(f"Reasoning: {response['reasoning']}")
-        print(f"Action Analysis: {response['action_analysis']}")
-        
-        # 打印动作决策和执行结果
-        if action_name == 'TURN_LEFT' or action_name == 'TURN_RIGHT':
-            print(f"Planned Action: {action_name} {degrees}°", end="")
+        # 打印动作决策（精简版：1行搞定）
+        action_str = action_name
+        if action_name in ['TURN_LEFT', 'TURN_RIGHT']:
+            action_str = f"{action_name} {degrees}°"
             if actual_degrees is not None:
                 diff = abs(degrees - actual_degrees)
-                ratio = actual_degrees / degrees if degrees > 0 else 0
-                if diff < 5:
-                    status = "✓ Success"
-                elif diff < 15:
-                    status = f"⚠ Partial ({ratio*100:.0f}%)"
-                else:
-                    status = f"✗ Failed ({ratio*100:.0f}%)"
-                print(f" → Actual: {actual_degrees:.1f}° [{status}]")
-            else:
-                print()
+                status = "✓" if diff < 5 else ("⚠" if diff < 15 else "✗")
+                action_str += f" → {actual_degrees:.0f}° [{status}]"
         elif action_name == 'MOVE_FORWARD':
-            print(f"Planned Action: {action_name} {meters}m", end="")
+            action_str = f"{action_name} {meters}m"
             if actual_meters is not None:
                 ratio = actual_meters / meters if meters > 0 else 0
-                if ratio > 0.9:
-                    status = "✓ Success"
-                elif ratio > 0.5:
-                    status = f"⚠ Partial ({ratio*100:.0f}%)"
-                else:
-                    status = f"✗ COLLISION ({ratio*100:.0f}%)"
-                print(f" → Actual: {actual_meters:.2f}m [{status}]")
-            else:
-                print()
-        else:
-            print(f"Action: {action_name}")
+                status = "✓" if ratio > 0.9 else ("⚠" if ratio > 0.5 else "✗COLL")
+                action_str += f" → {actual_meters:.2f}m [{status}]"
         
-        # 打印更新后的进度
-        print(f"Updated Progress: {updated_progress}")
+        print(f"  → {action_str} | {response['action_analysis']}")
         
         return action_id, action_name, updated_progress, response, degrees, meters, prompt

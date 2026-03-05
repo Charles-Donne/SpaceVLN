@@ -83,7 +83,6 @@ class BaseAPIClient(ABC):
         self.compress_images = enabled
         self.compression_max_size = max_size
         self.compression_quality = quality
-        print(f"🗜️  图片压缩配置: {'启用' if enabled else '禁用'} | 分辨率: {max_size}px | 质量: {quality}")
     
     @staticmethod
     def compress_image(image_path: str, max_size: int = 384, quality: int = 80) -> str:
