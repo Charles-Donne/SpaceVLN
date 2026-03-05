@@ -242,10 +242,30 @@ class BaseAPIClient(ABC):
                 "image_url": {"url": f"data:image/jpeg;base64,{img_base64}"}
             })
             
-            # 保存压缩后的图片（从base64解码回来，即模型实际看到的）
-            # 用 img_XX_ 前缀避免不同目录同名文件碰撞（如global_map/和local_map/都叫step_0012_initial.png）
+            # 保存压缩后的图片（模型实际看到的版本）
+            # 从路径提取语义名称: directions/xxx -> direction_000.png, global_map/xxx -> global_map.png
             if save_dir:
-                img_filename = f"img_{idx:02d}_{os.path.basename(img_path)}"
+                parent_dir = os.path.basename(os.path.dirname(img_path))
+                if parent_dir == 'directions':
+                    # directions/initial_direction_030.png -> direction_030.png
+                    basename = os.path.basename(img_path)
+                    # 提取角度部分: initial_direction_030.png -> 030
+                    import re
+                    angle_match = re.search(r'(\d{3})\.png$', basename)
+                    if angle_match:
+                        img_filename = f"direction_{angle_match.group(1)}.png"
+                    else:
+                        img_filename = f"img_{idx:02d}.png"
+                elif parent_dir == 'global_map':
+                    img_filename = "global_map.png"
+                elif parent_dir == 'local_map':
+                    img_filename = "local_map.png"
+                elif parent_dir == 'detection':
+                    img_filename = "detection.png"
+                elif parent_dir == 'rgb':
+                    img_filename = "rgb.png"
+                else:
+                    img_filename = f"img_{idx:02d}.png"
                 save_path = os.path.join(save_dir, img_filename)
                 with open(save_path, 'wb') as f:
                     f.write(base64.b64decode(img_base64))

@@ -13,7 +13,7 @@ from vlnce_baselines.visualization.visualizer import MapVisualizer
 class ActionExecutor(BaseAPIClient):
     """VLM动作执行器 - 负责低层动作决策"""
     
-    REQUIRED_FIELDS = ['reasoning', 'action_analysis', 'action']  # action_analysis从reasoning中独立出来
+    REQUIRED_FIELDS = ['reasoning', 'action_analysis', 'action']  # degrees/meters/progress_summary optional
     
     def __init__(self, config_path: str = "vlnce_baselines/vlm/vlm_config.yaml", 
                  turn_angle: float = 30.0, 
