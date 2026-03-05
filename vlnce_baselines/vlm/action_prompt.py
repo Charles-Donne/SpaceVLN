@@ -60,12 +60,6 @@ Analyze the 3 images to decide the next action for collision avoidance and navig
 
 **Safety Priority**: Avoid obstacles shown as black regions on local map
 
-# Available Actions
-- MOVE_FORWARD: Move {move_distance}m forward
-- TURN_LEFT: Rotate {turn_angle}° counterclockwise
-- TURN_RIGHT: Rotate {turn_angle}° clockwise
-- STOP: Declare arrival at subtask destination
-
 # Output Format (JSON only)
 
 {{
@@ -85,7 +79,7 @@ Analyze the 3 images to decide the next action for collision avoidance and navig
 
 **Ex1 - Clear path ahead**
 {{
-    "reasoning": "Local map shows safe green floor ahead. Destination visible ~2m. Move forward.",
+    "reasoning": "Local map shows safe green floor ahead. Destination visible closed. Move forward.",
     "action_analysis": "Clear path ahead on local map, destination visible in detection view",
     "action": "MOVE_FORWARD",
     "value": 0.25,
@@ -116,7 +110,7 @@ Analyze the 3 images to decide the next action for collision avoidance and navig
     "action_analysis": "All STOP criteria met: moved >=2 times, distance <0.5m",
     "action": "STOP",
     "value": 0,
-    "progress_summary": "Reached destination after 4 forward moves"
+    "progress_summary": "Reached destination after forward moves 3m"
 }}
 
 **Critical Rules**:
