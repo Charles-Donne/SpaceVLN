@@ -124,15 +124,20 @@ def get_action_execution_prompt(next_waypoint_destination: str,
                                 distance_left_60: str = "Unknown",
                                 distance_right_60: str = "Unknown",
                                 distance_left_90: str = "Unknown",
-                                distance_right_90: str = "Unknown") -> str:
+                                distance_right_90: str = "Unknown",
+                                move_distance: float = 0.25,
+                                turn_angle: int = 30) -> str:
     """获取动作执行提示词（精简版）"""
     if not progress_summary:
         progress_summary = "Just started"
         
     return ACTION_EXECUTION_PROMPT.format(
-        next_waypoint_destination=next_waypoint_destination,
+        subtask_destination=next_waypoint_destination,
         subtask_instruction=subtask_instruction,
         progress_summary=progress_summary,
+        detected_landmarks=detected_landmarks or "none",
+        move_distance=move_distance,
+        turn_angle=turn_angle,
         distance_front=distance_front,
         distance_left_30=distance_left_30,
         distance_left_60=distance_left_60,

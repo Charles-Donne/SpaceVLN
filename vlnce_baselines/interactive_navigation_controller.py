@@ -96,7 +96,7 @@ class InteractiveNavigationController:
         current_episodes = self.envs.current_episodes()
         self.current_instruction = current_episodes[0].instruction.instruction_text
         
-        print(f"📍 指令: {self.current_instruction[:100]}{'...' if len(self.current_instruction) > 100 else ''}")
+        print(f"Instruction: {self.current_instruction[:100]}{'...' if len(self.current_instruction) > 100 else ''}")
     
     def look_around(self) -> None:
         """360度环视建图(12步×30°)，步数0-11"""
@@ -110,7 +110,7 @@ class InteractiveNavigationController:
             obs, _, dones, _ = [list(x) for x in zip(*outputs)]
             
             if dones[0]:
-                print(" ⚠️  Episode提前结束")
+                print(" [WARN] Episode ended early")
                 self.current_step = step + 1
                 return
             
@@ -165,7 +165,7 @@ class InteractiveNavigationController:
             list(self.detected_classes), self.current_episode_id
         )
         
-        print(f"[Controller.step] 从mapper接收轨迹: 全局={len(map_state.get('global_trajectory_points', []))}, 子任务={len(map_state.get('subtask_trajectory_points', []))}")
+        # print(f"[Controller.step] 从mapper接收轨迹: 全局={len(map_state.get('global_trajectory_points', []))}, 子任务={len(map_state.get('subtask_trajectory_points', []))}")
         
         new_classes = len(self.detected_classes) - prev_class_count
 # print(f" +{new_classes}类" if new_classes > 0 else "")
@@ -239,15 +239,12 @@ class InteractiveNavigationController:
             final_metrics: 调用STOP后的最终评估指标
         """
         print(f"\n{'='*60}")
-        print(f"🏁 EPISODE 结束处理")
+        print(f"EPISODE FINISH")
         print(f"{'='*60}")
         print(f"Episode: {self.current_episode_id}")
-        print(f"📝 指令: {self.current_instruction if hasattr(self, 'current_instruction') else 'N/A'}")
-        print(f"📊 步数: {self.current_step} | 类别: {len(self.detected_classes)}")
-        if self.detected_classes:
-            print(f"   {', '.join(list(self.detected_classes))}")
-        status = "主动停止" if stop_action else "达到最大步数"
-        print(f"💡 结束原因: {status}")
+        print(f"Steps: {self.current_step} | Classes: {len(self.detected_classes)}")
+        status = "STOP" if stop_action else "MAX_STEPS"
+        print(f"Reason: {status}")
         
         # 🔑 关键修复：调用STOP动作以触发Habitat的Success判定
         final_metrics = {}
@@ -274,30 +271,30 @@ class InteractiveNavigationController:
                     final_metrics = infos[0]
                     dtg = final_metrics.get('distance_to_goal', -1)
                     success_flag = final_metrics.get('success', 0)
-                    print(f"✅ DTG: {dtg:.3f}m | Success: {success_flag} | SPL: {final_metrics.get('spl', 0.0):.4f}")
+                    print(f"DTG: {dtg:.3f}m | Success: {success_flag} | SPL: {final_metrics.get('spl', 0.0):.4f}")
                     
                     # 数据验证
                     if success_flag == 1 and dtg > 3.0:
-                        print(f"   ⚠️  数据异常: Success=1 但 DTG={dtg:.3f}m > 3m")
+                        print(f"   [WARN] Anomaly: Success=1 but DTG={dtg:.3f}m > 3m")
                     elif success_flag == 0 and 0 <= dtg < 3.0:
-                        print(f"   ⚠️  可能: DTG={dtg:.3f}m < 3m 但 Success=0")
+                        print(f"   [WARN] DTG={dtg:.3f}m < 3m but Success=0")
             except AssertionError as e:
                 # Episode已经结束，无法调用STOP
-                print(f"\n⚠️  Episode已结束，无法执行STOP: {e}")
-                print("   使用最后一次step的指标")
+                print(f"\n[WARN] Episode already ended, cannot STOP: {e}")
+                print("   Using last step metrics")
                 if hasattr(self, 'latest_info') and self.latest_info:
                     final_metrics = self.latest_info.copy()
             except Exception as e:
-                print(f"   ❌ STOP执行失败: {e}")
+                print(f"   [ERR] STOP failed: {e}")
                 final_metrics = {}
         elif stop_action and episode_already_done:
-            print("\n⚠️  Episode已经结束（done=True），跳过STOP动作")
-            print("   使用缓存的最终指标")
+            print("\n[WARN] Episode already done, skip STOP")
+            print("   Using cached metrics")
             # 使用最后一次的info作为最终指标
             if hasattr(self, 'latest_info') and self.latest_info:
                 final_metrics = self.latest_info.copy()
         else:
-            print("⏱️  达到最大步数 (Success=0)")
+            print("MAX_STEPS reached (Success=0)")
             # 获取当前指标（不调用STOP）
             if self.latest_info:
                 final_metrics = self.latest_info.copy()
