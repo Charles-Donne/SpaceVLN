@@ -72,8 +72,8 @@ Analyze the 3 images to decide the next action for collision avoidance and navig
 
 {{
     "reasoning": "Logic: (1) Destination location and distance (2) Movement count (3) Action decision",
-    "action": "MOVE_FORWARD" | "TURN_LEFT" | "TURN_RIGHT" | "STOP",
-    "progress_summary": "Updated action history for current subtask"
+    "action_analysis": "One-sentence analysis of why this action was chosen",
+    "action": "MOVE_FORWARD" | "TURN_LEFT" | "TURN_RIGHT" | "STOP"
 }}
 
 # Examples
@@ -81,29 +81,29 @@ Analyze the 3 images to decide the next action for collision avoidance and navig
 **Ex1 - Clear path ahead**
 {{
     "reasoning": "Local map shows safe green floor ahead. Destination visible. Move forward.",
-    "action": "MOVE_FORWARD",
-    "progress_summary": "Moved forward 1x toward doorway"
+    "action_analysis": "Clear path ahead on local map, destination visible in detection view",
+    "action": "MOVE_FORWARD"
 }}
 
 **Ex2 - Obstacle detected**
 {{
     "reasoning": "Local map shows black obstacle directly ahead. Must turn to find clear path.",
-    "action": "TURN_RIGHT",
-    "progress_summary": "Turned right to avoid chair obstacle"
+    "action_analysis": "Obstacle blocking forward path, turning right to find clear route",
+    "action": "TURN_RIGHT"
 }}
 
 **Ex3 - Approaching destination**
 {{
     "reasoning": "Movement: 3, Distance: ~1m. Local map clear. Continue approach.",
-    "action": "MOVE_FORWARD",
-    "progress_summary": "Moved forward 4x approaching sofa"
+    "action_analysis": "Distance ~1m, path clear, continue forward approach",
+    "action": "MOVE_FORWARD"
 }}
 
 **Ex4 - At destination**
 {{
     "reasoning": "Movement: 4 (✓≥2), Distance: <0.5m (✓), Fills view (✓). ALL MET.",
-    "action": "STOP",
-    "progress_summary": "Moved forward 4x, reached sofa"
+    "action_analysis": "All STOP criteria met: moved >=2 times, distance <0.5m",
+    "action": "STOP"
 }}
 
 **Critical Rules**:

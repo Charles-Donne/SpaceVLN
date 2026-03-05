@@ -135,7 +135,7 @@ class InteractiveNavigationController:
         # ⚠️ 关键修复：在使用current_step之前先累加，避免覆盖环视最后一步
         self.current_step += 1
         
-        print(f"[{self.current_step}] {self._action_name(action)}", end="")
+        print(f"[{self.current_step}]{self._action_name(action)}", end=" ")
         
         outputs = self.envs.step([action])
         obs, rewards, dones, infos = [list(x) for x in zip(*outputs)]

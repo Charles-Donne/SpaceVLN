@@ -1435,6 +1435,7 @@ class VLMNavigationController(InteractiveNavigationController):
                 
                 if success and action_sequence:
                     self.execute_rotation_sequence(action_sequence)
+                    print()  # newline after rotation steps
         
         # 返回response（prompt已保存到save_dir）
         return response, None
@@ -1949,6 +1950,7 @@ class VLMNavigationController(InteractiveNavigationController):
             
             if success and action_sequence:
                 self.execute_rotation_sequence(action_sequence)
+                print()  # newline after rotation steps
         
         # 3. 主导航循环
         total_steps = self.current_step
