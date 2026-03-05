@@ -251,12 +251,12 @@ class SaveManager:
             json.dump(log_result, f, indent=2, ensure_ascii=False)
         
         print(f"\n{'='*60}")
-        print(f"📁 结果已保存:")
-        print(f"   - 详细结果: {result_path}")
-        print(f"   - 分析日志: {log_path}")
-        print(f"   Steps: {result.get('total_steps', 0)} | Subtasks: {result.get('subtask_count', 0)}")
-        print(f"   Success: {result.get('success', 0)} | SPL: {result.get('spl', 0.0):.4f}")
-        print(f"   Distance to Goal: {result.get('distance_to_goal', -1):.3f}m")
+        print(f"Results saved:")
+        print(f"  {result_path}")
+        print(f"  {log_path}")
+        print(f"  Steps: {result.get('total_steps', 0)} | Subtasks: {result.get('subtask_count', 0)}")
+        print(f"  Success: {result.get('success', 0)} | SPL: {result.get('spl', 0.0):.4f}")
+        print(f"  Distance to Goal: {result.get('distance_to_goal', -1):.3f}m")
         print(f"{'='*60}")
         
         return log_path

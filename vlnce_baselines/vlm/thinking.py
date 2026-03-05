@@ -47,7 +47,7 @@ class LLMPlanner(BaseAPIClient):
         # 验证completion_criteria为字符串即可（描述到达后的状态）
         criteria = response.get('completion_criteria')
         if not criteria or not isinstance(criteria, str):
-            print(f"⚠️ completion_criteria应该是字符串格式")
+            print(f"[WARN] completion_criteria should be string")
             return False
         
         return True
@@ -58,7 +58,8 @@ class LLMPlanner(BaseAPIClient):
                                 direction_names: List[str],
                                 global_map_image: str,
                                 local_map_image: str = None,
-                                obstacle_distances: Dict[str, str] = None) -> Tuple[Optional[Dict], str]:
+                                obstacle_distances: Dict[str, str] = None,
+                                save_dir: str = None) -> Tuple[Optional[Dict], str]:
         """
         生成初始子任务
         
@@ -106,19 +107,20 @@ class LLMPlanner(BaseAPIClient):
         max_retries = 3
         for retry in range(max_retries):
             if retry > 0:
-                print(f"  🧠 LLM Planning retry {retry+1}/{max_retries}...")
-            response = self.call_api(prompt, images)
+                print(f"  [LLM] Planning retry {retry+1}/{max_retries}...")
+            # Only save on first attempt (avoid duplicate saves on retry)
+            response = self.call_api(prompt, images, save_dir=save_dir if retry == 0 else None)
             
             if response and self.validate_response(response, mode='initial'):
                 return response, prompt
             
             if retry < max_retries - 1:
                 wait = (retry + 1) * 2  # 2s, 4s 递增等待
-                print(f"  ⚠️  LLM Planning failed, retry in {wait}s ({retry + 1}/{max_retries - 1})...")
+                print(f"  [WARN] LLM Planning failed, retry in {wait}s ({retry + 1}/{max_retries - 1})...")
                 import time
                 time.sleep(wait)
         
-        print(f"  ✗ LLM Planning failed after {max_retries} attempts")
+        print(f"  [ERR] LLM Planning failed after {max_retries} attempts")
         return None, prompt
     
     def verify_and_replan(self,
@@ -130,7 +132,8 @@ class LLMPlanner(BaseAPIClient):
                          local_map_image: str = None,
                          detected_landmarks: List[str] = None,
                          waypoint_summary: str = None,
-                         obstacle_distances: Dict[str, str] = None) -> Tuple[Optional[Dict], bool]:
+                         obstacle_distances: Dict[str, str] = None,
+                         save_dir: str = None) -> Tuple[Optional[Dict], bool]:
         """
         验证子任务完成并规划下一步
         
@@ -193,17 +196,17 @@ class LLMPlanner(BaseAPIClient):
         max_retries = 3
         for retry in range(max_retries):
             if retry > 0:
-                print(f"  🧠 LLM Verify retry {retry+1}/{max_retries}...")
-            response = self.call_api(prompt, images)
+                print(f"  [LLM] Verify retry {retry+1}/{max_retries}...")
+            response = self.call_api(prompt, images, save_dir=save_dir if retry == 0 else None)
             
             if response and self.validate_response(response, mode='verify'):
                 return response, prompt
             
             if retry < max_retries - 1:
                 wait = (retry + 1) * 2
-                print(f"  ⚠️  LLM Verify failed, retry in {wait}s ({retry + 1}/{max_retries - 1})...")
+                print(f"  [WARN] LLM Verify failed, retry in {wait}s ({retry + 1}/{max_retries - 1})...")
                 import time
                 time.sleep(wait)
         
-        print(f"  ✗ LLM Verify failed after {max_retries} attempts")
+        print(f"  [ERR] LLM Verify failed after {max_retries} attempts")
         return None, None

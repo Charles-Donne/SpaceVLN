@@ -82,14 +82,14 @@ class VLMNavigationController(InteractiveNavigationController):
         try:
             self.planner = LLMPlanner(llm_config_path, self.action_space)
         except Exception as e:
-            print(f"⚠️  LLM Planner初始化失败: {e}")
+            print(f"[WARN] LLM Planner init failed: {e}")
             self.planner = None
         
         # 初始化VLM执行器
         try:
             self.action_executor = ActionExecutor(vlm_config_path, self.turn_angle, self.move_distance)
         except Exception as e:
-            print(f"⚠️  Action Executor初始化失败: {e}")
+            print(f"[WARN] Action Executor init failed: {e}")
             self.action_executor = None
         
         # VLM状态
@@ -734,8 +734,7 @@ class VLMNavigationController(InteractiveNavigationController):
             
             # 🔑 关键检查：如果episode已结束，立即停止环视并返回空列表
             if dones[0]:
-                print(f"\n⚠️  Episode已结束（在环视第 {i}/12 步），停止环视")
-                print(f"❌ 无法完成完整的12步环视，返回空列表")
+                print(f"[WARN] Episode ended at lookaround step {i}/12")
                 # 返回空列表，调用方需要处理这种情况
                 return [], []
             
@@ -826,8 +825,7 @@ class VLMNavigationController(InteractiveNavigationController):
         
         # 检查是否完成了完整的12步环视
         if len(lookaround_images) < 12:
-            print(f"\n⚠️ 警告: 环视未完成，只收集到 {len(lookaround_images)}/12 张图像（Episode可能提前结束）")
-            print(f"❌ 无法生成观察图片，跳过视觉观察收集")
+            print(f"[WARN] Lookaround incomplete: {len(lookaround_images)}/12 images")
             # 返回空列表，调用方需要处理这种情况
             return [], []
         
@@ -845,7 +843,7 @@ class VLMNavigationController(InteractiveNavigationController):
                 rgb_bgr = cv2.cvtColor(obs[0]['rgb'], cv2.COLOR_RGB2BGR)
                 
                 # 调用visualizer渲染地图并计算waypoint角度
-                print(f"\n  [Waypoint角度计算] 环视结束，计算最后waypoint的方向...")
+                # Waypoint角度计算
                 _, _, last_waypoint_angle = self.visualizer.save_step_visualization(
                     step=look_step,  # 使用最后一步的timestep
                     episode_id=self.current_episode_id,
@@ -975,11 +973,11 @@ class VLMNavigationController(InteractiveNavigationController):
         self.latest_local_map = os.path.join(self.episode_dir, 'local_map', f'step_{self.current_step:04d}_{phase}.png')
         
         if not os.path.exists(self.latest_global_map):
-            print(f"  ⚠️  Global Map not found: {self.latest_global_map}")
+            print(f"  [WARN] Global Map not found: {self.latest_global_map}")
             self.latest_global_map = None
         
         if not os.path.exists(self.latest_local_map):
-            print(f"  ⚠️  Local Map not found: {self.latest_local_map}")
+            print(f"  [WARN] Local Map not found: {self.latest_local_map}")
             self.latest_local_map = None
         
         # print(f"  12方向独立视图已保存")
@@ -1028,7 +1026,7 @@ class VLMNavigationController(InteractiveNavigationController):
                 direction_paths.append(direction_path)
                 direction_names.append(direction_name)
             else:
-                print(f"  ⚠️  {direction_name} 未找到: {direction_filename}")
+                print(f"  [WARN] {direction_name} not found: {direction_filename}")
         
         # 获取地图（使用当前step的地图，每次环视后current_step已更新）
         # current_step是最后一次环视后的step，地图文件名需要加上phase后缀
@@ -1036,11 +1034,11 @@ class VLMNavigationController(InteractiveNavigationController):
         local_map_path = os.path.join(self.episode_dir, 'local_map', f'step_{self.current_step:04d}_{phase}.png')
         
         if not os.path.exists(global_map_path):
-            print(f"  ⚠️  Global Map 未找到")
+            print(f"  [WARN] Global Map not found")
             global_map_path = None
         
         if not os.path.exists(local_map_path):
-            print(f"  ⚠️  Local Map 未找到")
+            print(f"  [WARN] Local Map not found")
             local_map_path = None
         
         return direction_paths, direction_names, global_map_path, local_map_path
@@ -1052,17 +1050,17 @@ class VLMNavigationController(InteractiveNavigationController):
         使用环视收集的4方向全景图 + 全局地图 + 局部地图调用LLM生成子任务
         """
         if not self.planner:
-            print("✗ LLM Planner未初始化")
+            print("[ERR] LLM Planner not initialized")
             return None
         
-        print(f"\n🧠 LLM Planning...")
+        print(f"\n[LLM] Planning...")
         
         # 从 vlm/observations/ 获取全景图和地图
         image_paths, direction_names, global_map, local_map = self.get_observations_and_maps("initial")
         
         # 验证地图文件存在
         if not global_map or not os.path.exists(global_map):
-            print(f"✗ Global map not found: {global_map}")
+            print(f"[ERR] Global map not found: {global_map}")
             return None
         
         # 地图已包含waypoint标记（在visualizer.save_step_visualization中渲染）
@@ -1088,43 +1086,30 @@ class VLMNavigationController(InteractiveNavigationController):
             "subtask_id": "1a",  # 初始化总是1a
             "prompt_type": "initial",
             "timestamp": datetime.now().isoformat(),
-            # 保存输入图片路径（12张方向图 + 2张地图）
-            "input_images": {
-                "global_map.png": global_map_for_llm,
-                "local_map.png": local_map,
-                # 12个方向视图（IMAGE 1-12）
-                **{f"IMAGE {i+1}.png": image_paths[i] if len(image_paths) > i else None for i in range(12)}
-            }
         }
         
-        # 生成prompt并添加到record
-        from vlnce_baselines.vlm.prompts import get_initial_planning_prompt
-        prompt = get_initial_planning_prompt(
-            self.current_instruction, 
-            "TURN_LEFT/RIGHT (30°, 60°, 90°, 120°, 150°, 180°), MOVE_FORWARD (0.25m, 0.5m, 0.75m, 1.0m, 1.25m, 1.5m), STOP"
-        )
-        thinking_record["prompt"] = prompt
+        # 计算save_dir: API发送时同步保存压缩图片+prompt
+        thinking_dir = os.path.join(self.save_manager.episode_dir, "thinking", "subtask_1")
+        os.makedirs(thinking_dir, exist_ok=True)
         
-        # 1️⃣ 先保存输入
-        thinking_dir = self.save_manager.save_thinking_input(thinking_record)
-        
-        # 2️⃣ 调用LLM生成初始子任务
+        # 调用LLM生成初始子任务（save_dir使call_api在发送时保存压缩图片+prompt）
         response, _ = self.planner.generate_initial_subtask(
             instruction=self.current_instruction,
             observation_images=image_paths,
             direction_names=direction_names,
-            global_map_image=global_map_for_llm,  # 使用带waypoint标注的版本
+            global_map_image=global_map_for_llm,
             local_map_image=local_map,
-            obstacle_distances=obstacle_distances
+            obstacle_distances=obstacle_distances,
+            save_dir=thinking_dir
         )
         
         if not response:
-            print("✗ LLM Planning failed")
+            print("[ERR] LLM Planning failed")
             return None
         
-        # 3️⃣ 保存response
-        thinking_record["response"] = response
-        self.save_manager.save_thinking_response(thinking_record, thinking_dir)
+        # 保存response（API返回后）
+        with open(os.path.join(thinking_dir, "response.json"), 'w', encoding='utf-8') as f:
+            json.dump(response, f, ensure_ascii=False, indent=2)
         
         # 不再保存到内存记录，减少内存开销
         # self.thinking_outputs.append(thinking_record)
@@ -1189,7 +1174,7 @@ class VLMNavigationController(InteractiveNavigationController):
         match = re.search(r'Left (\d+)(?:deg|°)|Right (\d+)(?:deg|°)|Back (\d+)(?:deg|°)?|Front', waypoint_direction)
         
         if not match:
-            print(f"  ⚠️  无法解析waypoint_direction: {waypoint_direction}")
+            print(f"  [WARN] Cannot parse waypoint_direction: {waypoint_direction}")
             return False, []
         
         angle = 0
@@ -1206,10 +1191,10 @@ class VLMNavigationController(InteractiveNavigationController):
             direction = 'LEFT'  # 向左转180度
         elif 'Front' in waypoint_direction:
             # 已经面向Front，无需旋转
-            print(f"  ✓ Waypoint已在Front方向，无需旋转")
+            # Waypoint already at Front, no rotation needed
             return True, []
         else:
-            print(f"  ⚠️  无法识别方向: {waypoint_direction}")
+            print(f"  [WARN] Unrecognized direction: {waypoint_direction}")
             return False, []
         
         # 生成动作序列（每次30度）
@@ -1246,7 +1231,7 @@ class VLMNavigationController(InteractiveNavigationController):
             elif action_name == "TURN_RIGHT":
                 action_id = HabitatSimActions.TURN_RIGHT
             else:
-                print(f"    ⚠️  未知动作: {action_name}")
+                print(f"    [WARN] Unknown action: {action_name}")
                 continue
             
             # 使用统一的执行器（step_with_vlm），确保：
@@ -1258,7 +1243,7 @@ class VLMNavigationController(InteractiveNavigationController):
             
             # 检查episode是否结束
             if result.get('done', False):
-                print(f"    ⚠️  Episode在旋转过程中结束")
+                print(f"    [WARN] Episode ended during rotation")
                 return False
         
         return True
@@ -1286,11 +1271,11 @@ class VLMNavigationController(InteractiveNavigationController):
         # 使用attempt字母标识（a=0, b=1, c=2...）
         attempt_letter = chr(ord('a') + self.subtask_attempt)
         phase = f"verify_{self.subtask_count}{attempt_letter}"
-        print(f"\n🔄 Verify #{self.subtask_count}{attempt_letter} (lookaround step {self.current_step + 1}-{self.current_step + 12})")
+        print(f"\n[Verify] #{self.subtask_count}{attempt_letter} (lookaround step {self.current_step + 1}-{self.current_step + 12})")
         image_paths, direction_names = self.look_around_and_collect(phase)
         
         if not image_paths:
-            print("❌ 环视建图失败（Episode可能提前结束），无法进行验证")
+            print("[ERR] Lookaround failed, cannot verify")
             # Episode提前结束，无法继续验证，返回失败
             return False, None, None
         
@@ -1299,7 +1284,7 @@ class VLMNavigationController(InteractiveNavigationController):
         
         # 验证地图文件存在
         if not global_map or not os.path.exists(global_map):
-            print(f"✗ Global map not found: {global_map}")
+            print(f"[ERR] Global map not found: {global_map}")
             return False, None
         
         # 地图已包含waypoint标记（在visualizer.save_step_visualization中渲染）
@@ -1354,72 +1339,47 @@ class VLMNavigationController(InteractiveNavigationController):
             "subtask_count": verification_subtask_count,  # 使用下一个编号
             "subtask_attempt": self.subtask_attempt,
             "subtask_id": subtask_id,  # 当前验证的子任务，如 "1a"
-            "next_subtask_id": f"{next_subtask_count}{next_attempt_letter}",  # 暂定，后续根据is_completed更新
             "prompt_type": "verification",
             "timestamp": datetime.now().isoformat(),
-            "detected_landmarks": detected_landmarks,  # 记录传递给LLM的landmarks
-            # 保存输入图片路径（12张方向图 + 2张地图）
-            "input_images": {
-                "global_map.png": global_map_for_llm,
-                "local_map.png": local_map if os.path.exists(local_map) else None,
-                # 12个方向视图（IMAGE 1-12）
-                **{f"IMAGE {i+1}.png": image_paths[i] if len(image_paths) > i else None for i in range(12)}
-            }
+            "detected_landmarks": detected_landmarks,
         }
         
-        # 生成prompt并添加到record
-        from vlnce_baselines.vlm.prompts import get_verification_replanning_prompt
-        prompt = get_verification_replanning_prompt(
-            self.current_instruction,
-            self.current_subtask.get('next_waypoint_destination', 'Unknown'),
-            self.current_subtask.get('subtask_instruction', 'Unknown'),
-            str(self.current_subtask.get('completion_criteria', {})),
-            "TURN_LEFT/RIGHT (30°, 60°, 90°, 120°, 150°, 180°), MOVE_FORWARD (0.25m, 0.5m, 0.75m, 1.0m, 1.25m, 1.5m), STOP",
-            detected_landmarks=", ".join(detected_landmarks) if detected_landmarks else None,
-            waypoint_summary=waypoint_summary
-        )
-        thinking_record["prompt"] = prompt
+        # 计算save_dir: API发送时同步保存压缩图片+prompt
+        thinking_dir = os.path.join(self.save_manager.episode_dir, "thinking", f"subtask_{verification_subtask_count}")
+        os.makedirs(thinking_dir, exist_ok=True)
         
-        # 1️⃣ 先保存输入
-        thinking_dir = self.save_manager.save_thinking_input(thinking_record)
-        
-        # 2️⃣ 调用LLM验证（全局地图必需，局部地图可选，传递实际检测到的类别）
+        # 调用LLM验证（save_dir使call_api在发送时保存压缩图片+prompt）
         response, _ = self.planner.verify_and_replan(
             instruction=self.current_instruction,
             current_subtask=self.current_subtask,
             observation_images=image_paths,
             direction_names=direction_names,
-            global_map_image=global_map_for_llm,  # 使用带waypoint标注的版本
+            global_map_image=global_map_for_llm,
             local_map_image=local_map if os.path.exists(local_map) else None,
             detected_landmarks=detected_landmarks,
             waypoint_summary=waypoint_summary,
-            obstacle_distances=obstacle_distances
+            obstacle_distances=obstacle_distances,
+            save_dir=thinking_dir
         )
         
         if not response:
-            print("✗ LLM Verify failed")
+            print("[ERR] LLM Verify failed")
             return None, None
         
-        # 更新next_subtask_id
-        if response.get('global_task_finish', False):
-            thinking_record["next_subtask_id"] = "final"
-        else:
-            thinking_record["next_subtask_id"] = f"{self.subtask_count + 1}a"
-        
-        # 3️⃣ 保存response
-        thinking_record["response"] = response
-        self.save_manager.save_thinking_response(thinking_record, thinking_dir)
+        # 保存response（API返回后）
+        with open(os.path.join(thinking_dir, "response.json"), 'w', encoding='utf-8') as f:
+            json.dump(response, f, ensure_ascii=False, indent=2)
         
         # 打印关键信息（精简）
         task_finished = response.get('global_task_finish', False)
         attempt_letter = chr(ord('a') + self.subtask_attempt)
-        print(f"  📍 #{self.subtask_count}{attempt_letter} → {response.get('next_waypoint_destination', 'N/A')} | finish={task_finished}")
+        print(f"  #{self.subtask_count}{attempt_letter} -> {response.get('next_waypoint_destination', 'N/A')} | finish={task_finished}")
         
         if task_finished:
-            print("🏆 全局任务完成")
-            return response, prompt
+            print("[DONE] Global task complete")
+            return response, None
         else:
-            print(f"  ➡️  下一子任务 #{self.subtask_count + 1}a: {response.get('subtask_instruction', 'N/A')[:60]}")
+            print(f"  Next #{self.subtask_count + 1}a: {response.get('subtask_instruction', 'N/A')[:60]}")
             
             # 保存waypoint
             waypoint_desc = response.get('current_waypoint', 'Unknown location')
@@ -1476,8 +1436,8 @@ class VLMNavigationController(InteractiveNavigationController):
                 if success and action_sequence:
                     self.execute_rotation_sequence(action_sequence)
         
-        # 返回response和prompt
-        return response, prompt
+        # 返回response（prompt已保存到save_dir）
+        return response, None
     
     def execute_action_with_vlm(self) -> Tuple[Optional[int], Optional[str], bool, int, Optional[Dict]]:
         """
@@ -1498,14 +1458,14 @@ class VLMNavigationController(InteractiveNavigationController):
             outputs = self.envs.step(actions)
             obs, _, dones, _ = [list(x) for x in zip(*outputs)]
             if dones[0]:
-                print("⚠️ Episode结束")
+                print("[WARN] Episode ended")
                 return None, None, True
             
             actions = [{"action": HabitatSimActions.TURN_LEFT}]
             outputs = self.envs.step(actions)
             obs, _, dones, _ = [list(x) for x in zip(*outputs)]
             if dones[0]:
-                print("⚠️ Episode结束")
+                print("[WARN] Episode ended")
                 return None, None, True
             obs = obs[0]
         
@@ -1578,7 +1538,7 @@ class VLMNavigationController(InteractiveNavigationController):
                 detection_step = last_step
                 break
         if not detection_image:
-            print(f"  ⚠️  Detection image not found for step {last_step} (tried phases: {possible_phases})")
+            print(f"  [WARN] Detection image not found for step {last_step}")
         else:
             # 为detection图像添加距离辅助线（不使用地面分割）
             detection_image = self.visualizer.prepare_action_image_with_enhancements(
@@ -1592,7 +1552,7 @@ class VLMNavigationController(InteractiveNavigationController):
                 local_map = candidate
                 break
         if not local_map:
-            print(f"  ⚠️  Local map not found for step {last_step} (tried phases: {possible_phases})")
+            print(f"  [WARN] Local map not found for step {last_step}")
         
         # 获取detection图像对应的landmark类别
         # 使用找到的detection图像对应的step
@@ -1622,47 +1582,43 @@ class VLMNavigationController(InteractiveNavigationController):
             'right_90': 'Unknown'
         })
         
-        # 准备action输入记录（在调用API之前）
+        # 准备action记录
         attempt_letter = chr(ord('a') + self.subtask_attempt)
-        action_record = {
-            "step": self.current_step + 1,  # 即将执行的action的step
-            "subtask_count": self.subtask_count,
-            "subtask_attempt": self.subtask_attempt,
-            "subtask_id": f"{self.subtask_count}{attempt_letter}",  # 如 "1a"
-            "timestamp": datetime.now().isoformat(),
-            "detected_landmarks": detected_landmarks,  # 记录传递给VLM的landmarks
-            # 保存输入图片路径（action模块只使用3张图：RGB + Detection + Local Map）
-            "input_images": {
-                "rgb.png": fp_image,
-                "detection.png": detection_image,
-                "local_map.png": local_map,
-            },
-        }
+        subtask_id = f"{self.subtask_count}{attempt_letter}"
         
         # 保存子任务信息
         subtask_info = {
             "subtask_id": self.subtask_count,
             "next_waypoint_destination": self.current_subtask.get('next_waypoint_destination', ''),
             "subtask_instruction": self.current_subtask.get('subtask_instruction', ''),
-            "start_step": self.current_step,  # 子任务开始时的step（决策前）
+            "start_step": self.current_step,
             "timestamp": datetime.now().isoformat()
         }
         
-        # 1️⃣ 先保存输入
-        action_dir = self.save_manager.save_action_input(action_record, subtask_info)
+        # 计算save_dir: API发送时同步保存压缩图片+prompt
+        subtask_dir = os.path.join(self.save_manager.episode_dir, "action", f"subtask_{subtask_id}")
+        action_save_dir = os.path.join(subtask_dir, f"step_{self.current_step + 1}")
+        os.makedirs(action_save_dir, exist_ok=True)
         
-        # 2️⃣ 调用VLM决策（不传递pose，使用当前progress_summary）
+        # 保存子任务信息（首次创建时）
+        info_file = os.path.join(subtask_dir, "info.json")
+        if not os.path.exists(info_file):
+            with open(info_file, 'w', encoding='utf-8') as f:
+                json.dump(subtask_info, f, ensure_ascii=False, indent=2)
+        
+        # 调用VLM决策（save_dir使call_api在发送时保存压缩图片+prompt）
         result = self.action_executor.decide_action(
             next_waypoint_destination=self.current_subtask.get('next_waypoint_destination', ''),
             subtask_instruction=self.current_subtask.get('subtask_instruction', ''),
             first_person_image=fp_image,
             action_mapping=ACTION_MAPPING,
-            progress_summary=self.progress_summary,  # 使用上次动作的progress
+            progress_summary=self.progress_summary,
             detection_image=detection_image,
             local_map_image=local_map,
             detected_landmarks=detected_landmarks,
             previous_action_reason=self.previous_action_reason,
-            obstacle_distances=obstacle_distances
+            obstacle_distances=obstacle_distances,
+            save_dir=action_save_dir
         )
         
         if len(result) == 7:
@@ -1677,18 +1633,12 @@ class VLMNavigationController(InteractiveNavigationController):
             prompt = None
         
         if action_id is None:
-            print("✗ VLM决策失败")
+            print("[ERR] VLM decision failed")
             return None, None, True, 1, None
         
-        # 3️⃣ 保存响应和prompt
-        action_record["action_name"] = action_name
-        action_record["action_id"] = action_id
-        action_record["response"] = response
-        action_record["prompt"] = prompt
-        
-        # 不再保存到内存记录，减少内存开销
-        # self.action_outputs.append(action_record)
-        self.save_manager.save_action_response(action_record)
+        # 保存response（API返回后，到同一个save_dir）
+        with open(os.path.join(action_save_dir, "response.json"), 'w', encoding='utf-8') as f:
+            json.dump(response, f, ensure_ascii=False, indent=2)
         
         # 保存planned action参数，供后续计算actual progress使用
         self.last_planned_degrees = degrees
@@ -1959,15 +1909,15 @@ class VLMNavigationController(InteractiveNavigationController):
         max_steps = self.config.TASK_CONFIG.ENVIRONMENT.MAX_EPISODE_STEPS
         
         print(f"\n{'='*60}")
-        print(f"🚀 VLM Navigation | max_steps={max_steps} | subtask_steps={max_subtask_steps}")
-        print(f"📝 {self.current_instruction}")
+        print(f"VLM Navigation | max_steps={max_steps} | subtask_steps={max_subtask_steps}")
+        print(f"Instruction: {self.current_instruction}")
         print(f"{'='*60}")
         
         # 1. 环视建图 + 收集观察（占用step 1-12）
         image_paths, direction_names = self.look_around_and_collect()
         
         if not image_paths:
-            print("❌ 初始环视建图失败（Episode可能在启动时就结束），无法开始导航")
+            print("[ERR] Initial lookaround failed, cannot start navigation")
             return {
                 'success': False,
                 'total_steps': self.current_step,
@@ -1981,7 +1931,7 @@ class VLMNavigationController(InteractiveNavigationController):
         # 2. 生成初始子任务（在step 12完成，下一个action从step 13开始）
         subtask = self.generate_initial_subtask()
         if not subtask:
-            print("✗ 初始子任务生成失败")
+            print("[ERR] Initial subtask generation failed")
             return {
                 'success': False,
                 'total_steps': self.current_step,  # 12
@@ -2024,31 +1974,31 @@ class VLMNavigationController(InteractiveNavigationController):
                 
                 if retry < max_retries - 1:
                     wait = (retry + 1) * 2
-                    print(f"  ✗ VLM Action failed, retry in {wait}s ({retry + 1}/{max_retries - 1})...")
+                    print(f"  [WARN] VLM Action failed, retry in {wait}s ({retry + 1}/{max_retries - 1})...")
                     import time
                     time.sleep(wait)
             
             # 所有重试都失败，跳过此步
             if action_id is None:
-                print("✗ VLM Action failed after all retries, skipping step")
+                print("[ERR] VLM Action failed after all retries, skipping step")
                 continue
             
-            # 🔑 关键检查：在执行任何action之前，检查VLM响应中的global_task_finish
+            # 关键检查：在执行任何action之前，检查VLM响应中的global_task_finish
             if vlm_response and vlm_response.get('global_task_finish', False):
-                print(f"🏆 Task complete (action response) | steps={total_steps}")
+                print(f"[DONE] Task complete (action) | steps={total_steps}")
                 navigation_complete = True
                 break
             
             # 如果VLM决定停止 → 验证子任务
             if should_stop:
-                print("\n🔄 STOP → Verify...")
+                print("\n[STOP] -> Verify...")
                 
                 # verify_and_replan会调用thinking模型检查任务是否完成
                 new_subtask, _ = self.verify_and_replan()
                 
                 # 检查模型是否判断全局任务完成
                 if new_subtask and new_subtask.get('global_task_finish', False):
-                    print(f"🏆 Task complete (verify) | steps={total_steps} | subtasks={self.subtask_count}")
+                    print(f"[DONE] Task complete (verify) | steps={total_steps} | subtasks={self.subtask_count}")
                     navigation_complete = True
                     break
                 
@@ -2091,7 +2041,7 @@ class VLMNavigationController(InteractiveNavigationController):
                 
                 # 🔑 检查episode是否自动结束（Habitat内部判断，如达到MAX_EPISODE_STEPS）
                 if result['done']:
-                    print(f"⚠️  Episode done (Habitat)")
+                    print(f"[WARN] Episode done (Habitat)")
                     # 不要尝试调用step(STOP)，因为episode已经done，会触发AssertionError
                     # latest_info已在step_with_vlm中更新，包含最终指标
                     navigation_complete = True
@@ -2146,11 +2096,11 @@ class VLMNavigationController(InteractiveNavigationController):
             
             # 🔑 强制重规划检查：如果达到最大步数，执行完动作后立即触发verify
             if force_replan_after_action:
-                print(f"\n🔄 Force replan after {max_subtask_steps} steps")
+                print(f"\n[Replan] Force replan after {max_subtask_steps} steps")
                 new_subtask, _ = self.verify_and_replan()
                 # 检查是否完成全局任务
                 if new_subtask and new_subtask.get('global_task_finish', False):
-                    print(f"🏆 Task complete (force replan) | steps={total_steps}")
+                    print(f"[DONE] Task complete (force replan) | steps={total_steps}")
                     navigation_complete = True
                     break
                 subtask_steps = 0  # 重置步数
@@ -2164,7 +2114,7 @@ class VLMNavigationController(InteractiveNavigationController):
         if hasattr(self, 'dtg_history') and self.dtg_history:
             valid_dtgs = [d for d in self.dtg_history if d >= 0]
             if valid_dtgs:
-                print(f"\n📊 DTG: min={min(valid_dtgs):.2f}m final={valid_dtgs[-1]:.2f}m")
+                print(f"\nDTG: min={min(valid_dtgs):.2f}m final={valid_dtgs[-1]:.2f}m")
         
         # 4. 生成GIF动画
         
@@ -2190,7 +2140,7 @@ class VLMNavigationController(InteractiveNavigationController):
         final_result = self._save_navigation_result(navigation_complete, total_steps, env_metrics)
         
         print(f"\n{'='*60}")
-        print(f"{'✅' if navigation_complete else '❌'} Done | steps={total_steps} | subtasks={self.subtask_count}")
+        print(f"{'OK' if navigation_complete else 'FAIL'} | steps={total_steps} | subtasks={self.subtask_count}")
         print(f"{'='*60}")
         
         return {
@@ -2271,12 +2221,7 @@ class VLMNavigationController(InteractiveNavigationController):
         }
         
         # 打印关键指标（便于实时监控）
-        print(f"\n📊 Episode {self.current_episode_id} 评估指标:")
-        print(f"  - Success: {result['success']}")
-        print(f"  - SPL: {result['spl']:.4f}")
-        print(f"  - Distance to Goal: {result['distance_to_goal']:.3f}m")
-        print(f"  - Path Length: {result['path_length']:.3f}m")
-        print(f"  - Oracle Success: {result['oracle_success']}")
+        print(f"\nEpisode {self.current_episode_id}: succ={result['success']} spl={result['spl']:.4f} dtg={result['distance_to_goal']:.3f}m pl={result['path_length']:.3f}m oracle={result['oracle_success']}")
         
         return self.save_manager.save_result(result)
     
@@ -2319,7 +2264,7 @@ class VLMNavigationController(InteractiveNavigationController):
             with open(self.current_subtask_file, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
         except Exception as e:
-            print(f"⚠️ 记录动作失败: {e}")
+            print(f"[WARN] Record action failed: {e}")
     
     def _print_subtask_info(self, response: Dict, is_initial: bool = False):
         """打印子任务信息（JSON格式）"""
@@ -2340,7 +2285,7 @@ class VLMNavigationController(InteractiveNavigationController):
         
         dest = response.get('next_waypoint_destination', 'N/A')
         instr = response.get('subtask_instruction', 'N/A')[:80]
-        print(f"  📋 {title}: {dest} | {instr}")
+        print(f"  {title}: {dest} | {instr}")
     
     # ========== Waypoint辅助方法 ==========
     

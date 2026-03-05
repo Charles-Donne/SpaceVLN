@@ -122,7 +122,7 @@ class BaseAPIClient(ABC):
             
             return tmp.name
         except Exception as e:
-            print(f"⚠️  Image compression failed: {e}, using original")
+            print(f"[WARN] Image compression failed: {e}, using original")
             return image_path
     
     def encode_image_base64(self, image_path: str, compress: bool = None) -> str:
@@ -162,7 +162,7 @@ class BaseAPIClient(ABC):
             # 不压缩，直接编码
             file_size = os.path.getsize(image_path)
             if file_size > 5 * 1024 * 1024:  # 5MB
-                print(f"⚠️  Large image: {os.path.basename(image_path)} ({file_size / 1024 / 1024:.2f}MB)")
+                print(f"[WARN] Large image: {os.path.basename(image_path)} ({file_size / 1024 / 1024:.2f}MB)")
             with open(image_path, "rb") as f:
                 return base64.b64encode(f.read()).decode("utf-8")
     
@@ -214,30 +214,58 @@ class BaseAPIClient(ABC):
         try:
             with open(filename, 'w', encoding='utf-8') as f:
                 f.write(response_text)  # 直接写入原始文本
-            print(f"  💾 VLM原始输出已保存: {os.path.abspath(filename)}")
+            print(f"  Raw output saved: {os.path.abspath(filename)}")
         except Exception as e:
-            print(f"  ⚠️  保存失败: {e}")
+            print(f"  [WARN] Save failed: {e}")
     
-    def build_message_content(self, text: str, image_paths: List[str]) -> List[Dict]:
-        """构建消息内容"""
+    def build_message_content(self, text: str, image_paths: List[str], save_dir: str = None) -> List[Dict]:
+        """构建消息内容，可选保存压缩后的图片（即模型实际看到的版本）
+        
+        Args:
+            text: prompt文本
+            image_paths: 图片路径列表
+            save_dir: 如果指定，将压缩后的图片和prompt保存到此目录
+        """
         content = [{"type": "text", "text": text}]
-        for img_path in image_paths:
+        
+        # 如果需要保存，先创建目录
+        if save_dir:
+            os.makedirs(save_dir, exist_ok=True)
+            # 保存prompt
+            with open(os.path.join(save_dir, "prompt.txt"), 'w', encoding='utf-8') as f:
+                f.write(text)
+        
+        for idx, img_path in enumerate(image_paths):
             img_base64 = self.encode_image_base64(img_path)
             content.append({
                 "type": "image_url",
                 "image_url": {"url": f"data:image/jpeg;base64,{img_base64}"}
             })
+            
+            # 保存压缩后的图片（从base64解码回来，即模型实际看到的）
+            if save_dir:
+                img_filename = os.path.basename(img_path)
+                save_path = os.path.join(save_dir, img_filename)
+                with open(save_path, 'wb') as f:
+                    f.write(base64.b64decode(img_base64))
+        
         return content
     
-    def call_api(self, prompt: str, image_paths: List[str]) -> Optional[Dict]:
-        """调用API（带计时和速度统计）"""
+    def call_api(self, prompt: str, image_paths: List[str], save_dir: str = None) -> Optional[Dict]:
+        """调用API（带计时和速度统计）
+        
+        Args:
+            prompt: prompt文本
+            image_paths: 图片路径列表
+            save_dir: 如果指定，在发送时同步保存压缩图片+prompt到此目录
+        """
         t_start = time.time()
         try:
             payload = {
                 "model": self.config.model,
                 "messages": [{
                     "role": "user",
-                    "content": self.build_message_content(prompt, image_paths)
+                    "content": self.build_message_content(prompt, image_paths, save_dir=save_dir)
                 }],
                 "temperature": self.config.temperature,
                 "max_tokens": self.config.max_tokens
@@ -283,7 +311,7 @@ class BaseAPIClient(ABC):
             
             # 打印速度统计
             model_short = self.config.model.split('/')[-1][:30]
-            speed_info = f"⚡ {model_short} | {latency:.1f}s | {prompt_tokens}→{completion_tokens} tokens | {tokens_per_sec:.0f} tok/s"
+            speed_info = f"{model_short} | {latency:.1f}s | {prompt_tokens}->{completion_tokens} tok | {tokens_per_sec:.0f} tok/s"
             
             # OpenRouter额外信息
             if is_openrouter:
@@ -301,7 +329,7 @@ class BaseAPIClient(ABC):
             # 检查截断
             finish_reason = result['choices'][0].get('finish_reason', 'unknown')
             if finish_reason == 'length':
-                print(f"⚠️  Response truncated (max_tokens={self.config.max_tokens})")
+                print(f"[WARN] Response truncated (max_tokens={self.config.max_tokens})")
             
             parsed = self.parse_json_response(content)
             

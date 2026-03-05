@@ -190,7 +190,8 @@ class ActionExecutor(BaseAPIClient):
                      previous_action_reason: str = "",
                      pose_before: tuple = None,
                      pose_after: tuple = None,
-                     obstacle_distances: Dict[str, str] = None) -> Tuple[Optional[int], Optional[str], Optional[str], Optional[Dict]]:
+                     obstacle_distances: Dict[str, str] = None,
+                     save_dir: str = None) -> Tuple[Optional[int], Optional[str], Optional[str], Optional[Dict]]:
         """
         基于第一人称视角、检测结果和局部地图决策下一步动作
         
@@ -248,12 +249,13 @@ class ActionExecutor(BaseAPIClient):
             images.append(detection_image)
         else:
             # 如果没有detection，回退到RGB
-            print("⚠️ No detection, using RGB")
+            print(f"  [WARN] No detection, using RGB")
             if os.path.exists(first_person_image):
                 images.append(first_person_image)
         
         # 调用API（父类call_api → build_message_content → encode_image_base64 → compress_image）
-        response = self.call_api(prompt, images)
+        # save_dir: 在发送时同步保存压缩后的图片+prompt
+        response = self.call_api(prompt, images, save_dir=save_dir)
         
         if not response:
             print("✗ No response from VLM")
@@ -325,6 +327,6 @@ class ActionExecutor(BaseAPIClient):
                 info += f" → {actual_meters:.2f}m [{tag}]"
         else:
             info = action_name
-        print(f"  🎯 {info} | {response.get('reasoning', '')[:60]}")
+        print(f"  Action: {info} | {response.get('reasoning', '')[:60]}")
         
         return action_id, action_name, updated_progress, response, degrees, meters, prompt
