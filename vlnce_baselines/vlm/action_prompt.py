@@ -74,15 +74,14 @@ Analyze the 3 images to decide the next action for collision avoidance and navig
     "reasoning": "Logic: (1) Destination location and distance (2) Movement count (3) Action decision",
     "action_analysis": "One-sentence analysis of why this action was chosen",
     "action": "MOVE_FORWARD" | "TURN_LEFT" | "TURN_RIGHT" | "STOP",
-    "degrees": 0,
-    "meters": 0,
+    "value": 0,
     "progress_summary": "Updated action history for current subtask"
 }}
 
 **Parameter rules**:
-- MOVE_FORWARD: set "meters" (0.25 ~ 1.5), "degrees": 0
-- TURN_LEFT / TURN_RIGHT: set "degrees" (30 ~ 180, multiples of 30), "meters": 0
-- STOP: both 0
+- MOVE_FORWARD: "value" = meters (0.25 ~ 1.5)
+- TURN_LEFT / TURN_RIGHT: "value" = degrees (30 ~ 180, multiples of 30)
+- STOP: "value" = 0
 
 # Examples
 
@@ -91,8 +90,7 @@ Analyze the 3 images to decide the next action for collision avoidance and navig
     "reasoning": "Local map shows safe green floor ahead. Destination visible ~2m. Move forward.",
     "action_analysis": "Clear path ahead on local map, destination visible in detection view",
     "action": "MOVE_FORWARD",
-    "degrees": 0,
-    "meters": 0.25,
+    "value": 0.25,
     "progress_summary": "Moved forward 1x toward doorway"
 }}
 
@@ -101,8 +99,7 @@ Analyze the 3 images to decide the next action for collision avoidance and navig
     "reasoning": "Local map shows black obstacle directly ahead. Must turn right to find clear path.",
     "action_analysis": "Obstacle blocking forward path, turning right to find clear route",
     "action": "TURN_RIGHT",
-    "degrees": 30,
-    "meters": 0,
+    "value": 30,
     "progress_summary": "Turned right 30 to avoid obstacle"
 }}
 
@@ -111,8 +108,7 @@ Analyze the 3 images to decide the next action for collision avoidance and navig
     "reasoning": "Destination is to the left ~90. Local map shows open area left. Turn left 90.",
     "action_analysis": "Destination detected at left side, need 90 degree turn",
     "action": "TURN_LEFT",
-    "degrees": 90,
-    "meters": 0,
+    "value": 90,
     "progress_summary": "Turned left 90 toward destination"
 }}
 
@@ -121,8 +117,7 @@ Analyze the 3 images to decide the next action for collision avoidance and navig
     "reasoning": "Movement: 4 (>=2), Distance: <0.5m. ALL STOP conditions met.",
     "action_analysis": "All STOP criteria met: moved >=2 times, distance <0.5m",
     "action": "STOP",
-    "degrees": 0,
-    "meters": 0,
+    "value": 0,
     "progress_summary": "Reached destination after 4 forward moves"
 }}
 

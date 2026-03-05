@@ -274,9 +274,10 @@ class ActionExecutor(BaseAPIClient):
         
         action_id = action_mapping[action_name]
         
-        # 提取degrees/meters参数（用于计算重复次数）
-        degrees = response.get('degrees', 0) if action_name in ['TURN_LEFT', 'TURN_RIGHT'] else 0
-        meters = response.get('meters', 0) if action_name == 'MOVE_FORWARD' else 0
+        # 提取value参数（degrees或meters，取决于action类型）
+        value = response.get('value', 0)
+        degrees = value if action_name in ['TURN_LEFT', 'TURN_RIGHT'] else 0
+        meters = value if action_name == 'MOVE_FORWARD' else 0
         
         # 计算实际位姿变化（如果提供了pose信息）
         actual_degrees = None
