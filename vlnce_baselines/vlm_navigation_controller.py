@@ -1143,12 +1143,17 @@ class VLMNavigationController(InteractiveNavigationController):
         if next_waypoint_landmark:
             self.landmark_classes = [next_waypoint_landmark]
             self.target_landmark = next_waypoint_landmark
+            # 更新GroundedSAM检测类别：如果lankmark不在mapping_classes中，动态添加
+            if next_waypoint_landmark not in self.mapping_classes:
+                self.classes = self.mapping_classes + [next_waypoint_landmark]
+                print(f"  [Detection] Added '{next_waypoint_landmark}' to GroundedSAM (not in mapping)")
+            else:
+                self.classes = self.mapping_classes
+                print(f"  [Detection] Landmark '{next_waypoint_landmark}' already in mapping_classes")
         else:
             self.target_landmark = None
             self.landmark_classes = []
-        
-        # ⚠️ 重要：self.classes始终保持为所有mapping_classes，用于完整的语义建图
-        # landmark_classes只用于可视化标注和导航决策
+            self.classes = self.mapping_classes
         
         # 打印子任务信息
         self._print_subtask_info(response, is_initial=True)
@@ -1420,11 +1425,19 @@ class VLMNavigationController(InteractiveNavigationController):
             if next_waypoint_landmark:
                 self.landmark_classes = [next_waypoint_landmark]
                 self.target_landmark = next_waypoint_landmark
+                # 更新GroundedSAM检测类别：如果lankmark不在mapping_classes中，动态添加
+                if next_waypoint_landmark not in self.mapping_classes:
+                    self.classes = self.mapping_classes + [next_waypoint_landmark]
+                    print(f"  [Detection] Added '{next_waypoint_landmark}' to GroundedSAM (not in mapping)")
+                else:
+                    self.classes = self.mapping_classes
+                    print(f"  [Detection] Landmark '{next_waypoint_landmark}' already in mapping_classes")
             else:
                 self.target_landmark = None
                 self.landmark_classes = []
+                self.classes = self.mapping_classes
             
-            # ⚠️ 重要：self.classes始终保持为所有mapping_classes，用于完整的语义建图
+            # ⚠️ 重要：self.classes更新已在上方完成
             
             self._print_subtask_info(response)
             

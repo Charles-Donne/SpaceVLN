@@ -14,7 +14,7 @@ Example: "Stop at chair and open doors" → Navigation ends at "chair".
 
 # Inputs
 **12 Views** (30° FOV, 360°): IMAGE 1=Front 0°, angles increase CCW (30°, 60°, ..., 330°)
-- **Obstacle distances**: label shown (e.g. "0.3m")=nearest obstacle at that distance (<0.5m=blocked, >0.5m=safe); no label=clear path
+- **Obstacle distances**: label shown (e.g. "0.3m")=nearest obstacle at that distance (<0.5m=blocked);
 - **Auto-rotation**: System rotates to your chosen IMAGE → becomes Front (0°)
 
 **2 Maps**: Global (full area) + Local (nearby, agent-centered)
@@ -156,7 +156,7 @@ VERIFICATION_REPLANNING_PROMPT = """VLN Verification: Verify subtask completion 
 
 # Inputs
 **12 Views** (30° FOV): IMAGE1=Front 0°, angles increase CCW
-- **Obstacle distances**: label shown (e.g. "0.3m")=nearest obstacle at that distance (<0.5m=blocked, >1m=safe); no label=clear path
+- **Obstacle distances**: label shown (e.g. "0.3m")=nearest obstacle at that distance (<0.5m=blocked); 
 - **Waypoint markers**: White circles(ID) + boxes(room) = visited locations
 - **Auto-rotation**: System rotates to your IMAGE
 

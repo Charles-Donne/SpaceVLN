@@ -19,38 +19,19 @@ ACTION_EXECUTION_PROMPT = """You are the action execution module for Vision-Lang
 
 # Visual Observations
 
-You are provided with 2 images:
+You are provided with 1 image:
 
-**IMAGE 1: Object Detection View** - Detected objects with bounding boxes (landmark: {detected_landmarks})
-**IMAGE 2: Local Semantic Map** - Nearby region top-down view
-
-# Local Map
-
-**Map Orientation**: 
-- Top of map = Agent's Front direction
-- Map rotates with agent - front is always up
-- Agent is at center
-
-**Color Legend**:
-- **White**: Unexplored/unknown areas
-- **Black**: Obstacles (walls, furniture) - AVOID
-- **Green**: Floor areas (safe to navigate) - OK TO MOVE
-- **Orange line**: Recent trajectory 
-- **Red arrow at center**: Agent position and facing direction (arrow = Front)
-- **Blue semi-circle**: Current field of view
-  - Opening direction = Front view
-  - Objects within blue region are visible in IMAGE 1
+**IMAGE 1: Object Detection View** - Detected objects with bounding boxes and 7-direction obstacle distance lines (landmark: {detected_landmarks})
+- Distance lines from bottom center: FRONT (up), Left/Right 30°/60°/90°
+- Red line = obstacle <0.5m (blocked), Yellow = 0.5-2m, Green = >2m (open)
 
 # Your Task
 
-Analyze the 3 images to decide the next action for collision avoidance and navigation.
+Analyze the detection image to decide the next action.
 
 **Decision Process**:
-1. **Detection View**: Are there relevant landmarks? Where is the destination relative to center?
-2. **Local Map**: 
-   - Check immediate path ahead (black = obstacle)
-   - Verify direction to destination
-   - Plan collision-free path
+1. **Detection View**: Are there relevant landmarks (yellow bbox)? Where is the destination?
+2. **Distance Lines**: Which directions are blocked (red) vs safe (green/yellow)?
 3. **Distance Estimation**: How far to destination? (e.g., "~3m", "<0.5m")
 4. **Action Decision**: Choose safest action toward destination
 
@@ -71,7 +52,7 @@ Analyze the 3 images to decide the next action for collision avoidance and navig
 }}
 
 **Parameter rules**:
-- MOVE_FORWARD: "value" = meters (0.25 ~ 1)
+- MOVE_FORWARD: "value" = meters (0.25 ~ 1.5)
 - TURN_LEFT / TURN_RIGHT: "value" = degrees (30 ~ 90, multiples of 30)
 - STOP: "value" = 0
 
@@ -82,7 +63,7 @@ Analyze the 3 images to decide the next action for collision avoidance and navig
     "reasoning": "Local map shows safe green floor ahead. Destination visible closed. Move forward.",
     "action_analysis": "Clear path ahead on local map, destination visible in detection view",
     "action": "MOVE_FORWARD",
-    "value": 0.25,
+    "value": 0.5,
     "progress_summary": "Moved forward 1x toward doorway"
 }}
 
@@ -95,16 +76,7 @@ Analyze the 3 images to decide the next action for collision avoidance and navig
     "progress_summary": "Turned right 30 to avoid obstacle"
 }}
 
-**Ex3 - Need large turn**
-{{
-    "reasoning": "Destination is to the left ~90. Local map shows open area left. Turn left 90.",
-    "action_analysis": "Destination detected at left side, need 90 degree turn",
-    "action": "TURN_LEFT",
-    "value": 90,
-    "progress_summary": "Turned left 90 toward destination"
-}}
-
-**Ex4 - At destination**
+**Ex3 - At destination**
 {{
     "reasoning": "Movement: 4 (>=2), Distance: <0.5m. ALL STOP conditions met.",
     "action_analysis": "All STOP criteria met: moved >=2 times, distance <0.5m",

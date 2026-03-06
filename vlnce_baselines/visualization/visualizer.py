@@ -824,10 +824,13 @@ class MapVisualizer:
                 rotated_py = (rotated_norm_x + 1.0) * map_w / 2.0
                 
                 # 5. 转换到裁剪区域（240x240中心区域）
-                # full_map是480x480（假设crop_size=24m），裁剪区域是中心240x240
-                crop_rel_x = rotated_py * 480.0 / map_w - (240 - 120)
-                crop_rel_y = rotated_px * 480.0 / map_h - (240 - 120)
-                
+                # 与global map保持一致：先flipud，再裁剪
+                raw_x = rotated_py * 480.0 / map_w
+                raw_y = rotated_px * 480.0 / map_h
+                # flipud（与base image的np.flipud保持一致）
+                flipped_y = 480 - 1 - raw_y
+                crop_rel_x = raw_x - 120
+                crop_rel_y = flipped_y - 120
                 # 检查是否在裁剪区域内
                 if 0 <= crop_rel_x < 240 and 0 <= crop_rel_y < 240:
                     # 放大到480x480
@@ -1260,7 +1263,7 @@ class MapVisualizer:
         side_offset = int(w * 0.25)  # 增大两侧宽度：0.15 → 0.25
         
         if "WARNING" in distance_str or "<0.5" in distance_str:
-            color, line_ratio, top_shrink = (0, 0, 255), 0.15, 0.8  # 红色：只延伸一点点，顶部收缩到0.8
+            color, line_ratio, top_shrink = (180, 105, 255), 0.15, 0.8  # 淡粉红(HotPink)：只延伸一点点，顶部收缩到0.8
         elif ">2.0" in distance_str or "open" in distance_str:
             color, line_ratio, top_shrink = (0, 255, 0), 0.65, 0.3  # 绿色：降到之前黄色位置，顶部收缩到0.3（最窄）
         else:
@@ -1314,7 +1317,7 @@ class MapVisualizer:
             
             # 根据距离确定颜色和长度（FRONT线条更长）
             if "WARNING" in dist_str or "<0.5" in dist_str:
-                color = (0, 0, 255)  # 红色
+                color = (180, 105, 255)  # 淡粉红(HotPink)
                 line_length = 65 if config['key'] == 'front' else 60
             elif ">2.0" in dist_str or "open" in dist_str:
                 color = (0, 255, 0)  # 绿色
