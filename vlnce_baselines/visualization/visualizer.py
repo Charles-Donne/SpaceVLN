@@ -517,7 +517,7 @@ class MapVisualizer:
                     if (0 <= pt1[0] < 480 and 0 <= pt1[1] < 480 and
                         0 <= pt2[0] < 480 and 0 <= pt2[1] < 480):
                         cv2.line(global_map_with_trajectory, pt1, pt2, 
-                                trajectory_color, thickness=2)
+                                trajectory_color, thickness=3)
             
             # ===== 阶段5.3: 绘制深红色虚线指示正前方（在waypoint和箭头之前）=====
             center_x, center_y = 240, 240
