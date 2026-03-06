@@ -14,9 +14,7 @@ Example: "Stop at chair and open doors" → Navigation ends at "chair".
 
 # Inputs
 **12 Views** (30° FOV, 360°): IMAGE 1=Front 0°, angles increase CCW (30°, 60°, ..., 330°)
-- **Obstacle distances** on each image: the number shown is the distance to the **nearest obstacle** in that view direction
-  - Label shown (e.g. "0.3m", "1.2m"): obstacle detected at that distance. <0.5m=blocked, >0.5m=safe
-  - **No label shown**: no obstacle detected in that direction → path is clear (safe to move)
+- **Obstacle distances**: label shown (e.g. "0.3m")=nearest obstacle at that distance (<0.5m=blocked, >0.5m=safe); no label=clear path
 - **Auto-rotation**: System rotates to your chosen IMAGE → becomes Front (0°)
 
 **2 Maps**: Global (full area) + Local (nearby, agent-centered)
@@ -25,7 +23,7 @@ Example: "Stop at chair and open doors" → Navigation ends at "chair".
 **Colors**: White=unexplored | Black=obstacles (AVOID) | Green=safe floor | Orange=trajectory (avoid revisit) | Red arrow=you (points Front) | Red dash=Forward direction
 
 **Global**: Full area, shows history
-**Local**: Zoomed, Dark green circle=0.5m radius, Blue=90° FOV
+**Local**: Zoomed, Dark green circle=0.5m radius, Blue=79° FOV
 
 **Use**: Global→layout, Local→nearby obstacles
 
@@ -158,9 +156,7 @@ VERIFICATION_REPLANNING_PROMPT = """VLN Verification: Verify subtask completion 
 
 # Inputs
 **12 Views** (30° FOV): IMAGE1=Front 0°, angles increase CCW
-- **Obstacle distances**: the number shown is the distance to the **nearest obstacle** in that view direction
-  - Label shown (e.g. "0.3m", "1.2m"): obstacle at that distance. <0.5m=blocked, >1m=safe
-  - **No label shown**: no obstacle detected → path is clear
+- **Obstacle distances**: label shown (e.g. "0.3m")=nearest obstacle at that distance (<0.5m=blocked, >1m=safe); no label=clear path
 - **Waypoint markers**: White circles(ID) + boxes(room) = visited locations
 - **Auto-rotation**: System rotates to your IMAGE
 
