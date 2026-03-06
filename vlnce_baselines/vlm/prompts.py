@@ -14,7 +14,9 @@ Example: "Stop at chair and open doors" → Navigation ends at "chair".
 
 # Inputs
 **12 Views** (30° FOV, 360°): IMAGE 1=Front 0°, angles increase CCW (30°, 60°, ..., 330°)
-- **Obstacle distances** on each: <0.5m=blocked, >0.5m=safe
+- **Obstacle distances** on each image: the number shown is the distance to the **nearest obstacle** in that view direction
+  - Label shown (e.g. "0.3m", "1.2m"): obstacle detected at that distance. <0.5m=blocked, >0.5m=safe
+  - **No label shown**: no obstacle detected in that direction → path is clear (safe to move)
 - **Auto-rotation**: System rotates to your chosen IMAGE → becomes Front (0°)
 
 **2 Maps**: Global (full area) + Local (nearby, agent-centered)
@@ -39,10 +41,6 @@ Example: "Stop at chair and open doors" → Navigation ends at "chair".
 **Format for each IMAGE**: "IMAGE # (Direction Angle°): room_type, object1 distance1, object2 distance2. Obs: X.Xm NEAR/FAR"
 
 **REQUIRED - Analyze ALL 12 IMAGEs sequentially**:
-- IMAGE 1 (Front 0°): ... | IMAGE 2 (Left 30°): ... | IMAGE 3 (Left 60°): ... | IMAGE 4 (Left 90°): ...
-- IMAGE 5 (Left 120°): ... | IMAGE 6 (Left 150°): ... | IMAGE 7 (Back 180°): ... | IMAGE 8 (Right 210°): ...
-- IMAGE 9 (Right 240°): ... | IMAGE 10 (Right 270°): ... | IMAGE 11 (Right 300°): ... | IMAGE 12 (Right 330°): ...
-
 **Distance classification**: NEAR<1m (large, current position) | FAR>1.5m (small, next destination)
 **Connect adjacent views**: Group similar IMAGEs, track landmark across angles
 **NO hallucination**: Say only what's visible
@@ -160,7 +158,9 @@ VERIFICATION_REPLANNING_PROMPT = """VLN Verification: Verify subtask completion 
 
 # Inputs
 **12 Views** (30° FOV): IMAGE1=Front 0°, angles increase CCW
-- **Obstacle distances**: <0.5m=blocked, >1m=safe
+- **Obstacle distances**: the number shown is the distance to the **nearest obstacle** in that view direction
+  - Label shown (e.g. "0.3m", "1.2m"): obstacle at that distance. <0.5m=blocked, >1m=safe
+  - **No label shown**: no obstacle detected → path is clear
 - **Waypoint markers**: White circles(ID) + boxes(room) = visited locations
 - **Auto-rotation**: System rotates to your IMAGE
 
@@ -175,10 +175,6 @@ VERIFICATION_REPLANNING_PROMPT = """VLN Verification: Verify subtask completion 
 **Format**: "IMAGE # (Direction Angle°): room, object1 dist1, object2 dist2. [Blue Circle #X if visible]. Obs: X.Xm NEAR/FAR"
 
 **REQUIRED - Analyze ALL 12 IMAGEs sequentially**:
-- IMAGE 1 (Front 0°): ... | IMAGE 2 (Left 30°): ... | IMAGE 3 (Left 60°): ... | IMAGE 4 (Left 90°): ...
-- IMAGE 5 (Left 120°): ... | IMAGE 6 (Left 150°): ... | IMAGE 7 (Back 180°): ... | IMAGE 8 (Right 210°): ...
-- IMAGE 9 (Right 240°): ... | IMAGE 10 (Right 270°): ... | IMAGE 11 (Right 300°): ... | IMAGE 12 (Right 330°): ...
-
 **Distance**: NEAR<1m (large) | FAR>1.5m (small)
 **Track waypoint markers**: Note which IMAGEs show Blue Circles (visited locations)
 **NO hallucination**: Say only what's visible
