@@ -282,6 +282,10 @@ class BaseAPIClient(ABC):
         """
         t_start = time.time()
         try:
+            # 确保 prompt 是 UTF-8 编码的字符串
+            if isinstance(prompt, bytes):
+                prompt = prompt.decode('utf-8')
+            
             payload = {
                 "model": self.config.model,
                 "messages": [{
@@ -315,7 +319,24 @@ class BaseAPIClient(ABC):
             
             if response.status_code != 200:
                 print(f"✗ API error: {response.status_code} ({latency:.1f}s)")
-                print(f"✗ Response: {response.text[:500]}")
+                # 诊断信息：记录请求参数和响应
+                try:
+                    error_detail = response.json()
+                    print(f"✗ Error detail: {error_detail}")
+                except:
+                    print(f"✗ Response: {response.text[:500]}")
+                
+                # 调试：记录payload大小和内容样本
+                import json
+                payload_size = len(json.dumps(payload))
+                print(f"  [DEBUG] Payload size: {payload_size} bytes")
+                if len(payload['messages'][0]['content']) > 0:
+                    first_item = payload['messages'][0]['content'][0]
+                    if first_item.get('type') == 'text':
+                        print(f"  [DEBUG] Prompt length: {len(first_item.get('text', ''))} chars")
+                    elif first_item.get('type') == 'image_url':
+                        print(f"  [DEBUG] First item is image_url")
+                
                 return None
             
             result = response.json()
