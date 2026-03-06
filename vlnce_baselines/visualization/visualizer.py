@@ -592,12 +592,12 @@ class MapVisualizer:
                         # 绘制实心蓝色圆圈
                         cv2.circle(global_map_with_trajectory, (display_x, display_y), 
                                   radius=10, color=(255, 0, 0), thickness=-1)  # 纯蓝色BGR，实心
-                        # 绘制ID数字（白色，增大字体并居中）- 使用连续编号
+                        # 绘制ID数字（白色，居中）- 使用连续编号
                         text = str(display_id)
-                        (text_w, text_h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+                        (text_w, text_h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)
                         cv2.putText(global_map_with_trajectory, text, 
                                    (display_x - text_w // 2, display_y + text_h // 2),
-                                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
                         rendered_count += 1
             
             # ===== 阶段5.5: 在中心绘制箭头（最后一层，覆盖waypoint）=====
@@ -1451,10 +1451,10 @@ class MapVisualizer:
         # 垂直拼接：地图在上，标签在下
         labeled_map = np.vstack([global_map, label_bg])
         
-        # 保存带标签的地图
+        # 保存带标签的地图（无压缩，保持高清）
         episode_dir = self._create_episode_directories(episode_id)
         save_path = os.path.join(episode_dir, 'global_map', f'step_{step:04d}_{phase}.png')
-        cv2.imwrite(save_path, labeled_map, [cv2.IMWRITE_PNG_COMPRESSION, 1])
+        cv2.imwrite(save_path, labeled_map)
         return save_path
     
     def save_local_map(self,
