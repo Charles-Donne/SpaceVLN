@@ -38,9 +38,12 @@ Analyze the detection image to decide the next action.
 3. **Distance Estimation**: How far to destination? (e.g., "~3m", "<0.5m")
 4. **Action Decision**: Choose safest action toward destination, avoiding blocked directions
 
-**STOP Conditions** (ALL required):
-- Moved ≥2 times
-- Destination within 0.5m
+**STOP Conditions** — STOP **immediately** if ANY of the following:
+- Destination is within 0.5m (close enough, do NOT keep moving)
+- Subtask instruction is already fulfilled (landmark reached / area entered)
+- Moved ≥2 times AND destination is clearly in front at close range
+
+> ⚠️ **Do NOT overshoot**: If you are already near the destination, STOP now. Moving past it is worse than stopping early.
 
 **Safety Priority**: Avoid directions with red distance lines (obstacle <0.5m)
 
@@ -89,9 +92,10 @@ Analyze the detection image to decide the next action.
 }}
 
 **Critical Rules**:
-- Move ≥2 times before STOP
-- STOP only when distance ≤0.5m
-- When uncertain, MOVE_FORWARD
+- **STOP immediately** if destination is within 0.5m — do not take another step
+- **STOP immediately** if the subtask instruction is already fulfilled
+- Move ≥2 times before STOP only when destination is still far
+- When uncertain about distance, MOVE_FORWARD cautiously (small value)
 - progress_summary must describe orientation, locations entered/passed, and obstacles bypassed
 """
 
