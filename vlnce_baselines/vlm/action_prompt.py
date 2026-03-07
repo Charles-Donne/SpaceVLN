@@ -24,9 +24,9 @@ ACTION_EXECUTION_PROMPT = """You are the action execution module for Vision-Lang
 
 You are provided with 1 image:
 
-**IMAGE 1: Object Detection View** - Detected objects with bounding boxes and 7-direction obstacle distance lines (landmark: {detected_landmarks})
-- Distance lines from bottom center: FRONT (up), Left/Right 30°/60°/90°
-- Red line = obstacle <0.5m (blocked), Yellow = 0.5-2m, Green = >2m (open)
+**Current View (front-facing)** — Object detection results with bounding boxes (target landmark: {detected_landmarks}), overlaid with 7-direction lines showing the distance to the nearest obstacle in each direction (these distances reflect actual obstacle proximity, not necessarily what is visible in the image):
+- Directions: FRONT, Left/Right 30°, Left/Right 60°, Left/Right 90° (from bottom center)
+- Red = nearest obstacle <0.5m (blocked), Yellow = 0.5–2m (caution), Green = >2m (open)
 
 # Your Task
 
