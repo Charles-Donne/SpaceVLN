@@ -341,7 +341,7 @@ class InteractiveNavigationController:
         
         for i, label in enumerate(labels_all):
             parts = label.split()
-            label_name = parts[0]
+            label_name = ' '.join(parts[:-1]) if len(parts) > 1 else parts[0]
             confidence = float(parts[-1]) if len(parts) > 1 else 0.5
             
             # 只有mapping_classes的检测进入语义地图

@@ -1123,7 +1123,7 @@ class MapVisualizer:
             
             # 提取类别名和置信度
             parts = label.split()
-            label_name = parts[0] if len(parts) > 0 else "unknown"
+            label_name = ' '.join(parts[:-1]) if len(parts) > 1 else (parts[0] if len(parts) > 0 else "unknown")
             confidence = float(parts[-1]) if len(parts) > 1 else 0.0
             
             # 只标注在landmark_classes中的类别
