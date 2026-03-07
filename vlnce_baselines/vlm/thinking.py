@@ -33,6 +33,9 @@ class LLMPlanner(BaseAPIClient):
         # 默认动作空间与interactive_navigation一致
         self.action_space = action_space or "MOVE_FORWARD (0.25m), TURN_LEFT (30°), TURN_RIGHT (30°), STOP"
         
+        # 不压缩图像（global map等需要高质量）
+        self.set_compression_config(enabled=False)
+        
         # print(f"✓ LLM Planner initialized")
         print(f"  LLMPlanner: {self.config.model}")
     

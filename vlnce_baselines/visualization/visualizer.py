@@ -1059,8 +1059,8 @@ class MapVisualizer:
         labels = {
             'FRONT': (w // 2, 20),  # 上方
             'BACK': (w // 2, h - 8),  # 下方
-            'LEFT': (32, h // 2),  # 左侧
-            'RIGHT': (w - 32, h // 2)  # 右侧
+            'LEFT': (40, h // 2),  # 左侧
+            'RIGHT': (w - 40, h // 2)  # 右侧
         }
         
         for text, (x, y) in labels.items():
