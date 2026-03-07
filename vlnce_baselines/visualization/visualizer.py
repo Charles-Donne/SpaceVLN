@@ -1059,8 +1059,8 @@ class MapVisualizer:
         labels = {
             'FRONT': (w // 2, 20),  # 上方
             'BACK': (w // 2, h - 8),  # 下方
-            'LEFT': (45, h // 2),  # 左侧（更靠近中心，避免被遮挡）
-            'RIGHT': (w - 45, h // 2)  # 右侧（更靠近中心，避免被遮挡）
+            'LEFT': (32, h // 2),  # 左侧
+            'RIGHT': (w - 32, h // 2)  # 右侧
         }
         
         for text, (x, y) in labels.items():
@@ -1504,7 +1504,7 @@ class MapVisualizer:
         # 保存带标签的地图
         episode_dir = self._create_episode_directories(episode_id)
         save_path = os.path.join(episode_dir, 'local_map', f'step_{step:04d}_{phase}.png')
-        cv2.imwrite(save_path, labeled_map, [cv2.IMWRITE_PNG_COMPRESSION, 1])
+        cv2.imwrite(save_path, labeled_map)
         return save_path
     
     def save_detection(self,
