@@ -339,6 +339,22 @@ class InteractiveNavigationController:
         valid_labels = []
         valid_confidences = []
         
+        # --- Landmark Debug ---
+        landmark_targets = self.landmark_classes if hasattr(self, 'landmark_classes') else []
+        if landmark_targets:
+            all_detected_names = []
+            for lbl in labels_all:
+                p = lbl.split()
+                all_detected_names.append(' '.join(p[:-1]) if len(p) > 1 else p[0])
+            matched = [n for n in all_detected_names if n in landmark_targets]
+            print(f"  [LandmarkDebug] target={landmark_targets} | GroundedSAM_classes={self.classes}")
+            print(f"  [LandmarkDebug] raw_labels={labels_all}")
+            if matched:
+                print(f"  [LandmarkDebug] ✅ MATCHED: {matched}")
+            else:
+                print(f"  [LandmarkDebug] ❌ NOT FOUND in detections (all names: {all_detected_names})")
+        # ----------------------
+
         for i, label in enumerate(labels_all):
             parts = label.split()
             label_name = ' '.join(parts[:-1]) if len(parts) > 1 else parts[0]
