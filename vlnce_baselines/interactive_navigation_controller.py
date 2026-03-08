@@ -346,11 +346,15 @@ class InteractiveNavigationController:
             for lbl in labels_all:
                 p = lbl.split()
                 all_detected_names.append(' '.join(p[:-1]) if len(p) > 1 else p[0])
-            matched = [n for n in all_detected_names if n in landmark_targets]
+            # 精确匹配 + 子串匹配（如 'painting' 命中 'painting of girl in blue bonnet'）
+            matched_exact = [n for n in all_detected_names if n in landmark_targets]
+            matched_substr = [(n, lc) for n in all_detected_names for lc in landmark_targets if n not in landmark_targets and n in lc]
             print(f"  [LandmarkDebug] target={landmark_targets} | GroundedSAM_classes={self.classes}")
             print(f"  [LandmarkDebug] raw_labels={labels_all}")
-            if matched:
-                print(f"  [LandmarkDebug] ✅ MATCHED: {matched}")
+            if matched_exact:
+                print(f"  [LandmarkDebug] ✅ EXACT: {matched_exact}")
+            elif matched_substr:
+                print(f"  [LandmarkDebug] ✅ SUBSTR: {matched_substr} (substring match, treating as landmark)")
             else:
                 print(f"  [LandmarkDebug] ❌ NOT FOUND in detections (all names: {all_detected_names})")
         # ----------------------
@@ -368,6 +372,10 @@ class InteractiveNavigationController:
             
             # 所有检测到的类别都记录（包括landmark）
             self.detected_classes.add(label_name)
+            # 子串匹配：若检测词是某landmark短语的组成词，也记录该landmark
+            for lc in (self.landmark_classes if hasattr(self, 'landmark_classes') else []):
+                if label_name != lc and label_name in lc:
+                    self.detected_classes.add(lc)
         
         if len(valid_masks) == 0:
             # 没有检测到有效的mapping类别，返回全0的15通道
