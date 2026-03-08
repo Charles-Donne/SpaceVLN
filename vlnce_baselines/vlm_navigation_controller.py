@@ -2303,19 +2303,76 @@ class VLMNavigationController(InteractiveNavigationController):
         print(f"  {title}: {dest} | {instr}")
     
     # ========== Waypoint辅助方法 ==========
-    
+
+    @staticmethod
+    def _bearing_to_description(bearing_deg: float) -> str:
+        """将相对方位角转换为可读描述（0=Front, CCW positive）"""
+        b = ((bearing_deg + 180) % 360) - 180  # normalize to [-180, 180]
+        if abs(b) < 22.5:
+            return "Front"
+        elif abs(b) > 157.5:
+            return "Behind"
+        elif b < 0:
+            return f"Left {abs(b):.0f}°"
+        else:
+            return f"Right {b:.0f}°"
+
     def _get_waypoint_summary(self) -> str:
-        """获取waypoint摘要（用于LLM提示词）"""
+        """
+        获取waypoint摘要（用于LLM提示词）
+        包含每个waypoint相对当前pose的距离和方向，以及顺序拓扑路径。
+        """
+        import math
         wp_pos, wp_ids, wp_descs = self.mapper.get_waypoints()
         if len(wp_ids) == 0:
-            return ""
-        
-        # 根据waypoint ID和描述生成摘要
-        summary_lines = []
-        for wp_id, wp_desc in zip(wp_ids, wp_descs):
-            summary_lines.append(f"#{wp_id}: {wp_desc}")
-        
-        return "\n".join(summary_lines)
-    
+            return "No waypoints visited yet."
+
+        curr_pose = self.mapper.full_pose  # [x_m, y_m, orientation_deg]
+        resolution = self.mapper.resolution  # cm/pixel
+
+        node_lines = []
+        for i, (wp_id, wp_desc, (wp_py, wp_px)) in enumerate(zip(wp_ids, wp_descs, wp_pos)):
+            is_last = (i == len(wp_ids) - 1)
+            suffix = "  ← LAST VISITED (came from here)" if is_last else ""
+
+            if curr_pose is not None:
+                # 世界像素 → 米
+                wp_x = wp_px * resolution / 100.0
+                wp_y = wp_py * resolution / 100.0
+                curr_x, curr_y, curr_ori = curr_pose[0], curr_pose[1], curr_pose[2]
+
+                dx = wp_x - curr_x
+                dy = wp_y - curr_y
+                dist = math.sqrt(dx ** 2 + dy ** 2)
+
+                # 世界绝对角（数学惯例：0=东, CCW正方向）
+                abs_angle = math.degrees(math.atan2(dy, dx))
+                # 转换为相对于智能体朝向（curr_ori: 0=北, CCW正方向 → 数学惯例=90-curr_ori）
+                agent_math_angle = 90.0 - curr_ori
+                rel_bearing = abs_angle - agent_math_angle
+                direction = self._bearing_to_description(rel_bearing)
+                spatial_info = f"{dist:.1f}m, {direction}"
+            else:
+                spatial_info = "distance unknown"
+
+            node_lines.append(f"WP#{wp_id} [{wp_desc}] — {spatial_info}{suffix}")
+
+        # 顺序拓扑路径（各段距离）
+        path_segments = []
+        for i in range(len(wp_ids) - 1):
+            py1, px1 = wp_pos[i]
+            py2, px2 = wp_pos[i + 1]
+            seg_dist = math.sqrt(
+                ((px2 - px1) * resolution / 100) ** 2 +
+                ((py2 - py1) * resolution / 100) ** 2
+            )
+            path_segments.append(f"WP#{wp_ids[i]}→WP#{wp_ids[i+1]}({seg_dist:.1f}m)")
+        if path_segments:
+            path_line = "Path: " + " → ".join(path_segments) + " → Current"
+        else:
+            path_line = "Path: WP#1 → Current"
+
+        return "\n".join(node_lines) + "\n" + path_line
+
     # ========== 原有方法 ==========
 

@@ -80,7 +80,7 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
 # Output (JSON only)
 
 {{
-    "current_waypoint": "<Room | Nearby (<1m): obj1, obj2 | Connected (>1.5m): area1, area2>",
+    "current_waypoint": "<Room | Nearby (<1m): obj1, obj2 | Connected (>2m): area1, area2>",
     "waypoint_sequence": "<Current→Next→...→Goal. Mark (✓) passed only>",
     "task_progress": "<Completed✓ current(Current) future unmarked. ONE (Current) only>",
     "next_waypoint_direction": "<IMAGE 1-12>",
@@ -231,7 +231,7 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
 # Output (JSON only)
 
 {{
-    "current_waypoint": "<Room | Nearby (<1m): obj1, obj2 | Connected (>1.5m): area1, area2>",
+    "current_waypoint": "<Room | Nearby (<1m): obj1, obj2 | Connected (>2m): area1, area2>",
     "waypoint_sequence": "<Completed(✓)→Current→Next→Goal. Mark (✓) passed/at(<0.5m) only>",
     "task_progress": "<Completed✓ current(Current) future unmarked. ONE (Current) only. All✓+NO(Current)=complete>",
     "next_waypoint_direction": "<IMAGE 1-12>",

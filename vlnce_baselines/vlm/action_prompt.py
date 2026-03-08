@@ -64,7 +64,7 @@ Analyze the detection image to decide the next action.
     "reasoning": "Destination doorway visible ahead in detection view. Front distance line is green (>2m open). Move forward.",
     "action_analysis": "Destination visible ahead with clear path, moving forward",
     "action": "MOVE_FORWARD",
-    "value": 0.5,
+    "value": 0.75,
     "progress_summary": "Facing the hallway entrance; moved forward 0.5m toward doorway; no obstacles bypassed yet"
 }}
 
