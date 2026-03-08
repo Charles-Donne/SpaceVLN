@@ -779,7 +779,8 @@ class VLMNavigationController(InteractiveNavigationController):
                 waypoint_ids=map_state.get('waypoint_ids', []),  # 从map_state获取
                 phase=phase,
                 global_trajectory_points=map_state.get('global_trajectory_points', []),  # 全局轨迹（global map用）
-                crop_offset=map_state.get('crop_offset')  # 从map_state获取
+                crop_offset=map_state.get('crop_offset'),  # 从map_state获取
+                controller=self
             )
             
             # 累积当前step检测到的landmarks

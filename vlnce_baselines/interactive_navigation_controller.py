@@ -424,7 +424,12 @@ class InteractiveNavigationController:
         min_depth = self.config.TASK_CONFIG.SIMULATOR.DEPTH_SENSOR.MIN_DEPTH
         max_depth = self.config.TASK_CONFIG.SIMULATOR.DEPTH_SENSOR.MAX_DEPTH
         env_frame_width = self.config.TASK_CONFIG.SIMULATOR.RGB_SENSOR.WIDTH
-        
+
+        # 保存原始深度（米）用于landmark距离可视化（在预处理之前）
+        depth_raw = state[:, :, 3]  # [H, W], range [0, 1]
+        valid_mask = (depth_raw > 0.0) & (depth_raw < 0.99)
+        self.latest_depth_meters = np.where(valid_mask, min_depth + depth_raw * max_depth, 0.0).astype(np.float32)
+
         sem_seg_pred = self._get_sem_pred(rgb, save_object_detection, step)
         depth = self._preprocess_depth(depth, min_depth, max_depth)
         

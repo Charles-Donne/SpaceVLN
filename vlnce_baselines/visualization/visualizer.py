@@ -1095,9 +1095,10 @@ class MapVisualizer:
                               detections,  # sv.Detections object
                               labels: List[str],
                               landmark_classes: Optional[List[str]] = None,
-                              mapping_classes: Optional[List[str]] = None) -> np.ndarray:
+                              mapping_classes: Optional[List[str]] = None,
+                              depth_meters: Optional[np.ndarray] = None) -> np.ndarray:
         """
-        直接在RGB上渲染边界框（只标注Landmark类别）
+        直接在RGB上渲染边界框（只标注Landmark类别，显示到当前位置的距离）
         
         Args:
             rgb: RGB图像 (H, W, 3) BGR格式
@@ -1105,6 +1106,7 @@ class MapVisualizer:
             labels: 标签列表 (例如: ["chair 0.85", "table 0.92"])
             landmark_classes: Landmark类别列表（只标注这些类别）
             mapping_classes: Mapping类别列表（不标注，仅用于建图）
+            depth_meters: 深度图 [H, W]，单位米，用于计算landmark实际距离
         
         Returns:
             detection_vis: 检测可视化图像（只显示Landmark边界框）
@@ -1142,17 +1144,35 @@ class MapVisualizer:
             
             label_name = matched_landmark  # 用完整landmark名称显示
             detected_landmarks.append((label_name, confidence))
-            
+
             # 使用醒目的黄色粗框标注Landmark
             color = detection_colors["landmark"]
             thickness = detection_thickness["landmark"]
-            
+
             # 画边界框
             x1, y1, x2, y2 = map(int, bbox)
             cv2.rectangle(detection_vis, (x1, y1), (x2, y2), color, thickness)
-            
-            # 准备标签文本（在框内部上方显示）
-            text = f"{label_name} {confidence:.2f}"
+
+            # 计算landmark到当前位置的距离（从depth图中心区域取中位数）
+            dist_str = ""
+            if depth_meters is not None and depth_meters.size > 0:
+                h_img, w_img = depth_meters.shape[:2]
+                # 取bbox中心20%区域采样，避免边缘噪声
+                cx0 = int(x1 + (x2 - x1) * 0.4)
+                cx1 = int(x1 + (x2 - x1) * 0.6)
+                cy0 = int(y1 + (y2 - y1) * 0.4)
+                cy1 = int(y1 + (y2 - y1) * 0.6)
+                cx0, cx1 = max(0, cx0), min(w_img, cx1)
+                cy0, cy1 = max(0, cy0), min(h_img, cy1)
+                if cx1 > cx0 and cy1 > cy0:
+                    patch = depth_meters[cy0:cy1, cx0:cx1]
+                    valid_vals = patch[patch > 0.1]
+                    if len(valid_vals) > 0:
+                        dist_m = float(np.median(valid_vals))
+                        dist_str = f" {dist_m:.1f}m"
+
+            # 准备标签文本（不显示置信度，显示距离）
+            text = f"{label_name}{dist_str}"
             font = cv2.FONT_HERSHEY_SIMPLEX
             font_scale = 0.6
             font_thickness = 2
@@ -1621,9 +1641,13 @@ class MapVisualizer:
         paths['local_map'] = self.save_local_map(step, episode_id, local_map, phase)        # 4. 渲染并保存检测结果
         detected_landmarks_step = []
         if detections is not None and labels is not None:
+            depth_meters = None
+            if controller is not None and hasattr(controller, 'latest_depth_meters'):
+                depth_meters = controller.latest_depth_meters
             detection_vis, detected_landmarks_step = self.render_detection_bbox(
-                rgb, detections, labels, 
-                landmark_classes, mapping_classes
+                rgb, detections, labels,
+                landmark_classes, mapping_classes,
+                depth_meters=depth_meters
             )
             paths['detection'] = self.save_detection(step, episode_id, detection_vis, phase)
         
