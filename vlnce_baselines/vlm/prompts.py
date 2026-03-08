@@ -7,7 +7,7 @@ VLM规划提示词模板
 # 初始规划提示词 - 在任务开始时生成第一个子任务
 INITIAL_PLANNING_PROMPT = """VLN Planning: Analyze environment + Global Task → design next subtask.
 
-**Role**: NAVIGATION ONLY (TURN/MOVE/STOP). NOT manipulation (doors/objects). End at final waypoint.
+**Role**: Spatial reasoning and navigation planning — you are the cognitive decision-making core. Build a mental spatial model of the environment, determine exactly where you are, decide where to go next, and issue precise navigation instructions. NOT manipulation (doors/objects). End at final waypoint.
 Example: "Stop at chair and open doors" → Navigation ends at "chair".
 
 **Task**: {instruction}
@@ -80,7 +80,7 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
 # Output (JSON only)
 
 {{
-    "current_waypoint": "<Room - Objects>",
+    "current_waypoint": "<Room | Nearby (<1m): obj1, obj2 | Connected (>1.5m): area1, area2>",
     "waypoint_sequence": "<Current→Next→...→Goal. Mark (✓) passed only>",
     "task_progress": "<Completed✓ current(Current) future unmarked. ONE (Current) only>",
     "next_waypoint_direction": "<IMAGE 1-12>",
@@ -145,7 +145,8 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
 # 验证和重规划提示词 - 验证子任务完成并生成下一步规划
 VERIFICATION_REPLANNING_PROMPT = """VLN Verification: Verify subtask completion + plan next.
 
-**Role**: NAVIGATION (TURN/MOVE/STOP). NOT manipulation. End at final waypoint.
+**Role**: Spatial reasoning and navigation planning — you are the cognitive decision-making core. Build a mental topology of explored space using waypoint history and maps, determine exactly where you are, decide where to go next, and issue precise navigation instructions. NOT manipulation (doors/objects). End at final waypoint.
+Example: "Stop at chair and open doors" → Navigation ends at "chair".
 
 **Task**: {instruction}
 
@@ -164,6 +165,8 @@ VERIFICATION_REPLANNING_PROMPT = """VLN Verification: Verify subtask completion 
 **Colors**: White=unexplored | Black=obstacles | Green=safe | Orange=trajectory | Red=you | Blue circles=waypoints
 
 **Waypoint History**: {waypoint_summary}
+> Build a **spatial topology graph** from this history: each entry is a node (room + key objects). For each waypoint, estimate its **direction and distance from your current pose** (Front=0°, CCW). The **last entry is your most recently visited waypoint** — this tells you where you came from and confirms your movement direction.
+> Example mental model: WP#1(Kitchen, ~3m behind) ↔ WP#2(Hallway, ~1.5m left) ↔ Current ↔ WP#3(ahead, unexplored)
 
 # Reasoning (6 Parts)
 
@@ -193,15 +196,16 @@ VERIFICATION_REPLANNING_PROMPT = """VLN Verification: Verify subtask completion 
 
 **3) Position & Task Chain (DETAILED reasoning required)**
 1. **Current location**: NEAR<1m (Part 1) + trajectory end + blue circles behind + map → exact position
-2. **Parse full task**: Break into stages (waypoint1 → waypoint2 → ... → goal)
-3. **Task progress marking** (MUST be consistent):
+2. **Spatial topology**: From waypoint history + map, construct a mental graph — list each historical waypoint with estimated direction (°) and distance (m) from current pose. The last waypoint = where you came from. Identify which rooms are connected and in which directions.
+3. **Parse full task**: Break into stages (waypoint1 → waypoint2 → ... → goal)
+4. **Task progress marking** (MUST be consistent):
    - Blue circles behind = (✓) completed, already passed
    - Current location = (Current) ONE only
    - Ahead of current = unmarked (not yet reached)
    **Check direction**: Don't confuse same room at different stages (e.g., passed hallway vs future hallway)
-4. **Waypoint sequence**: Completed(✓) → Current → Next → ... → Goal (blue circles behind = ✓)
-5. **Task chain analysis**: What's completed? What's next? Which waypoint now? Why?
-6. **Arrival check**: FAR(>1.5m, 1-2 views)=Continue | SURROUNDED(<1m, 3+ views)=STOP
+5. **Waypoint sequence**: Completed(✓) → Current → Next → ... → Goal (blue circles behind = ✓)
+6. **Task chain analysis**: What's completed? What's next? Which waypoint now? Why?
+7. **Arrival check**: FAR(>1.5m, 1-2 views)=Continue | SURROUNDED(<1m, 3+ views)=STOP
 
 **4) Direction Selection (Exploration Priority)**
 A) Next + task direction?
@@ -227,7 +231,7 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
 # Output (JSON only)
 
 {{
-    "current_waypoint": "<Room - Objects>",
+    "current_waypoint": "<Room | Nearby (<1m): obj1, obj2 | Connected (>1.5m): area1, area2>",
     "waypoint_sequence": "<Completed(✓)→Current→Next→Goal. Mark (✓) passed/at(<0.5m) only>",
     "task_progress": "<Completed✓ current(Current) future unmarked. ONE (Current) only. All✓+NO(Current)=complete>",
     "next_waypoint_direction": "<IMAGE 1-12>",
