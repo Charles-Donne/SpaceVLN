@@ -327,7 +327,6 @@ class BaseAPIClient(ABC):
                     print(f"✗ Response: {response.text[:500]}")
                 
                 # 调试：记录payload大小和内容样本
-                import json
                 payload_size = len(json.dumps(payload))
                 print(f"  [DEBUG] Payload size: {payload_size} bytes")
                 if len(payload['messages'][0]['content']) > 0:
