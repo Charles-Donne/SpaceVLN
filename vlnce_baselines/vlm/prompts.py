@@ -25,14 +25,6 @@ Example: "Stop at chair and open doors" → Navigation ends at "chair".
 **Global**: Full area, shows history
 **Local**: Zoomed, Dark green circle=0.5m radius, Blue=79° FOV
 
-**Use**: Global→layout, Local→nearby obstacles
-
-# Your Task
-
-1. **Analyze 12 views + maps**: Identify current position (NEAR objects <1.0m, Local Map green circle) and next waypoint (FAR objects >1.5m)
-2. **Select safe direction**: Choose IMAGE with waypoint centered, obstacle distance >0.5m, Global Map shows green path
-3. **Plan instruction**: System auto-rotates to your direction, write instruction from Front view after rotation
-
 # Reasoning (6 Parts)
 
 **1) 12-View Analysis (MUST analyze EACH IMAGE 1-12)** 
@@ -40,7 +32,6 @@ Example: "Stop at chair and open doors" → Navigation ends at "chair".
 
 **REQUIRED - Analyze ALL 12 IMAGEs sequentially**:
 **Distance classification**: NEAR<1m (large, current position) | FAR>1.5m (small, next destination)
-**Connect adjacent views**: Group similar IMAGEs, track landmark across angles
 **NO hallucination**: Say only what's visible
 
 **Conclusion (mandatory after all 12)**:
@@ -129,16 +120,12 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
 }}
 
 **Critical Rules**:
-- **Reasoning thoroughness**: Part 1 MUST analyze ALL 12 IMAGEs with angle+direction+content. Part 3 MUST detail position and complete task chain (✓→Current→unmarked)
-- **Initial position**: Determine from NEAR<1m + Local Map 0.5m circle. Mark current=(Current), future=unmarked
-- **Position awareness**: NEAR<1m (multiple IMAGEs) = current position ≠ destination FAR>1.5m (1-2 views)
-- **Markers**: Behind=(✓) | Now=(Current) ONE only | Ahead=unmarked
-- **Task chain consistency**: Before current=(✓), current=(Current), after current=unmarked. Chain determines next direction
-- **Entrance vs interior**: "Wait at entrance" = doorway, NOT inside room
-- **Room-first strategy**: "[room]'s [object]" → navigate to [room] first, then [object]
-- **Auto-rotation**: System rotates to your IMAGE → write from Front view after
-- **Detail instructions**: Use [room]+[relation]+[object]. "Living room's gray couch" NOT "couch"
-- **IMAGE-angle match**: IMAGE1=0°, IMAGE2=30°, ..., IMAGE7=180°, ..., IMAGE12=330°
+- Part 1 MUST analyze ALL 12 IMAGEs. Part 3 MUST detail position and complete task chain (✓→Current→unmarked)
+- NEAR<1m multiple IMAGEs=current position | FAR>1.5m 1-2 views=destination (not arrived yet)
+- Markers: Behind=(✓) | Now=(Current) ONE only | Ahead=unmarked
+- "Wait at entrance"=doorway NOT inside room | "[room]'s [object]"→navigate room first
+- IMAGE-angle: IMAGE1=0°, IMAGE2=30°, ..., IMAGE7=180°, ..., IMAGE12=330°
+- Auto-rotation: System rotates to your IMAGE → write instruction from Front view after
 """
 
 
@@ -165,8 +152,7 @@ Example: "Stop at chair and open doors" → Navigation ends at "chair".
 **Colors**: White=unexplored | Black=obstacles | Green=safe | Orange=trajectory | Red=you | Blue circles=waypoints
 
 **Waypoint History**: {waypoint_summary}
-> Build a **spatial topology graph** from this history: each entry is a node (room + key objects). For each waypoint, estimate its **direction and distance from your current pose** (Front=0°, CCW). The **last entry is your most recently visited waypoint** — this tells you where you came from and confirms your movement direction.
-> Example mental model: WP#1(Kitchen, ~3m behind) ↔ WP#2(Hallway, ~1.5m left) ↔ Current ↔ WP#3(ahead, unexplored)
+> Each entry includes direction and distance from your **current pose** (Front=0°, CCW). The **last entry is your most recently visited waypoint** — confirms where you came from.
 
 # Reasoning (6 Parts)
 
@@ -196,16 +182,15 @@ Example: "Stop at chair and open doors" → Navigation ends at "chair".
 
 **3) Position & Task Chain (DETAILED reasoning required)**
 1. **Current location**: NEAR<1m (Part 1) + trajectory end + blue circles behind + map → exact position
-2. **Spatial topology**: From waypoint history + map, construct a mental graph — list each historical waypoint with estimated direction (°) and distance (m) from current pose. The last waypoint = where you came from. Identify which rooms are connected and in which directions.
-3. **Parse full task**: Break into stages (waypoint1 → waypoint2 → ... → goal)
-4. **Task progress marking** (MUST be consistent):
+2. **Parse full task**: Break into stages (waypoint1 → waypoint2 → ... → goal)
+3. **Task progress marking** (MUST be consistent):
    - Blue circles behind = (✓) completed, already passed
    - Current location = (Current) ONE only
    - Ahead of current = unmarked (not yet reached)
    **Check direction**: Don't confuse same room at different stages (e.g., passed hallway vs future hallway)
-5. **Waypoint sequence**: Completed(✓) → Current → Next → ... → Goal (blue circles behind = ✓)
-6. **Task chain analysis**: What's completed? What's next? Which waypoint now? Why?
-7. **Arrival check**: FAR(>1.5m, 1-2 views)=Continue | SURROUNDED(<1m, 3+ views)=STOP
+4. **Waypoint sequence**: Completed(✓) → Current → Next → ... → Goal (blue circles behind = ✓)
+5. **Task chain analysis**: What's completed? What's next? Which waypoint now? Why?
+6. **Arrival check**: FAR(>1.5m, 1-2 views)=Continue | SURROUNDED(<1m, 3+ views)=STOP
 
 **4) Direction Selection (Exploration Priority)**
 A) Next + task direction?
@@ -214,13 +199,6 @@ C) Verify: "Opposite X" | "Left" | "Through X"
 D) Check map: Green path? **Blue circles = explored, AVOID**
 E) Eliminate: <0.5m | **IMAGE7/180° (COMPLETELY DISABLED - DO NOT USE)**
 F) Choose: Task dir > **Unexplored (no blue)** > Visible > Safe > Green
-
-**CRITICAL - IMAGE7 (Back 180°) REMOVED FROM OPTIONS**:
-- **NEVER turn 180° backward** - Goals are typically AHEAD, not behind
-- **No backtracking** - Task chain goes FORWARD, never retreat to passed areas
-- **When replanning**: ONLY use IMAGEs 1-6, 8-12 (Front/Left/Right directions)
-- **If FRONT blocked**: Choose LEFT (IMAGEs 2-6) or RIGHT (IMAGEs 8-12), NOT IMAGE7
-- **Blue circles behind?** Explore NEW forward areas (no blue circles), don't return
 
 **5) Near-term**: Auto-rotate → detailed subtask with room+object
 **6) Long-term**: Remaining → final
