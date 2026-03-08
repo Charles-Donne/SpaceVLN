@@ -14,7 +14,7 @@ Example: "Stop at chair and open doors" → Navigation ends at "chair".
 
 # Inputs
 **12 Views** (30° FOV, 360°): IMAGE 1=Front 0°, angles increase CCW (30°, 60°, ..., 330°)
-- **Obstacle distances**: label shown (e.g. "0.3m")=nearest obstacle at that distance (<0.5m=blocked);
+- **Obstacle distances**: label = **nearest obstacle in that direction** (NOT the distance to far objects visible in the scene). <0.5m=blocked | 0.5-1.0m=caution | >1.0m=passable
 - **Auto-rotation**: System rotates to your chosen IMAGE → becomes Front (0°)
 
 **2 Maps**: Global (full area) + Local (nearby, agent-centered)
@@ -32,6 +32,7 @@ Example: "Stop at chair and open doors" → Navigation ends at "chair".
 
 **REQUIRED - Analyze ALL 12 IMAGEs sequentially**:
 **Distance classification**: NEAR<1m (large, current position) | FAR>1.5m (small, next destination)
+**Connect adjacent views**: Group similar IMAGEs, track landmark across angles
 **NO hallucination**: Say only what's visible
 
 **Conclusion (mandatory after all 12)**:
@@ -59,8 +60,9 @@ Example: "Stop at chair and open doors" → Navigation ends at "chair".
 A) Next destination + task direction?
 B) Scan 12 IMAGEs → where visible?
 C) Verify: "Opposite X"(X@IMAGE7→choose IMAGE1) | "Left"(IMAGEs2-6) | "Through X"(traverse)
-D) Eliminate: <0.5m | **IMAGE7/180° (DO NOT USE - targets ahead, no backtracking)**
-E) Choose: Task direction > Waypoint visible > Safe > Map green path
+D) Eliminate: **obs<0.5m=blocked** | **obs 0.5-1.0m=risky, avoid** | **IMAGE7/180° (DO NOT USE)**
+   ⚠ Seeing a far object in image does NOT mean path is clear — obs label is what matters
+E) Choose: Task direction > Waypoint visible > **obs>1.0m** > Map green path
 
 **5) Near-term**: Auto-rotate → detailed subtask with room+object
 **6) Long-term**: Remaining waypoints → goal
@@ -120,12 +122,16 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
 }}
 
 **Critical Rules**:
-- Part 1 MUST analyze ALL 12 IMAGEs. Part 3 MUST detail position and complete task chain (✓→Current→unmarked)
-- NEAR<1m multiple IMAGEs=current position | FAR>1.5m 1-2 views=destination (not arrived yet)
-- Markers: Behind=(✓) | Now=(Current) ONE only | Ahead=unmarked
-- "Wait at entrance"=doorway NOT inside room | "[room]'s [object]"→navigate room first
-- IMAGE-angle: IMAGE1=0°, IMAGE2=30°, ..., IMAGE7=180°, ..., IMAGE12=330°
-- Auto-rotation: System rotates to your IMAGE → write instruction from Front view after
+- **Reasoning thoroughness**: Part 1 MUST analyze ALL 12 IMAGEs with angle+direction+content. Part 3 MUST detail position and complete task chain (✓→Current→unmarked)
+- **Initial position**: Determine from NEAR<1m + Local Map 0.5m circle. Mark current=(Current), future=unmarked
+- **Position awareness**: NEAR<1m (multiple IMAGEs) = current position ≠ destination FAR>1.5m (1-2 views)
+- **Markers**: Behind=(✓) | Now=(Current) ONE only | Ahead=unmarked
+- **Task chain consistency**: Before current=(✓), current=(Current), after current=unmarked. Chain determines next direction
+- **Entrance vs interior**: "Wait at entrance" = doorway, NOT inside room
+- **Room-first strategy**: "[room]'s [object]" → navigate to [room] first, then [object]
+- **Auto-rotation**: System rotates to your IMAGE → write from Front view after
+- **Detail instructions**: Use [room]+[relation]+[object]. "Living room's gray couch" NOT "couch"
+- **IMAGE-angle match**: IMAGE1=0°, IMAGE2=30°, ..., IMAGE7=180°, ..., IMAGE12=330°
 """
 
 
@@ -144,7 +150,7 @@ Example: "Stop at chair and open doors" → Navigation ends at "chair".
 
 # Inputs
 **12 Views** (30° FOV): IMAGE1=Front 0°, angles increase CCW
-- **Obstacle distances**: label shown (e.g. "0.3m")=nearest obstacle at that distance (<0.5m=blocked); 
+- **Obstacle distances**: label = **nearest obstacle in that direction** (NOT the distance to far objects visible in the scene). <0.5m=blocked | 0.5-1.0m=caution | >1.0m=passable
 - **Waypoint markers**: White circles(ID) + boxes(room) = visited locations
 - **Auto-rotation**: System rotates to your IMAGE
 
@@ -197,8 +203,9 @@ A) Next + task direction?
 B) Scan 12 IMAGEs → where?
 C) Verify: "Opposite X" | "Left" | "Through X"
 D) Check map: Green path? **Blue circles = explored, AVOID**
-E) Eliminate: <0.5m | **IMAGE7/180° (COMPLETELY DISABLED - DO NOT USE)**
-F) Choose: Task dir > **Unexplored (no blue)** > Visible > Safe > Green
+E) Eliminate: **obs<0.5m=blocked** | **obs 0.5-1.0m=risky, avoid** | **IMAGE7/180° DISABLED**
+   ⚠ Seeing a room/object far in image does NOT mean path is clear — obs label is what matters
+F) Choose: Task dir > **Unexplored (no blue)** > **obs>1.0m** > Map green path
 
 **5) Near-term**: Auto-rotate → detailed subtask with room+object
 **6) Long-term**: Remaining → final
