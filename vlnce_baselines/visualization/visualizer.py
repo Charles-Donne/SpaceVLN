@@ -1096,9 +1096,10 @@ class MapVisualizer:
                               labels: List[str],
                               landmark_classes: Optional[List[str]] = None,
                               mapping_classes: Optional[List[str]] = None,
-                              depth_meters: Optional[np.ndarray] = None) -> np.ndarray:
+                              depth_meters: Optional[np.ndarray] = None,
+                              hfov: float = 79.0) -> np.ndarray:
         """
-        直接在RGB上渲染边界框（只标注Landmark类别，显示到当前位置的距离）
+        直接在RGB上渲染边界框（只标注Landmark类别，显示距离+水平偏角）
         
         Args:
             rgb: RGB图像 (H, W, 3) BGR格式
@@ -1107,6 +1108,7 @@ class MapVisualizer:
             landmark_classes: Landmark类别列表（只标注这些类别）
             mapping_classes: Mapping类别列表（不标注，仅用于建图）
             depth_meters: 深度图 [H, W]，单位米，用于计算landmark实际距离
+            hfov: 相机水平视野角（度），用于计算水平偏角，默认79°
         
         Returns:
             detection_vis: 检测可视化图像（只显示Landmark边界框）
@@ -1153,26 +1155,40 @@ class MapVisualizer:
             x1, y1, x2, y2 = map(int, bbox)
             cv2.rectangle(detection_vis, (x1, y1), (x2, y2), color, thickness)
 
+            # 计算bbox中心像素坐标
+            h_img, w_img = rgb.shape[:2]
+            bbox_cx = (x1 + x2) / 2.0
+            bbox_cy = (y1 + y2) / 2.0
+
+            # 水平偏角：正=右，负=左（相对当前视野中心）
+            angle_deg = (bbox_cx - w_img / 2.0) / w_img * hfov
+            if abs(angle_deg) < 3.0:
+                angle_str = "↑"
+            elif angle_deg > 0:
+                angle_str = f"R{angle_deg:.0f}°"
+            else:
+                angle_str = f"L{abs(angle_deg):.0f}°"
+
             # 计算landmark到当前位置的距离（从depth图中心区域取中位数）
             dist_str = ""
             if depth_meters is not None and depth_meters.size > 0:
-                h_img, w_img = depth_meters.shape[:2]
+                dh, dw = depth_meters.shape[:2]
                 # 取bbox中心20%区域采样，避免边缘噪声
-                cx0 = int(x1 + (x2 - x1) * 0.4)
-                cx1 = int(x1 + (x2 - x1) * 0.6)
-                cy0 = int(y1 + (y2 - y1) * 0.4)
-                cy1 = int(y1 + (y2 - y1) * 0.6)
-                cx0, cx1 = max(0, cx0), min(w_img, cx1)
-                cy0, cy1 = max(0, cy0), min(h_img, cy1)
-                if cx1 > cx0 and cy1 > cy0:
-                    patch = depth_meters[cy0:cy1, cx0:cx1]
+                px0 = int(x1 + (x2 - x1) * 0.4)
+                px1 = int(x1 + (x2 - x1) * 0.6)
+                py0 = int(y1 + (y2 - y1) * 0.4)
+                py1 = int(y1 + (y2 - y1) * 0.6)
+                px0, px1 = max(0, px0), min(dw, px1)
+                py0, py1 = max(0, py0), min(dh, py1)
+                if px1 > px0 and py1 > py0:
+                    patch = depth_meters[py0:py1, px0:px1]
                     valid_vals = patch[patch > 0.1]
                     if len(valid_vals) > 0:
                         dist_m = float(np.median(valid_vals))
                         dist_str = f" {dist_m:.1f}m"
 
-            # 准备标签文本（不显示置信度，显示距离）
-            text = f"{label_name}{dist_str}"
+            # 准备标签文本：名称 + 距离 + 水平偏角
+            text = f"{label_name}{dist_str} {angle_str}"
             font = cv2.FONT_HERSHEY_SIMPLEX
             font_scale = 0.6
             font_thickness = 2
@@ -1647,7 +1663,8 @@ class MapVisualizer:
             detection_vis, detected_landmarks_step = self.render_detection_bbox(
                 rgb, detections, labels,
                 landmark_classes, mapping_classes,
-                depth_meters=depth_meters
+                depth_meters=depth_meters,
+                hfov=hfov
             )
             paths['detection'] = self.save_detection(step, episode_id, detection_vis, phase)
         
