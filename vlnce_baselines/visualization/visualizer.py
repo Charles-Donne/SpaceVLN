@@ -350,7 +350,8 @@ class MapVisualizer:
                          landmark_config: Optional[Dict] = None,
                          waypoint_positions: Optional[List[Tuple[int, int]]] = None,
                          waypoint_ids: Optional[List[int]] = None,
-                         crop_offset: Optional[Tuple[int, int]] = None) -> Tuple[np.ndarray, np.ndarray, List, np.ndarray, Optional[float]]:
+                         crop_offset: Optional[Tuple[int, int]] = None,
+                         mapping_classes: Optional[List[str]] = None) -> Tuple[np.ndarray, np.ndarray, List, np.ndarray, Optional[float]]:
         """
         渲染全局地图（严格按照ZS_Evaluator的渲染逻辑 + 平滑轨迹线）
         
@@ -444,7 +445,8 @@ class MapVisualizer:
             landmarks = self._extract_landmarks(
                 full_map, detected_classes, landmark_classes,
                 landmark_config['min_total_pixels'],
-                landmark_config['min_area_threshold']
+                landmark_config['min_area_threshold'],
+                mapping_classes=mapping_classes
             )
         
         # ===== 阶段4: 准备显示（地图已在提取时旋转，agent朝向向上）=====
@@ -705,7 +707,8 @@ class MapVisualizer:
                         hfov: float = 90.0,
                         waypoint_positions: Optional[List[Tuple[int, int]]] = None,
                         waypoint_ids: Optional[List[int]] = None,
-                        crop_offset: Optional[Tuple[int, int]] = None) -> np.ndarray:
+                        crop_offset: Optional[Tuple[int, int]] = None,
+                        mapping_classes: Optional[List[str]] = None) -> np.ndarray:
         """
         独立渲染局部地图（不继承全局地图，完全独立构建）
         
@@ -995,7 +998,8 @@ class MapVisualizer:
             landmarks = self._extract_landmarks(
                 full_map, detected_classes, landmark_classes,
                 landmark_config['min_total_pixels'],
-                landmark_config['min_area_threshold']
+                landmark_config['min_area_threshold'],
+                mapping_classes=mapping_classes
             )
             
             # 只在有旋转矩阵时绘制landmarks
@@ -1687,7 +1691,8 @@ class MapVisualizer:
         _, global_map_with_trajectory, landmarks, global_map_clean, last_waypoint_angle = self.render_global_map(
             full_map, global_traj_to_use, detected_classes, floor,
             current_pose, landmark_classes, landmark_config,
-            waypoint_positions, waypoint_ids, crop_offset
+            waypoint_positions, waypoint_ids, crop_offset,
+            mapping_classes=mapping_classes
         )
         paths['global_map'] = self.save_global_map(step, episode_id, global_map_with_trajectory, phase)
         
@@ -1695,7 +1700,8 @@ class MapVisualizer:
         local_map = self.render_local_map(
             full_map, trajectory_points, detected_classes, current_pose,
             floor, landmark_classes, landmark_config, hfov,
-            waypoint_positions, waypoint_ids, crop_offset
+            waypoint_positions, waypoint_ids, crop_offset,
+            mapping_classes=mapping_classes
         )
         paths['local_map'] = self.save_local_map(step, episode_id, local_map, phase)        # 4. 渲染并保存检测结果
         detected_landmarks_step = []
@@ -1737,13 +1743,15 @@ class MapVisualizer:
                           detected_classes: List[str],
                           landmark_classes: List[str],
                           min_total_pixels: int,
-                          min_area_threshold: int) -> List[Tuple]:
+                          min_area_threshold: int,
+                          mapping_classes: Optional[List[str]] = None) -> List[Tuple]:
         """提取landmark标记位置并计算到agent的距离和相对偏角
         
         流程：
         1. 遍历landmark_classes（如cabinet）
         2. 检查是否在detected_classes中
-        3. 计算语义通道索引：semantic_channel_idx = 4 + detected_classes.index(cls_name)
+        3. 计算语义通道索引：semantic_channel_idx = 3 + len(mapping_classes) + lm_idx
+           （mapping通道从3开始，landmark通道紧接其后）
         4. 从full_map[semantic_channel_idx]提取mask
         5. 形态学闭运算：填补间隙，合并相近区域
         6. 连通域分析，过滤面积 < min_area_threshold
@@ -1774,10 +1782,16 @@ class MapVisualizer:
             if cls_name not in detected_classes:
                 continue
             
-            cls_idx = detected_classes.index(cls_name)
-            semantic_channel_idx = 4 + cls_idx
+            cls_idx = detected_classes.index(cls_name) if cls_name in detected_classes else -1
+            # 修正的通道索引：语义通道从3开始，landmark通道在mapping通道之后
+            if mapping_classes is not None:
+                lm_idx = landmark_classes.index(cls_name)
+                semantic_channel_idx = 3 + len(mapping_classes) + lm_idx
+            else:
+                # 向后兼容模式（没有mapping_classes时回退旧公式）
+                semantic_channel_idx = 4 + cls_idx if cls_idx >= 0 else -1
             
-            if semantic_channel_idx >= full_map.shape[0]:
+            if semantic_channel_idx < 0 or semantic_channel_idx >= full_map.shape[0]:
                 continue
             
             cls_mask = full_map[semantic_channel_idx, ...] > 0.5

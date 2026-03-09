@@ -338,6 +338,9 @@ class InteractiveNavigationController:
         valid_masks = []        # 用于建图的mapping类别
         valid_labels = []
         valid_confidences = []
+        # Landmark masks (投影到地图的额外通道，channel 3+N_mapping 开始)
+        landmark_classes_list = self.landmark_classes if hasattr(self, 'landmark_classes') else []
+        landmark_masks = np.zeros((len(landmark_classes_list), self.height, self.width), dtype=np.float32)
         
         # --- Landmark Debug ---
         landmark_targets = self.landmark_classes if hasattr(self, 'landmark_classes') else []
@@ -370,6 +373,12 @@ class InteractiveNavigationController:
                 valid_labels.append(label_name)
                 valid_confidences.append(confidence)
             
+            # Landmark classes：收集mask投影到地图额外通道
+            if label_name in landmark_classes_list:
+                lm_idx = landmark_classes_list.index(label_name)
+                landmark_masks[lm_idx] = np.maximum(
+                    landmark_masks[lm_idx], masks_all[i].astype(np.float32))
+            
             # 所有检测到的类别都记录（包括landmark）
             self.detected_classes.add(label_name)
             # 子串匹配：若检测词是某landmark短语的组成词，也记录该landmark
@@ -378,8 +387,12 @@ class InteractiveNavigationController:
                     self.detected_classes.add(lc)
         
         if len(valid_masks) == 0:
-            # 没有检测到有效的mapping类别，返回全0的15通道
-            return np.zeros((self.height, self.width, len(predefined_classes)), dtype=np.float32)
+            # 没有检测到mapping类别，但可能有landmark检测
+            combined = np.concatenate([
+                np.zeros((len(predefined_classes), self.height, self.width), dtype=np.float32),
+                landmark_masks  # [N_lm, H, W]
+            ], axis=0)
+            return combined.transpose(1, 2, 0)  # [H, W, 15+N]
         
         # Winner-Takes-All处理（只处理mapping类别）
         valid_masks = np.array(valid_masks)
@@ -394,7 +407,9 @@ class InteractiveNavigationController:
                 if i < masks_processed.shape[0]:
                     global_masks[global_idx] = masks_processed[i]
         
-        return global_masks.transpose(1, 2, 0)  # [H, W, 15]
+        # 合并mapping通道 + landmark通道：[15+N, H, W] → [H, W, 15+N]
+        combined = np.concatenate([global_masks, landmark_masks], axis=0)
+        return combined.transpose(1, 2, 0)  # [H, W, 15+N_lm]
     
     def _process_masks_with_labels(self, masks: np.ndarray, labels: list, confidences: list = None) -> np.ndarray:
         """Winner-Takes-All掩码处理"""
