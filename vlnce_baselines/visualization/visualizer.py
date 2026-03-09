@@ -630,7 +630,7 @@ class MapVisualizer:
             
             if len(landmarks) > 0:
                 landmark_summary = {}
-                for marker_x, marker_y, cls_name in landmarks:
+                for marker_x, marker_y, cls_name, _dist_m, _angle_deg in landmarks:
                     # 计算像素数
                     cls_idx = detected_classes.index(cls_name)
                     semantic_channel_idx = 4 + cls_idx
@@ -1000,7 +1000,7 @@ class MapVisualizer:
             
             # 只在有旋转矩阵时绘制landmarks
             if rotation_matrix is not None:
-                for marker_x, marker_y, cls_name in landmarks:
+                for marker_x, marker_y, cls_name, _dist_m, _angle_deg in landmarks:
                     # 转换landmark坐标（与全局地图坐标变换一致）
                     # centroids返回(cx, cy)格式，cx是列坐标(map_y方向)，cy是行坐标(map_x方向)
                     display_x = marker_x * 480 / w  # 列坐标 → display_x
@@ -1097,7 +1097,8 @@ class MapVisualizer:
                               landmark_classes: Optional[List[str]] = None,
                               mapping_classes: Optional[List[str]] = None,
                               depth_meters: Optional[np.ndarray] = None,
-                              hfov: float = 79.0) -> np.ndarray:
+                              hfov: float = 79.0,
+                              landmark_dist_map: Optional[Dict[str, Tuple[float, float]]] = None) -> np.ndarray:
         """
         直接在RGB上渲染边界框（只标注Landmark类别，显示距离+水平偏角）
         
@@ -1107,8 +1108,10 @@ class MapVisualizer:
             labels: 标签列表 (例如: ["chair 0.85", "table 0.92"])
             landmark_classes: Landmark类别列表（只标注这些类别）
             mapping_classes: Mapping类别列表（不标注，仅用于建图）
-            depth_meters: 深度图 [H, W]，单位米，用于计算landmark实际距离
+            depth_meters: 深度图（保留兼容性，当landmark_dist_map不可用时使用）
             hfov: 相机水平视野角（度），用于计算水平偏角，默认79°
+            landmark_dist_map: {class_name: (dist_m, rel_angle_deg)} 由地图世界坐标预计算
+                               优先使用，比深度图采样更高效准确
         
         Returns:
             detection_vis: 检测可视化图像（只显示Landmark边界框）
@@ -1160,32 +1163,42 @@ class MapVisualizer:
             bbox_cx = (x1 + x2) / 2.0
             bbox_cy = (y1 + y2) / 2.0
 
-            # 水平偏角：正=右，负=左（相对当前视野中心）
-            angle_deg = (bbox_cx - w_img / 2.0) / w_img * hfov
-            if abs(angle_deg) < 3.0:
-                angle_str = "↑"
-            elif angle_deg > 0:
-                angle_str = f"R{angle_deg:.0f}°"
-            else:
-                angle_str = f"L{abs(angle_deg):.0f}°"
-
-            # 计算landmark到当前位置的距离（从depth图中心区域取中位数）
+            # ── 优先：从地图世界坐标获取距离和偏角（高效，无需深度图采样）──
             dist_str = ""
-            if depth_meters is not None and depth_meters.size > 0:
-                dh, dw = depth_meters.shape[:2]
-                # 取bbox中心20%区域采样，避免边缘噪声
-                px0 = int(x1 + (x2 - x1) * 0.4)
-                px1 = int(x1 + (x2 - x1) * 0.6)
-                py0 = int(y1 + (y2 - y1) * 0.4)
-                py1 = int(y1 + (y2 - y1) * 0.6)
-                px0, px1 = max(0, px0), min(dw, px1)
-                py0, py1 = max(0, py0), min(dh, py1)
-                if px1 > px0 and py1 > py0:
-                    patch = depth_meters[py0:py1, px0:px1]
-                    valid_vals = patch[patch > 0.1]
-                    if len(valid_vals) > 0:
-                        dist_m = float(np.median(valid_vals))
-                        dist_str = f" {dist_m:.1f}m"
+            angle_str = ""
+            if landmark_dist_map and label_name in landmark_dist_map:
+                map_dist_m, map_angle_deg = landmark_dist_map[label_name]
+                dist_str = f" {map_dist_m:.1f}m"
+                if abs(map_angle_deg) < 3.0:
+                    angle_str = "↑"
+                elif map_angle_deg > 0:
+                    angle_str = f"R{map_angle_deg:.0f}°"
+                else:
+                    angle_str = f"L{abs(map_angle_deg):.0f}°"
+            else:
+                # ── 回退：从bbox中心像素计算水平偏角，从深度图采样距离 ──
+                raw_angle = (bbox_cx - w_img / 2.0) / w_img * hfov
+                if abs(raw_angle) < 3.0:
+                    angle_str = "↑"
+                elif raw_angle > 0:
+                    angle_str = f"R{raw_angle:.0f}°"
+                else:
+                    angle_str = f"L{abs(raw_angle):.0f}°"
+
+                if depth_meters is not None and depth_meters.size > 0:
+                    dh, dw = depth_meters.shape[:2]
+                    px0 = int(x1 + (x2 - x1) * 0.4)
+                    px1 = int(x1 + (x2 - x1) * 0.6)
+                    py0 = int(y1 + (y2 - y1) * 0.4)
+                    py1 = int(y1 + (y2 - y1) * 0.6)
+                    px0, px1 = max(0, px0), min(dw, px1)
+                    py0, py1 = max(0, py0), min(dh, py1)
+                    if px1 > px0 and py1 > py0:
+                        patch = depth_meters[py0:py1, px0:px1]
+                        valid_vals = patch[patch > 0.1]
+                        if len(valid_vals) > 0:
+                            dist_m = float(np.median(valid_vals))
+                            dist_str = f" {dist_m:.1f}m"
 
             # 准备标签文本：名称 + 距离 + 水平偏角
             text = f"{label_name}{dist_str} {angle_str}"
@@ -1657,14 +1670,23 @@ class MapVisualizer:
         paths['local_map'] = self.save_local_map(step, episode_id, local_map, phase)        # 4. 渲染并保存检测结果
         detected_landmarks_step = []
         if detections is not None and labels is not None:
+            # 从地图landmarks构建距离/角度查找表（同一类取最近实例）
+            landmark_dist_map = {}
+            for _, _, cls_name, dist_m, angle_deg in landmarks:
+                if cls_name not in landmark_dist_map or dist_m < landmark_dist_map[cls_name][0]:
+                    landmark_dist_map[cls_name] = (dist_m, angle_deg)
+
+            # 仅在地图信息不完整时才使用深度图作为备用
             depth_meters = None
-            if controller is not None and hasattr(controller, 'latest_depth_meters'):
+            if not landmark_dist_map and controller is not None and hasattr(controller, 'latest_depth_meters'):
                 depth_meters = controller.latest_depth_meters
+
             detection_vis, detected_landmarks_step = self.render_detection_bbox(
                 rgb, detections, labels,
                 landmark_classes, mapping_classes,
                 depth_meters=depth_meters,
-                hfov=hfov
+                hfov=hfov,
+                landmark_dist_map=landmark_dist_map if landmark_dist_map else None
             )
             paths['detection'] = self.save_detection(step, episode_id, detection_vis, phase)
         
@@ -1681,8 +1703,8 @@ class MapVisualizer:
                           detected_classes: List[str],
                           landmark_classes: List[str],
                           min_total_pixels: int,
-                          min_area_threshold: int) -> List[Tuple[int, int, str]]:
-        """提取landmark标记位置
+                          min_area_threshold: int) -> List[Tuple]:
+        """提取landmark标记位置并计算到agent的距离和相对偏角
         
         流程：
         1. 遍历landmark_classes（如cabinet）
@@ -1692,13 +1714,21 @@ class MapVisualizer:
         5. 形态学闭运算：填补间隙，合并相近区域
         6. 连通域分析，过滤面积 < min_area_threshold
         7. 空间合并（距离 < landmark_merge_distance）
+        8. 计算到agent的距离和相对偏角（基于地图世界坐标，无需深度图）
+        
+        坐标系说明（full_map已由get_full_map_for_rendering预旋转）：
+        - agent始终位于地图中心 (h//2, w//2)
+        - cy(row)方向：cy > h//2 为agent前方，cy < h//2 为后方
+        - cx(col)方向：cx > w//2 为agent右侧，cx < w//2 为左侧
         
         Args:
             min_total_pixels: 总像素数阈值（已弃用，为兼容保留参数）
             min_area_threshold: 单个连通域最小面积
         
         Returns:
-            List of (cx, cy, class_name)
+            List of (cx, cy, class_name, dist_m, rel_angle_deg)
+            dist_m: 到agent的直线距离（米）
+            rel_angle_deg: 相对agent前方的偏角（度，正=右，负=左，范围[-180,180]）
         """
         if not landmark_classes or len(detected_classes) == 0:
             return []
@@ -1755,13 +1785,29 @@ class MapVisualizer:
                     spatial_regions[(cx, cy)] = [(area, cls_name)]
                     if not landmark_found:
                         landmark_found = True
+        import math as _math
+        # 预计算agent中心位置和分辨率（用于距离/角度计算）
+        h_map = full_map.shape[1]
+        w_map = full_map.shape[2]
+        agent_cy = h_map // 2  # agent在地图中心（行）
+        agent_cx = w_map // 2  # agent在地图中心（列）
+        resolution_m = self.resolution / 100.0  # cm/pixel → m/pixel
+
         landmarks = []
         for (cx, cy), candidates in spatial_regions.items():
             candidates.sort(key=lambda x: x[0], reverse=True)
             dominant_class = candidates[0][1]
             area = candidates[0][0]
-            landmarks.append((cx, cy, dominant_class))
-            print(f"  📍 {dominant_class} @({cx},{cy}) - {area}px")
+
+            # 计算到agent的距离和相对偏角
+            # full_map已预旋转：cy大于中心=前方，cx大于中心=右侧
+            d_fwd   = cy - agent_cy   # 正=前
+            d_right = cx - agent_cx   # 正=右
+            dist_m = _math.sqrt(d_fwd ** 2 + d_right ** 2) * resolution_m
+            rel_angle_deg = _math.degrees(_math.atan2(d_right, d_fwd)) if dist_m > 0 else 0.0
+
+            landmarks.append((cx, cy, dominant_class, dist_m, rel_angle_deg))
+            print(f"  📍 {dominant_class} @({cx},{cy}) - {area}px  {dist_m:.1f}m {rel_angle_deg:+.0f}°")
         
         return landmarks
     
