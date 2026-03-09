@@ -191,6 +191,7 @@ class ActionExecutor(BaseAPIClient):
                      pose_before: tuple = None,
                      pose_after: tuple = None,
                      obstacle_distances: Dict[str, str] = None,
+                     landmark_map_info: str = None,
                      save_dir: str = None) -> Tuple[Optional[int], Optional[str], Optional[str], Optional[Dict]]:
         """
         基于第一人称视角、检测结果和局部地图决策下一步动作
@@ -239,7 +240,8 @@ class ActionExecutor(BaseAPIClient):
             distance_right_30=obstacle_distances['right_30'],
             distance_right_60=obstacle_distances.get('right_60', 'Unknown'),
             distance_left_90=obstacle_distances['left_90'],
-            distance_right_90=obstacle_distances['right_90']
+            distance_right_90=obstacle_distances['right_90'],
+            landmark_map_info=landmark_map_info
         )
         
         # 只发Detection图（节省token，local map已移除）

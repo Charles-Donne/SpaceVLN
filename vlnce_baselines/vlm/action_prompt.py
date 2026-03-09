@@ -27,6 +27,10 @@ You are provided with 1 image:
 **Current View (front-facing)** — Object detection results with bounding boxes (target landmark: {detected_landmarks}), overlaid with 7-direction lines showing the distance to the nearest obstacle in each direction (these distances reflect actual obstacle proximity, not necessarily what is visible in the image):
 - Directions: FRONT, Left/Right 30°, Left/Right 60°, Left/Right 90° (from bottom center)
 - Red = nearest obstacle <0.5m (blocked), Yellow = 0.5–2m (caution), Green = >2m (open)
+- **Bottom strip** (cyan text, if present): mapped landmarks currently **off-screen** — still in the environment but outside current FOV: `📍Map: name dist dir`
+
+**Landmark Map** (all known landmarks from semantic map, sorted by distance):
+{landmark_map_info}
 
 # Your Task
 
@@ -34,9 +38,10 @@ Analyze the detection image to decide the next action.
 
 **Decision Process**:
 1. **Detection View**: Are there relevant landmarks (yellow bbox)? Where is the destination relative to current view?
-2. **Distance Lines**: Which directions are blocked (red) vs safe (green/yellow)?
-3. **Distance Estimation**: How far to destination? (e.g., "~3m", "<0.5m")
-4. **Action Decision**: Choose safest action toward destination, avoiding blocked directions
+2. **Landmark Map**: Check `{landmark_map_info}` — if destination is listed as `[Map]` (off-screen), use its direction (e.g. `R45°`) to turn toward it
+3. **Distance Lines**: Which directions are blocked (red) vs safe (green/yellow)?
+4. **Distance Estimation**: How far to destination? (e.g., "~3m", "<0.5m")
+5. **Action Decision**: Choose safest action toward destination, avoiding blocked directions
 
 **STOP Condition** — You must get as close as possible to the destination or fully complete the subtask instruction, then STOP immediately — do not move past it or take unnecessary extra steps.
 
@@ -105,11 +110,14 @@ def get_action_execution_prompt(next_waypoint_destination: str,
                                 distance_right_60: str = "Unknown",
                                 distance_left_90: str = "Unknown",
                                 distance_right_90: str = "Unknown",
+                                landmark_map_info: str = None,
                                 move_distance: float = 0.25,
                                 turn_angle: int = 30) -> str:
     """获取动作执行提示词（精简版）"""
     if not progress_summary:
         progress_summary = "Just started"
+    if not landmark_map_info:
+        landmark_map_info = "No landmarks mapped yet"
         
     return ACTION_EXECUTION_PROMPT.format(
         subtask_destination=next_waypoint_destination,
@@ -117,6 +125,7 @@ def get_action_execution_prompt(next_waypoint_destination: str,
         progress_summary=progress_summary,
         previous_action_reason=previous_action_reason or "N/A (first step)",
         detected_landmarks=detected_landmarks or "none",
+        landmark_map_info=landmark_map_info,
         move_distance=move_distance,
         turn_angle=turn_angle,
         distance_front=distance_front,

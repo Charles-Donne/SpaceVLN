@@ -1123,6 +1123,7 @@ class MapVisualizer:
         
         # 统计检测到的landmark
         detected_landmarks = []
+        matched_in_view: set = set()  # 当前帧中实际可见的landmark类名
         
         for i in range(len(detections.xyxy)):
             bbox = detections.xyxy[i]
@@ -1149,6 +1150,7 @@ class MapVisualizer:
             
             label_name = matched_landmark  # 用完整landmark名称显示
             detected_landmarks.append((label_name, confidence))
+            matched_in_view.add(label_name)
 
             # 使用醒目的黄色粗框标注Landmark
             color = detection_colors["landmark"]
@@ -1224,8 +1226,36 @@ class MapVisualizer:
                        (text_x, text_y),
                        font, font_scale, (0, 0, 0), font_thickness)
         
-        # 返回检测可视化和检测到的landmark列表
-        return detection_vis, detected_landmarks
+        # ── 绘制离屏landmark提示条（在地图中存在但当前视野不可见）──
+        if landmark_dist_map:
+            offscreen = {k: v for k, v in landmark_dist_map.items() if k not in matched_in_view}
+            if offscreen:
+                h_img2, w_img2 = detection_vis.shape[:2]
+                # 构建提示文本
+                parts = []
+                for cls_name, (d_m, a_deg) in sorted(offscreen.items(), key=lambda x: x[1][0]):
+                    if abs(a_deg) < 5.0:
+                        dir_s = "↑"
+                    elif a_deg > 0:
+                        dir_s = f"R{a_deg:.0f}°"
+                    else:
+                        dir_s = f"L{abs(a_deg):.0f}°"
+                    parts.append(f"{cls_name} {d_m:.1f}m {dir_s}")
+                strip_text = "📍Map: " + "  |  ".join(parts)
+
+                font2 = cv2.FONT_HERSHEY_SIMPLEX
+                fs2, ft2 = 0.5, 1
+                (tw, th), _ = cv2.getTextSize(strip_text, font2, fs2, ft2)
+                strip_h = th + 10
+                strip_y = h_img2 - strip_h - 2
+                # 深色半透明背景条
+                cv2.rectangle(detection_vis, (0, strip_y - 4),
+                              (min(tw + 12, w_img2), strip_y + th + 4), (30, 30, 30), -1)
+                cv2.putText(detection_vis, strip_text, (6, strip_y + th),
+                            font2, fs2, (80, 230, 255), ft2, cv2.LINE_AA)  # 青黄色
+
+        # 返回检测可视化、检测到的landmark列表、已匹配的类名集合
+        return detection_vis, detected_landmarks, matched_in_view
     
     # ========== 保存方法 ==========
     
@@ -1681,7 +1711,7 @@ class MapVisualizer:
             if not landmark_dist_map and controller is not None and hasattr(controller, 'latest_depth_meters'):
                 depth_meters = controller.latest_depth_meters
 
-            detection_vis, detected_landmarks_step = self.render_detection_bbox(
+            detection_vis, detected_landmarks_step, _visible = self.render_detection_bbox(
                 rgb, detections, labels,
                 landmark_classes, mapping_classes,
                 depth_meters=depth_meters,
@@ -1689,6 +1719,10 @@ class MapVisualizer:
                 landmark_dist_map=landmark_dist_map if landmark_dist_map else None
             )
             paths['detection'] = self.save_detection(step, episode_id, detection_vis, phase)
+
+        # 将当前地图中的所有landmark距离/角度信息存到controller，供LLM提示词使用
+        if controller is not None and landmark_dist_map:
+            controller.latest_landmark_dist_map = landmark_dist_map
         
         # 5. 保存semantic masks（用于action模式的地面分割）
         if masks is not None:
