@@ -2384,9 +2384,9 @@ class VLMNavigationController(InteractiveNavigationController):
 
                 # 世界绝对角（数学惯例：0=东, CCW正方向）
                 abs_angle = math.degrees(math.atan2(dy, dx))
-                # 转换为相对于智能体朝向（curr_ori: 0=北, CCW正方向 → 数学惯例=90-curr_ori）
-                agent_math_angle = 90.0 - curr_ori
-                rel_bearing = abs_angle - agent_math_angle
+                # curr_ori 同为数学惯例（0=东，90=北，CCW正向）
+                # 相对方位角（CW为正：正=右，负=左），与 _bearing_to_description 约定一致
+                rel_bearing = curr_ori - abs_angle
                 direction = self._bearing_to_description(rel_bearing)
                 spatial_info = f"{dist:.1f}m, {direction}"
             else:

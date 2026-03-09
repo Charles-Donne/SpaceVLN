@@ -24,42 +24,41 @@ ACTION_EXECUTION_PROMPT = """You are the action execution module for Vision-Lang
 
 You are provided with 1 image:
 
-**Current View (front-facing)** — Object detection results with bounding boxes (target landmark: {detected_landmarks}), overlaid with 7-direction lines showing the distance to the nearest obstacle in each direction:
+**Current View (front-facing)** — Object detection results with bounding boxes (target landmark: {detected_landmarks}), overlaid with 7-direction lines showing obstacle distances:
 - Directions: FRONT, Left/Right 30deg, Left/Right 60deg, Left/Right 90deg (from bottom center)
 - Red = nearest obstacle <0.5m (blocked), Yellow = 0.5–2m (caution), Green = >2m (open)
-- **Bottom strip** (cyan text, if present): mapped landmarks currently **off-screen** — same as Map-offscreen entries below
+- **Bottom strip** (cyan text, if present): mapped landmarks currently off-screen — same as Map-offscreen entries below
+- **Yellow bbox label**: `name Xm Ydeg` — distance and angle from semantic map
 
 # Known Landmark Map (from semantic map, sorted by distance)
 {landmark_map_info}
 
-  Legend:
-  - `[Visible]`: landmark appears in current view — navigate toward it directly
-  - `[Map-offscreen]`: landmark is mapped but outside FOV — **follow the TURN hint**, then move forward toward it
-  - If the destination landmark is within **0.5m** → **STOP immediately**
+  - `[Visible]`: landmark is in current view — navigate toward its yellow bbox
+  - `[Map-offscreen Rdeg]`: off-screen to the RIGHT — TURN RIGHT that many degrees first
+  - `[Map-offscreen Ldeg]`: off-screen to the LEFT — TURN LEFT that many degrees first
+  - Distance < 0.5m → **STOP immediately**
 
 # Your Task
 
 **Decision Process**:
-1. **Check Landmark Map**: Is the destination listed? If `[Visible]` → move toward it. If `[Map-offscreen]` → execute the TURN hint first to face it.
-2. **Detection View**: Confirm landmark position in image (yellow bbox). Is it close (<0.5m)?
+1. **Check Landmark Map**: Is the destination listed?
+   - `[Visible]` → it's in view, move toward the yellow bbox
+   - `[Map-offscreen]` → **execute the TURN hint first** (e.g., `R60deg` = TURN_RIGHT 60)
+   - Listed distance < 0.5m → **STOP immediately**
+2. **Confirm in Detection View**: Visible yellow bbox present? How close?
 3. **Obstacle Check**: Which directions are blocked (red) vs safe (green/yellow)?
-4. **Action Decision**: Choose the safest action that makes progress toward destination.
+4. **Action Decision**: Safest action toward destination.
 
-**STOP Rules** — STOP immediately if ANY of:
-- Destination landmark bbox is visible and within ~0.5m
-- Landmark Map shows destination at <0.5m distance
-- Subtask instruction is clearly fulfilled
-
-**Safety**: Never move in a red-line direction.
+**Safety**: Never move into a red-line direction.
 
 # Output Format (JSON only)
 
 {{
-    "reasoning": "Logic: (1) Landmark location and distance from map (2) Is turn needed? (3) Action decision",
+    "reasoning": "1) Landmark location+distance from map  2) Turn needed?  3) Action decision",
     "action_analysis": "One-sentence analysis of why this action was chosen",
     "action": "MOVE_FORWARD" | "TURN_LEFT" | "TURN_RIGHT" | "STOP",
     "value": 0,
-    "progress_summary": "Updated summary: actions taken, current facing direction, locations entered/bypassed"
+    "progress_summary": "Updated: actions taken, current facing direction, locations entered/bypassed"
 }}
 
 **Parameter rules**:
@@ -69,37 +68,37 @@ You are provided with 1 image:
 
 # Examples
 
-**Ex1 - Landmark off-screen to the right**
+**Ex1 - Off-screen landmark to the right**
 {{
-    "reasoning": "Landmark Map shows destination cabinet 3.2m R60deg [Map-offscreen]. Need to turn right ~60deg to face it. Front distance line is green so safe.",
-    "action_analysis": "Destination is off-screen to the right, turning right 60deg to face it",
+    "reasoning": "Landmark Map: cabinet 3.2m [Map-offscreen R60deg]. Need TURN_RIGHT 60 to face it. Front is green.",
+    "action_analysis": "Destination off-screen to right, turning right 60deg to face it",
     "action": "TURN_RIGHT",
     "value": 60,
     "progress_summary": "Had turned right 60deg toward cabinet"
 }}
 
-**Ex2 - Clear path ahead toward visible landmark**
+**Ex2 - Visible landmark ahead, clear path**
 {{
-    "reasoning": "Destination doorway visible ahead (yellow bbox). Landmark Map shows 2.1m ahead. Front distance line is green (>2m open). Move forward.",
+    "reasoning": "Landmark Map: doorway 2.1m [Visible]. Yellow bbox visible ahead. Front line green (>2m). Move forward.",
     "action_analysis": "Destination visible ahead with clear path, moving forward",
     "action": "MOVE_FORWARD",
     "value": 0.75,
-    "progress_summary": "Facing the hallway entrance; moved forward 0.5m toward doorway"
+    "progress_summary": "Facing hallway entrance; moved 0.5m toward doorway"
 }}
 
 **Ex3 - At destination**
 {{
-    "reasoning": "Landmark Map shows destination sofa at 0.3m. Yellow bbox is close. STOP condition met.",
-    "action_analysis": "Destination within 0.5m, stopping",
+    "reasoning": "Landmark Map: sofa 0.3m [Visible]. Under 0.5m threshold. STOP.",
+    "action_analysis": "Destination within 0.5m, stopping immediately",
     "action": "STOP",
     "value": 0,
     "progress_summary": "Entered living room; now at sofa ~0.3m"
 }}
 
 **Critical Rules**:
-- **STOP immediately** if destination is within 0.5m or subtask instruction is fulfilled
+- **STOP immediately** if destination is < 0.5m or subtask instruction is fulfilled
 - For off-screen landmarks, **always turn toward the indicated direction first**
-- progress_summary must describe orientation, locations entered/passed, and obstacles bypassed
+- progress_summary must describe orientation, locations entered/passed, obstacles bypassed
 """
 
 

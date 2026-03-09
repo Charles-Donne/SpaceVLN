@@ -158,7 +158,7 @@ Example: "Stop at chair and open doors" → Navigation ends at "chair".
 **Colors**: White=unexplored | Black=obstacles | Green=safe | Orange=trajectory | Red=you | Blue circles=waypoints
 
 **Waypoint History**: {waypoint_summary}
-> Each entry includes direction and distance from your **current pose** (Front=0°, CCW). The **last entry is your most recently visited waypoint** — confirms where you came from.
+> Each entry shows direction and distance from your **current pose** (Front=0deg, Right=positive, Left=negative). The **last entry is your most recently visited waypoint** — confirms where you came from.
 
 # Reasoning (6 Parts)
 

@@ -373,11 +373,18 @@ class InteractiveNavigationController:
                 valid_labels.append(label_name)
                 valid_confidences.append(confidence)
             
-            # Landmark classes：收集mask投影到地图额外通道
+            # Landmark classes：收集mask投影到地图额外通道（精确匹配 + 子串匹配）
             if label_name in landmark_classes_list:
                 lm_idx = landmark_classes_list.index(label_name)
                 landmark_masks[lm_idx] = np.maximum(
                     landmark_masks[lm_idx], masks_all[i].astype(np.float32))
+            else:
+                # 子串匹配：检测词是landmark短语的组成词（如'painting'→'painting of girl in blue bonnet'）
+                for lc in landmark_classes_list:
+                    if label_name in lc:
+                        lm_idx = landmark_classes_list.index(lc)
+                        landmark_masks[lm_idx] = np.maximum(
+                            landmark_masks[lm_idx], masks_all[i].astype(np.float32))
             
             # 所有检测到的类别都记录（包括landmark）
             self.detected_classes.add(label_name)
