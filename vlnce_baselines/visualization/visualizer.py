@@ -1176,20 +1176,20 @@ class MapVisualizer:
                 map_dist_m, map_angle_deg = landmark_dist_map[label_name]
                 dist_str = f" {map_dist_m:.1f}m"
                 if abs(map_angle_deg) < 3.0:
-                    angle_str = "↑"
+                    angle_str = "^"
                 elif map_angle_deg > 0:
-                    angle_str = f"R{map_angle_deg:.0f}°"
+                    angle_str = f"R{map_angle_deg:.0f}deg"
                 else:
-                    angle_str = f"L{abs(map_angle_deg):.0f}°"
+                    angle_str = f"L{abs(map_angle_deg):.0f}deg"
             else:
                 # ── 回退：从bbox中心像素计算水平偏角，从深度图采样距离 ──
                 raw_angle = (bbox_cx - w_img / 2.0) / w_img * hfov
                 if abs(raw_angle) < 3.0:
-                    angle_str = "↑"
+                    angle_str = "^"
                 elif raw_angle > 0:
-                    angle_str = f"R{raw_angle:.0f}°"
+                    angle_str = f"R{raw_angle:.0f}deg"
                 else:
-                    angle_str = f"L{abs(raw_angle):.0f}°"
+                    angle_str = f"L{abs(raw_angle):.0f}deg"
 
                 if depth_meters is not None and depth_meters.size > 0:
                     dh, dw = depth_meters.shape[:2]
@@ -1239,11 +1239,11 @@ class MapVisualizer:
                 parts = []
                 for cls_name, (d_m, a_deg) in sorted(offscreen.items(), key=lambda x: x[1][0]):
                     if abs(a_deg) < 5.0:
-                        dir_s = "↑"
+                        dir_s = "^"
                     elif a_deg > 0:
-                        dir_s = f"R{a_deg:.0f}°"
+                        dir_s = f"R{a_deg:.0f}deg"
                     else:
-                        dir_s = f"L{abs(a_deg):.0f}°"
+                        dir_s = f"L{abs(a_deg):.0f}deg"
                     parts.append(f"{cls_name} {d_m:.1f}m {dir_s}")
                 strip_text = "📍Map: " + "  |  ".join(parts)
 
@@ -1712,9 +1712,9 @@ class MapVisualizer:
                 if cls_name not in landmark_dist_map or dist_m < landmark_dist_map[cls_name][0]:
                     landmark_dist_map[cls_name] = (dist_m, angle_deg)
 
-            # 仅在地图信息不完整时才使用深度图作为备用
+            # 深度图：始终从controller获取，作为地图数据缺失时的备用
             depth_meters = None
-            if not landmark_dist_map and controller is not None and hasattr(controller, 'latest_depth_meters'):
+            if controller is not None and hasattr(controller, 'latest_depth_meters'):
                 depth_meters = controller.latest_depth_meters
 
             detection_vis, detected_landmarks_step, _visible = self.render_detection_bbox(

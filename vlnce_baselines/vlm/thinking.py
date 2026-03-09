@@ -33,8 +33,8 @@ class LLMPlanner(BaseAPIClient):
         # 默认动作空间与interactive_navigation一致
         self.action_space = action_space or "MOVE_FORWARD (0.25m), TURN_LEFT (30°), TURN_RIGHT (30°), STOP"
         
-        # 不压缩图像（global map等需要高质量）
-        self.set_compression_config(enabled=False)
+        # 方向观察图压缩（节省token），global_map保持全分辨率（需要细节）
+        self.set_compression_config(enabled=True, max_size=512, quality=75)
         
         # print(f"✓ LLM Planner initialized")
         print(f"  LLMPlanner: {self.config.model}")
@@ -102,15 +102,16 @@ class LLMPlanner(BaseAPIClient):
         
         if local_map_image:
             images.append(local_map_image)
-            # print(f"  📍 Images: 4 directions + Global map + Local map")
-        # else:
-            # print(f"  📍 Images: 4 directions + Global map")
+        
+        # global_map不压缩（需要全分辨率），其余图片压缩
+        no_compress = {len(observation_images)}  # global_map的索引
         
         # 添加重试机制
         max_retries = 3
         for retry in range(max_retries):
             # Only save on first attempt (avoid duplicate saves on retry)
-            response = self.call_api(prompt, images, save_dir=save_dir if retry == 0 else None)
+            response = self.call_api(prompt, images, save_dir=save_dir if retry == 0 else None,
+                                     no_compress_indices=no_compress)
             
             if response and self.validate_response(response, mode='initial'):
                 return response, prompt
@@ -193,10 +194,14 @@ class LLMPlanner(BaseAPIClient):
         if local_map_image:
             images.append(local_map_image)
         
+        # global_map不压缩（需要全分辨率），其余图片压缩
+        no_compress = {len(observation_images)}  # global_map的索引
+        
         # 添加重试机制
         max_retries = 3
         for retry in range(max_retries):
-            response = self.call_api(prompt, images, save_dir=save_dir if retry == 0 else None)
+            response = self.call_api(prompt, images, save_dir=save_dir if retry == 0 else None,
+                                     no_compress_indices=no_compress)
             
             if response and self.validate_response(response, mode='verify'):
                 return response, prompt

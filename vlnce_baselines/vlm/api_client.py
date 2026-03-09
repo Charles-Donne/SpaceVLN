@@ -218,13 +218,15 @@ class BaseAPIClient(ABC):
         except Exception as e:
             print(f"  [WARN] Save failed: {e}")
     
-    def build_message_content(self, text: str, image_paths: List[str], save_dir: str = None) -> List[Dict]:
+    def build_message_content(self, text: str, image_paths: List[str], save_dir: str = None,
+                              no_compress_indices: set = None) -> List[Dict]:
         """构建消息内容，可选保存压缩后的图片（即模型实际看到的版本）
         
         Args:
             text: prompt文本
             image_paths: 图片路径列表
             save_dir: 如果指定，将压缩后的图片和prompt保存到此目录
+            no_compress_indices: 不压缩的图片索引集合（如 {4} 表示第5张图不压缩）
         """
         content = [{"type": "text", "text": text}]
         
@@ -236,7 +238,9 @@ class BaseAPIClient(ABC):
                 f.write(text)
         
         for idx, img_path in enumerate(image_paths):
-            img_base64 = self.encode_image_base64(img_path)
+            # 指定索引跳过压缩（如 global_map 需要保持原始分辨率）
+            skip_compress = no_compress_indices is not None and idx in no_compress_indices
+            img_base64 = self.encode_image_base64(img_path, compress=(False if skip_compress else None))
             content.append({
                 "type": "image_url",
                 "image_url": {"url": f"data:image/jpeg;base64,{img_base64}"}
@@ -272,13 +276,15 @@ class BaseAPIClient(ABC):
         
         return content
     
-    def call_api(self, prompt: str, image_paths: List[str], save_dir: str = None) -> Optional[Dict]:
+    def call_api(self, prompt: str, image_paths: List[str], save_dir: str = None,
+                 no_compress_indices: set = None) -> Optional[Dict]:
         """调用API（带计时和速度统计）
         
         Args:
             prompt: prompt文本
             image_paths: 图片路径列表
             save_dir: 如果指定，在发送时同步保存压缩图片+prompt到此目录
+            no_compress_indices: 不压缩的图片索引集合（如 {4} 表示第5张图不压缩）
         """
         t_start = time.time()
         try:
@@ -290,7 +296,8 @@ class BaseAPIClient(ABC):
                 "model": self.config.model,
                 "messages": [{
                     "role": "user",
-                    "content": self.build_message_content(prompt, image_paths, save_dir=save_dir)
+                    "content": self.build_message_content(prompt, image_paths, save_dir=save_dir,
+                                                          no_compress_indices=no_compress_indices)
                 }],
                 "temperature": self.config.temperature,
                 "max_tokens": self.config.max_tokens

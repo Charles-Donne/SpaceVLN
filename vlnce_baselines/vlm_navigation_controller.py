@@ -1621,31 +1621,40 @@ class VLMNavigationController(InteractiveNavigationController):
             with open(info_file, 'w', encoding='utf-8') as f:
                 json.dump(subtask_info, f, ensure_ascii=False, indent=2)
         
-        # 构建 landmark_map_info：可见 + 地图离屏两类
+        # 构建 landmark_map_info：可见 + 地图离屏两类（按距离升序）
         # action VLM 只有第一人称图，需要文字告知离屏的已映射 landmark 方向距离
         action_landmark_map_info = None
         landmark_dist_map = getattr(self, 'latest_landmark_dist_map', {})
         if landmark_dist_map:
-            visible_parts, offscreen_parts = [], []
+            # 判断当前帧可见的 landmark
+            if detection_step is not None and hasattr(self, 'current_step_landmarks') and detection_step in self.current_step_landmarks:
+                visible_names = {n for n, _ in self.current_step_landmarks[detection_step]}
+            else:
+                visible_names = set()
+
+            lines = []
             for cls_name, (dist_m, angle_deg) in sorted(landmark_dist_map.items(), key=lambda x: x[1][0]):
                 if abs(angle_deg) < 5.0:
                     dir_s = "ahead"
                 elif angle_deg > 0:
-                    dir_s = f"R{angle_deg:.0f}°"
+                    dir_s = f"R{angle_deg:.0f}deg"
                 else:
-                    dir_s = f"L{abs(angle_deg):.0f}°"
-                entry = f"{cls_name} {dist_m:.1f}m {dir_s}"
-                # 判断是否在当前帧可见（detection_image 对应的那步）
-                if detection_step is not None and hasattr(self, 'current_step_landmarks') and detection_step in self.current_step_landmarks:
-                    visible_names = {n for n, _ in self.current_step_landmarks[detection_step]}
-                else:
-                    visible_names = set()
+                    dir_s = f"L{abs(angle_deg):.0f}deg"
+
                 if cls_name in visible_names:
-                    visible_parts.append(f"[Visible] {entry}")
+                    tag = "[Visible]"
+                    hint = ""
                 else:
-                    offscreen_parts.append(f"[Map-offscreen] {entry}")
-            all_parts = visible_parts + offscreen_parts
-            action_landmark_map_info = "  |  ".join(all_parts) if all_parts else None
+                    tag = "[Map-offscreen]"
+                    # 添加明确的转向提示
+                    if abs(angle_deg) < 5.0:
+                        hint = " → already ahead, move forward"
+                    elif angle_deg > 0:
+                        hint = f" → TURN RIGHT ~{angle_deg:.0f}deg then move forward"
+                    else:
+                        hint = f" → TURN LEFT ~{abs(angle_deg):.0f}deg then move forward"
+                lines.append(f"  • {tag} {cls_name}: {dist_m:.1f}m, {dir_s}{hint}")
+            action_landmark_map_info = "\n".join(lines) if lines else None
 
         # 调用VLM决策（save_dir使call_api在发送时保存压缩图片+prompt）
         result = self.action_executor.decide_action(
