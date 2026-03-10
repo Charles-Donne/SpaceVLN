@@ -24,41 +24,38 @@ ACTION_EXECUTION_PROMPT = """You are the action execution module for Vision-Lang
 
 You are provided with 1 image:
 
-**Current View (front-facing)** — Object detection results with bounding boxes (target landmark: {detected_landmarks}), overlaid with 7-direction lines showing obstacle distances:
+**Current View (front-facing)** — Object detection results with bounding boxes (target landmark: {detected_landmarks}), overlaid with 7-direction lines showing the distance to the nearest obstacle in each direction:
 - Directions: FRONT, Left/Right 30deg, Left/Right 60deg, Left/Right 90deg (from bottom center)
 - Red = nearest obstacle <0.5m (blocked), Yellow = 0.5–2m (caution), Green = >2m (open)
-- **Bottom strip** (cyan text, if present): mapped landmarks currently off-screen — same as Map-offscreen entries below
-- **Yellow bbox label**: `name Xm Ydeg` — distance and angle from semantic map
+- **Bottom strip** (cyan text, if present): mapped landmarks currently **off-screen** — same as Map-offscreen entries below
 
 # Known Landmark Map (from semantic map, sorted by distance)
 {landmark_map_info}
 
-  - `[Visible]`: landmark is in current view — navigate toward its yellow bbox
-  - `[Map-offscreen Rdeg]`: off-screen to the RIGHT — TURN RIGHT that many degrees first
-  - `[Map-offscreen Ldeg]`: off-screen to the LEFT — TURN LEFT that many degrees first
-  - Distance < 0.5m → **STOP immediately**
-
 # Your Task
 
 **Decision Process**:
-1. **Check Landmark Map**: Is the destination listed?
-   - `[Visible]` → it's in view, move toward the yellow bbox
-   - `[Map-offscreen]` → **execute the TURN hint first** (e.g., `R60deg` = TURN_RIGHT 60)
-   - Listed distance < 0.5m → **STOP immediately**
-2. **Confirm in Detection View**: Visible yellow bbox present? How close?
-3. **Obstacle Check**: Which directions are blocked (red) vs safe (green/yellow)?
-4. **Action Decision**: Safest action toward destination.
+1. **Detection View**: Are there relevant landmarks (yellow bbox)? Where is the destination relative to current view?
+2. **Landmark Map**: Check the Known Landmark Map section above — each entry shows distance and direction.
+   - `[Visible]` → visible in current view, move toward its yellow bbox
+   - `[Map-offscreen R/Ldeg]` → turn RIGHT/LEFT by that many degrees first, then move
+   - Distance < 0.5m → **STOP immediately**
+3. **Distance Lines**: Which directions are blocked (red) vs safe (green/yellow)?
+4. **Distance Estimation**: How far to destination? (e.g., "~3m", "<0.5m")
+5. **Action Decision**: Choose safest action toward destination, avoiding blocked directions
 
-**Safety**: Never move into a red-line direction.
+**STOP Condition** — You must get as close as possible to the destination or fully complete the subtask instruction, then STOP immediately — do not move past it or take unnecessary extra steps.
+
+**Safety Priority**: Avoid directions with red distance lines (obstacle <0.5m)
 
 # Output Format (JSON only)
 
 {{
-    "reasoning": "1) Landmark location+distance from map  2) Turn needed?  3) Action decision",
+    "reasoning": "Logic: (1) Destination location and distance (2) Movement count (3) Action decision",
     "action_analysis": "One-sentence analysis of why this action was chosen",
     "action": "MOVE_FORWARD" | "TURN_LEFT" | "TURN_RIGHT" | "STOP",
     "value": 0,
-    "progress_summary": "Updated: actions taken, current facing direction, locations entered/bypassed"
+    "progress_summary": "Updated summary: actions taken, current facing direction, locations entered/bypassed"
 }}
 
 **Parameter rules**:
@@ -68,22 +65,22 @@ You are provided with 1 image:
 
 # Examples
 
-**Ex1 - Off-screen landmark to the right**
+**Ex1 - Clear path ahead**
 {{
-    "reasoning": "Landmark Map: cabinet 3.2m [Map-offscreen R60deg]. Need TURN_RIGHT 60 to face it. Front is green.",
-    "action_analysis": "Destination off-screen to right, turning right 60deg to face it",
-    "action": "TURN_RIGHT",
-    "value": 60,
-    "progress_summary": "Had turned right 60deg toward cabinet"
-}}
-
-**Ex2 - Visible landmark ahead, clear path**
-{{
-    "reasoning": "Landmark Map: doorway 2.1m [Visible]. Yellow bbox visible ahead. Front line green (>2m). Move forward.",
+    "reasoning": "Destination doorway visible ahead (yellow bbox). Landmark Map shows 2.1m ahead. Front distance line is green (>2m open). Move forward.",
     "action_analysis": "Destination visible ahead with clear path, moving forward",
     "action": "MOVE_FORWARD",
     "value": 0.75,
-    "progress_summary": "Facing hallway entrance; moved 0.5m toward doorway"
+    "progress_summary": "Facing the hallway entrance; moved forward 0.5m toward doorway; no obstacles bypassed yet"
+}}
+
+**Ex2 - Obstacle detected**
+{{
+    "reasoning": "Front distance line is red (<0.5m blocked). Right 30° is green. Turn right to find clear path toward sofa.",
+    "action_analysis": "Obstacle blocking forward path, turning right toward open direction",
+    "action": "TURN_RIGHT",
+    "value": 30,
+    "progress_summary": "Bypassed wall on left; now facing right corridor; moved ~1m total"
 }}
 
 **Ex3 - At destination**
@@ -92,7 +89,7 @@ You are provided with 1 image:
     "action_analysis": "Destination within 0.5m, stopping immediately",
     "action": "STOP",
     "value": 0,
-    "progress_summary": "Entered living room; now at sofa ~0.3m"
+    "progress_summary": "Entered living room from hallway; bypassed table on right; now facing sofa at ~0.3m"
 }}
 
 **Critical Rules**:
@@ -107,22 +104,17 @@ def get_action_execution_prompt(next_waypoint_destination: str,
                                 progress_summary: str = "",
                                 detected_landmarks: str = None,
                                 previous_action_reason: str = "",
-                                distance_front: str = "Unknown",
-                                distance_left_30: str = "Unknown",
-                                distance_right_30: str = "Unknown",
-                                distance_left_60: str = "Unknown",
-                                distance_right_60: str = "Unknown",
-                                distance_left_90: str = "Unknown",
-                                distance_right_90: str = "Unknown",
                                 landmark_map_info: str = None,
                                 move_distance: float = 0.25,
-                                turn_angle: int = 30) -> str:
-    """获取动作执行提示词（精简版）"""
+                                turn_angle: int = 30,
+                                # 以下参数保留兼容性但不再用于prompt
+                                **kwargs) -> str:
+    """获取动作执行提示词"""
     if not progress_summary:
         progress_summary = "Just started"
     if not landmark_map_info:
         landmark_map_info = "No landmarks mapped yet"
-        
+
     return ACTION_EXECUTION_PROMPT.format(
         subtask_destination=next_waypoint_destination,
         subtask_instruction=subtask_instruction,
@@ -132,11 +124,4 @@ def get_action_execution_prompt(next_waypoint_destination: str,
         landmark_map_info=landmark_map_info,
         move_distance=move_distance,
         turn_angle=turn_angle,
-        distance_front=distance_front,
-        distance_left_30=distance_left_30,
-        distance_left_60=distance_left_60,
-        distance_right_30=distance_right_30,
-        distance_right_60=distance_right_60,
-        distance_left_90=distance_left_90,
-        distance_right_90=distance_right_90
-    )
+
