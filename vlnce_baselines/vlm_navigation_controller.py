@@ -55,6 +55,7 @@ class VLMNavigationController(InteractiveNavigationController):
     """
     
     def __init__(self, config: Config,
+                 config_path: str = None,
                  llm_config_path: str = "vlnce_baselines/vlm/llm_config.yaml",
                  vlm_config_path: str = "vlnce_baselines/vlm/vlm_config.yaml"):
         """
@@ -62,9 +63,15 @@ class VLMNavigationController(InteractiveNavigationController):
         
         Args:
             config: Habitat配置
-            llm_config_path: LLM配置文件路径
-            vlm_config_path: VLM配置文件路径
+            config_path: 统一API配置文件路径（同时设置LLM和VLM，优先于下面两个参数）
+            llm_config_path: LLM配置文件路径（仅当 config_path=None 时生效）
+            vlm_config_path: VLM配置文件路径（仅当 config_path=None 时生效）
         """
+        # 统一配置文件优先
+        if config_path is not None:
+            llm_config_path = config_path
+            vlm_config_path = config_path
+        
         # 调用父类初始化（初始化环境、检测、建图、可视化）
         super().__init__(config)
         

@@ -24,12 +24,15 @@ def main():
     parser.add_argument("--results-dir", type=str, default=None, help="结果保存目录")
     
     # VLM配置
+    parser.add_argument("--config", type=str,
+                       default="vlnce_baselines/vlm/api_config.yaml",
+                       help="统一API配置文件路径（推荐）：同时设置LLM和VLM服务商/模型")
     parser.add_argument("--llm-config", type=str, 
-                       default="vlnce_baselines/vlm/llm_config.yaml",
-                       help="LLM配置文件路径")
+                       default=None,
+                       help="LLM配置文件路径（仅当不使用 --config 时生效）")
     parser.add_argument("--vlm-config", type=str,
-                       default="vlnce_baselines/vlm/vlm_config.yaml", 
-                       help="VLM配置文件路径")
+                       default=None,
+                       help="VLM配置文件路径（仅当不使用 --config 时生效）")
     
     # 导航参数
     parser.add_argument("--max-subtask-steps", type=int, default=5,
@@ -138,12 +141,23 @@ def main():
             episode_config = ConfigHelper.setup_navigation_config(episode_config)
             episode_config.freeze()
             
-            # 初始化控制器
-            controller = VLMNavigationController(
-                episode_config,
-                llm_config_path=args.llm_config,
-                vlm_config_path=args.vlm_config
-            )
+            # 初始化控制器（优先使用统一配置文件，回退到分开的 llm/vlm config）
+            import os as _os
+            _use_unified = _os.path.exists(args.config)
+            if _use_unified:
+                controller = VLMNavigationController(
+                    episode_config,
+                    config_path=args.config
+                )
+            else:
+                # 回退到 legacy 双文件模式
+                _llm = args.llm_config or "vlnce_baselines/vlm/llm_config.yaml"
+                _vlm = args.vlm_config or "vlnce_baselines/vlm/vlm_config.yaml"
+                controller = VLMNavigationController(
+                    episode_config,
+                    llm_config_path=_llm,
+                    vlm_config_path=_vlm
+                )
             
             # 重置Episode
             controller.reset_episode(episode_id=episode_id)
@@ -153,7 +167,10 @@ def main():
             
             print(f"\n📝 指令: {controller.current_instruction}")
             print(f"⚙️  配置: Episode {episode_id} | 最大步数 {max_steps} (从 Habitat 配置)")
-            print(f"🔧 VLM: LLM={args.llm_config} | VLM={args.vlm_config}")
+            if _use_unified:
+                print(f"🔧 API config: {args.config}")
+            else:
+                print(f"🔧 VLM: LLM={_llm} | VLM={_vlm}")
             
             # 运行VLM导航
             result = controller.run_vlm_navigation(

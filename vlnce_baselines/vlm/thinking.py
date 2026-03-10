@@ -27,7 +27,7 @@ class LLMPlanner(BaseAPIClient):
             config_path: LLM配置文件路径
             action_space: 动作空间描述（如 "MOVE_FORWARD (0.25m), TURN_LEFT (30°), ..."）
         """
-        config = APIConfig(config_path)
+        config = APIConfig(config_path, role="llm")
         super().__init__(config)
         
         # 默认动作空间与interactive_navigation一致

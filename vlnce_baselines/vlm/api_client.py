@@ -15,44 +15,94 @@ from typing import Dict, List, Optional
 
 
 class APIConfig:
-    """统一API配置类"""
+    """统一API配置类
     
-    def __init__(self, config_path: str):
+    支持两种格式：
+      统一格式（推荐）: 包含 provider 字段，通过 role='llm'/'vlm' 选择对应模型和参数
+      Legacy 格式: 直接包含 api_key / base_url / model（向后兼容）
+    """
+    
+    def __init__(self, config_path: str, role: str = None):
+        """
+        Args:
+            config_path: 配置文件路径
+            role: 'llm'（高层规划）或 'vlm'（低层执行）
+                  统一格式中用于选择 {role}_model / {role}_max_tokens / {role}_timeout
+                  Legacy 格式中忽略此参数
+        """
         if not os.path.exists(config_path):
             raise FileNotFoundError(f"配置文件不存在: {config_path}")
         
         with open(config_path, 'r', encoding='utf-8') as f:
-            self.config = yaml.safe_load(f)
+            raw = yaml.safe_load(f)
         
-        # 验证必要字段
-        required = ['api_key', 'base_url', 'model']
-        missing = [f for f in required if f not in self.config or not self.config[f]]
-        if missing:
-            raise ValueError(f"配置文件缺少必要字段: {', '.join(missing)}")
+        self.config = raw
+        self._role = role or 'llm'
+        
+        if 'provider' in raw:
+            # ── 统一格式 ──────────────────────────────────────────────
+            provider = raw['provider']
+            if provider not in raw:
+                raise ValueError(f"配置文件中找不到 provider '{provider}' 的配置块")
+            pc = raw[provider]          # provider config block
+            r  = self._role             # 'llm' or 'vlm'
+            
+            self._api_key      = pc.get('api_key', '')
+            self._base_url     = pc.get('base_url', '')
+            self._model        = pc.get(f'{r}_model') or pc.get('model', '')
+            self._temperature  = raw.get('temperature', 0.1)
+            self._max_tokens   = raw.get(f'{r}_max_tokens', 2000)
+            self._timeout      = raw.get(f'{r}_timeout', 60)
+            self._provider_name = provider
+            
+            missing = [f for f in ['api_key', 'base_url'] if not pc.get(f)]
+            if not self._model:
+                missing.append(f'{r}_model')
+            if missing:
+                raise ValueError(f"[{provider}] 配置块缺少必要字段: {', '.join(missing)}")
+        else:
+            # ── Legacy 格式（向后兼容）──────────────────────────────────
+            required = ['api_key', 'base_url', 'model']
+            missing = [f for f in required if not raw.get(f)]
+            if missing:
+                raise ValueError(f"配置文件缺少必要字段: {', '.join(missing)}")
+            
+            self._api_key      = raw['api_key']
+            self._base_url     = raw['base_url']
+            self._model        = raw['model']
+            self._temperature  = raw.get('temperature', 0.1)
+            self._max_tokens   = raw.get('max_tokens', 2000)
+            self._timeout      = raw.get('timeout', 60)
+            self._provider_name = None
     
     @property
     def api_key(self) -> str:
-        return self.config['api_key']
+        return self._api_key
     
     @property
     def base_url(self) -> str:
-        return self.config['base_url']
+        return self._base_url
     
     @property
     def model(self) -> str:
-        return self.config['model']
+        return self._model
     
     @property
     def temperature(self) -> float:
-        return self.config.get('temperature', 0.1)
+        return self._temperature
     
     @property
     def max_tokens(self) -> int:
-        return self.config.get('max_tokens', 2000)
+        return self._max_tokens
     
     @property
     def timeout(self) -> int:
-        return self.config.get('timeout', 60)
+        return self._timeout
+    
+    @property
+    def provider(self) -> str:
+        """当前使用的服务商名称（统一格式返回 'dashscope'/'openrouter'，legacy 返回 ''）"""
+        return self._provider_name or ''
     
     def get_headers(self) -> Dict[str, str]:
         return {

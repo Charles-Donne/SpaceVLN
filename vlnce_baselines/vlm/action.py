@@ -26,7 +26,7 @@ class ActionExecutor(BaseAPIClient):
             turn_angle: 每次转向角度（度）- 与interactive_navigation一致：30°
             move_distance: 每次前进距离（米）- 与interactive_navigation一致：0.25m
         """
-        config = APIConfig(config_path)
+        config = APIConfig(config_path, role="vlm")
         super().__init__(config)
         
         self.turn_angle = turn_angle
