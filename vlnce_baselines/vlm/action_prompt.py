@@ -29,24 +29,26 @@ You are provided with 1 image:
 - Red = nearest obstacle <0.5m (blocked), Yellow = 0.5–2m (caution), Green = >2m (open)
 - **Bottom strip** (cyan text, if present): mapped landmarks currently **off-screen** — same as Map-offscreen entries below
 
-# Known Landmark Map (from semantic map, sorted by distance)
+# Known Landmark Map (from semantic map, sorted by nearest first)
+# Format: [Visible Xm Ydeg] or [Map-offscreen Xm Ydeg]  — X=distance, Y=bearing (R=right, L=left, ^=ahead)
 {landmark_map_info}
 
 # Your Task
 
 **Decision Process**:
-1. **Detection View**: Are there relevant landmarks (yellow bbox)? Where is the destination relative to current view?
-2. **Landmark Map**: Check the Known Landmark Map section above — each entry shows distance and direction.
-   - `[Visible]` → visible in current view, move toward its yellow bbox
-   - `[Map-offscreen R/Ldeg]` → turn RIGHT/LEFT by that many degrees first, then move
-   - Distance < 0.5m → **STOP immediately**
-3. **Distance Lines**: Which directions are blocked (red) vs safe (green/yellow)?
-4. **Distance Estimation**: How far to destination? (e.g., "~3m", "<0.5m")
-5. **Action Decision**: Choose safest action toward destination, avoiding blocked directions
+1. **Detection View**: Are there relevant landmarks visible (yellow bbox)? Where is the destination relative to the current view?
+2. **Landmark Map**: Read the Known Landmark Map above — each entry is one landmark with its distance and bearing from you.
+   - `[Visible Xm Ydeg]` — already in view; move toward its yellow bounding box.
+   - `[Map-offscreen Xm RYdeg]` — behind you or off to the right; turn RIGHT ~Y degrees first, then move forward.
+   - `[Map-offscreen Xm LYdeg]` — off to the left; turn LEFT ~Y degrees first, then move forward.
+   - Any landmark at **< 0.5 m** → **STOP immediately**.
+3. **Distance Lines**: Which directions are blocked (red < 0.5 m) vs safe (green > 2 m)?
+4. **Distance Check**: How far is the destination right now? (e.g. "~3 m", "< 0.5 m")
+5. **Action**: Choose the safest action that moves you toward the destination while avoiding blocked directions.
 
-**STOP Condition** — You must get as close as possible to the destination or fully complete the subtask instruction, then STOP immediately — do not move past it or take unnecessary extra steps.
+**STOP Condition** — Approach the destination as close as possible, then STOP. Do not overshoot or take unnecessary extra steps.
 
-**Safety Priority**: Avoid directions with red distance lines (obstacle <0.5m)
+**Safety Priority**: Never move in a direction whose distance line is red (obstacle < 0.5 m).
 
 # Output Format (JSON only)
 
