@@ -1154,10 +1154,8 @@ class VLMNavigationController(InteractiveNavigationController):
             # 更新GroundedSAM检测类别：如果lankmark不在mapping_classes中，动态添加
             if next_waypoint_landmark not in self.mapping_classes:
                 self.classes = self.mapping_classes + [next_waypoint_landmark]
-                print(f"  [Detection] Added '{next_waypoint_landmark}' to GroundedSAM (not in mapping)")
             else:
                 self.classes = self.mapping_classes
-                print(f"  [Detection] Landmark '{next_waypoint_landmark}' already in mapping_classes")
         else:
             self.target_landmark = None
             self.landmark_classes = []
@@ -1436,10 +1434,8 @@ class VLMNavigationController(InteractiveNavigationController):
                 # 更新GroundedSAM检测类别：如果lankmark不在mapping_classes中，动态添加
                 if next_waypoint_landmark not in self.mapping_classes:
                     self.classes = self.mapping_classes + [next_waypoint_landmark]
-                    print(f"  [Detection] Added '{next_waypoint_landmark}' to GroundedSAM (not in mapping)")
                 else:
                     self.classes = self.mapping_classes
-                    print(f"  [Detection] Landmark '{next_waypoint_landmark}' already in mapping_classes")
             else:
                 self.target_landmark = None
                 self.landmark_classes = []

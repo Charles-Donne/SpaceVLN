@@ -341,26 +341,6 @@ class InteractiveNavigationController:
         # Landmark masks (投影到地图的额外通道，channel 3+N_mapping 开始)
         landmark_classes_list = self.landmark_classes if hasattr(self, 'landmark_classes') else []
         landmark_masks = np.zeros((len(landmark_classes_list), self.height, self.width), dtype=np.float32)
-        
-        # --- Landmark Debug ---
-        landmark_targets = self.landmark_classes if hasattr(self, 'landmark_classes') else []
-        if landmark_targets:
-            all_detected_names = []
-            for lbl in labels_all:
-                p = lbl.split()
-                all_detected_names.append(' '.join(p[:-1]) if len(p) > 1 else p[0])
-            # 精确匹配 + 子串匹配（如 'painting' 命中 'painting of girl in blue bonnet'）
-            matched_exact = [n for n in all_detected_names if n in landmark_targets]
-            matched_substr = [(n, lc) for n in all_detected_names for lc in landmark_targets if n not in landmark_targets and n in lc]
-            print(f"  [LandmarkDebug] target={landmark_targets} | GroundedSAM_classes={self.classes}")
-            print(f"  [LandmarkDebug] raw_labels={labels_all}")
-            if matched_exact:
-                print(f"  [LandmarkDebug] ✅ EXACT: {matched_exact}")
-            elif matched_substr:
-                print(f"  [LandmarkDebug] ✅ SUBSTR: {matched_substr} (substring match, treating as landmark)")
-            else:
-                print(f"  [LandmarkDebug] ❌ NOT FOUND in detections (all names: {all_detected_names})")
-        # ----------------------
 
         for i, label in enumerate(labels_all):
             parts = label.split()

@@ -1886,7 +1886,6 @@ class MapVisualizer:
             rel_angle_deg = _math.degrees(_math.atan2(d_right, d_fwd)) if dist_m > 0 else 0.0
 
             landmarks.append((cx, cy, dominant_class, dist_m, rel_angle_deg))
-            print(f"  📍 {dominant_class} @({cx},{cy}) - {area}px  {dist_m:.1f}m {rel_angle_deg:+.0f}°")
         
         return landmarks
     

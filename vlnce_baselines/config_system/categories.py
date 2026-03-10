@@ -172,24 +172,8 @@ class CategoryConfig:
     def print_summary(self):
         """打印类别配置摘要"""
         stats = self.get_statistics()
-        
-        print("\n" + "="*60)
-        print("类别配置摘要")
-        print("="*60)
-        print(f"建图类别 (Mapping): {stats['total_mapping']} 个")
-        print(f"  {', '.join(self._mapping_classes)}")
-        print(f"\nLandmark类别: {stats['total_landmark']} 个")
-        print(f"  {', '.join(self._landmark_classes)}")
-        print(f"\n完整检测类别: {stats['total_detection']} 个")
-        
-        if stats['detected_total'] > 0:
-            print(f"\n已检测到: {stats['detected_total']} 个")
-            if stats['detected_mapping']:
-                print(f"  - Mapping: {', '.join(stats['detected_mapping_list'])}")
-            if stats['detected_landmark']:
-                print(f"  - Landmark: {', '.join(stats['detected_landmark_list'])}")
-        
-        print("="*60 + "\n")
+        lm_detected = ', '.join(stats['detected_landmark_list']) if stats['detected_landmark'] else 'none'
+        print(f"  Categories: mapping={stats['total_mapping']} landmark={stats['total_landmark']} | detected_landmark=[{lm_detected}]")
     
     # ========== 复制和重置 ==========
     
