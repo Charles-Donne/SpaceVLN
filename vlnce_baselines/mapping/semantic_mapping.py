@@ -1348,8 +1348,8 @@ class Semantic_Mapping(nn.Module):
         agent_height_proj = voxels[..., self.min_z:max_z].sum(4) # shape: [bs, num_detected_classes + 1, 100, 100]
         all_height_proj = voxels.sum(4) # shape: [bs, num_detected_classes + 1, 100, 100]
 
-        fp_map_pred = agent_height_proj[:, :1, :, :] # obstacle map
-        fp_exp_pred = all_height_proj[:, :1, :, :] # explored map
+        fp_map_pred = agent_height_proj[:, :1, :, :] # obstacle map（仅取agent高度附近）
+        fp_exp_pred = all_height_proj[:, :1, :, :]   # explored map（所有高度）
         fp_map_pred = fp_map_pred / self.map_pred_threshold
         fp_exp_pred = fp_exp_pred / self.exp_pred_threshold
         fp_map_pred = torch.clamp(fp_map_pred, min=0.0, max=1.0)
@@ -1368,8 +1368,10 @@ class Semantic_Mapping(nn.Module):
         y2 = y1 + self.vision_range
         agent_view[:, 0:1, y1:y2, x1:x2] = fp_map_pred # obstacle map
         agent_view[:, 1:2, y1:y2, x1:x2] = fp_exp_pred # explored area
+        # 语义类别用 all_height_proj（不限高度）：障碍物只需关心通行高度，
+        # 但 landmark（挂画、窗户等）可能在任意高度，用 all_height_proj 确保不漏掉
         agent_view[:, 3:, y1:y2, x1:x2] = torch.clamp(
-            agent_height_proj[:, 1:, :, :] / self.cat_pred_threshold,
+            all_height_proj[:, 1:, :, :] / self.cat_pred_threshold,
             min=0.0, max=1.0) # semantic categories (从通道3开始)
 
         corrected_pose = pose_obs # sensor pose
