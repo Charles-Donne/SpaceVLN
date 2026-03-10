@@ -22,9 +22,14 @@ model: "qwen-vl-plus-latest"
 # ========================
 # 方案2: OpenRouter
 # ========================
+# ⚠️ 注意：OpenRouter会随机路由到不同后端，速度差异大（30~100 TPS）
+# 程序已自动在 payload 中加入 "order":["Alibaba"] 固定优先走阿里云后端
 # api_key: "sk-or-your-openrouter-key"
 # base_url: "https://openrouter.ai/api/v1"
-# model: "qwen/qwen-2.5-vl-72b-instruct"
+# Qwen3 VL 系列（2025年最新）:
+#   qwen/qwen3-vl-8b-instruct       - 快（8B，Action执行推荐）
+#   qwen/qwen3-vl-30b-a3b-instruct  - 强（MoE 30B/A3B，备选）
+# model: "qwen/qwen3-vl-8b-instruct"
 
 # ========================
 # 方案3: OpenAI

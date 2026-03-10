@@ -307,11 +307,12 @@ class BaseAPIClient(ABC):
             headers = self.config.get_headers()
             is_openrouter = 'openrouter' in self.config.base_url.lower()
             if is_openrouter:
-                # OpenRouter: 选择最快的provider
+                # OpenRouter: 固定优先走阿里云 Tongyi 后端（Qwen 系列在此最快，~90-100 TPS）
+                # 若阿里云不可用则 fallback 到其他 provider
                 headers["X-Title"] = "MapReAct-VLN"
                 payload["provider"] = {
-                    "sort": "throughput",        # 按吞吐量排序，选最快provider
-                    "allow_fallbacks": True       # 允许回退到其他provider
+                    "order": ["Alibaba"],         # 固定优先走阿里云（最高吞吐）
+                    "allow_fallbacks": True       # 阿里云不可用时允许回退
                 }
             
             response = requests.post(
