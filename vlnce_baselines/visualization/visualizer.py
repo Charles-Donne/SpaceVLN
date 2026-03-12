@@ -1211,21 +1211,37 @@ class MapVisualizer:
             if landmark_dist_map and label_name in landmark_dist_map:
                 map_dist_m, map_angle_deg = landmark_dist_map[label_name]
 
-            # ── [LM COMPARE] 两种方式对比 ──
-            print(f"[LM COMPARE] '{label_name}'  "
-                  f"depth=({depth_dist_m:.2f}m  angle={depth_angle_deg:.1f}deg)  "
-                  f"map=({map_dist_m:.2f}m  angle={map_angle_deg:.1f}deg)  "
-                  f"diff_dist={abs(depth_dist_m - map_dist_m):.2f}m  diff_angle={abs(depth_angle_deg - map_angle_deg):.1f}deg"
-                  if (depth_dist_m is not None and map_dist_m is not None)
-                  else f"[LM COMPARE] '{label_name}'  depth={'N/A' if depth_dist_m is None else f'{depth_dist_m:.2f}m {depth_angle_deg:.1f}deg'}  map={'N/A' if map_dist_m is None else f'{map_dist_m:.2f}m {map_angle_deg:.1f}deg'}")
+            # ── 一致性检验：depth 和 map 差距过大说明当帧检测 false positive ──
+            # 阈值：距离偏差>0.8m 且 角度偏差>20°，判定当帧检测不可信
+            DIST_THR = 0.8   # 米
+            ANGLE_THR = 20.0  # 度
+            depth_trustworthy = True
+            if (depth_dist_m is not None and map_dist_m is not None and depth_angle_deg is not None and map_angle_deg is not None):
+                diff_dist = abs(depth_dist_m - map_dist_m)
+                diff_angle = abs(depth_angle_deg - map_angle_deg)
+                if diff_dist > DIST_THR and diff_angle > ANGLE_THR:
+                    depth_trustworthy = False
 
-            # ── bbox上显示距离（优先地图距离，回退深度距离）──
+            # ── [LM COMPARE] 两种方式对比 ──
+            if depth_dist_m is not None and map_dist_m is not None:
+                trust_tag = "✅" if depth_trustworthy else "❌FAKE"
+                print(f"[LM COMPARE] '{label_name}'  "
+                      f"depth=({depth_dist_m:.2f}m  angle={depth_angle_deg:.1f}deg) {trust_tag}  "
+                      f"map=({map_dist_m:.2f}m  angle={map_angle_deg:.1f}deg)  "
+                      f"diff_dist={abs(depth_dist_m - map_dist_m):.2f}m  diff_angle={abs(depth_angle_deg - map_angle_deg):.1f}deg")
+            else:
+                print(f"[LM COMPARE] '{label_name}'  "
+                      f"depth={'N/A' if depth_dist_m is None else f'{depth_dist_m:.2f}m {depth_angle_deg:.1f}deg'}  "
+                      f"map={'N/A' if map_dist_m is None else f'{map_dist_m:.2f}m {map_angle_deg:.1f}deg'}")
+
+            # ── bbox上显示距离：当帧检测可信用depth（最新最准），否则fallback到map ──
             dist_str = ""
-            angle_str = ""
-            if map_dist_m is not None:
-                dist_str = f" {map_dist_m:.1f}m"
+            if depth_dist_m is not None and depth_trustworthy:
+                dist_str = f" {depth_dist_m:.1f}m"   # RGB-D直采：精确
+            elif map_dist_m is not None:
+                dist_str = f" ~{map_dist_m:.1f}m"    # 地图估计（前缀~标识）
             elif depth_dist_m is not None:
-                dist_str = f" {depth_dist_m:.1f}m"
+                dist_str = f" {depth_dist_m:.1f}m"   # 无地图时仍显示depth
 
             # ── 单行标签（仅距离）显示在bbox上方，名称移至底部条带 ──
             row1 = dist_str.strip()
