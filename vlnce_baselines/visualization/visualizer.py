@@ -1106,7 +1106,7 @@ class MapVisualizer:
         detection_vis = rgb.copy()
         
         if detections is None or len(detections.xyxy) == 0:
-            return detection_vis, []
+            return detection_vis, [], set()
         
         # 统计检测到的landmark
         detected_landmarks = []
