@@ -389,32 +389,33 @@ class MapVisualizer:
         - Waypoint作为语义层的一部分（值=4）在调色板渲染阶段处理，存储在Channel 3
         - 不渲染bed/chair等语义类别的颜色，只用于landmark标注
         """
-        obstacle_map = full_map[0, ...]
-        explored_map = full_map[1, ...]
-        h, w = obstacle_map.shape
-        
+        # ===== 阶段1: 从 full_map 提取各层 mask（统一流程，obstacle/floor/landmark 均来自同一投影）=====
+        # 通道布局：[0] obstacle  [1] explored  [3..3+M-1] mapping_classes  [3+M..] landmark_classes
+        h, w = full_map.shape[1], full_map.shape[2]
+        obstacle_mask = self._get_channel_mask(full_map, 0)   # channel 0: obstacle
+        explored_mask = self._get_channel_mask(full_map, 1)   # channel 1: explored
+
         # ===== 计算地图使用统计（显示真实探索范围）=====
         map_usage_stats = self._calculate_map_usage(trajectory_points, h, w)
-        # 静默处理统计信息，不打印详细数据
-        
-        # ===== 阶段1: 创建语义地图（严格按照ZS_Evaluator的layer顺序）=====
+
+        # ===== 阶段1.1: 创建语义地图 =====
         semantic_map = np.zeros((h, w), dtype=np.uint8)
-        
-        obstacle_mask = np.rint(obstacle_map) == 1
-        explored_mask = np.rint(explored_map) == 1
-        
-        # ===== 基础层渲染顺序 =====
-        # 底层到中层：已探索自由空间(底层) → Floor(中层)
-        # 障碍物层将在绘制轨迹后、箭头前单独叠加
-        
-        # Layer 1: 已探索自由空间（浅灰色）- 先绘制底层
+
+        # Layer 1: 已探索自由空间（浅灰色）
         explored_free_mask = np.logical_and(explored_mask, ~obstacle_mask)
         semantic_map[explored_free_mask] = 2
-        
-        # Layer 2: Floor（浅绿色）- 覆盖部分自由空间
-        if floor is not None:
-            floor_mask = floor.astype(bool)
-            floor_display_mask = np.logical_and(floor_mask, explored_mask)
+
+        # Layer 2: Floor（浅绿色）
+        # 优先从 full_map[3+floor_idx] 提取（与 obstacle 同一流程），fallback 到 mapper 预计算的 floor
+        floor_display_mask = None
+        if mapping_classes and 'floor' in mapping_classes:
+            floor_ch = 3 + mapping_classes.index('floor')
+            floor_raw = self._get_channel_mask(full_map, floor_ch)
+            if floor_raw is not None and floor_raw.any():
+                floor_display_mask = np.logical_and(floor_raw, explored_mask)
+        if floor_display_mask is None and floor is not None:
+            floor_display_mask = np.logical_and(floor.astype(bool), explored_mask)
+        if floor_display_mask is not None:
             semantic_map[floor_display_mask] = 5  # 浅绿色
         
         # Layer 3: 不再从Channel 2提取轨迹，后续在PIL渲染后用OpenCV连线绘制
@@ -609,10 +610,8 @@ class MapVisualizer:
             cv2.drawContours(global_map_with_trajectory, [agent_arrow], 0, (0, 0, 255), -1)
             
             # ===== 阶段5.6: 叠加黑色障碍物层（覆盖在箭头之上，使障碍物更醒目）=====
-            # 创建障碍物掩码并叠加到已渲染的地图上
-            obstacle_mask_display = obstacle_map > 0.5
-            # ⚠️ 关键修复：障碍物也需要flipud翻转，与semantic_map保持一致
-            obstacle_mask_display = np.flipud(obstacle_mask_display)
+            # obstacle_mask 来自 _get_channel_mask(full_map, 0)，与 semantic_map 同源
+            obstacle_mask_display = np.flipud(obstacle_mask)
             # 缩放到480x480
             obstacle_mask_display = cv2.resize(
                 obstacle_mask_display.astype(np.uint8) * 255,
@@ -732,24 +731,28 @@ class MapVisualizer:
         if full_map is None:
             return None
         
-        # ===== 阶段1: 独立构建局部地图基础层 =====
-        obstacle_map = full_map[0, ...]
-        explored_map = full_map[1, ...]
-        h, w = obstacle_map.shape
-        
+        # ===== 阶段1: 从 full_map 提取各层 mask（与 render_global_map 完全相同的通道布局）=====
+        h, w = full_map.shape[1], full_map.shape[2]
+        obstacle_mask = self._get_channel_mask(full_map, 0)   # channel 0: obstacle
+        explored_mask = self._get_channel_mask(full_map, 1)   # channel 1: explored
+
         # 创建语义地图
         semantic_map = np.zeros((h, w), dtype=np.uint8)
-        obstacle_mask = np.rint(obstacle_map) == 1
-        explored_mask = np.rint(explored_map) == 1
-        
+
         # Layer 1: 已探索自由空间（浅灰色）
         explored_free_mask = np.logical_and(explored_mask, ~obstacle_mask)
         semantic_map[explored_free_mask] = 2
-        
-        # Layer 2: Floor（浅绿色）
-        if floor is not None:
-            floor_mask = floor.astype(bool)
-            floor_display_mask = np.logical_and(floor_mask, explored_mask)
+
+        # Layer 2: Floor（浅绿色）— 同 global map 的 floor 提取逻辑
+        floor_display_mask = None
+        if mapping_classes and 'floor' in mapping_classes:
+            floor_ch = 3 + mapping_classes.index('floor')
+            floor_raw = self._get_channel_mask(full_map, floor_ch)
+            if floor_raw is not None and floor_raw.any():
+                floor_display_mask = np.logical_and(floor_raw, explored_mask)
+        if floor_display_mask is None and floor is not None:
+            floor_display_mask = np.logical_and(floor.astype(bool), explored_mask)
+        if floor_display_mask is not None:
             semantic_map[floor_display_mask] = 5
         
         # Layer 3: 不渲染轨迹和waypoint（后续用OpenCV绘制轨迹）
@@ -855,8 +858,8 @@ class MapVisualizer:
         import math
         
         # 先获取旋转后的障碍物掩码（用于raycasting）
-        # 注意：obstacle_map 已经在 full_map 中旋转过了
-        obstacle_mask_flipped = np.flipud(obstacle_map > 0.5)
+        # obstacle_mask 来自 _get_channel_mask(full_map, 0)，已在 full_map 中旋转
+        obstacle_mask_flipped = np.flipud(obstacle_mask)
         obstacle_mask_resized = cv2.resize(
             obstacle_mask_flipped.astype(np.uint8) * 255,
             (480, 480),
@@ -1261,7 +1264,7 @@ class MapVisualizer:
                     cv2.line(strip, (w_img2 // 6, sep_y), (w_img2 * 5 // 6, sep_y), (200, 200, 200), 1)
                     continue
                 (tw, th), _ = cv2.getTextSize(txt, font2, fs2, ft2)
-                x_c = max(0, (w_img2 - tw) // 2)
+                x_c = 8  # 左对齐，8px 左边距
                 y_c = pad_v + row_h * i + th
                 cv2.putText(strip, txt, (x_c, y_c), font2, fs2, (20, 20, 20), ft2, cv2.LINE_AA)
 
@@ -1754,7 +1757,67 @@ class MapVisualizer:
         return paths, detected_landmarks_step, last_waypoint_angle
     
     # ========== 辅助方法 ==========
-    
+
+    def _get_channel_mask(self, full_map: np.ndarray, channel_idx: int,
+                          threshold: float = 0.5) -> Optional[np.ndarray]:
+        """从 full_map 提取指定通道的二值 mask（统一基础函数）。
+
+        所有层均来自同一投影流程（RGB-D → splat_feat_nd → forward()）：
+          full_map[0]              : obstacle
+          full_map[1]              : explored
+          full_map[2]              : agent / waypoint
+          full_map[3 .. 3+M-1]     : mapping_classes[0..M-1]  （含 floor）
+          full_map[3+M .. 3+M+N-1] : landmark_classes[0..N-1]
+        """
+        if channel_idx < 0 or channel_idx >= full_map.shape[0]:
+            return None
+        return full_map[channel_idx, ...] > threshold
+
+    def _get_channel_centroids(self,
+                               full_map: np.ndarray,
+                               channel_idx: int,
+                               min_area: int,
+                               merge_dist: float,
+                               threshold: float = 0.5) -> List[Tuple[int, int, int]]:
+        """从 full_map 指定通道提取连通域质心（landmark 的额外聚类步骤）。
+
+        obstacle / floor 只需 _get_channel_mask；
+        landmark 在此基础上进一步做形态学闭运算 + 连通域聚类。
+
+        Returns: [(cx, cy, area), ...]
+        """
+        mask = self._get_channel_mask(full_map, channel_idx, threshold)
+        if mask is None or not mask.any():
+            return []
+
+        # 形态学闭运算（填补间隙，合并相近检测，7×7 椭圆核）
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+        closed = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_CLOSE, kernel)
+
+        # 连通域分析
+        _, _, stats, centroids = cv2.connectedComponentsWithStats(closed, connectivity=8)
+
+        regions: dict = {}  # {(cx, cy): area}
+        for i in range(1, len(stats)):
+            area = int(stats[i, cv2.CC_STAT_AREA])
+            if area < min_area:
+                continue
+            cx, cy = int(centroids[i][0]), int(centroids[i][1])
+
+            # 空间合并：距离 < merge_dist 的连通域归并到面积较大者
+            merged = False
+            for pos in list(regions.keys()):
+                if np.hypot(cx - pos[0], cy - pos[1]) < merge_dist:
+                    if area > regions[pos]:
+                        del regions[pos]
+                        regions[(cx, cy)] = area
+                    merged = True
+                    break
+            if not merged:
+                regions[(cx, cy)] = area
+
+        return [(cx, cy, a) for (cx, cy), a in regions.items()]
+
     def _extract_landmarks(self,
                           full_map: np.ndarray,
                           detected_classes: List[str],
@@ -1762,117 +1825,53 @@ class MapVisualizer:
                           min_total_pixels: int,
                           min_area_threshold: int,
                           mapping_classes: Optional[List[str]] = None) -> List[Tuple]:
-        """提取landmark标记位置并计算到agent的距离和相对偏角
-        
-        流程：
-        1. 遍历landmark_classes（如cabinet）
-        2. 检查是否在detected_classes中
-        3. 计算语义通道索引：semantic_channel_idx = 3 + len(mapping_classes) + lm_idx
-           （mapping通道从3开始，landmark通道紧接其后）
-        4. 从full_map[semantic_channel_idx]提取mask
-        5. 形态学闭运算：填补间隙，合并相近区域
-        6. 连通域分析，过滤面积 < min_area_threshold
-        7. 空间合并（距离 < landmark_merge_distance）
-        8. 计算到agent的距离和相对偏角（基于地图世界坐标，无需深度图）
-        
-        坐标系说明（full_map已由get_full_map_for_rendering预旋转）：
-        - agent始终位于地图中心 (h//2, w//2)
-        - cy(row)方向：cy > h//2 为agent前方，cy < h//2 为后方
-        - cx(col)方向：cx > w//2 为agent右侧，cx < w//2 为左侧
-        
+        """提取 landmark 质心并计算到 agent 的距离和偏角。
+
+        所有语义通道均来自同一个 full_map（RGB-D → splat_feat_nd → forward()）：
+          [0] obstacle  [1] explored  [2] agent
+          [3 .. 3+M-1]  mapping_classes（含 floor）
+          [3+M .. ]     landmark_classes
+
+        obstacle / floor 只需 _get_channel_mask；
+        landmark 在此基础上额外做连通域聚类（_get_channel_centroids）。
+
         Args:
-            min_total_pixels: 总像素数阈值（已弃用，为兼容保留参数）
-            min_area_threshold: 单个连通域最小面积
-        
+            min_total_pixels: 已弃用，保留兼容
         Returns:
-            List of (cx, cy, class_name, dist_m, rel_angle_deg)
-            dist_m: 到agent的直线距离（米）
-            rel_angle_deg: 相对agent前方的偏角（度，正=右，负=左，范围[-180,180]）
+            [(cx, cy, class_name, dist_m, rel_angle_deg), ...]
         """
         if not landmark_classes or len(detected_classes) == 0:
             return []
-        
-        spatial_regions = {}
-        landmark_found = False
-        
-        for cls_name in landmark_classes:
-            if cls_name not in detected_classes:
-                continue
-            
-            cls_idx = detected_classes.index(cls_name) if cls_name in detected_classes else -1
-            # 修正的通道索引：语义通道从3开始，landmark通道在mapping通道之后
-            if mapping_classes is not None:
-                lm_idx = landmark_classes.index(cls_name)
-                semantic_channel_idx = 3 + len(mapping_classes) + lm_idx
-            else:
-                # 向后兼容模式（没有mapping_classes时回退旧公式）
-                semantic_channel_idx = 4 + cls_idx if cls_idx >= 0 else -1
-            
-            if semantic_channel_idx < 0 or semantic_channel_idx >= full_map.shape[0]:
-                continue
-            
-            cls_mask = full_map[semantic_channel_idx, ...] > 0.5
-            num_pixels = cls_mask.sum()
-            
-            # 移除min_total_pixels检查，允许标记远处小像素区域
-            if num_pixels == 0:
-                continue
-            
-            # 形态学闭运算：填补间隙，合并相近区域
-            # 使用7×7核，可以填补距离3-4像素的间隙，合并被Winner-Takes-All分割的区域
-            cls_mask_uint8 = cls_mask.astype(np.uint8)
-            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
-            cls_mask_closed = cv2.morphologyEx(cls_mask_uint8, cv2.MORPH_CLOSE, kernel)
-            
-            # 连通性分析（在闭运算后的mask上）
-            num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
-                cls_mask_closed, connectivity=8)
-            
-            for i in range(1, num_labels):
-                area = stats[i, cv2.CC_STAT_AREA]
-                cx, cy = int(centroids[i][0]), int(centroids[i][1])
-                
-                if area < min_area_threshold:
-                    continue
-                
-                # 检查空间合并（使用constant.py配置的距离）
-                from vlnce_baselines.config_system.constants import landmark_merge_distance
-                merged = False
-                for existing_pos in list(spatial_regions.keys()):
-                    ex_cx, ex_cy = existing_pos
-                    dist = np.sqrt((cx - ex_cx)**2 + (cy - ex_cy)**2)
-                    if dist < landmark_merge_distance:
-                        spatial_regions[existing_pos].append((area, cls_name))
-                        merged = True
-                        break
-                
-                if not merged:
-                    spatial_regions[(cx, cy)] = [(area, cls_name)]
-                    if not landmark_found:
-                        landmark_found = True
+
+        from vlnce_baselines.config_system.constants import landmark_merge_distance
         import math as _math
-        # 预计算agent中心位置和分辨率（用于距离/角度计算）
-        h_map = full_map.shape[1]
-        w_map = full_map.shape[2]
-        agent_cy = h_map // 2  # agent在地图中心（行）
-        agent_cx = w_map // 2  # agent在地图中心（列）
+
+        MAP_CH = 3
+        n_mapping = len(mapping_classes) if mapping_classes is not None else 0
+        h_map, w_map = full_map.shape[1], full_map.shape[2]
+        agent_cy, agent_cx = h_map // 2, w_map // 2
         resolution_m = self.resolution / 100.0  # cm/pixel → m/pixel
 
         landmarks = []
-        for (cx, cy), candidates in spatial_regions.items():
-            candidates.sort(key=lambda x: x[0], reverse=True)
-            dominant_class = candidates[0][1]
-            area = candidates[0][0]
+        for lm_idx, cls_name in enumerate(landmark_classes):
+            if cls_name not in detected_classes:
+                continue
+            if mapping_classes is not None:
+                ch_idx = MAP_CH + n_mapping + lm_idx
+            else:
+                # 向后兼容：没有 mapping_classes 时的旧公式
+                cls_idx = detected_classes.index(cls_name)
+                ch_idx = 4 + cls_idx
 
-            # 计算到agent的距离和相对偏角
-            # full_map已预旋转：cy大于中心=前方，cx大于中心=右侧
-            d_fwd   = cy - agent_cy   # 正=前
-            d_right = cx - agent_cx   # 正=右
-            dist_m = _math.sqrt(d_fwd ** 2 + d_right ** 2) * resolution_m
-            rel_angle_deg = _math.degrees(_math.atan2(d_right, d_fwd)) if dist_m > 0 else 0.0
+            # _get_channel_centroids 内部调用 _get_channel_mask，与 obstacle 同一基础
+            for cx, cy, _area in self._get_channel_centroids(
+                    full_map, ch_idx, min_area_threshold, landmark_merge_distance):
+                d_fwd   = cy - agent_cy   # 正 = 前方
+                d_right = cx - agent_cx   # 正 = 右侧
+                dist_m = _math.hypot(d_fwd, d_right) * resolution_m
+                rel_angle_deg = _math.degrees(_math.atan2(d_right, d_fwd)) if dist_m > 0 else 0.0
+                landmarks.append((cx, cy, cls_name, dist_m, rel_angle_deg))
 
-            landmarks.append((cx, cy, dominant_class, dist_m, rel_angle_deg))
-        
         return landmarks
     
     def save_semantic_masks(self, step: int, episode_id: int, masks: np.ndarray, phase: str = "action") -> str:
