@@ -397,6 +397,9 @@ class InteractiveNavigationController:
         # 合并mapping通道 + landmark通道：[15+N, H, W] → [H, W, 15+N]
         combined = np.concatenate([global_masks, landmark_masks], axis=0)
 
+        # 保存按landmark_classes索引的masks（用于depth采样对比）
+        self.latest_landmark_masks = landmark_masks.copy()  # [N_lm, H, W] indexed by landmark_classes
+
         # [LM-DBG 1/3 DETECT]
         for j, lm_cls in enumerate(landmark_classes_list):
             lm_m = landmark_masks[j]

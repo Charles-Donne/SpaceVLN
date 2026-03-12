@@ -146,7 +146,7 @@ landmark_marker_radius = 6                 # 圆球半径(像素)
 
 # 标注阈值（控制显示条件）
 landmark_min_total_pixels = 1       # 总像素数阈值（1=不过滤）
-landmark_min_area_threshold = 30    # 单个连通域最小面积(像素)
+landmark_min_area_threshold = 10    # 单个连通域最小面积(像素)，降低以支持稀疏landmark投影
 landmark_merge_distance = 30        # 合并距离(像素，30px≈1.5m)
 
 

@@ -1775,11 +1775,10 @@ class MapVisualizer:
             except Exception:
                 pass
 
-            # landmark_masks：从 controller 获取，用于深度采样对比
+            # landmark_masks：从 controller 获取（按landmark_classes索引），用于深度采样对比
             lm_masks_for_bbox = None
-            if controller is not None and hasattr(controller, 'latest_masks_full') and controller.latest_masks_full is not None:
-                n_mapping = len(mapping_classes) if mapping_classes else 15
-                lm_masks_for_bbox = controller.latest_masks_full[n_mapping:]  # [N_lm, H, W]
+            if controller is not None and hasattr(controller, 'latest_landmark_masks') and controller.latest_landmark_masks is not None:
+                lm_masks_for_bbox = controller.latest_landmark_masks  # [N_lm, H, W] indexed by landmark_classes
 
             detection_vis, detected_landmarks_step, _visible = self.render_detection_bbox(
                 rgb_for_det, detections, labels,
