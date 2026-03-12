@@ -24,10 +24,11 @@ ACTION_EXECUTION_PROMPT = """You are the action execution module for Vision-Lang
 
 You are provided with 1 image:
 
-**Current View (front-facing)** — Object detection results with bounding boxes (target landmark: {detected_landmarks}), overlaid with 7-direction lines showing the distance to the nearest obstacle in each direction:
+**Current View (front-facing)** — Object detection overlaid with 7-direction obstacle-distance lines:
 - Directions: FRONT, Left/Right 30deg, Left/Right 60deg, Left/Right 90deg (from bottom center)
 - Red = nearest obstacle <0.5m (blocked), Yellow = 0.5–2m (caution), Green = >2m (open)
-- **Bottom strip** (cyan text, if present): mapped landmarks currently **off-screen** — same as Map-offscreen entries below
+- **Yellow bounding box**: marks the subtask **landmark reference** ({detected_landmarks}) — a recognizable object near the destination area, **not the destination itself**; use it as a visual anchor to navigate into the right area
+- **Bottom white strip** (if present): all landmark names, distances and directions — `[Visible]` = detected in current frame, `[Off-screen]` = mapped but outside current view
 
 # Known Landmark Map (from semantic map, sorted by distance)
 {landmark_map_info}
@@ -35,7 +36,7 @@ You are provided with 1 image:
 # Your Task
 
 **Decision Process**:
-1. **Detection View**: Are there relevant landmarks (yellow bbox)? Where is the destination relative to current view?
+1. **Detection View**: Check the **bottom strip** for all landmark names and distances. Is a yellow bbox visible? It marks the **subtask landmark reference** (nearby anchor, NOT the final destination) — navigate toward it to reach the destination area.
 2. **Landmark Map**: Read the Known Landmark Map section above.
    - `[Visible Xm Ydeg]`: landmark is in the current view — navigate toward its yellow bbox
    - `[Map R/Ldeg]`: off-screen — TURN RIGHT/LEFT that many degrees first, then move forward

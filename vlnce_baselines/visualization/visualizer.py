@@ -1189,93 +1189,83 @@ class MapVisualizer:
                             dist_m = float(np.median(valid_vals))
                             dist_str = f" {dist_m:.1f}m"
 
-            # ── 双行标签：第一行=距离+角度，第二行=名称，水平居中 ──
-            font = cv2.FONT_HERSHEY_SIMPLEX
-            font_scale = 0.5
-            font_thickness = 1
-            row_gap = 3
-            pad = 4
-
-            # 构建两行文字
-            row1 = f"{dist_str.strip()} {angle_str}".strip() if (dist_str.strip() or angle_str) else angle_str
-            row2 = label_name
-            # 过长名称截断
-            if len(row2) > 30:
-                row2 = row2[:28] + ".."
-
-            (w1, h1), _ = cv2.getTextSize(row1, font, font_scale, font_thickness) if row1 else ((0, 0), 0)
-            (w2, h2), _ = cv2.getTextSize(row2, font, font_scale, font_thickness)
-
-            bg_w = max(w1, w2) + pad * 2
-            bg_h = ((h1 + row_gap + h2) if row1 else h2) + pad * 2
-
-            # 水平居中对齐bbox中心，限制在图像边界内
-            cx_bbox = (x1 + x2) // 2
-            bg_x = max(0, min(cx_bbox - bg_w // 2, w_img - bg_w))
-
-            # 优先绘制在bbox上方；没有空间则绘制在框内顶部
-            bg_y = y1 - bg_h - 4
-            if bg_y < 0:
-                bg_y = y1 + 2
-
-            # 黄色背景框
-            cv2.rectangle(detection_vis, (bg_x, bg_y), (bg_x + bg_w, bg_y + bg_h), color, -1)
-
-            # 绘制第一行（距离+角度）
-            y_cur = bg_y + pad
+            # ── 单行标签（仅距离+角度）显示在bbox上方，名称移至底部条带 ──
+            row1 = f"{dist_str.strip()} {angle_str}".strip() if (dist_str.strip() or angle_str) else ""
             if row1:
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                font_scale = 0.5
+                font_thickness = 1
+                pad = 4
+
+                (w1, h1), _ = cv2.getTextSize(row1, font, font_scale, font_thickness)
+                bg_w = w1 + pad * 2
+                bg_h = h1 + pad * 2
+
+                cx_bbox = (x1 + x2) // 2
+                bg_x = max(0, min(cx_bbox - bg_w // 2, w_img - bg_w))
+                bg_y = y1 - bg_h - 4
+                if bg_y < 0:
+                    bg_y = y1 + 2
+
+                cv2.rectangle(detection_vis, (bg_x, bg_y), (bg_x + bg_w, bg_y + bg_h), color, -1)
                 r1_x = bg_x + (bg_w - w1) // 2
-                cv2.putText(detection_vis, row1, (r1_x, y_cur + h1),
+                cv2.putText(detection_vis, row1, (r1_x, bg_y + pad + h1),
                             font, font_scale, (0, 0, 0), font_thickness, cv2.LINE_AA)
-                y_cur += h1 + row_gap
-
-            # 绘制第二行（名称）
-            r2_x = bg_x + (bg_w - w2) // 2
-            cv2.putText(detection_vis, row2, (r2_x, y_cur + h2),
-                        font, font_scale, (0, 0, 0), font_thickness, cv2.LINE_AA)
         
-        # ── 离屏landmark提示条：新建白底黑字区域拼接在图像下方，不覆盖原画面 ──
-        if landmark_dist_map:
-            offscreen = {k: v for k, v in landmark_dist_map.items() if k not in matched_in_view}
-            if offscreen:
-                w_img2 = detection_vis.shape[1]
-                font2 = cv2.FONT_HERSHEY_SIMPLEX
-                fs2, ft2 = 0.5, 1
+        # ── 底部条带：所有landmark信息（可见+离屏）拼接在图像下方，白底黑字 ──
+        # [Visible] = 当前帧检测到，[Off-screen] = 地图中存在但视野外
+        offscreen = {k: v for k, v in landmark_dist_map.items() if k not in matched_in_view} if landmark_dist_map else {}
+        if detected_landmarks or offscreen:
+            w_img2 = detection_vis.shape[1]
+            font2 = cv2.FONT_HERSHEY_SIMPLEX
+            fs2, ft2 = 0.5, 1
 
-                # 每个离屏landmark一行
-                item_lines = []
-                for cls_name, (d_m, a_deg) in sorted(offscreen.items(), key=lambda x: x[1][0]):
-                    if abs(a_deg) < 5.0:
-                        dir_s = "^"
-                    elif a_deg > 0:
-                        dir_s = f"R{a_deg:.0f}deg"
-                    else:
-                        dir_s = f"L{abs(a_deg):.0f}deg"
-                    short_name = cls_name if len(cls_name) <= 28 else cls_name[:26] + ".."
-                    item_lines.append(f"[off-screen]  {short_name}  {d_m:.1f}m  {dir_s}")
+            def _dir_str(a_deg):
+                if abs(a_deg) < 5.0: return "^"
+                return f"R{a_deg:.0f}deg" if a_deg > 0 else f"L{abs(a_deg):.0f}deg"
 
-                # 计算每行文字尺寸
-                line_sizes = [cv2.getTextSize(t, font2, fs2, ft2) for t in item_lines]
-                line_hs = [s[0][1] for s in line_sizes]
-                row_h = (max(line_hs) if line_hs else 14) + 6
-                pad_v = 6
-                total_h = row_h * len(item_lines) + pad_v * 2
+            item_lines = []  # list of (text, is_separator)
 
-                # 新建白底条带（与原图等宽）
-                strip = np.full((total_h, w_img2, 3), 255, dtype=np.uint8)
+            # ── 可见landmark ──
+            for lm_name, _conf in detected_landmarks:
+                sn = lm_name if len(lm_name) <= 24 else lm_name[:22] + ".."
+                if landmark_dist_map and lm_name in landmark_dist_map:
+                    d_m, a_deg = landmark_dist_map[lm_name]
+                    item_lines.append((f"[Visible]     {sn}   {d_m:.1f}m  {_dir_str(a_deg)}", False))
+                else:
+                    item_lines.append((f"[Visible]     {sn}", False))
 
-                # 顶部细线分隔
-                cv2.line(strip, (0, 0), (w_img2, 0), (180, 180, 180), 1)
+            # 空行分隔（两组都有时）
+            if detected_landmarks and offscreen:
+                item_lines.append(("", True))
 
-                # 每行文字水平居中、黑色
-                for i, (txt, (tw, th)) in enumerate(zip(item_lines, [s[0] for s in line_sizes])):
-                    x_c = max(0, (w_img2 - tw) // 2)
-                    y_c = pad_v + row_h * i + th
-                    cv2.putText(strip, txt, (x_c, y_c),
-                                font2, fs2, (20, 20, 20), ft2, cv2.LINE_AA)
+            # ── 离屏landmark ──
+            for cls_name, (d_m, a_deg) in sorted(offscreen.items(), key=lambda x: x[1][0]):
+                sn = cls_name if len(cls_name) <= 24 else cls_name[:22] + ".."
+                item_lines.append((f"[Off-screen]  {sn}   {d_m:.1f}m  {_dir_str(a_deg)}", False))
 
-                # 垂直拼接：原图在上，白底条带在下
-                detection_vis = np.vstack([detection_vis, strip])
+            # 计算行高
+            font2 = cv2.FONT_HERSHEY_SIMPLEX
+            fs2, ft2 = 0.5, 1
+            _sample = cv2.getTextSize("Ag", font2, fs2, ft2)[0]
+            row_h = _sample[1] + 8
+            pad_v = 6
+            total_h = row_h * len(item_lines) + pad_v * 2
+
+            strip = np.full((total_h, w_img2, 3), 255, dtype=np.uint8)
+            cv2.line(strip, (0, 0), (w_img2, 0), (180, 180, 180), 1)
+
+            for i, (txt, is_sep) in enumerate(item_lines):
+                if is_sep:
+                    sep_y = pad_v + row_h * i + row_h // 2
+                    cv2.line(strip, (w_img2 // 6, sep_y), (w_img2 * 5 // 6, sep_y), (200, 200, 200), 1)
+                    continue
+                (tw, th), _ = cv2.getTextSize(txt, font2, fs2, ft2)
+                x_c = max(0, (w_img2 - tw) // 2)
+                y_c = pad_v + row_h * i + th
+                cv2.putText(strip, txt, (x_c, y_c), font2, fs2, (20, 20, 20), ft2, cv2.LINE_AA)
+
+            detection_vis = np.vstack([detection_vis, strip])
 
         # 返回检测可视化、检测到的landmark列表、已匹配的类名集合
         return detection_vis, detected_landmarks, matched_in_view
