@@ -1558,10 +1558,10 @@ class VLMNavigationController(InteractiveNavigationController):
         if not detection_image:
             print(f"  [WARN] Detection image not found for step {last_step}")
         else:
-            # 检测图保存时（环视阶段）距离尚未计算，在此处叠加距离线。
-            # draw_distance_on_action_view 会自动识别底部白色条带，仅在RGB区域画线。
+            # 距离线已在save_step_visualization内直接从full_map计算并画入detection图
+            # 不需要再叠加
             detection_image = self.visualizer.prepare_action_image_with_enhancements(
-                detection_image, mask_path, self.latest_obstacle_distances, self.classes, use_floor=False, use_distance=True)
+                detection_image, mask_path, self.latest_obstacle_distances, self.classes, use_floor=False, use_distance=False)
         
         # 查找局部地图（使用相同的回退逻辑）
         local_map = None

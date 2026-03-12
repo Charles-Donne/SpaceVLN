@@ -1725,13 +1725,23 @@ class MapVisualizer:
             if controller is not None and hasattr(controller, 'latest_depth_meters'):
                 depth_meters = controller.latest_depth_meters
 
-            # 先在原始图像上画7方向距离线，再交给render_detection_bbox
-            # 这样白底条带始终拼在距离线+bbox之下，不会出现在距离线起点处
+            # 直接从full_map算出7方向距离，立即画到rgb_for_det上
+            # （此时图像底部就是真正的底部，白底条带还未拼入）
             rgb_for_det = rgb.copy()
-            if phase.startswith('action'):
-                od = getattr(controller, 'latest_obstacle_distances', None) if controller else None
-                if od:
-                    rgb_for_det = self.draw_distance_on_action_view(rgb_for_det, od)
+            try:
+                obs_mask = self._get_channel_mask(full_map, 0)  # obstacle channel
+                obs_flipped = np.flipud(obs_mask)
+                obs_resized = cv2.resize(
+                    obs_flipped.astype(np.uint8) * 255,
+                    (480, 480), interpolation=cv2.INTER_NEAREST) > 127
+                obstacle_distances = self.calculate_obstacle_distances_from_rotated_map(
+                    obs_resized, 240, 240)
+                rgb_for_det = self.draw_distance_on_action_view(rgb_for_det, obstacle_distances)
+                # 更新到controller，供后续提示词使用
+                if controller is not None:
+                    controller.latest_obstacle_distances = obstacle_distances
+            except Exception:
+                pass
 
             detection_vis, detected_landmarks_step, _visible = self.render_detection_bbox(
                 rgb_for_det, detections, labels,
