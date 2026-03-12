@@ -1251,11 +1251,11 @@ class MapVisualizer:
             cv2.putText(detection_vis, row2, (r2_x, y_cur + h2),
                         font, font_scale, (0, 0, 0), font_thickness, cv2.LINE_AA)
         
-        # ── 绘制离屏landmark提示条（在地图中存在但当前视野不可见），每项一行居中 ──
+        # ── 离屏landmark提示条：新建白底黑字区域拼接在图像下方，不覆盖原画面 ──
         if landmark_dist_map:
             offscreen = {k: v for k, v in landmark_dist_map.items() if k not in matched_in_view}
             if offscreen:
-                h_img2, w_img2 = detection_vis.shape[:2]
+                w_img2 = detection_vis.shape[1]
                 font2 = cv2.FONT_HERSHEY_SIMPLEX
                 fs2, ft2 = 0.5, 1
 
@@ -1268,26 +1268,31 @@ class MapVisualizer:
                         dir_s = f"R{a_deg:.0f}deg"
                     else:
                         dir_s = f"L{abs(a_deg):.0f}deg"
-                    # 截断过长名称
                     short_name = cls_name if len(cls_name) <= 28 else cls_name[:26] + ".."
-                    item_lines.append(f"{short_name}  {d_m:.1f}m  {dir_s}")
+                    item_lines.append(f"[off-screen]  {short_name}  {d_m:.1f}m  {dir_s}")
 
                 # 计算每行文字尺寸
                 line_sizes = [cv2.getTextSize(t, font2, fs2, ft2) for t in item_lines]
                 line_hs = [s[0][1] for s in line_sizes]
-                row_h = (max(line_hs) if line_hs else 14) + 5
-                total_h = row_h * len(item_lines) + 8
+                row_h = (max(line_hs) if line_hs else 14) + 6
+                pad_v = 6
+                total_h = row_h * len(item_lines) + pad_v * 2
 
-                strip_y0 = max(0, h_img2 - total_h)
-                # 整块深色背景
-                cv2.rectangle(detection_vis, (0, strip_y0), (w_img2, h_img2), (30, 30, 30), -1)
+                # 新建白底条带（与原图等宽）
+                strip = np.full((total_h, w_img2, 3), 255, dtype=np.uint8)
 
-                # 每行文字居中绘制
+                # 顶部细线分隔
+                cv2.line(strip, (0, 0), (w_img2, 0), (180, 180, 180), 1)
+
+                # 每行文字水平居中、黑色
                 for i, (txt, (tw, th)) in enumerate(zip(item_lines, [s[0] for s in line_sizes])):
                     x_c = max(0, (w_img2 - tw) // 2)
-                    y_c = strip_y0 + 6 + row_h * i + th
-                    cv2.putText(detection_vis, txt, (x_c, y_c),
-                                font2, fs2, (80, 230, 255), ft2, cv2.LINE_AA)
+                    y_c = pad_v + row_h * i + th
+                    cv2.putText(strip, txt, (x_c, y_c),
+                                font2, fs2, (20, 20, 20), ft2, cv2.LINE_AA)
+
+                # 垂直拼接：原图在上，白底条带在下
+                detection_vis = np.vstack([detection_vis, strip])
 
         # 返回检测可视化、检测到的landmark列表、已匹配的类名集合
         return detection_vis, detected_landmarks, matched_in_view
