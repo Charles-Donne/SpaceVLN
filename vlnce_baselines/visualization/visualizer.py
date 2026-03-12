@@ -1085,7 +1085,8 @@ class MapVisualizer:
                               depth_meters: Optional[np.ndarray] = None,
                               hfov: float = 79.0,
                               landmark_dist_map: Optional[Dict[str, Tuple[float, float]]] = None,
-                              landmark_masks: Optional[np.ndarray] = None) -> np.ndarray:
+                              landmark_masks: Optional[np.ndarray] = None,
+                              controller=None) -> np.ndarray:
         """
         直接在RGB上渲染边界框（只标注Landmark类别，显示距离+水平偏角）
         
@@ -1152,30 +1153,43 @@ class MapVisualizer:
             bbox_cx = (x1 + x2) / 2.0
             bbox_cy = (y1 + y2) / 2.0
 
-            # ── 方式A：从深度图直接采样（优先用landmark mask，回退bbox中心区域） ──
+            # ── 方式A：RGB-D深度直接采样 ──
+            # 优先级：① controller缓存（_get_sem_pred里已算好） ② mask重采样 ③ bbox中心patch
             depth_dist_m = None
             depth_angle_deg = None
-            if depth_meters is not None and depth_meters.size > 0:
+
+            # ① 直接取缓存——与[LM 1/3 DETECT]完全同源，零额外计算
+            if (landmark_classes is not None and label_name in landmark_classes
+                    and controller is not None
+                    and hasattr(controller, 'latest_landmark_depth_m')):
+                depth_dist_m = controller.latest_landmark_depth_m.get(label_name)
+
+            # ② fallback：用mask在visualizer内重采样
+            _lm_masks = landmark_masks
+            if _lm_masks is None and controller is not None and hasattr(controller, 'latest_landmark_masks'):
+                _lm_masks = controller.latest_landmark_masks
+            _depth = depth_meters
+            if _depth is None and controller is not None and hasattr(controller, 'latest_depth_meters'):
+                _depth = controller.latest_depth_meters
+
+            if depth_dist_m is None and _depth is not None and _depth.size > 0:
                 sampled = False
-                # 优先：用landmark mask区域采样（与[LM 1/3 DETECT]完全一致）
-                if landmark_masks is not None and landmark_classes is not None:
-                    lm_idx_in_list = None
-                    if label_name in landmark_classes:
-                        lm_idx_in_list = landmark_classes.index(label_name)
-                    if lm_idx_in_list is not None and lm_idx_in_list < landmark_masks.shape[0]:
-                        lm_m = landmark_masks[lm_idx_in_list]
-                        if lm_m.shape != depth_meters.shape[:2]:
+                if _lm_masks is not None and landmark_classes is not None and label_name in landmark_classes:
+                    lm_idx_in_list = landmark_classes.index(label_name)
+                    if lm_idx_in_list < _lm_masks.shape[0]:
+                        lm_m = _lm_masks[lm_idx_in_list]
+                        if lm_m.shape != _depth.shape[:2]:
                             lm_m = cv2.resize(lm_m.astype(np.float32),
-                                              (depth_meters.shape[1], depth_meters.shape[0]),
+                                              (_depth.shape[1], _depth.shape[0]),
                                               interpolation=cv2.INTER_NEAREST)
-                        valid_d = depth_meters[lm_m > 0.5]
+                        valid_d = _depth[lm_m > 0.5]
                         valid_d = valid_d[valid_d > 0.1]
                         if len(valid_d) > 0:
                             depth_dist_m = float(np.median(valid_d))
                             sampled = True
-                # 回退：bbox中心40%~60%矩形区域
+                # ③ 最后回退：bbox中心40%~60%矩形
                 if not sampled:
-                    dh, dw = depth_meters.shape[:2]
+                    dh, dw = _depth.shape[:2]
                     px0 = int(x1 + (x2 - x1) * 0.4)
                     px1_b = int(x1 + (x2 - x1) * 0.6)
                     py0 = int(y1 + (y2 - y1) * 0.4)
@@ -1183,10 +1197,12 @@ class MapVisualizer:
                     px0, px1_b = max(0, px0), min(dw, px1_b)
                     py0, py1_b = max(0, py0), min(dh, py1_b)
                     if px1_b > px0 and py1_b > py0:
-                        patch = depth_meters[py0:py1_b, px0:px1_b]
+                        patch = _depth[py0:py1_b, px0:px1_b]
                         valid_vals = patch[patch > 0.1]
                         if len(valid_vals) > 0:
                             depth_dist_m = float(np.median(valid_vals))
+
+            if depth_dist_m is not None:
                 depth_angle_deg = (bbox_cx - w_img / 2.0) / w_img * hfov
 
             # ── 方式B：从世界地图质心获取 ──
@@ -1752,13 +1768,7 @@ class MapVisualizer:
                 if cls_name not in landmark_dist_map or dist_m < landmark_dist_map[cls_name][0]:
                     landmark_dist_map[cls_name] = (dist_m, angle_deg)
 
-            # 深度图：始终从controller获取，作为地图数据缺失时的备用
-            depth_meters = None
-            if controller is not None and hasattr(controller, 'latest_depth_meters'):
-                depth_meters = controller.latest_depth_meters
-
             # 直接从full_map算出7方向距离，立即画到rgb_for_det上
-            # （此时图像底部就是真正的底部，白底条带还未拼入）
             rgb_for_det = rgb.copy()
             try:
                 obs_mask = self._get_channel_mask(full_map, 0)  # obstacle channel
@@ -1769,24 +1779,17 @@ class MapVisualizer:
                 obstacle_distances = self.calculate_obstacle_distances_from_rotated_map(
                     obs_resized, 240, 240)
                 rgb_for_det = self.draw_distance_on_action_view(rgb_for_det, obstacle_distances)
-                # 更新到controller，供后续提示词使用
                 if controller is not None:
                     controller.latest_obstacle_distances = obstacle_distances
             except Exception:
                 pass
 
-            # landmark_masks：从 controller 获取（按landmark_classes索引），用于深度采样对比
-            lm_masks_for_bbox = None
-            if controller is not None and hasattr(controller, 'latest_landmark_masks') and controller.latest_landmark_masks is not None:
-                lm_masks_for_bbox = controller.latest_landmark_masks  # [N_lm, H, W] indexed by landmark_classes
-
             detection_vis, detected_landmarks_step, _visible = self.render_detection_bbox(
                 rgb_for_det, detections, labels,
                 landmark_classes, mapping_classes,
-                depth_meters=depth_meters,
                 hfov=hfov,
                 landmark_dist_map=landmark_dist_map if landmark_dist_map else None,
-                landmark_masks=lm_masks_for_bbox
+                controller=controller
             )
             paths['detection'] = self.save_detection(step, episode_id, detection_vis, phase)
 

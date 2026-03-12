@@ -398,21 +398,30 @@ class InteractiveNavigationController:
         # 合并mapping通道 + landmark通道：[15+N, H, W] → [H, W, 15+N]
         combined = np.concatenate([global_masks, landmark_masks], axis=0)
 
-        # 保存按landmark_classes索引的masks（用于depth采样对比）
+        # 保存按landmark_classes索引的masks
         self.latest_landmark_masks = landmark_masks.copy()  # [N_lm, H, W] indexed by landmark_classes
+
+        # 直接从RGB-D深度图采样每个landmark的距离（最准确，当帧可见时直接可用）
+        # 结果缓存到 self.latest_landmark_depth_m 供 render_detection_bbox 直接取用
+        lm_depth_m: dict = {}
+        if hasattr(self, 'latest_depth_meters') and self.latest_depth_meters is not None:
+            for j, lm_cls in enumerate(landmark_classes_list):
+                lm_m = landmark_masks[j]
+                try:
+                    valid_d = self.latest_depth_meters[lm_m > 0.5]
+                    valid_d = valid_d[valid_d > 0.1]
+                    if len(valid_d) > 0:
+                        lm_depth_m[lm_cls] = float(np.median(valid_d))
+                except Exception:
+                    pass
+        self.latest_landmark_depth_m = lm_depth_m
 
         # [LM-DBG 1/3 DETECT]
         for j, lm_cls in enumerate(landmark_classes_list):
             lm_m = landmark_masks[j]
             lm_detected = any(lm_cls in l or any(w in lm_cls for w in l.split()[:-1]) for l in labels_all)
-            d_info = ""
-            if hasattr(self, 'latest_depth_meters') and self.latest_depth_meters is not None:
-                try:
-                    depth_at_lm = self.latest_depth_meters[lm_m > 0.5]
-                    valid_d = depth_at_lm[depth_at_lm > 0.1]
-                    d_info = f"  depth(median={np.median(valid_d):.2f}m valid={len(valid_d)}px)" if len(valid_d) > 0 else "  depth=INVALID(all_zero)"
-                except Exception:
-                    pass
+            d_val = lm_depth_m.get(lm_cls)
+            d_info = f"  depth(median={d_val:.2f}m valid={int((lm_m>0.5).sum())}px)" if d_val is not None else "  depth=N/A"
             print(f"[LM 1/3 DETECT] '{lm_cls}'  in_detections={lm_detected}  mask_pixels={int((lm_m>0.5).sum())}{d_info}")
 
         return combined.transpose(1, 2, 0)  # [H, W, 15+N_lm]
