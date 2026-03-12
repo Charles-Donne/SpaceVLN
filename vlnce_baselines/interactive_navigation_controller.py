@@ -195,7 +195,8 @@ class InteractiveNavigationController:
                 waypoint_ids=map_state.get('waypoint_ids', []),  # 从map_state获取
                 phase=phase,
                 global_trajectory_points=map_state.get('global_trajectory_points', []),  # 从map_state获取（global map用全局轨迹）
-                crop_offset=map_state.get('crop_offset')  # 从map_state获取
+                crop_offset=map_state.get('crop_offset'),  # 从map_state获取
+                controller=self  # 传入controller以获取latest_depth_meters和latest_landmark_masks
             )
             
             # 保存当前step检测到的landmarks（用于action决策）
