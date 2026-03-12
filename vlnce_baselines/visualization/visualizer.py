@@ -406,18 +406,11 @@ class MapVisualizer:
         semantic_map[explored_free_mask] = 2
 
         # Layer 2: Floor（浅绿色）
-        # 优先从 full_map[3+floor_idx] 提取（与 obstacle 同一流程），fallback 到 mapper 预计算的 floor
-        floor_display_mask = None
-        if mapping_classes and 'floor' in mapping_classes:
-            floor_ch = 3 + mapping_classes.index('floor')
-            floor_raw = self._get_channel_mask(full_map, floor_ch)
-            if floor_raw is not None and floor_raw.any():
-                floor_display_mask = np.logical_and(floor_raw, explored_mask)
-        if floor_display_mask is None and floor is not None:
+        # 使用 mapper.extract_floor() 预计算的形态学 floor（比 full_map[floor_ch] 更完整可靠）
+        if floor is not None:
             floor_display_mask = np.logical_and(floor.astype(bool), explored_mask)
-        if floor_display_mask is not None:
             semantic_map[floor_display_mask] = 5  # 浅绿色
-        
+
         # Layer 3: 不再从Channel 2提取轨迹，后续在PIL渲染后用OpenCV连线绘制
         
         # Layer 4: Waypoint（蓝色）- 从Channel 2提取
@@ -743,18 +736,12 @@ class MapVisualizer:
         explored_free_mask = np.logical_and(explored_mask, ~obstacle_mask)
         semantic_map[explored_free_mask] = 2
 
-        # Layer 2: Floor（浅绿色）— 同 global map 的 floor 提取逻辑
-        floor_display_mask = None
-        if mapping_classes and 'floor' in mapping_classes:
-            floor_ch = 3 + mapping_classes.index('floor')
-            floor_raw = self._get_channel_mask(full_map, floor_ch)
-            if floor_raw is not None and floor_raw.any():
-                floor_display_mask = np.logical_and(floor_raw, explored_mask)
-        if floor_display_mask is None and floor is not None:
+        # Layer 2: Floor（浅绿色）
+        # 使用 mapper.extract_floor() 预计算的形态学 floor（与 render_global_map 逻辑一致）
+        if floor is not None:
             floor_display_mask = np.logical_and(floor.astype(bool), explored_mask)
-        if floor_display_mask is not None:
             semantic_map[floor_display_mask] = 5
-        
+
         # Layer 3: 不渲染轨迹和waypoint（后续用OpenCV绘制轨迹）
         # Local map不显示历史waypoint，只显示轨迹
         
@@ -1401,8 +1388,17 @@ class MapVisualizer:
         """
         h, w = image.shape[:2]
         center_x = w // 2
-        bottom_y = h - 10
-        
+        # 自动检测白底条带：如果图像底部存在白色条带（np.vstack拼接的landmark信息栏），
+        # 则只在原始RGB区域内画距离线，避免射线起点落在白色区域内。
+        # 检测方法：若最后一行全白（mean>253），向上扫描找到第一个非白行。
+        h_rgb = h
+        if image[-1].mean() > 253:
+            for r in range(h - 1, -1, -1):
+                if image[r].mean() < 250:
+                    h_rgb = r + 1
+                    break
+        bottom_y = h_rgb - 10
+
         # 7个方向：左90, 左60, 左30, 前, 右30, 右60, 右90
         # 对应的像素角度（从底部向上，-90°是正上方）
         direction_configs = [
