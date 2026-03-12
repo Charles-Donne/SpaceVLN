@@ -980,21 +980,10 @@ class MapVisualizer:
         
         # ===== 阶段9: 绘制Landmark标记（紫色圆球，最上层，不被遮挡）=====
         if landmark_classes and landmark_config:
-            # 计算旋转矩阵（用于landmark坐标转换）
-            rotation_matrix = None
-            if current_pose is not None:
-                agent_orientation_deg = current_pose[2]  # 度数
-                rotation_angle_deg = 90 - agent_orientation_deg
-                rotation_angle_rad = np.radians(rotation_angle_deg)
-                cos_theta = np.cos(rotation_angle_rad)
-                sin_theta = np.sin(rotation_angle_rad)
-                # 2D旋转矩阵（围绕中心点240,240旋转）
-                rotation_matrix = np.array([
-                    [cos_theta, -sin_theta, 240 * (1 - cos_theta) + 240 * sin_theta],
-                    [sin_theta, cos_theta, 240 * (1 - sin_theta) - 240 * cos_theta],
-                    [0, 0, 1]
-                ])
-            
+            # full_map 已由 get_full_map_for_rendering(rotate_to_agent_heading=True) 旋转过
+            # _extract_landmarks 返回的 (marker_x, marker_y) 已经是旋转后地图的像素坐标
+            # 与 render_global_map 的处理完全一致：scale + flipud + 裁剪中心区域
+            # 不需要再做额外旋转（否则会双重旋转导致位置偏移）
             landmarks = self._extract_landmarks(
                 full_map, detected_classes, landmark_classes,
                 landmark_config['min_total_pixels'],
@@ -1002,32 +991,26 @@ class MapVisualizer:
                 mapping_classes=mapping_classes
             )
             
-            # 只在有旋转矩阵时绘制landmarks
-            if rotation_matrix is not None:
-                for marker_x, marker_y, cls_name, _dist_m, _angle_deg in landmarks:
-                    # 转换landmark坐标（与全局地图坐标变换一致）
-                    # centroids返回(cx, cy)格式，cx是列坐标(map_y方向)，cy是行坐标(map_x方向)
-                    display_x = marker_x * 480 / w  # 列坐标 → display_x
-                    display_y = (h - 1 - marker_y) * 480 / h  # 行坐标 → display_y（翻转）
-                    point = np.array([display_x, display_y, 1])
-                    rotated_point = rotation_matrix @ point
-                    
-                    # 转换到local坐标系（裁剪区域是120-360，映射到0-480）
-                    local_x = (rotated_point[0] - 120) * 2
-                    local_y = (rotated_point[1] - 120) * 2
-                    
-                    # 只绘制在可见范围内的landmark
-                    if 0 <= local_x < 480 and 0 <= local_y < 480:
-                        # Local map使用更大的landmark标记（10像素）
-                        local_landmark_radius = 10
-                        cv2.circle(local_map, 
-                                  (int(local_x), int(local_y)), 
-                                  local_landmark_radius, 
-                                  landmark_marker_color, -1)
-                        cv2.circle(local_map, 
-                                  (int(local_x), int(local_y)), 
-                                  local_landmark_radius, 
-                                  landmark_marker_border, 1)
+            for marker_x, marker_y, cls_name, _dist_m, _angle_deg in landmarks:
+                # 1. 缩放到 480×480 显示坐标（与 global map 相同）
+                display_x = marker_x * 480.0 / w   # 列坐标 → display_x
+                display_y = (h - 1 - marker_y) * 480.0 / h  # 行坐标 → flipud → display_y
+                
+                # 2. 裁剪中心 240×240（rows/cols 120-360）并放大到 480×480
+                local_x = (display_x - 120) * 2
+                local_y = (display_y - 120) * 2
+                
+                # 3. 只绘制在可见范围内的landmark
+                if 0 <= local_x < 480 and 0 <= local_y < 480:
+                    local_landmark_radius = 10
+                    cv2.circle(local_map,
+                               (int(local_x), int(local_y)),
+                               local_landmark_radius,
+                               landmark_marker_color, -1)
+                    cv2.circle(local_map,
+                               (int(local_x), int(local_y)),
+                               local_landmark_radius,
+                               landmark_marker_border, 1)
         
         # ===== 阶段10: 最终裁剪到440×440（中心区域）=====
         # 从480x480裁剪中心440x440区域
