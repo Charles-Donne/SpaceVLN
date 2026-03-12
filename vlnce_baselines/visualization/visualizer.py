@@ -980,12 +980,24 @@ class MapVisualizer:
                 landmark_config['min_area_threshold'],
                 mapping_classes=mapping_classes
             )
-            
+
+            # ===== [LM-DEBUG 4/4] 渲染阶段 =====
+            print(f"[LM-DBG4] render_local_map  full_map.shape={full_map.shape}  h={h} w={w}")
+            print(f"[LM-DBG4] detected_classes={detected_classes}")
+            print(f"[LM-DBG4] landmark_classes={landmark_classes}")
+            print(f"[LM-DBG4] mapping_classes={mapping_classes}")
+            print(f"[LM-DBG4] _extract_landmarks returned {len(landmarks)} landmark(s): {[(cls, cx, cy, f'{d:.2f}m', f'{a:.1f}deg') for cx,cy,cls,d,a in landmarks]}")
+            # ===== [LM-DEBUG 4/4 END] =====
+
             for marker_x, marker_y, cls_name, _dist_m, _angle_deg in landmarks:
                 # 1. 缩放到 480×480 显示坐标（与 global map 相同）
                 display_x = marker_x * 480.0 / w   # 列坐标 → display_x
                 display_y = (h - 1 - marker_y) * 480.0 / h  # 行坐标 → flipud → display_y
-                
+
+                # ===== [LM-DEBUG 4/4 坐标变换] =====
+                print(f"[LM-DBG4]   '{cls_name}'  raw(col={marker_x},row={marker_y}) → display({display_x:.1f},{display_y:.1f}) → local({(display_x-120)*2:.1f},{(display_y-120)*2:.1f})  agent_center=(240,240)")
+                # ===== [LM-DEBUG 4/4 END] =====
+
                 # 2. 裁剪中心 240×240（rows/cols 120-360）并放大到 480×480
                 local_x = (display_x - 120) * 2
                 local_y = (display_y - 120) * 2
@@ -1793,6 +1805,12 @@ class MapVisualizer:
         Returns: [(cx, cy, area), ...]
         """
         mask = self._get_channel_mask(full_map, channel_idx, threshold)
+
+        # ===== [LM-DEBUG 3/4] 质心提取阶段 =====
+        _nonzero = (mask > threshold).sum() if mask is not None else 0
+        print(f"[LM-DBG3] _get_channel_centroids ch={channel_idx}  mask pixels>{threshold}: {_nonzero}  full_map.shape={full_map.shape}")
+        # ===== [LM-DEBUG 3/4 END] =====
+
         if mask is None or not mask.any():
             return []
 

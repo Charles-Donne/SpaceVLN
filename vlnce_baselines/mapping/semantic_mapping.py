@@ -1374,6 +1374,14 @@ class Semantic_Mapping(nn.Module):
             all_height_proj[:, 1:, :, :] / self.cat_pred_threshold,
             min=0.0, max=1.0) # semantic categories (从通道3开始)
 
+        # ===== [LM-DEBUG 2/4] 投影阶段 (agent_view) =====
+        n_sem = agent_view.shape[1] - 3
+        n_mapping = 15  # mapping_classes 固定15个
+        for _lm_ch in range(n_mapping, n_sem):
+            _ch_data = agent_view[0, 3 + _lm_ch, y1:y2, x1:x2]
+            print(f"[LM-DBG2]   agent_view landmark ch_offset={_lm_ch}  pixels>0.5: {(_ch_data>0.5).sum().item()}  max={_ch_data.max().item():.3f}")
+        # ===== [LM-DEBUG 2/4 END] =====
+
         corrected_pose = pose_obs # sensor pose
 
         def get_new_pose_batch(pose, rel_pose_change):
