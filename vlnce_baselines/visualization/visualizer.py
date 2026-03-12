@@ -1153,51 +1153,41 @@ class MapVisualizer:
             bbox_cx = (x1 + x2) / 2.0
             bbox_cy = (y1 + y2) / 2.0
 
-            # ── 方式A：RGB-D深度直接采样 ──
-            # 优先级：① controller缓存（_get_sem_pred里已算好） ② mask重采样 ③ bbox中心patch
+            # ── 方式A：每个 bbox 独立从 RGB-D 深度图采样 ──
+            # 每个检测实例用自己的 SAM mask（通过 sv.Detections.mask）或 bbox 中心区域
+            # 完全独立，多实例同类各自拿到真实距离
             depth_dist_m = None
             depth_angle_deg = None
 
-            # ① 直接取缓存——与[LM 1/3 DETECT]完全同源，零额外计算
-            if (landmark_classes is not None and label_name in landmark_classes
-                    and controller is not None
-                    and hasattr(controller, 'latest_landmark_depth_m')):
-                depth_dist_m = controller.latest_landmark_depth_m.get(label_name)
-
-            # ② fallback：用mask在visualizer内重采样
-            _lm_masks = landmark_masks
-            if _lm_masks is None and controller is not None and hasattr(controller, 'latest_landmark_masks'):
-                _lm_masks = controller.latest_landmark_masks
             _depth = depth_meters
             if _depth is None and controller is not None and hasattr(controller, 'latest_depth_meters'):
                 _depth = controller.latest_depth_meters
 
-            if depth_dist_m is None and _depth is not None and _depth.size > 0:
+            if _depth is not None and _depth.size > 0:
                 sampled = False
-                if _lm_masks is not None and landmark_classes is not None and label_name in landmark_classes:
-                    lm_idx_in_list = landmark_classes.index(label_name)
-                    if lm_idx_in_list < _lm_masks.shape[0]:
-                        lm_m = _lm_masks[lm_idx_in_list]
-                        if lm_m.shape != _depth.shape[:2]:
-                            lm_m = cv2.resize(lm_m.astype(np.float32),
-                                              (_depth.shape[1], _depth.shape[0]),
-                                              interpolation=cv2.INTER_NEAREST)
-                        valid_d = _depth[lm_m > 0.5]
-                        valid_d = valid_d[valid_d > 0.1]
-                        if len(valid_d) > 0:
-                            depth_dist_m = float(np.median(valid_d))
-                            sampled = True
-                # ③ 最后回退：bbox中心40%~60%矩形
+                # ① 优先：用该实例自己的 SAM mask（detections.mask[i]）
+                if (detections is not None
+                        and hasattr(detections, 'mask')
+                        and detections.mask is not None
+                        and i < len(detections.mask)
+                        and detections.mask[i] is not None):
+                    inst_mask = detections.mask[i].astype(np.float32)
+                    if inst_mask.shape != _depth.shape[:2]:
+                        inst_mask = cv2.resize(inst_mask,
+                                               (_depth.shape[1], _depth.shape[0]),
+                                               interpolation=cv2.INTER_NEAREST)
+                    valid_d = _depth[inst_mask > 0.5]
+                    valid_d = valid_d[valid_d > 0.1]
+                    if len(valid_d) > 0:
+                        depth_dist_m = float(np.median(valid_d))
+                        sampled = True
+                # ② fallback：bbox 内部像素（不依赖 mask）
                 if not sampled:
                     dh, dw = _depth.shape[:2]
-                    px0 = int(x1 + (x2 - x1) * 0.4)
-                    px1_b = int(x1 + (x2 - x1) * 0.6)
-                    py0 = int(y1 + (y2 - y1) * 0.4)
-                    py1_b = int(y1 + (y2 - y1) * 0.6)
-                    px0, px1_b = max(0, px0), min(dw, px1_b)
-                    py0, py1_b = max(0, py0), min(dh, py1_b)
-                    if px1_b > px0 and py1_b > py0:
-                        patch = _depth[py0:py1_b, px0:px1_b]
+                    bx0, bx1 = max(0, x1), min(dw, x2)
+                    by0, by1 = max(0, y1), min(dh, y2)
+                    if bx1 > bx0 and by1 > by0:
+                        patch = _depth[by0:by1, bx0:bx1]
                         valid_vals = patch[patch > 0.1]
                         if len(valid_vals) > 0:
                             depth_dist_m = float(np.median(valid_vals))
