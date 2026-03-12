@@ -990,7 +990,10 @@ class MapVisualizer:
                 display_y = (h - 1 - marker_y) * 480.0 / h  # 行坐标 → flipud → display_y
                 local_x_dbg = (display_x - 120) * 2
                 local_y_dbg = (display_y - 120) * 2
-                print(f"[LM RENDER] '{cls_name}'  dist={_dist_m:.2f}m angle={_angle_deg:.1f}deg  landmark(col={marker_x},row={marker_y})  agent(col={w//2},row={h//2})  delta(dc={marker_x-w//2},dr={marker_y-h//2})  ->local({local_x_dbg:.0f},{local_y_dbg:.0f})  visible={0<=local_x_dbg<480 and 0<=local_y_dbg<480}")
+                _res_m = self.resolution / 100.0  # 5cm/px → 0.05m/px
+                fwd_m = (marker_y - h // 2) * _res_m   # row>center=前方
+                right_m = (marker_x - w // 2) * _res_m  # col>center=右方
+                print(f"[LM RENDER] '{cls_name}'  heading={current_o:.0f}deg  world(fwd={fwd_m:.2f}m right={right_m:.2f}m)  dist={_dist_m:.2f}m angle={_angle_deg:.1f}deg  map(col={marker_x} row={marker_y}) agent(col={w//2} row={h//2}) ->local({local_x_dbg:.0f},{local_y_dbg:.0f}) visible={0<=local_x_dbg<480 and 0<=local_y_dbg<480}")
 
                 # 2. 裁剪中心 240×240（rows/cols 120-360）并放大到 480×480
                 local_x = (display_x - 120) * 2
