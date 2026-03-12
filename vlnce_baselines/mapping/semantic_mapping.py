@@ -1370,9 +1370,18 @@ class Semantic_Mapping(nn.Module):
         agent_view[:, 1:2, y1:y2, x1:x2] = fp_exp_pred # explored area
         # 语义类别用 all_height_proj（不限高度）：障碍物只需关心通行高度，
         # 但 landmark（挂画、窗户等）可能在任意高度，用 all_height_proj 确保不漏掉
-        agent_view[:, 3:, y1:y2, x1:x2] = torch.clamp(
-            all_height_proj[:, 1:, :, :] / self.cat_pred_threshold,
-            min=0.0, max=1.0) # semantic categories (从通道3开始)
+        n_mapping = 15  # mapping_classes 固定15个通道
+        n_sem_total = all_height_proj.shape[1] - 1  # 去掉占位通道0
+        # mapping_classes 用标准 threshold
+        agent_view[:, 3:3+n_mapping, y1:y2, x1:x2] = torch.clamp(
+            all_height_proj[:, 1:1+n_mapping, :, :] / self.cat_pred_threshold,
+            min=0.0, max=1.0)
+        # landmark_classes 用更低 threshold（mask稀疏，标准threshold=5.0会全部过滤掉）
+        if n_sem_total > n_mapping:
+            lm_threshold = max(self.cat_pred_threshold * 0.1, 0.5)  # 降低到10%，最低0.5
+            agent_view[:, 3+n_mapping:, y1:y2, x1:x2] = torch.clamp(
+                all_height_proj[:, 1+n_mapping:, :, :] / lm_threshold,
+                min=0.0, max=1.0)
 
         # [LM-DBG 2/3 PROJECT]
         _n_lm = agent_view.shape[1] - 3 - 15
