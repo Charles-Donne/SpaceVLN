@@ -1378,8 +1378,7 @@ class Semantic_Mapping(nn.Module):
         _n_lm = agent_view.shape[1] - 3 - 15
         for _lm_ch in range(_n_lm):
             _ch = agent_view[0, 3 + 15 + _lm_ch, y1:y2, x1:x2]
-            if _ch.max().item() > 0:
-                print(f"[LM 2/3 PROJECT] lm_ch_offset={_lm_ch}  agent_view pixels>0.5={int((_ch>0.5).sum().item())}  max={_ch.max().item():.3f}")
+            print(f"[LM 2/3 PROJECT] lm_ch_offset={_lm_ch}  agent_view pixels>0.5={int((_ch>0.5).sum().item())}  max={_ch.max().item():.3f}")
 
         corrected_pose = pose_obs # sensor pose
 

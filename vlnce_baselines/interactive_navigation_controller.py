@@ -400,7 +400,8 @@ class InteractiveNavigationController:
         # [LM-DBG 1/3 DETECT]
         for j, lm_cls in enumerate(landmark_classes_list):
             lm_m = landmark_masks[j]
-            print(f"[LM 1/3 DETECT] '{lm_cls}'  raw_detections={[l for l in labels_all]}  mask_pixels={int((lm_m>0.5).sum())}")
+            lm_detected = any(lm_cls in l or any(w in lm_cls for w in l.split()[:-1]) for l in labels_all)
+            print(f"[LM 1/3 DETECT] '{lm_cls}'  in_detections={lm_detected}  mask_pixels={int((lm_m>0.5).sum())}")
 
         return combined.transpose(1, 2, 0)  # [H, W, 15+N_lm]
     

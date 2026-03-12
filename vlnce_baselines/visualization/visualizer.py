@@ -990,7 +990,7 @@ class MapVisualizer:
                 display_y = (h - 1 - marker_y) * 480.0 / h  # 行坐标 → flipud → display_y
                 local_x_dbg = (display_x - 120) * 2
                 local_y_dbg = (display_y - 120) * 2
-                print(f"[LM RENDER] '{cls_name}'  dist={_dist_m:.2f}m angle={_angle_deg:.1f}deg  map(col={marker_x},row={marker_y}) -> local({local_x_dbg:.0f},{local_y_dbg:.0f})  visible={0<=local_x_dbg<480 and 0<=local_y_dbg<480}")
+                print(f"[LM RENDER] '{cls_name}'  dist={_dist_m:.2f}m angle={_angle_deg:.1f}deg  landmark(col={marker_x},row={marker_y})  agent(col={w//2},row={h//2})  delta(dc={marker_x-w//2},dr={marker_y-h//2})  ->local({local_x_dbg:.0f},{local_y_dbg:.0f})  visible={0<=local_x_dbg<480 and 0<=local_y_dbg<480}")
 
                 # 2. 裁剪中心 240×240（rows/cols 120-360）并放大到 480×480
                 local_x = (display_x - 120) * 2
@@ -1185,8 +1185,8 @@ class MapVisualizer:
                             dist_m = float(np.median(valid_vals))
                             dist_str = f" {dist_m:.1f}m"
 
-            # ── 单行标签（仅距离+角度）显示在bbox上方，名称移至底部条带 ──
-            row1 = f"{dist_str.strip()} {angle_str}".strip() if (dist_str.strip() or angle_str) else ""
+            # ── 单行标签（仅距离）显示在bbox上方，名称移至底部条带 ──
+            row1 = dist_str.strip()
             if row1:
                 font = cv2.FONT_HERSHEY_SIMPLEX
                 font_scale = 0.5
@@ -1259,7 +1259,7 @@ class MapVisualizer:
                 (tw, th), _ = cv2.getTextSize(txt, font2, fs2, ft2)
                 x_c = 8  # 左对齐，8px 左边距
                 y_c = pad_v + row_h * i + th
-                cv2.putText(strip, txt, (x_c, y_c), font2, fs2, (20, 20, 20), ft2, cv2.LINE_AA)
+                cv2.putText(strip, txt, (x_c, y_c), font2, fs2, (0, 0, 200), 2, cv2.LINE_AA)
 
             detection_vis = np.vstack([detection_vis, strip])
 
