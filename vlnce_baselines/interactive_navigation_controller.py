@@ -397,13 +397,10 @@ class InteractiveNavigationController:
         # 合并mapping通道 + landmark通道：[15+N, H, W] → [H, W, 15+N]
         combined = np.concatenate([global_masks, landmark_masks], axis=0)
 
-        # ===== [LM-DEBUG 1/4] 检测阶段 =====
-        print(f"[LM-DBG1] landmark_classes_list={landmark_classes_list}")
-        print(f"[LM-DBG1] labels_all (raw detections)={labels_all}")
+        # [LM-DBG 1/3 DETECT]
         for j, lm_cls in enumerate(landmark_classes_list):
             lm_m = landmark_masks[j]
-            print(f"[LM-DBG1]   landmark[{j}]='{lm_cls}'  mask pixels>0.5: {(lm_m>0.5).sum()}  max={lm_m.max():.3f}")
-        # ===== [LM-DEBUG 1/4 END] =====
+            print(f"[LM 1/3 DETECT] '{lm_cls}'  raw_detections={[l for l in labels_all]}  mask_pixels={int((lm_m>0.5).sum())}")
 
         return combined.transpose(1, 2, 0)  # [H, W, 15+N_lm]
     
