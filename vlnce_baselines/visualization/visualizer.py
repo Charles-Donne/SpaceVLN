@@ -1211,14 +1211,14 @@ class MapVisualizer:
             fs2, ft2 = 0.5, 1
 
             def _dir_str(a_deg):
-                if abs(a_deg) < 5.0: return "^"
-                return f"R{a_deg:.0f}deg" if a_deg > 0 else f"L{abs(a_deg):.0f}deg"
+                if abs(a_deg) < 5.0: return "Front"
+                return f"Right {a_deg:.0f}deg" if a_deg > 0 else f"Left {abs(a_deg):.0f}deg"
 
             item_lines = []  # list of (text, is_separator)
 
             # ── 可见landmark ──
             for lm_name, _conf in detected_landmarks:
-                sn = lm_name if len(lm_name) <= 28 else lm_name[:26] + ".."
+                sn = lm_name if len(lm_name) <= 40 else lm_name[:38] + ".."
                 if landmark_dist_map and lm_name in landmark_dist_map:
                     d_m, a_deg = landmark_dist_map[lm_name]
                     item_lines.append((f"[Vis] {sn}  {d_m:.1f}m  {_dir_str(a_deg)}", False))
@@ -1231,7 +1231,7 @@ class MapVisualizer:
 
             # ── 离屏landmark ──
             for cls_name, (d_m, a_deg) in sorted(offscreen.items(), key=lambda x: x[1][0]):
-                sn = cls_name if len(cls_name) <= 28 else cls_name[:26] + ".."
+                sn = cls_name if len(cls_name) <= 40 else cls_name[:38] + ".."
                 item_lines.append((f"[Off] {sn}  {d_m:.1f}m  {_dir_str(a_deg)}", False))
 
             # 计算行高（增大间距，避免文字显示不全）
