@@ -1228,12 +1228,12 @@ class MapVisualizer:
 
             # ── 可见landmark ──
             for lm_name, _conf in detected_landmarks:
-                sn = lm_name if len(lm_name) <= 24 else lm_name[:22] + ".."
+                sn = lm_name if len(lm_name) <= 28 else lm_name[:26] + ".."
                 if landmark_dist_map and lm_name in landmark_dist_map:
                     d_m, a_deg = landmark_dist_map[lm_name]
-                    item_lines.append((f"[Visible]     {sn}   {d_m:.1f}m  {_dir_str(a_deg)}", False))
+                    item_lines.append((f"[Vis] {sn}  {d_m:.1f}m  {_dir_str(a_deg)}", False))
                 else:
-                    item_lines.append((f"[Visible]     {sn}", False))
+                    item_lines.append((f"[Vis] {sn}", False))
 
             # 空行分隔（两组都有时）
             if detected_landmarks and offscreen:
@@ -1241,14 +1241,14 @@ class MapVisualizer:
 
             # ── 离屏landmark ──
             for cls_name, (d_m, a_deg) in sorted(offscreen.items(), key=lambda x: x[1][0]):
-                sn = cls_name if len(cls_name) <= 24 else cls_name[:22] + ".."
-                item_lines.append((f"[Off-screen]  {sn}   {d_m:.1f}m  {_dir_str(a_deg)}", False))
+                sn = cls_name if len(cls_name) <= 28 else cls_name[:26] + ".."
+                item_lines.append((f"[Off] {sn}  {d_m:.1f}m  {_dir_str(a_deg)}", False))
 
-            # 计算行高
+            # 计算行高（增大间距，避免文字显示不全）
             font2 = cv2.FONT_HERSHEY_SIMPLEX
-            fs2, ft2 = 0.5, 1
+            fs2, ft2 = 0.52, 1
             _sample = cv2.getTextSize("Ag", font2, fs2, ft2)[0]
-            row_h = _sample[1] + 8
+            row_h = _sample[1] + 14
             pad_v = 6
             total_h = row_h * len(item_lines) + pad_v * 2
 
@@ -1726,8 +1726,16 @@ class MapVisualizer:
             if controller is not None and hasattr(controller, 'latest_depth_meters'):
                 depth_meters = controller.latest_depth_meters
 
+            # 先在原始图像上画7方向距离线，再交给render_detection_bbox
+            # 这样白底条带始终拼在距离线+bbox之下，不会出现在距离线起点处
+            rgb_for_det = rgb.copy()
+            if phase.startswith('action'):
+                od = getattr(controller, 'latest_obstacle_distances', None) if controller else None
+                if od:
+                    rgb_for_det = self.draw_distance_on_action_view(rgb_for_det, od)
+
             detection_vis, detected_landmarks_step, _visible = self.render_detection_bbox(
-                rgb, detections, labels,
+                rgb_for_det, detections, labels,
                 landmark_classes, mapping_classes,
                 depth_meters=depth_meters,
                 hfov=hfov,

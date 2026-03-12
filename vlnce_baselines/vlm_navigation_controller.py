@@ -1558,9 +1558,10 @@ class VLMNavigationController(InteractiveNavigationController):
         if not detection_image:
             print(f"  [WARN] Detection image not found for step {last_step}")
         else:
-            # 为detection图像添加距离辅助线（不使用地面分割）
+            # 距离线已在save_step_visualization的render_detection_bbox之前画入detection图
+            # 这里只做文件路径处理（不重复叠加距离线）
             detection_image = self.visualizer.prepare_action_image_with_enhancements(
-                detection_image, mask_path, self.latest_obstacle_distances, self.classes, use_floor=False, use_distance=True)
+                detection_image, mask_path, self.latest_obstacle_distances, self.classes, use_floor=False, use_distance=False)
         
         # 查找局部地图（使用相同的回退逻辑）
         local_map = None
