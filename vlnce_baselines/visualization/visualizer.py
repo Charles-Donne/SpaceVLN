@@ -1151,42 +1151,45 @@ class MapVisualizer:
             bbox_cx = (x1 + x2) / 2.0
             bbox_cy = (y1 + y2) / 2.0
 
-            # ── 优先：从地图世界坐标获取距离和偏角（高效，无需深度图采样）──
-            dist_str = ""
-            angle_str = ""
+            # ── 方式A：从深度图直接采样（bbox中心40%~60%区域） ──
+            depth_dist_m = None
+            depth_angle_deg = None
+            if depth_meters is not None and depth_meters.size > 0:
+                dh, dw = depth_meters.shape[:2]
+                px0 = int(x1 + (x2 - x1) * 0.4)
+                px1 = int(x1 + (x2 - x1) * 0.6)
+                py0 = int(y1 + (y2 - y1) * 0.4)
+                py1 = int(y1 + (y2 - y1) * 0.6)
+                px0, px1 = max(0, px0), min(dw, px1)
+                py0, py1 = max(0, py0), min(dh, py1)
+                if px1 > px0 and py1 > py0:
+                    patch = depth_meters[py0:py1, px0:px1]
+                    valid_vals = patch[patch > 0.1]
+                    if len(valid_vals) > 0:
+                        depth_dist_m = float(np.median(valid_vals))
+                depth_angle_deg = (bbox_cx - w_img / 2.0) / w_img * hfov
+
+            # ── 方式B：从世界地图质心获取 ──
+            map_dist_m = None
+            map_angle_deg = None
             if landmark_dist_map and label_name in landmark_dist_map:
                 map_dist_m, map_angle_deg = landmark_dist_map[label_name]
-                dist_str = f" {map_dist_m:.1f}m"
-                if abs(map_angle_deg) < 3.0:
-                    angle_str = "^"
-                elif map_angle_deg > 0:
-                    angle_str = f"R{map_angle_deg:.0f}deg"
-                else:
-                    angle_str = f"L{abs(map_angle_deg):.0f}deg"
-            else:
-                # ── 回退：从bbox中心像素计算水平偏角，从深度图采样距离 ──
-                raw_angle = (bbox_cx - w_img / 2.0) / w_img * hfov
-                if abs(raw_angle) < 3.0:
-                    angle_str = "^"
-                elif raw_angle > 0:
-                    angle_str = f"R{raw_angle:.0f}deg"
-                else:
-                    angle_str = f"L{abs(raw_angle):.0f}deg"
 
-                if depth_meters is not None and depth_meters.size > 0:
-                    dh, dw = depth_meters.shape[:2]
-                    px0 = int(x1 + (x2 - x1) * 0.4)
-                    px1 = int(x1 + (x2 - x1) * 0.6)
-                    py0 = int(y1 + (y2 - y1) * 0.4)
-                    py1 = int(y1 + (y2 - y1) * 0.6)
-                    px0, px1 = max(0, px0), min(dw, px1)
-                    py0, py1 = max(0, py0), min(dh, py1)
-                    if px1 > px0 and py1 > py0:
-                        patch = depth_meters[py0:py1, px0:px1]
-                        valid_vals = patch[patch > 0.1]
-                        if len(valid_vals) > 0:
-                            dist_m = float(np.median(valid_vals))
-                            dist_str = f" {dist_m:.1f}m"
+            # ── [LM COMPARE] 两种方式对比 ──
+            print(f"[LM COMPARE] '{label_name}'  "
+                  f"depth=({depth_dist_m:.2f}m  angle={depth_angle_deg:.1f}deg)  "
+                  f"map=({map_dist_m:.2f}m  angle={map_angle_deg:.1f}deg)  "
+                  f"diff_dist={abs(depth_dist_m - map_dist_m):.2f}m  diff_angle={abs(depth_angle_deg - map_angle_deg):.1f}deg"
+                  if (depth_dist_m is not None and map_dist_m is not None)
+                  else f"[LM COMPARE] '{label_name}'  depth={'N/A' if depth_dist_m is None else f'{depth_dist_m:.2f}m {depth_angle_deg:.1f}deg'}  map={'N/A' if map_dist_m is None else f'{map_dist_m:.2f}m {map_angle_deg:.1f}deg'}")
+
+            # ── bbox上显示距离（优先地图距离，回退深度距离）──
+            dist_str = ""
+            angle_str = ""
+            if map_dist_m is not None:
+                dist_str = f" {map_dist_m:.1f}m"
+            elif depth_dist_m is not None:
+                dist_str = f" {depth_dist_m:.1f}m"
 
             # ── 单行标签（仅距离）显示在bbox上方，名称移至底部条带 ──
             row1 = dist_str.strip()
