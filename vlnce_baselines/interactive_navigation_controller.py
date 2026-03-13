@@ -360,11 +360,13 @@ class InteractiveNavigationController:
         landmark_masks = np.zeros((len(landmark_classes_list), self.height, self.width), dtype=np.float32)
         lm_name_to_idx = {lm.strip().lower(): idx for idx, lm in enumerate(landmark_classes_list)}
 
+        raw_detected_names = []
         for i, label in enumerate(labels_all):
             parts = label.split()
             label_name = ' '.join(parts[:-1]) if len(parts) > 1 else parts[0]
             label_name_norm = label_name.strip().lower()
             confidence = float(parts[-1]) if len(parts) > 1 else 0.5
+            raw_detected_names.append(label_name)
             
             # 只有mapping_classes的检测进入语义地图
             if label_name in predefined_classes:
@@ -383,6 +385,20 @@ class InteractiveNavigationController:
             # 规范化精确匹配到landmark时，记录canonical短语名
             if label_name_norm in lm_name_to_idx:
                 self.detected_classes.add(landmark_classes_list[lm_name_to_idx[label_name_norm]])
+
+        # [LM-CHECK] 每步输出可检测与过滤情况（排查自定义landmark在哪一步被过滤）
+        if save_object_detection:
+            raw_unique = sorted(list(set(raw_detected_names)))
+            matched_lm = sorted([
+                lm for lm in landmark_classes_list
+                if lm.strip().lower() in set([n.strip().lower() for n in raw_unique])
+            ])
+            missed_lm = sorted([lm for lm in landmark_classes_list if lm not in matched_lm])
+            print(f"[LM CHECK] step={step if step is not None else self.current_step} mode=landmark_on  detect_classes={detect_classes}")
+            print(f"[LM CHECK] raw_detected={raw_unique}")
+            print(f"[LM CHECK] matched_landmarks={matched_lm}  missed_landmarks={missed_lm}")
+        elif hasattr(self, 'landmark_classes') and self.landmark_classes:
+            print(f"[LM CHECK] step={step if step is not None else self.current_step} mode=landmark_off  only_mapping_detected (custom landmarks skipped this step)")
         
         if len(valid_masks) == 0:
             # 没有检测到mapping类别，但可能有landmark检测
