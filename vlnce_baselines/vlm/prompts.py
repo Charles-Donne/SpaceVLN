@@ -33,8 +33,14 @@ Example: "Stop at chair and open doors" → Navigation ends at "chair".
 
 # Reasoning (6 Parts)
 
+**Concise-but-complete style (MANDATORY)**:
+- Keep all 6 parts, do not omit any part.
+- Use short bullet/checklist style, avoid long prose repetition.
+- Prefer compact evidence statements: "IMAGE # → object, distance, obstacle".
+- Keep reasoning focused on decisions; no redundant narration.
+
 **1) 12-View Analysis (MUST analyze EACH IMAGE 1-12)** 
-**Format for each IMAGE**: "IMAGE # (Direction Angle°): room_type, object1 distance1, object2 distance2. Obs: X.Xm NEAR/FAR"
+**Format for each IMAGE**: "IMAGE # (Angle°): room, key objects+distance, Obs X.Xm"
 
 **REQUIRED - Analyze ALL 12 IMAGEs sequentially**:
 **Distance classification**: NEAR<1m (large, current position) | FAR>1.5m (small, next destination)
@@ -92,7 +98,7 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
     "next_waypoint_landmark": "<Single, detectable noun (1-2 words)>",
     "completion_criteria": "<Detection: NEAR<1m | Map: area | Position: region>",
     "global_task_finish": <true if ALL✓, no(Current), at final. Else false>,
-    "reasoning": "<6 parts REQUIRED: 1)12-Views(MUST analyze EACH IMAGE 1-12 with angle+direction+room+objects+distance+obstacle), 2)Maps(local 0.5m circle+global layout), 3)Position(detailed current location)+Task chain(✓→Current→unmarked, front-to-back consistency), 4)Direction(why this IMAGE?), 5)Near-term plan, 6)Long-term plan. Be thorough>"
+    "reasoning": "<6 parts REQUIRED, concise checklist style: 1)12-Views(all IMAGE1-12), 2)Maps, 3)Position+Task chain, 4)Direction decision, 5)Near-term, 6)Long-term. Clear evidence, no omission, no redundancy>"
 }}
 
 #Examples (abbreviated):
@@ -178,8 +184,14 @@ Example: "Stop at chair and open doors" → Navigation ends at "chair".
 
 # Reasoning (6 Parts)
 
+**Concise-but-complete style (MANDATORY)**:
+- Keep all 6 parts, do not omit any part.
+- Use short bullet/checklist style, avoid long prose repetition.
+- Prefer compact evidence statements: "IMAGE # → object, distance, obstacle, blue-circle".
+- Keep reasoning focused on verification decision + next immediate step.
+
 **1) 12-View Analysis (MUST analyze EACH IMAGE 1-12)**
-**Format**: "IMAGE # (Direction Angle°): room, object1 dist1, object2 dist2. [Blue Circle #X if visible]. Obs: X.Xm NEAR/FAR"
+**Format**: "IMAGE # (Angle°): room, key objects+distance, [Blue Circle #X if visible], Obs X.Xm"
 
 **REQUIRED - Analyze ALL 12 IMAGEs sequentially**:
 **Distance**: NEAR<1m (large) | FAR>1.5m (small)
@@ -245,7 +257,7 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
     "next_waypoint_landmark": "<Single, detectable noun (1-2 words)>",
     "completion_criteria": "<Detection: NEAR<1m | Map: area | Position: region>",
     "global_task_finish": <true if ALL✓, no(Current), at final. Else false>,
-    "reasoning": "<6 parts REQUIRED: 1)12-Views(MUST analyze EACH IMAGE 1-12 with angle+direction+room+objects+distance+obstacle+blue circles), 2)Maps(local 0.5m+global history+blue circles), 3)Position(detailed)+Task chain(✓→Current→unmarked, blue behind=✓)+arrived?, 4)Direction(why? exploration priority), 5)Near-term, 6)Long-term. Be thorough>"
+    "reasoning": "<6 parts REQUIRED, concise checklist style: 1)12-Views(all IMAGE1-12), 2)Maps+history, 3)Position+Task chain+completion check, 4)Direction decision, 5)Near-term, 6)Long-term. Clear evidence, no omission, no redundancy>"
 }}
 
 # Examples (abbreviated):
