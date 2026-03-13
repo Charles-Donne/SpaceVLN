@@ -1794,14 +1794,6 @@ class VLMNavigationController(InteractiveNavigationController):
         if self.latest_obs is None:
             return False
 
-        detection_path = os.path.join(
-            self.episode_dir,
-            'detection',
-            f'step_{self.current_step:04d}_{action_phase}.png'
-        )
-        if os.path.exists(detection_path):
-            return True
-
         obs = [self.latest_obs]
         batch_obs = self._batch_obs(obs, save_object_detection=True)
         poses = torch.from_numpy(np.array([self.latest_obs['sensor_pose']])).float().to(self.device)

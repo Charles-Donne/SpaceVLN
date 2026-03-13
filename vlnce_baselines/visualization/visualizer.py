@@ -1111,6 +1111,7 @@ class MapVisualizer:
         
         # 统计检测到的landmark
         detected_landmarks = []
+        visible_entries = []  # [(name, dist_m, angle_deg, source), ...] source in {'depth','map'}
         matched_in_view: set = set()  # 当前帧中实际可见的landmark类名
         
         for i in range(len(detections.xyxy)):
@@ -1233,6 +1234,14 @@ class MapVisualizer:
             elif depth_dist_m is not None:
                 dist_str = f" {depth_dist_m:.1f}m"   # 无地图时仍显示depth
 
+            # 底部条带记录：每个可见实例一条（多实例不会被合并）
+            if depth_dist_m is not None and depth_trustworthy and depth_angle_deg is not None:
+                visible_entries.append((label_name, depth_dist_m, depth_angle_deg, 'depth'))
+            elif map_dist_m is not None and map_angle_deg is not None:
+                visible_entries.append((label_name, map_dist_m, map_angle_deg, 'map'))
+            elif depth_dist_m is not None and depth_angle_deg is not None:
+                visible_entries.append((label_name, depth_dist_m, depth_angle_deg, 'depth'))
+
             # ── 单行标签（仅距离）显示在bbox上方，名称移至底部条带 ──
             row1 = dist_str.strip()
             if row1:
@@ -1270,17 +1279,21 @@ class MapVisualizer:
 
             item_lines = []  # list of (text, is_separator)
 
-            # ── 可见landmark ──
-            for lm_name, _conf in detected_landmarks:
+            # ── 可见landmark（逐实例显示） ──
+            for idx_vis, (lm_name, d_m, a_deg, src) in enumerate(visible_entries, 1):
                 sn = lm_name if len(lm_name) <= 40 else lm_name[:38] + ".."
-                if landmark_dist_map and lm_name in landmark_dist_map:
-                    d_m, a_deg = landmark_dist_map[lm_name]
-                    item_lines.append((f"[Vis] {sn}  {d_m:.1f}m  {_dir_str(a_deg)}", False))
-                else:
+                tag = "[Vis]" if src == 'depth' else "[Vis~Map]"
+                suffix = f" #{idx_vis}" if len(visible_entries) > 1 else ""
+                item_lines.append((f"{tag}{suffix} {sn}  {d_m:.1f}m  {_dir_str(a_deg)}", False))
+
+            # 若可见实例未能得到距离，则退化显示名称
+            if detected_landmarks and not visible_entries:
+                for lm_name, _conf in detected_landmarks:
+                    sn = lm_name if len(lm_name) <= 40 else lm_name[:38] + ".."
                     item_lines.append((f"[Vis] {sn}", False))
 
             # 空行分隔（两组都有时）
-            if detected_landmarks and offscreen:
+            if (visible_entries or detected_landmarks) and offscreen:
                 item_lines.append(("", True))
 
             # ── 离屏landmark ──

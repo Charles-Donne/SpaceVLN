@@ -178,6 +178,7 @@ class InteractiveNavigationController:
 # print(f" +{new_classes}类" if new_classes > 0 else "")
         
         if save_vis:
+            vis_landmark_classes = self.landmark_classes if enable_landmark_detection else []
             # action执行时不传waypoint信息，不计算角度（只在环视后计算）
             rgb_bgr = cv2.cvtColor(obs[0]['rgb'], cv2.COLOR_RGB2BGR)
             _, detected_landmarks_step, _ = self.visualizer.save_step_visualization(
@@ -192,7 +193,7 @@ class InteractiveNavigationController:
                 hfov=self.config.MAP.HFOV,
                 detections=self.latest_detections_full if hasattr(self, 'latest_detections_full') else None,
                 labels=self.latest_labels_full if hasattr(self, 'latest_labels_full') else None,
-                landmark_classes=self.landmark_classes,
+                landmark_classes=vis_landmark_classes,
                 mapping_classes=self.mapping_classes,
                 landmark_config={
                     'min_total_pixels': self.landmark_min_total_pixels,
@@ -207,7 +208,7 @@ class InteractiveNavigationController:
             )
             
             # 保存当前step检测到的landmarks（用于action决策）
-            if detected_landmarks_step:
+            if enable_landmark_detection and detected_landmarks_step:
                 if not hasattr(self, 'current_step_landmarks'):
                     self.current_step_landmarks = {}
                 self.current_step_landmarks[self.current_step] = detected_landmarks_step
@@ -385,7 +386,7 @@ class InteractiveNavigationController:
             # 所有检测到的类别都记录（包括landmark）
             self.detected_classes.add(label_name)
             # 子串匹配：若检测词是某landmark短语的组成词，也记录该landmark
-            for lc in (self.landmark_classes if hasattr(self, 'landmark_classes') else []):
+            for lc in landmark_classes_list:
                 if label_name != lc and label_name in lc:
                     self.detected_classes.add(lc)
         
