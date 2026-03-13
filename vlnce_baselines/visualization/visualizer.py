@@ -1085,6 +1085,7 @@ class MapVisualizer:
                               depth_meters: Optional[np.ndarray] = None,
                               hfov: float = 79.0,
                               landmark_dist_map: Optional[Dict[str, Tuple[float, float]]] = None,
+                              landmark_dist_map_multi: Optional[Dict[str, List[Tuple[float, float]]]] = None,
                               landmark_masks: Optional[np.ndarray] = None,
                               controller=None) -> np.ndarray:
         """
@@ -1196,10 +1197,17 @@ class MapVisualizer:
             if depth_dist_m is not None:
                 depth_angle_deg = (bbox_cx - w_img / 2.0) / w_img * hfov
 
-            # ── 方式B：从世界地图质心获取 ──
+            # ── 方式B：从世界地图质心获取（优先同类多实例匹配） ──
             map_dist_m = None
             map_angle_deg = None
-            if landmark_dist_map and label_name in landmark_dist_map:
+            if landmark_dist_map_multi and label_name in landmark_dist_map_multi:
+                candidates = landmark_dist_map_multi[label_name]
+                if candidates:
+                    if depth_angle_deg is not None:
+                        map_dist_m, map_angle_deg = min(candidates, key=lambda x: abs(x[1] - depth_angle_deg))
+                    else:
+                        map_dist_m, map_angle_deg = min(candidates, key=lambda x: x[0])
+            elif landmark_dist_map and label_name in landmark_dist_map:
                 map_dist_m, map_angle_deg = landmark_dist_map[label_name]
 
             # ── 一致性检验：depth 和 map 差距过大说明当帧检测 false positive ──
@@ -1715,20 +1723,30 @@ class MapVisualizer:
                                hfov: float = 90.0,
                                detections=None,  # sv.Detections对象（新）
                                labels: Optional[List[str]] = None,
-                               landmark_classes: Optional[List[str]] = None,
+                            landmark_masks: Optional[np.ndarray] = None,
+                            landmark_dist_map_multi: Optional[Dict[str, List[Tuple[float, float]]]] = None,
                                mapping_classes: Optional[List[str]] = None,  # 新增
                                landmark_config: Optional[Dict] = None,
                                waypoint_positions: Optional[List[Tuple[int, int]]] = None,
                                waypoint_ids: Optional[List[int]] = None,
-                               masks: Optional[np.ndarray] = None,
-                               phase: str = "action",
+                            if landmark_dist_map_multi and label_name in landmark_dist_map_multi:
+                                candidates = landmark_dist_map_multi[label_name]
+                                if candidates:
+                                    if depth_angle_deg is not None:
+                                        # 用角度最接近当前bbox的地图实例（解决同类多实例被“最近距离”覆盖）
+                                        map_dist_m, map_angle_deg = min(candidates, key=lambda x: abs(x[1] - depth_angle_deg))
+                                    else:
+                                        map_dist_m, map_angle_deg = min(candidates, key=lambda x: x[0])
+                            elif landmark_dist_map and label_name in landmark_dist_map:
+                                map_dist_m, map_angle_deg = landmark_dist_map[label_name]
                                global_trajectory_points: Optional[List[Tuple[int, int]]] = None,
                                controller = None,
-                               crop_offset: Optional[Tuple[int, int]] = None) -> Tuple[Dict[str, str], List, Optional[float]]:
+                            landmark_dist_map = {}
+                            landmark_dist_map_multi = {}
         """
         一键保存当前步骤的所有可视化（支持新detection渲染 + 平滑轨迹线 + waypoint标记）
         
-        Args:
+                                    landmark_dist_map_multi.setdefault(cls_name, []).append((dist_m, angle_deg))
             trajectory_points: [(x, y), ...] 当前子任务轨迹（用于local map）
             global_trajectory_points: [(x, y), ...] 完整导航历史轨迹（用于global map，可选）
                 - 如果提供，global map显示此轨迹
@@ -1780,10 +1798,12 @@ class MapVisualizer:
         )
         paths['local_map'] = self.save_local_map(step, episode_id, local_map, phase)        # 4. 渲染并保存检测结果
         detected_landmarks_step = []
+        landmark_dist_map = {}
+        landmark_dist_map_multi = {}
         if detections is not None and labels is not None:
             # 从地图landmarks构建距离/角度查找表（同一类取最近实例）
-            landmark_dist_map = {}
             for _, _, cls_name, dist_m, angle_deg in landmarks:
+                landmark_dist_map_multi.setdefault(cls_name, []).append((dist_m, angle_deg))
                 if cls_name not in landmark_dist_map or dist_m < landmark_dist_map[cls_name][0]:
                     landmark_dist_map[cls_name] = (dist_m, angle_deg)
 
@@ -1808,9 +1828,28 @@ class MapVisualizer:
                 landmark_classes, mapping_classes,
                 hfov=hfov,
                 landmark_dist_map=landmark_dist_map if landmark_dist_map else None,
+                landmark_dist_map_multi=landmark_dist_map_multi if landmark_dist_map_multi else None,
                 controller=controller
             )
             paths['detection'] = self.save_detection(step, episode_id, detection_vis, phase)
+
+        # 统计：本步 landmark 配置/检测/地图实例数量
+        n_cfg = len(landmark_classes) if landmark_classes else 0
+        n_det_inst = len(detected_landmarks_step)
+        n_det_cls = len(set([n for n, _ in detected_landmarks_step])) if detected_landmarks_step else 0
+        n_map_inst = len(landmarks)
+        n_map_cls = len(set([x[2] for x in landmarks])) if landmarks else 0
+        if n_cfg > 0:
+            print(f"[LM STATS] step={step}  cfg_classes={n_cfg}  det_inst={n_det_inst} det_cls={n_det_cls}  map_inst={n_map_inst} map_cls={n_map_cls}")
+        if controller is not None:
+            controller.latest_landmark_stats = {
+                'step': step,
+                'configured_classes': n_cfg,
+                'detected_instances': n_det_inst,
+                'detected_classes': n_det_cls,
+                'mapped_instances': n_map_inst,
+                'mapped_classes': n_map_cls,
+            }
 
         # 将当前地图中的所有landmark距离/角度信息存到controller，供LLM提示词使用
         if controller is not None and landmark_dist_map:
