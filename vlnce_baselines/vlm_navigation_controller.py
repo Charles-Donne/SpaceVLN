@@ -1640,7 +1640,26 @@ class VLMNavigationController(InteractiveNavigationController):
         # action VLM 只有第一人称图，需要文字告知离屏的已映射 landmark 方向距离
         action_landmark_map_info = None
         landmark_dist_map = getattr(self, 'latest_landmark_dist_map', {})
-        if landmark_dist_map:
+        landmark_dist_map_multi = getattr(self, 'latest_landmark_dist_map_multi', {})
+
+        def _snap_angle_to_action(a_deg: float) -> int:
+            # 仅用于action提示文本，不改变真实地图角度
+            if abs(a_deg) < 15.0:
+                return 0
+            return int(round(a_deg / 30.0) * 30)
+
+        def _fmt_dir_real(a_deg: float) -> str:
+            if abs(a_deg) < 1e-6:
+                return "Front 0deg"
+            return f"R{abs(a_deg):.0f}deg" if a_deg > 0 else f"L{abs(a_deg):.0f}deg"
+
+        def _fmt_dir_action(a_deg: float) -> str:
+            a_snap = _snap_angle_to_action(a_deg)
+            if a_snap == 0:
+                return "Front 0deg"
+            return f"R{abs(a_snap):.0f}deg" if a_snap > 0 else f"L{abs(a_snap):.0f}deg"
+
+        if landmark_dist_map or landmark_dist_map_multi:
             # 判断当前帧可见的 landmark
             if detection_step is not None and hasattr(self, 'current_step_landmarks') and detection_step in self.current_step_landmarks:
                 visible_names = {n for n, _ in self.current_step_landmarks[detection_step]}
@@ -1648,27 +1667,47 @@ class VLMNavigationController(InteractiveNavigationController):
                 visible_names = set()
 
             lines = []
-            for cls_name, (dist_m, angle_deg) in sorted(landmark_dist_map.items(), key=lambda x: x[1][0]):
-                if abs(angle_deg) < 5.0:
-                    dir_s = "ahead"
-                elif angle_deg > 0:
-                    dir_s = f"R{angle_deg:.0f}deg"
-                else:
-                    dir_s = f"L{abs(angle_deg):.0f}deg"
 
-                if cls_name in visible_names:
-                    tag = "[Visible]"
-                    hint = ""
-                else:
-                    tag = "[Map-offscreen]"
-                    # 添加明确的转向提示
-                    if abs(angle_deg) < 5.0:
-                        hint = " → already ahead, move forward"
-                    elif angle_deg > 0:
-                        hint = f" → TURN RIGHT ~{angle_deg:.0f}deg then move forward"
+            # 优先使用多实例；若无则回退到每类最近实例
+            if landmark_dist_map_multi:
+                for cls_name, candidates in sorted(landmark_dist_map_multi.items(), key=lambda x: min([p[0] for p in x[1]]) if x[1] else 1e9):
+                    if not candidates:
+                        continue
+                    sorted_candidates = sorted(candidates, key=lambda p: p[0])
+                    for idx_c, (dist_m, angle_deg) in enumerate(sorted_candidates, 1):
+                        tag = "[Visible-class]" if cls_name in visible_names else "[Map-offscreen]"
+                        snap_deg = _snap_angle_to_action(angle_deg)
+                        if cls_name in visible_names and abs(snap_deg) <= 0:
+                            hint = ""
+                        elif snap_deg == 0:
+                            hint = " → move forward"
+                        elif snap_deg > 0:
+                            hint = f" → TURN RIGHT {abs(snap_deg)}deg then move forward"
+                        else:
+                            hint = f" → TURN LEFT {abs(snap_deg)}deg then move forward"
+                        suffix = f" #{idx_c}" if len(sorted_candidates) > 1 else ""
+                        lines.append(
+                            f"  • {tag} {cls_name}{suffix}: {dist_m:.1f}m, "
+                            f"Real={_fmt_dir_real(angle_deg)} | Act={_fmt_dir_action(angle_deg)}{hint}"
+                        )
+            else:
+                for cls_name, (dist_m, angle_deg) in sorted(landmark_dist_map.items(), key=lambda x: x[1][0]):
+                    tag = "[Visible-class]" if cls_name in visible_names else "[Map-offscreen]"
+                    snap_deg = _snap_angle_to_action(angle_deg)
+                    if cls_name in visible_names and abs(snap_deg) <= 0:
+                        hint = ""
+                    elif snap_deg == 0:
+                        hint = " → move forward"
+                    elif snap_deg > 0:
+                        hint = f" → TURN RIGHT {abs(snap_deg)}deg then move forward"
                     else:
-                        hint = f" → TURN LEFT ~{abs(angle_deg):.0f}deg then move forward"
-                lines.append(f"  • {tag} {cls_name}: {dist_m:.1f}m, {dir_s}{hint}")
+                        hint = f" → TURN LEFT {abs(snap_deg)}deg then move forward"
+
+                    lines.append(
+                        f"  • {tag} {cls_name}: {dist_m:.1f}m, "
+                        f"Real={_fmt_dir_real(angle_deg)} | Act={_fmt_dir_action(angle_deg)}{hint}"
+                    )
+
             action_landmark_map_info = "\n".join(lines) if lines else None
 
         # 调用VLM决策（save_dir使call_api在发送时保存压缩图片+prompt）

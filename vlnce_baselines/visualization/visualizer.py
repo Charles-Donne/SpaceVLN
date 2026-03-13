@@ -1114,6 +1114,18 @@ class MapVisualizer:
         detected_landmarks = []
         visible_entries = []  # [(name, dist_m, angle_deg, source), ...] source in {'depth','map'}
         matched_in_view: set = set()  # 当前帧中实际可见的landmark类名
+
+        def _snap_angle_to_action(a_deg: float) -> int:
+            """仅用于渲染标注：将角度量化到30°动作栅格（不改真实坐标）。"""
+            if abs(a_deg) < 15.0:
+                return 0
+            return int(round(a_deg / 30.0) * 30)
+
+        def _dir_str(a_deg: float, use_action_snap: bool = False) -> str:
+            a = _snap_angle_to_action(a_deg) if use_action_snap else a_deg
+            if abs(a) < 1e-6:
+                return "Front 0deg"
+            return f"Right {abs(a):.0f}deg" if a > 0 else f"Left {abs(a):.0f}deg"
         
         for i in range(len(detections.xyxy)):
             bbox = detections.xyxy[i]
@@ -1271,15 +1283,48 @@ class MapVisualizer:
         
         # ── 底部条带：所有landmark信息（可见+离屏）拼接在图像下方，白底黑字 ──
         # [Visible] = 当前帧检测到，[Off-screen] = 地图中存在但视野外
-        offscreen = {k: v for k, v in landmark_dist_map.items() if k not in matched_in_view} if landmark_dist_map else {}
-        if detected_landmarks or offscreen:
+        # 构建离屏landmark列表：优先保留多实例（同类多个实例分别显示距离/角度）
+        # 仅用于渲染展示，不改变任何真实地图坐标。
+        offscreen_items = []  # [(cls_name, inst_idx, dist_m, angle_deg)]
+        if landmark_dist_map_multi:
+            used_indices_by_class = {}
+            # 尽量把可见实例和地图实例做一一对应，剩余的作为离屏
+            for lm_name, d_m_vis, a_deg_vis, _src in visible_entries:
+                candidates = landmark_dist_map_multi.get(lm_name, [])
+                if not candidates:
+                    continue
+                used_set = used_indices_by_class.setdefault(lm_name, set())
+                best_idx = None
+                best_cost = None
+                for idx_c, (d_m_c, a_deg_c) in enumerate(candidates):
+                    if idx_c in used_set:
+                        continue
+                    cost = abs(a_deg_c - a_deg_vis) + 0.5 * abs(d_m_c - d_m_vis)
+                    if best_cost is None or cost < best_cost:
+                        best_cost = cost
+                        best_idx = idx_c
+                if best_idx is not None:
+                    used_set.add(best_idx)
+
+            for cls_name, candidates in landmark_dist_map_multi.items():
+                used_set = used_indices_by_class.get(cls_name, set())
+                sorted_with_idx = sorted(list(enumerate(candidates)), key=lambda x: x[1][0])
+                inst_id = 0
+                for idx_c, (d_m, a_deg) in sorted_with_idx:
+                    if idx_c in used_set:
+                        continue
+                    inst_id += 1
+                    offscreen_items.append((cls_name, inst_id, d_m, a_deg))
+        elif landmark_dist_map:
+            for cls_name, (d_m, a_deg) in sorted(landmark_dist_map.items(), key=lambda x: x[1][0]):
+                if cls_name in matched_in_view:
+                    continue
+                offscreen_items.append((cls_name, 1, d_m, a_deg))
+
+        if detected_landmarks or offscreen_items:
             w_img2 = detection_vis.shape[1]
             font2 = cv2.FONT_HERSHEY_SIMPLEX
             fs2, ft2 = 0.5, 1
-
-            def _dir_str(a_deg):
-                if abs(a_deg) < 5.0: return "Front"
-                return f"Right {a_deg:.0f}deg" if a_deg > 0 else f"Left {abs(a_deg):.0f}deg"
 
             item_lines = []  # list of (text, is_separator)
 
@@ -1288,7 +1333,11 @@ class MapVisualizer:
                 sn = lm_name if len(lm_name) <= 40 else lm_name[:38] + ".."
                 tag = "[Vis]" if src == 'depth' else "[Vis~Map]"
                 suffix = f" #{idx_vis}" if len(visible_entries) > 1 else ""
-                item_lines.append((f"{tag}{suffix} {sn}  {d_m:.1f}m  {_dir_str(a_deg)}", False))
+                item_lines.append((
+                    f"{tag}{suffix} {sn}  {d_m:.1f}m  "
+                    f"Real:{_dir_str(a_deg, False)} | Act:{_dir_str(a_deg, True)}",
+                    False
+                ))
 
             # 若可见实例未能得到距离，则退化显示名称
             if detected_landmarks and not visible_entries:
@@ -1297,13 +1346,23 @@ class MapVisualizer:
                     item_lines.append((f"[Vis] {sn}", False))
 
             # 空行分隔（两组都有时）
-            if (visible_entries or detected_landmarks) and offscreen:
+            if (visible_entries or detected_landmarks) and offscreen_items:
                 item_lines.append(("", True))
 
             # ── 离屏landmark ──
-            for cls_name, (d_m, a_deg) in sorted(offscreen.items(), key=lambda x: x[1][0]):
+            # 同类多实例按 #k 标识
+            cls_total = {}
+            for cls_name, _inst_idx, _d_m, _a_deg in offscreen_items:
+                cls_total[cls_name] = cls_total.get(cls_name, 0) + 1
+
+            for cls_name, inst_idx, d_m, a_deg in sorted(offscreen_items, key=lambda x: x[2]):
                 sn = cls_name if len(cls_name) <= 40 else cls_name[:38] + ".."
-                item_lines.append((f"[Off] {sn}  {d_m:.1f}m  {_dir_str(a_deg)}", False))
+                suffix = f" #{inst_idx}" if cls_total.get(cls_name, 0) > 1 else ""
+                item_lines.append((
+                    f"[Off]{suffix} {sn}  {d_m:.1f}m  "
+                    f"Real:{_dir_str(a_deg, False)} | Act:{_dir_str(a_deg, True)}",
+                    False
+                ))
 
             # 计算行高（增大间距，避免文字显示不全）
             font2 = cv2.FONT_HERSHEY_SIMPLEX
@@ -1835,9 +1894,11 @@ class MapVisualizer:
                 'mapped_classes': n_map_cls,
             }
 
-        # 将当前地图中的所有landmark距离/角度信息存到controller，供LLM提示词使用
-        if controller is not None and landmark_dist_map:
-            controller.latest_landmark_dist_map = landmark_dist_map
+        # 将当前地图中的landmark距离/角度信息存到controller，供LLM/VLM提示词使用
+        # 注意：latest_landmark_dist_map_multi保留每类多实例；latest_landmark_dist_map是每类最近实例
+        if controller is not None:
+            controller.latest_landmark_dist_map = landmark_dist_map if landmark_dist_map else {}
+            controller.latest_landmark_dist_map_multi = landmark_dist_map_multi if landmark_dist_map_multi else {}
         
         # 5. 保存semantic masks（用于action模式的地面分割）
         if masks is not None:

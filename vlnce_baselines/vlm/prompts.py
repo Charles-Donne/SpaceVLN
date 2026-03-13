@@ -7,15 +7,15 @@ VLM规划提示词模板
 # 初始规划提示词 - 在任务开始时生成第一个子任务
 INITIAL_PLANNING_PROMPT = """VLN Planning: Analyze environment + Global Task → design next subtask.
 
-**Role**: Spatial reasoning and navigation planning. Build a mental spatial model, locate current position, choose the next move, and issue precise navigation instructions. NOT manipulation (doors/objects). End at final waypoint.
+**Role**: Spatial reasoning + navigation planning. Build spatial model, locate current position, choose next move, and output precise navigation instructions. NOT manipulation (doors/objects). End at final waypoint.
 Example: "Stop at chair and open doors" → Navigation ends at "chair".
 
 **Task**: {instruction}
 
-**Initial state note**: This is the first planning step. No place has been visited yet. Your immediate goal is to complete the FIRST sentence/stage of the instruction first: go to the nearest relevant landmark/destination vicinity.
+**Initial state note**: This is initial planning (no waypoint/history yet). First complete sentence/stage #1 by moving to the nearest relevant landmark/destination vicinity.
 
 # Inputs
-**12 Views** (30° FOV, 360°): IMAGE 1=Front 0°, angles increase CCW (30°, 60°, ..., 330°)
+**12 Views** (30° FOV, 360°): IMAGE1=Front 0°, angles increase CCW (30°, 60°, ..., 330°)
 - **Obstacle distances**: label = **nearest obstacle in that direction** (NOT the distance to far objects visible in the scene). <0.5m=blocked | 0.5-1.0m=caution | >1.0m=passable
 - **Auto-rotation**: System rotates to your chosen IMAGE → becomes Front (0°)
 
@@ -29,8 +29,8 @@ Example: "Stop at chair and open doors" → Navigation ends at "chair".
 
 # Reasoning (6 Parts)
 
-**1) 12-View Analysis (MUST analyze EACH IMAGE 1-12)** 
-**Format for each IMAGE**: "IMAGE # (Direction Angle°): room_type, object1 distance1, object2 distance2. Obs: X.Xm NEAR/FAR"
+**1) 12-View Analysis (MUST analyze EACH IMAGE 1-12)**
+**Format for each IMAGE**: "IMAGE# (Direction Angle°): room_type, object1 distance1, object2 distance2. Obs: X.Xm NEAR/FAR"
 
 **REQUIRED - Analyze ALL 12 IMAGEs sequentially**:
 **Distance classification**: NEAR<1m (large, current position) | FAR>1.5m (small, next destination)
@@ -55,12 +55,12 @@ Example: "Stop at chair and open doors" → Navigation ends at "chair".
    - Current location = (Current) ONE only
    - Ahead of current = unmarked (not yet reached)
 4. **Waypoint sequence**: Write complete chain: Completed(✓) → Current → Next → ... → Goal
-5. **Task chain analysis**: What's next step? Which waypoint to navigate to? Why?
+5. **Task chain analysis**: What's next step/waypoint and why?
 6. **Arrival check**: FAR(>1.5m, 1-2 views)=Continue | SURROUNDED(<1m, 3+ views)=STOP
 
 **Landmark spatial-relation rule (MANDATORY)**:
 - Preserve landmark order and spatial relations from the instruction.
-- Plan with explicit relations such as: pass-by / left-of / right-of / through / after / then.
+- Plan with explicit relations: pass-by / left-of / right-of / through / after / then.
 - Example pattern: "go to oven" → "pass arch near painting" → "enter the arch on your right".
 
 **4) Direction Selection**
@@ -76,7 +76,7 @@ E) Choose: Task direction > Waypoint visible > **obs>1.0m** > Map green path
 
 **Sequential planning rule (strict)**:
 - Output only the immediate next waypoint for current-stage progress.
-- Forbidden: planning stage +2/+3 while stage +1 is unfinished.
+- Forbidden: plan stage +2/+3 while stage +1 is unfinished.
 
 # Actions
 TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
@@ -137,9 +137,9 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
 - **First-sentence-first (initial)**: In initial planning, complete the first sentence/stage before moving to later stages.
 - **Nearest relevant landmark first**: Prefer the nearest landmark that advances the current stage.
 - **Landmark relations**: Keep directional/relational constraints between landmarks (e.g., near, beside, left/right, through, after).
-- **Reasoning thoroughness**: Part 1 MUST analyze ALL 12 IMAGEs with angle+direction+content. Part 3 MUST detail position and complete task chain (✓→Current→unmarked)
-- **Initial position**: Determine from NEAR<1m + Local Map 0.5m circle. Mark current=(Current), future=unmarked
-- **Position awareness**: NEAR<1m (multiple IMAGEs) = current position ≠ destination FAR>1.5m (1-2 views)
+- **Reasoning thoroughness**: Part 1 MUST analyze ALL 12 IMAGEs (angle+direction+content). Part 3 MUST detail position + complete task chain (✓→Current→unmarked)
+- **Initial position**: Determine from NEAR<1m + Local Map 0.5m circle
+- **Position awareness**: NEAR<1m across multiple IMAGEs = current position; FAR>1.5m (1-2 views) is usually destination, not arrival
 - **Markers**: Behind=(✓) | Now=(Current) ONE only | Ahead=unmarked
 - **Task chain consistency**: Before current=(✓), current=(Current), after current=unmarked. Chain determines next direction
 - **Entrance vs interior**: "Wait at entrance" = doorway, NOT inside room
@@ -210,7 +210,7 @@ Example: "Stop at chair and open doors" → Navigation ends at "chair".
    - Ahead of current = unmarked (not yet reached)
    **Check direction**: Don't confuse same room at different stages (e.g., passed hallway vs future hallway)
 4. **Waypoint sequence**: Completed(✓) → Current → Next → ... → Goal (blue circles behind = ✓)
-5. **Task chain analysis**: What's completed? What's next? Which waypoint now? Why?
+5. **Task chain analysis**: What's completed? What's next waypoint? Why?
 6. **Arrival check**: FAR(>1.5m, 1-2 views)=Continue | SURROUNDED(<1m, 3+ views)=STOP
 
 **Landmark spatial-relation rule (MANDATORY)**:
@@ -311,7 +311,7 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
 - **Current-work-first**: Must finish current nearest unfinished stage before planning later stages.
 - **Nearest relevant landmark first**: For current unfinished stage, prefer the nearest landmark that advances that stage.
 - **Landmark relations**: Preserve directional/relational constraints between landmarks (e.g., near, beside, left/right, through, after).
-- **Reasoning thoroughness**: Part 1 MUST analyze ALL 12 IMAGEs with angle+direction+content+blue circles. Part 3 MUST detail position and task chain (✓→Current→unmarked, blue behind=✓)
+- **Reasoning thoroughness**: Part 1 MUST analyze ALL 12 IMAGEs (angle+direction+content+blue circles). Part 3 MUST detail position + task chain (✓→Current→unmarked, blue behind=✓)
 - **Base on actual**: Say only what's visible. Wall=wall, don't guess beyond
 - **IMAGE-angle**: IMAGE1=0°, IMAGE2=30°, ..., IMAGE7=180°, ..., IMAGE12=330°
 - **Position first**: Determine position → then mark (✓)/Current/unmarked

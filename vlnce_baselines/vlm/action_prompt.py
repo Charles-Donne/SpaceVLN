@@ -37,10 +37,7 @@ You are provided with 1 image:
 
 **Decision Process**:
 1. **Detection View**: Check the **bottom strip** for all landmark names and distances. Is a yellow bbox visible? It marks the **subtask landmark reference** (nearby anchor, NOT the final destination) — navigate toward it to reach the destination area.
-2. **Landmark Map**: Read the Known Landmark Map section above.
-   - `[Visible Xm Ydeg]`: landmark is in the current view — navigate toward its yellow bbox
-   - `[Map R/Ldeg]`: off-screen — TURN RIGHT/LEFT that many degrees first, then move forward
-   - If distance < 0.5m, **STOP immediately**
+2. **Landmark Map**: Read the Known Landmark Map section above. If distance < 0.5m, **STOP immediately**
 3. **Distance Lines**: Which directions are blocked (red) vs safe (green/yellow)?
 4. **Distance Estimation**: How far to destination? (e.g., "~3m", "<0.5m")
 5. **Action Decision**: Choose the safest action toward the destination, avoiding blocked directions
