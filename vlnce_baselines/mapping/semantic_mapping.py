@@ -979,7 +979,6 @@ class Semantic_Mapping(nn.Module):
         self.full_map = None
         self.one_step_full_map = None
         
-        print(f"✅ 地图初始化: Agent@世界(6.0m, 6.0m) Tile(0,0)中心 LocalMap[0-12m]")
                                 
     def update_map(self, step: int, detected_classes: OrderedSet, current_episode_id: int) -> None:
         """
@@ -1387,7 +1386,6 @@ class Semantic_Mapping(nn.Module):
         _n_lm = agent_view.shape[1] - 3 - 15
         for _lm_ch in range(_n_lm):
             _ch = agent_view[0, 3 + 15 + _lm_ch, y1:y2, x1:x2]
-            print(f"[LM 2/3 PROJECT] lm_ch_offset={_lm_ch}  agent_view pixels>0.5={int((_ch>0.5).sum().item())}  max={_ch.max().item():.3f}")
 
         corrected_pose = pose_obs # sensor pose
 

@@ -1648,11 +1648,6 @@ class VLMNavigationController(InteractiveNavigationController):
                 return 0
             return int(round(a_deg / 30.0) * 30)
 
-        def _fmt_dir_real(a_deg: float) -> str:
-            if abs(a_deg) < 1e-6:
-                return "Front 0deg"
-            return f"R{abs(a_deg):.0f}deg" if a_deg > 0 else f"L{abs(a_deg):.0f}deg"
-
         def _fmt_dir_action(a_deg: float) -> str:
             a_snap = _snap_angle_to_action(a_deg)
             if a_snap == 0:
@@ -1688,7 +1683,7 @@ class VLMNavigationController(InteractiveNavigationController):
                         suffix = f" #{idx_c}" if len(sorted_candidates) > 1 else ""
                         lines.append(
                             f"  • {tag} {cls_name}{suffix}: {dist_m:.1f}m, "
-                            f"Real={_fmt_dir_real(angle_deg)} | Act={_fmt_dir_action(angle_deg)}{hint}"
+                            f"{_fmt_dir_action(angle_deg)}{hint}"
                         )
             else:
                 for cls_name, (dist_m, angle_deg) in sorted(landmark_dist_map.items(), key=lambda x: x[1][0]):
@@ -1705,7 +1700,7 @@ class VLMNavigationController(InteractiveNavigationController):
 
                     lines.append(
                         f"  • {tag} {cls_name}: {dist_m:.1f}m, "
-                        f"Real={_fmt_dir_real(angle_deg)} | Act={_fmt_dir_action(angle_deg)}{hint}"
+                        f"{_fmt_dir_action(angle_deg)}{hint}"
                     )
 
             action_landmark_map_info = "\n".join(lines) if lines else None
@@ -2523,4 +2518,3 @@ class VLMNavigationController(InteractiveNavigationController):
         return "\n".join(node_lines) + "\n" + path_line
 
     # ========== 原有方法 ==========
-

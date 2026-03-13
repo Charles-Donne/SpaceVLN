@@ -981,9 +981,6 @@ class MapVisualizer:
                 mapping_classes=mapping_classes
             )
 
-            if not landmarks:
-                print(f"[LM RENDER] no landmarks found. detected={detected_classes} lm_classes={landmark_classes}")
-
             for marker_x, marker_y, cls_name, _dist_m, _angle_deg in landmarks:
                 # 1. 缩放到 480×480 显示坐标（与 global map 相同）
                 display_x = marker_x * 480.0 / w   # 列坐标 → display_x
@@ -993,7 +990,6 @@ class MapVisualizer:
                 _res_m = self.resolution / 100.0  # 5cm/px → 0.05m/px
                 fwd_m = (marker_y - h // 2) * _res_m   # row>center=前方
                 right_m = (marker_x - w // 2) * _res_m  # col>center=右方
-                print(f"[LM RENDER] '{cls_name}'  heading={current_o:.0f}deg  world(fwd={fwd_m:.2f}m right={right_m:.2f}m)  dist={_dist_m:.2f}m angle={_angle_deg:.1f}deg  map(col={marker_x} row={marker_y}) agent(col={w//2} row={h//2}) ->local({local_x_dbg:.0f},{local_y_dbg:.0f}) visible={0<=local_x_dbg<480 and 0<=local_y_dbg<480}")
 
                 # 2. 裁剪中心 240×240（rows/cols 120-360）并放大到 480×480
                 local_x = (display_x - 120) * 2
@@ -1112,7 +1108,7 @@ class MapVisualizer:
         
         # 统计检测到的landmark
         detected_landmarks = []
-        visible_entries = []  # [(name, dist_m, angle_deg, source), ...] source in {'depth','map'}
+        visible_entries = []  # [(name, dist_m, angle_deg), ...] using corrected map values when available
         matched_in_view: set = set()  # 当前帧中实际可见的landmark类名
 
         def _snap_angle_to_action(a_deg: float) -> int:
@@ -1218,48 +1214,25 @@ class MapVisualizer:
             elif landmark_dist_map and label_name in landmark_dist_map:
                 map_dist_m, map_angle_deg = landmark_dist_map[label_name]
 
-            # ── 一致性检验：depth 和 map 差距过大说明当帧检测 false positive ──
-            # 阈值：距离偏差>0.8m 且 角度偏差>20°，判定当帧检测不可信
-            DIST_THR = 0.8   # 米
-            ANGLE_THR = 20.0  # 度
-            depth_trustworthy = True
-            if (depth_dist_m is not None and map_dist_m is not None and depth_angle_deg is not None and map_angle_deg is not None):
-                diff_dist = abs(depth_dist_m - map_dist_m)
-                diff_angle = abs(depth_angle_deg - map_angle_deg)
-                if diff_dist > DIST_THR and diff_angle > ANGLE_THR:
-                    depth_trustworthy = False
-
-            # ── [LM COMPARE] 两种方式对比 ──
-            if depth_dist_m is not None and map_dist_m is not None:
-                trust_tag = "✅" if depth_trustworthy else "❌FAKE"
-                print(f"[LM COMPARE] '{label_name}'  "
-                      f"depth=({depth_dist_m:.2f}m  angle={depth_angle_deg:.1f}deg) {trust_tag}  "
-                      f"map=({map_dist_m:.2f}m  angle={map_angle_deg:.1f}deg)  "
-                      f"diff_dist={abs(depth_dist_m - map_dist_m):.2f}m  diff_angle={abs(depth_angle_deg - map_angle_deg):.1f}deg")
-            else:
-                print(f"[LM COMPARE] '{label_name}'  "
-                      f"depth={'N/A' if depth_dist_m is None else f'{depth_dist_m:.2f}m {depth_angle_deg:.1f}deg'}  "
-                      f"map={'N/A' if map_dist_m is None else f'{map_dist_m:.2f}m {map_angle_deg:.1f}deg'}")
-
-            # ── bbox上显示距离：当帧检测可信用depth（最新最准），否则fallback到map ──
-            dist_str = ""
-            if depth_dist_m is not None and depth_trustworthy:
-                dist_str = f" {depth_dist_m:.1f}m"   # RGB-D直采：精确
-            elif map_dist_m is not None:
-                dist_str = f" ~{map_dist_m:.1f}m"    # 地图估计（前缀~标识）
-            elif depth_dist_m is not None:
-                dist_str = f" {depth_dist_m:.1f}m"   # 无地图时仍显示depth
-
-            # 底部条带记录：每个可见实例一条（多实例不会被合并）
-            if depth_dist_m is not None and depth_trustworthy and depth_angle_deg is not None:
-                visible_entries.append((label_name, depth_dist_m, depth_angle_deg, 'depth'))
-            elif map_dist_m is not None and map_angle_deg is not None:
-                visible_entries.append((label_name, map_dist_m, map_angle_deg, 'map'))
+            # 动作输入图优先显示地图矫正后的距离和角度；无地图时退化到depth估计。
+            display_dist_m = None
+            display_angle_deg = None
+            if map_dist_m is not None and map_angle_deg is not None:
+                display_dist_m = map_dist_m
+                display_angle_deg = map_angle_deg
             elif depth_dist_m is not None and depth_angle_deg is not None:
-                visible_entries.append((label_name, depth_dist_m, depth_angle_deg, 'depth'))
+                display_dist_m = depth_dist_m
+                display_angle_deg = depth_angle_deg
 
-            # ── 单行标签（仅距离）显示在bbox上方，名称移至底部条带 ──
-            row1 = dist_str.strip()
+            if display_dist_m is not None and display_angle_deg is not None:
+                visible_entries.append((label_name, display_dist_m, display_angle_deg))
+
+            # bbox上方只显示最终用于决策的距离和动作角度
+            row1 = ""
+            if display_dist_m is not None and display_angle_deg is not None:
+                row1 = f"{display_dist_m:.1f}m {_dir_str(display_angle_deg, True)}"
+            elif display_dist_m is not None:
+                row1 = f"{display_dist_m:.1f}m"
             if row1:
                 font = cv2.FONT_HERSHEY_SIMPLEX
                 font_scale = 0.5
@@ -1289,7 +1262,7 @@ class MapVisualizer:
         if landmark_dist_map_multi:
             used_indices_by_class = {}
             # 尽量把可见实例和地图实例做一一对应，剩余的作为离屏
-            for lm_name, d_m_vis, a_deg_vis, _src in visible_entries:
+            for lm_name, d_m_vis, a_deg_vis in visible_entries:
                 candidates = landmark_dist_map_multi.get(lm_name, [])
                 if not candidates:
                     continue
@@ -1329,13 +1302,11 @@ class MapVisualizer:
             item_lines = []  # list of (text, is_separator)
 
             # ── 可见landmark（逐实例显示） ──
-            for idx_vis, (lm_name, d_m, a_deg, src) in enumerate(visible_entries, 1):
+            for idx_vis, (lm_name, d_m, a_deg) in enumerate(visible_entries, 1):
                 sn = lm_name if len(lm_name) <= 40 else lm_name[:38] + ".."
-                tag = "[Vis]" if src == 'depth' else "[Vis~Map]"
                 suffix = f" #{idx_vis}" if len(visible_entries) > 1 else ""
                 item_lines.append((
-                    f"{tag}{suffix} {sn}  {d_m:.1f}m  "
-                    f"Real:{_dir_str(a_deg, False)} | Act:{_dir_str(a_deg, True)}",
+                    f"[Vis]{suffix} {sn}  {d_m:.1f}m  {_dir_str(a_deg, True)}",
                     False
                 ))
 
@@ -1359,8 +1330,7 @@ class MapVisualizer:
                 sn = cls_name if len(cls_name) <= 40 else cls_name[:38] + ".."
                 suffix = f" #{inst_idx}" if cls_total.get(cls_name, 0) > 1 else ""
                 item_lines.append((
-                    f"[Off]{suffix} {sn}  {d_m:.1f}m  "
-                    f"Real:{_dir_str(a_deg, False)} | Act:{_dir_str(a_deg, True)}",
+                    f"[Off]{suffix} {sn}  {d_m:.1f}m  {_dir_str(a_deg, True)}",
                     False
                 ))
 
@@ -1882,8 +1852,6 @@ class MapVisualizer:
         n_det_cls = len(set([n for n, _ in detected_landmarks_step])) if detected_landmarks_step else 0
         n_map_inst = len(landmarks)
         n_map_cls = len(set([x[2] for x in landmarks])) if landmarks else 0
-        if n_cfg > 0:
-            print(f"[LM STATS] step={step}  cfg_classes={n_cfg}  det_inst={n_det_inst} det_cls={n_det_cls}  map_inst={n_map_inst} map_cls={n_map_cls}")
         if controller is not None:
             controller.latest_landmark_stats = {
                 'step': step,
@@ -1937,10 +1905,6 @@ class MapVisualizer:
         Returns: [(cx, cy, area), ...]
         """
         mask = self._get_channel_mask(full_map, channel_idx, threshold)
-
-        # [LM-DBG 3/3 CENTROID] 只打印landmark通道(ch>=18)
-        if channel_idx >= 18 and mask is not None:
-            print(f"[LM 3/3 CENTROID] ch={channel_idx}  full_map_pixels>0.5={int((mask>threshold).sum())}")
 
         if mask is None or not mask.any():
             return []

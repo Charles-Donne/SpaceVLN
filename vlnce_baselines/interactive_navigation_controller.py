@@ -386,20 +386,6 @@ class InteractiveNavigationController:
             if label_name_norm in lm_name_to_idx:
                 self.detected_classes.add(landmark_classes_list[lm_name_to_idx[label_name_norm]])
 
-        # [LM-CHECK] 每步输出可检测与过滤情况（排查自定义landmark在哪一步被过滤）
-        if save_object_detection:
-            raw_unique = sorted(list(set(raw_detected_names)))
-            matched_lm = sorted([
-                lm for lm in landmark_classes_list
-                if lm.strip().lower() in set([n.strip().lower() for n in raw_unique])
-            ])
-            missed_lm = sorted([lm for lm in landmark_classes_list if lm not in matched_lm])
-            print(f"[LM CHECK] step={step if step is not None else self.current_step} mode=landmark_on  detect_classes={detect_classes}")
-            print(f"[LM CHECK] raw_detected={raw_unique}")
-            print(f"[LM CHECK] matched_landmarks={matched_lm}  missed_landmarks={missed_lm}")
-        elif hasattr(self, 'landmark_classes') and self.landmark_classes:
-            print(f"[LM CHECK] step={step if step is not None else self.current_step} mode=landmark_off  only_mapping_detected (custom landmarks skipped this step)")
-        
         if len(valid_masks) == 0:
             # 没有检测到mapping类别，但可能有landmark检测
             combined = np.concatenate([
@@ -441,19 +427,6 @@ class InteractiveNavigationController:
                 except Exception:
                     pass
         self.latest_landmark_depth_m = lm_depth_m
-
-        # [LM-DBG 1/3 DETECT]（仅在启用landmark检测时打印）
-        if save_object_detection:
-            for j, lm_cls in enumerate(landmark_classes_list):
-                lm_m = landmark_masks[j]
-                _lm_norm = lm_cls.strip().lower()
-                lm_detected = any(
-                    ((' '.join(l.split()[:-1]) if len(l.split()) > 1 else l.split()[0]).strip().lower() == _lm_norm)
-                    for l in labels_all if len(l.split()) > 0
-                )
-                d_val = lm_depth_m.get(lm_cls)
-                d_info = f"  depth(median={d_val:.2f}m valid={int((lm_m>0.5).sum())}px)" if d_val is not None else "  depth=N/A"
-                print(f"[LM 1/3 DETECT] '{lm_cls}'  in_detections={lm_detected}  mask_pixels={int((lm_m>0.5).sum())}{d_info}")
 
         return combined.transpose(1, 2, 0)  # [H, W, 15+N_lm]
     
@@ -562,4 +535,3 @@ class InteractiveNavigationController:
         # print("\n[Close] 关闭环境...")
         self.envs.close()
         # print("[Close] 完成！")
-
