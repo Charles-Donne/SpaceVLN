@@ -207,11 +207,11 @@ class InteractiveNavigationController:
                 controller=self  # 传入controller以获取latest_depth_meters和latest_landmark_masks
             )
             
-            # 保存当前step检测到的landmarks（用于action决策）
-            if enable_landmark_detection and detected_landmarks_step:
+            # 记录当前step的landmark检测结果（用于action决策与去重）
+            if enable_landmark_detection:
                 if not hasattr(self, 'current_step_landmarks'):
                     self.current_step_landmarks = {}
-                self.current_step_landmarks[self.current_step] = detected_landmarks_step
+                self.current_step_landmarks[self.current_step] = detected_landmarks_step or []
         
         return {
             'obs': obs[0],

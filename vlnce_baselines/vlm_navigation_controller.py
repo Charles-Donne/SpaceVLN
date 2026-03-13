@@ -1253,11 +1253,12 @@ class VLMNavigationController(InteractiveNavigationController):
             # - 保存可视化（RGB、detection、maps）
             # - 更新距离信息
             # - 正确记录步数
+            is_last_turn = (i == len(action_sequence) - 1)
             result = self.step_with_vlm(
                 action_id,
                 action_name,
                 save_vis=True,
-                enable_landmark_detection=False,
+                enable_landmark_detection=is_last_turn,
             )
             
             # 检查episode是否结束
@@ -1793,6 +1794,10 @@ class VLMNavigationController(InteractiveNavigationController):
         """在不移动agent的情况下，执行一次动作前landmark检测并保存可视化。"""
         if self.latest_obs is None:
             return False
+
+        # 若当前step已做过landmark检测（例如自动转向最后一步），直接复用，避免重复计算
+        if hasattr(self, 'current_step_landmarks') and self.current_step in self.current_step_landmarks:
+            return True
 
         obs = [self.latest_obs]
         batch_obs = self._batch_obs(obs, save_object_detection=True)
