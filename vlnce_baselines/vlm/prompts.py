@@ -79,7 +79,7 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
     "next_waypoint_direction": "<IMAGE 1-12>",
     "next_waypoint_destination": "<Next waypoint>",
     "subtask_instruction": "<DETAILED: [room]+[relation]+[object]. After auto-rotate to Front view>",
-    "next_waypoint_landmark": "<Single landmark>",
+    "next_waypoint_landmark": "<Single, detectable noun (1-2 words), e.g., door/window/table/chair/painting/bed>",
     "completion_criteria": "<Detection: NEAR<1m | Map: area | Position: region>",
     "global_task_finish": <true if ALL✓, no(Current), at final. Else false>,
     "reasoning": "<6 parts REQUIRED: 1)12-Views(MUST analyze EACH IMAGE 1-12 with angle+direction+room+objects+distance+obstacle), 2)Maps(local 0.5m circle+global layout), 3)Position(detailed current location)+Task chain(✓→Current→unmarked, front-to-back consistency), 4)Direction(why this IMAGE?), 5)Near-term plan, 6)Long-term plan. Be thorough>"
@@ -130,6 +130,9 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
 - **Entrance vs interior**: "Wait at entrance" = doorway, NOT inside room
 - **Room-first strategy**: "[room]'s [object]" → navigate to [room] first, then [object]
 - **Auto-rotation**: System rotates to your IMAGE → write from Front view after
+- **Landmark output constraint (very important)**: `next_waypoint_landmark` must be a simple detectable noun (prefer 1 word, max 2 words). Avoid long phrases, colors, relative clauses, and overly specific modifiers.
+    - ✅ Good: `door`, `window`, `table`, `chair`, `painting`, `bed`, `sofa`, `sink`, `toilet`, `bookshelf`
+    - ❌ Bad: `painting of the girl in a blue bonnet`, `left wooden table near doorway`, `the second chair beside cabinet`
 - **Detail instructions**: Use [room]+[relation]+[object]. "Living room's gray couch" NOT "couch"
 - **IMAGE-angle match**: IMAGE1=0°, IMAGE2=30°, ..., IMAGE7=180°, ..., IMAGE12=330°
 """
@@ -222,7 +225,7 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
     "next_waypoint_direction": "<IMAGE 1-12>",
     "next_waypoint_destination": "<Next waypoint>",
     "subtask_instruction": "<DETAILED: [room]+[relation]+[object]. From current after auto-rotate>",
-    "next_waypoint_landmark": "<Single landmark>",
+    "next_waypoint_landmark": "<Single, detectable noun (1-2 words), e.g., door/window/table/chair/painting/bed>",
     "completion_criteria": "<Detection: NEAR<1m | Map: area | Position: region>",
     "global_task_finish": <true if ALL✓, no(Current), at final. Else false>,
     "reasoning": "<6 parts REQUIRED: 1)12-Views(MUST analyze EACH IMAGE 1-12 with angle+direction+room+objects+distance+obstacle+blue circles), 2)Maps(local 0.5m+global history+blue circles), 3)Position(detailed)+Task chain(✓→Current→unmarked, blue behind=✓)+arrived?, 4)Direction(why? exploration priority), 5)Near-term, 6)Long-term. Be thorough>"
@@ -297,6 +300,9 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
 - **NO IMAGE7/180° EVER**: Turning 180° backward is DISABLED. Goals are ahead. Only use IMAGEs 1-6, 8-12 (Front/Left/Right). If FRONT blocked, go LEFT or RIGHT, NEVER back.
 - **Room-first**: "[room]'s [object]" → navigate to [room], then [object]
 - **Detail instructions**: [room]+[relation]+[object]. "Living room's gray couch" NOT "couch"
+- **Landmark output constraint (very important)**: `next_waypoint_landmark` must be a simple detectable noun (prefer 1 word, max 2 words). Avoid long phrases, colors, relative clauses, and overly specific modifiers.
+    - ✅ Good: `door`, `window`, `table`, `chair`, `painting`, `bed`, `sofa`, `sink`, `toilet`, `bookshelf`
+    - ❌ Bad: `painting of the girl in a blue bonnet`, `left wooden table near doorway`, `the second chair beside cabinet`
 - **Auto-rotation**: System rotates to your IMAGE → write from Front after
 - **Map Part 2**: NO IMAGE numbers in Part 2, use only map
 """
