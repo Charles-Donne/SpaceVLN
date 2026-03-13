@@ -350,7 +350,12 @@ class InteractiveNavigationController:
         valid_labels = []
         valid_confidences = []
         # Landmark masks (投影到地图的额外通道，channel 3+N_mapping 开始)
-        landmark_classes_list = self.landmark_classes if hasattr(self, 'landmark_classes') else []
+        # 仅在 save_object_detection=True 时启用landmark检测（动作前快照/动作阶段）
+        landmark_classes_list = (
+            self.landmark_classes
+            if (save_object_detection and hasattr(self, 'landmark_classes'))
+            else []
+        )
         landmark_masks = np.zeros((len(landmark_classes_list), self.height, self.width), dtype=np.float32)
 
         for i, label in enumerate(labels_all):
@@ -426,13 +431,14 @@ class InteractiveNavigationController:
                     pass
         self.latest_landmark_depth_m = lm_depth_m
 
-        # [LM-DBG 1/3 DETECT]
-        for j, lm_cls in enumerate(landmark_classes_list):
-            lm_m = landmark_masks[j]
-            lm_detected = any(lm_cls in l or any(w in lm_cls for w in l.split()[:-1]) for l in labels_all)
-            d_val = lm_depth_m.get(lm_cls)
-            d_info = f"  depth(median={d_val:.2f}m valid={int((lm_m>0.5).sum())}px)" if d_val is not None else "  depth=N/A"
-            print(f"[LM 1/3 DETECT] '{lm_cls}'  in_detections={lm_detected}  mask_pixels={int((lm_m>0.5).sum())}{d_info}")
+        # [LM-DBG 1/3 DETECT]（仅在启用landmark检测时打印）
+        if save_object_detection:
+            for j, lm_cls in enumerate(landmark_classes_list):
+                lm_m = landmark_masks[j]
+                lm_detected = any(lm_cls in l or any(w in lm_cls for w in l.split()[:-1]) for l in labels_all)
+                d_val = lm_depth_m.get(lm_cls)
+                d_info = f"  depth(median={d_val:.2f}m valid={int((lm_m>0.5).sum())}px)" if d_val is not None else "  depth=N/A"
+                print(f"[LM 1/3 DETECT] '{lm_cls}'  in_detections={lm_detected}  mask_pixels={int((lm_m>0.5).sum())}{d_info}")
 
         return combined.transpose(1, 2, 0)  # [H, W, 15+N_lm]
     

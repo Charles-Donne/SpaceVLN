@@ -1307,7 +1307,7 @@ class MapVisualizer:
                 (tw, th), _ = cv2.getTextSize(txt, font2, fs2, ft2)
                 x_c = 8  # 左对齐，8px 左边距
                 y_c = pad_v + row_h * i + th
-                cv2.putText(strip, txt, (x_c, y_c), font2, fs2, (0, 0, 200), 2, cv2.LINE_AA)
+                cv2.putText(strip, txt, (x_c, y_c), font2, fs2, (0, 0, 200), 1, cv2.LINE_AA)
 
             detection_vis = np.vstack([detection_vis, strip])
 
