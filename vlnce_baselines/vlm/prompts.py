@@ -33,6 +33,7 @@ INITIAL_PLANNING_PROMPT = """VLN Planning: Analyze environment + Global Task →
 
 **REQUIRED - Analyze ALL 12 IMAGEs sequentially**:
 **Distance classification**: NEAR<1m (large, current position) | FAR>1.5m (small, next destination)
+**Per IMAGE requirement**: mention NEAR large objects and FAR small objects when visible
 **Connect adjacent views**: Group similar IMAGEs, track landmark across angles
 **NO hallucination**: Say only what's visible
 
@@ -92,7 +93,7 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
     "next_waypoint_landmark": "<Single, detectable noun (1-2 words)>",
     "completion_criteria": "<Detection: NEAR<1m | Map: area | Position: region>",
     "global_task_finish": <true if ALL✓, no(Current), at final. Else false>,
-    "reasoning": "<6 parts REQUIRED: 1)12-Views(MUST analyze IMAGE 1-12 with angle+direction+room+objects+distance+obstacle), 2)Maps(local+global), 3)Position+Task chain(✓→Current→unmarked), 4)Direction, 5)Near-term, 6)Long-term>"
+    "reasoning": "<6 parts REQUIRED: 1)12-Views(MUST analyze IMAGE 1-12 with angle+direction+room+NEAR large objects+FAR small objects+distance+obstacle), 2)Maps(local+global), 3)Position+Task chain(✓→Current→unmarked), 4)Direction, 5)Near-term, 6)Long-term>"
 }}
 
 #Examples (abbreviated):
@@ -120,6 +121,7 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
 - **Nearest relevant landmark first**: Prefer the nearest landmark that advances the current stage.
 - **Landmark relations**: Keep directional/relational constraints between landmarks (e.g., near, beside, left/right, through, after).
 - **Reasoning thoroughness**: Part 1 MUST analyze ALL 12 IMAGEs (angle+direction+content). Part 3 MUST detail position + complete task chain (✓→Current→unmarked)
+- **Per-view detail**: For every IMAGE, report NEAR large objects and FAR small objects when visible
 - **Position awareness**: NEAR<1m across multiple IMAGEs = current position; FAR>1.5m (1-2 views) is usually destination, not arrival
 - **Task chain consistency**: Before current=(✓), current=(Current), after current=unmarked. Chain determines next direction
 - **Entrance vs interior**: "Wait at entrance" = doorway, NOT inside room
@@ -150,7 +152,6 @@ VERIFICATION_REPLANNING_PROMPT = """VLN Verification: Verify subtask completion 
 **Colors**: White=unexplored | Black=obstacles | Green=safe | Orange=trajectory | Red=you | Blue circles=waypoints
 
 **Waypoint History**: {waypoint_summary}
-> Each entry shows direction and distance from your current pose (Front=0deg, Right=positive, Left=negative). The last entry is the most recent waypoint.
 
 # Reasoning (6 Parts)
 
@@ -159,6 +160,7 @@ VERIFICATION_REPLANNING_PROMPT = """VLN Verification: Verify subtask completion 
 
 **REQUIRED - Analyze ALL 12 IMAGEs sequentially**:
 **Distance**: NEAR<1m (large) | FAR>1.5m (small)
+**Per IMAGE requirement**: mention NEAR large objects and FAR small objects when visible
 **Track waypoint markers**: Note which IMAGEs show Blue Circles (visited locations)
 **NO hallucination**: Say only what's visible
 
@@ -225,7 +227,7 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
     "next_waypoint_landmark": "<Single, detectable noun (1-2 words)>",
     "completion_criteria": "<Detection: NEAR<1m | Map: area | Position: region>",
     "global_task_finish": <true if ALL✓, no(Current), at final. Else false>,
-    "reasoning": "<6 parts REQUIRED: 1)12-Views(MUST analyze IMAGE 1-12 with angle+direction+room+objects+distance+obstacle+blue circles), 2)Maps(local+global history), 3)Position+Task chain(✓→Current→unmarked)+arrival, 4)Direction, 5)Near-term, 6)Long-term>"
+    "reasoning": "<6 parts REQUIRED: 1)12-Views(MUST analyze IMAGE 1-12 with angle+direction+room+NEAR large objects+FAR small objects+distance+obstacle+blue circles), 2)Maps(local+global history), 3)Position+Task chain(✓→Current→unmarked)+arrival, 4)Direction, 5)Near-term, 6)Long-term>"
 }}
 
 # Examples (abbreviated):
@@ -271,6 +273,7 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
 - **Nearest relevant landmark first**: For current unfinished stage, prefer the nearest landmark that advances that stage.
 - **Landmark relations**: Preserve directional/relational constraints between landmarks (e.g., near, beside, left/right, through, after).
 - **Reasoning thoroughness**: Part 1 MUST analyze ALL 12 IMAGEs (angle+direction+content+blue circles). Part 3 MUST detail position + task chain (✓→Current→unmarked, blue behind=✓)
+- **Per-view detail**: For every IMAGE, report NEAR large objects and FAR small objects when visible
 - **Base on actual**: Say only what's visible. Wall=wall, don't guess beyond
 - **Position first**: Determine position → then mark (✓)/Current/unmarked
 - **Seeing ≠ Arriving**: NEAR<1m multiple IMAGEs = current. FAR>1.5m one view ≠ arrived. Must be SURROUNDED<0.5m to stop

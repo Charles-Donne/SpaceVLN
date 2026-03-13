@@ -21,7 +21,11 @@ import torch
 from skimage.morphology import disk, remove_small_objects
 from skimage.morphology import binary_closing as _binary_closing_compat
 
-from vlnce_baselines.config_system.constants import navigable_classes, map_channels
+from vlnce_baselines.config_system.constants import (
+    mapping_classes,
+    navigable_classes,
+    map_channels,
+)
 
 
 class SemanticMapper:
@@ -163,9 +167,6 @@ class SemanticMapper:
         
         # 提取语义层（从第 map_channels 个通道开始）
         semantic_layers = full_map_filtered[map_channels:, ...]
-        
-        # 关键修复：使用full_map的实际通道数，而不是detected_classes的长度
-        # detected_classes是全局累计的，但每步的full_map只包含当前步检测到的类别
         num_semantic_channels = semantic_layers.shape[0]
         
         # 如果没有语义通道，直接返回基于explored的简单floor
@@ -174,28 +175,29 @@ class SemanticMapper:
             floor = np.logical_and(explored_area, np.logical_not(obstacles))
             return floor.astype(np.uint8)
         
-        # 区分可导航和不可导航的类别（只处理当前步实际存在的类别）
+        # full_map[3:3+len(mapping_classes)] 始终对应固定的 mapping_classes 顺序。
+        # 不能用运行时 detected_classes 顺序解释这些通道，否则 floor/door/bed 等类别会错位。
+        mapping_semantic_layers = semantic_layers[:len(mapping_classes), ...]
+
+        # 区分可导航和不可导航的类别（只基于固定 mapping_classes，不把 landmark 通道算进 floor）
         navigable_index = []
         not_navigable_index = []
-        
-        for i in range(num_semantic_channels):
-            # 由于detected_classes可能多于semantic_layers，需要安全索引
-            if i < len(detected_classes):
-                cls_name = detected_classes[i]
-                if cls_name in navigable_classes:
-                    navigable_index.append(i)
-                else:
-                    not_navigable_index.append(i)
+
+        for i, cls_name in enumerate(mapping_classes[:mapping_semantic_layers.shape[0]]):
+            if cls_name in navigable_classes:
+                navigable_index.append(i)
+            else:
+                not_navigable_index.append(i)
         
         # 不可导航物体
         if len(not_navigable_index) > 0:
-            objects = np.sum(semantic_layers[not_navigable_index], axis=0).astype(bool)
+            objects = np.sum(mapping_semantic_layers[not_navigable_index], axis=0).astype(bool)
         else:
             objects = np.zeros_like(obstacles)
         
         # 可导航区域（如floor, stairs等）
         if len(navigable_index) > 0:
-            navigable = np.logical_or.reduce(semantic_layers[navigable_index])
+            navigable = np.logical_or.reduce(mapping_semantic_layers[navigable_index])
             navigable = np.logical_and(navigable, np.logical_not(objects))
         else:
             navigable = np.zeros_like(obstacles)
