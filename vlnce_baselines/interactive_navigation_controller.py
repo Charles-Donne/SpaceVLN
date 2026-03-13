@@ -127,11 +127,18 @@ class InteractiveNavigationController:
             # 不再打印每步的进度，只在最后汇总
         
         self.current_step = 12
-        landmarks_found = [cls for cls in self.detected_classes if cls in landmark_classes]
         # print(f" ✅ {len(self.detected_classes)}类")
     
-    def step(self, action: int, save_vis: bool = True, phase: str = "action") -> Dict[str, Any]:
-        """执行一步动作，更新地图并保存可视化"""
+    def step(self, action: int, save_vis: bool = True, phase: str = "action",
+             enable_landmark_detection: bool = True) -> Dict[str, Any]:
+        """执行一步动作，更新地图并保存可视化
+
+        Args:
+            action: Habitat动作ID
+            save_vis: 是否保存可视化
+            phase: 文件命名阶段
+            enable_landmark_detection: 是否启用landmark检测（False时仅检测mapping_classes）
+        """
         # ⚠️ 关键修复：在使用current_step之前先累加，避免覆盖环视最后一步
         self.current_step += 1
         
@@ -155,7 +162,7 @@ class InteractiveNavigationController:
             }
         
         prev_class_count = len(self.detected_classes)
-        batch_obs = self._batch_obs(obs, save_object_detection=True)
+        batch_obs = self._batch_obs(obs, save_object_detection=enable_landmark_detection)
         poses = torch.from_numpy(
             np.array([item['sensor_pose'] for item in obs])
         ).float().to(self.device)
@@ -322,9 +329,12 @@ class InteractiveNavigationController:
         Returns:
             semantic_masks: [H, W, 15] 固定15个通道的语义地图
         """
-        # 使用 detection_classes = mapping + landmark 进行检测
+        # save_object_detection=False 时仅使用 mapping_classes，避免在旋转阶段做 landmark 检测
+        detect_classes = self.classes if save_object_detection else self.mapping_classes
+
+        # 使用 detection_classes 进行检测
         masks_all, labels_all, annotated_images, current_detections = \
-            self.segment_module.segment(rgb, classes=self.classes)
+            self.segment_module.segment(rgb, classes=detect_classes)
         self.mapper.mapping_module.rgb_vis = annotated_images
         
         self.latest_detections_full = current_detections

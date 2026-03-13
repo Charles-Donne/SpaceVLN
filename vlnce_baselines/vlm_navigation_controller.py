@@ -120,6 +120,9 @@ class VLMNavigationController(InteractiveNavigationController):
         # 观察缓存（环视时收集的4方向图像）
         self.direction_images = {}  # {direction_name: image_path}
         self.latest_map_image = None
+
+        # 累积跟踪的landmark类别（跨子任务保留），用于多landmark同时检测
+        self.tracked_landmark_classes = set()
         
         # 障碍物距离缓存
         # Thinking模式（环视）：12个方向（360°每30°）
@@ -171,6 +174,7 @@ class VLMNavigationController(InteractiveNavigationController):
         self.current_subtask_file = None
         self.direction_images = {}
         self.latest_map_image = None
+        self.tracked_landmark_classes = set()
         self.pose_before_action = None  # 重置pose追踪
         self.last_planned_degrees = 0  # 记录计划转向角度
         self.last_planned_meters = 0   # 记录计划移动距离
@@ -745,9 +749,9 @@ class VLMNavigationController(InteractiveNavigationController):
                 # 返回空列表，调用方需要处理这种情况
                 return [], []
             
-            # 更新检测和建图（每一步都保存）
+            # 旋转扫描阶段：仅更新mapping地图，不做landmark检测（节省算力）
             prev_class_count = len(self.detected_classes)
-            batch_obs = self._batch_obs(obs, save_object_detection=True)  # 保存检测结果
+            batch_obs = self._batch_obs(obs, save_object_detection=False)
             poses = torch.from_numpy(np.array([item['sensor_pose'] for item in obs])).float().to(self.device)
             
             map_state = self.mapper.update_map(
@@ -1149,16 +1153,15 @@ class VLMNavigationController(InteractiveNavigationController):
         
         # 直接使用VLM输出，不自动提取
         if next_waypoint_landmark:
-            self.landmark_classes = [next_waypoint_landmark]
+            self.tracked_landmark_classes.add(next_waypoint_landmark)
+            self.landmark_classes = sorted(list(self.tracked_landmark_classes))
             self.target_landmark = next_waypoint_landmark
             # 更新GroundedSAM检测类别：如果lankmark不在mapping_classes中，动态添加
-            if next_waypoint_landmark not in self.mapping_classes:
-                self.classes = self.mapping_classes + [next_waypoint_landmark]
-            else:
-                self.classes = self.mapping_classes
+            extra_landmarks = [c for c in self.landmark_classes if c not in self.mapping_classes]
+            self.classes = self.mapping_classes + extra_landmarks
         else:
             self.target_landmark = None
-            self.landmark_classes = []
+            self.landmark_classes = sorted(list(self.tracked_landmark_classes))
             self.classes = self.mapping_classes
         
         # 打印子任务信息
@@ -1250,7 +1253,12 @@ class VLMNavigationController(InteractiveNavigationController):
             # - 保存可视化（RGB、detection、maps）
             # - 更新距离信息
             # - 正确记录步数
-            result = self.step_with_vlm(action_id, action_name, save_vis=True)
+            result = self.step_with_vlm(
+                action_id,
+                action_name,
+                save_vis=True,
+                enable_landmark_detection=False,
+            )
             
             # 检查episode是否结束
             if result.get('done', False):
@@ -1429,16 +1437,15 @@ class VLMNavigationController(InteractiveNavigationController):
             
             # 直接使用VLM输出，不自动提取
             if next_waypoint_landmark:
-                self.landmark_classes = [next_waypoint_landmark]
+                self.tracked_landmark_classes.add(next_waypoint_landmark)
+                self.landmark_classes = sorted(list(self.tracked_landmark_classes))
                 self.target_landmark = next_waypoint_landmark
                 # 更新GroundedSAM检测类别：如果lankmark不在mapping_classes中，动态添加
-                if next_waypoint_landmark not in self.mapping_classes:
-                    self.classes = self.mapping_classes + [next_waypoint_landmark]
-                else:
-                    self.classes = self.mapping_classes
+                extra_landmarks = [c for c in self.landmark_classes if c not in self.mapping_classes]
+                self.classes = self.mapping_classes + extra_landmarks
             else:
                 self.target_landmark = None
-                self.landmark_classes = []
+                self.landmark_classes = sorted(list(self.tracked_landmark_classes))
                 self.classes = self.mapping_classes
             
             # ⚠️ 重要：self.classes更新已在上方完成
@@ -1494,6 +1501,9 @@ class VLMNavigationController(InteractiveNavigationController):
         # 生成当前子任务的phase标识
         attempt_letter = chr(ord('a') + self.subtask_attempt)
         action_phase = f"action{self.subtask_count}{attempt_letter}"
+
+        # 首次Action前检测：不在旋转过程中检测，等旋转结束后在当前朝向做一次
+        self._run_pre_action_detection_snapshot(action_phase)
         
         # 智能查找可用的图像：优先使用action phase，回退到verify/initial
         # 可能的phase顺序: action2a -> verify_2a -> verify_1a -> initial (注意verify带下划线)
@@ -1722,7 +1732,8 @@ class VLMNavigationController(InteractiveNavigationController):
         
         return action_id, action_name, should_stop, repeat_count, response
     
-    def step_with_vlm(self, action: int, action_name: str = "", save_vis: bool = True) -> Dict[str, Any]:
+    def step_with_vlm(self, action: int, action_name: str = "", save_vis: bool = True,
+                      enable_landmark_detection: bool = True) -> Dict[str, Any]:
         """
         执行VLM决策的动作（调用父类step方法）并缓存观察
         
@@ -1730,6 +1741,7 @@ class VLMNavigationController(InteractiveNavigationController):
             action: 动作ID
             action_name: 动作名称（用于可视化）
             save_vis: 是否保存可视化
+            enable_landmark_detection: 是否启用landmark检测（旋转阶段可关闭节省算力）
             
         Returns:
             步骤结果字典
@@ -1738,7 +1750,12 @@ class VLMNavigationController(InteractiveNavigationController):
         attempt_letter = chr(ord('a') + self.subtask_attempt)
         phase = f"action{self.subtask_count}{attempt_letter}"
         
-        result = self.step(action, save_vis, phase)
+        result = self.step(
+            action,
+            save_vis,
+            phase,
+            enable_landmark_detection=enable_landmark_detection,
+        )
         # 缓存最新观察和info用于下次VLM决策和可视化
         self.latest_obs = result.get('obs', None)
         self.latest_info = result.get('info', None)
@@ -1771,6 +1788,60 @@ class VLMNavigationController(InteractiveNavigationController):
             )
         
         return result
+
+    def _run_pre_action_detection_snapshot(self, action_phase: str) -> bool:
+        """在不移动agent的情况下，执行一次动作前landmark检测并保存可视化。"""
+        if self.latest_obs is None:
+            return False
+
+        detection_path = os.path.join(
+            self.episode_dir,
+            'detection',
+            f'step_{self.current_step:04d}_{action_phase}.png'
+        )
+        if os.path.exists(detection_path):
+            return True
+
+        obs = [self.latest_obs]
+        batch_obs = self._batch_obs(obs, save_object_detection=True)
+        poses = torch.from_numpy(np.array([self.latest_obs['sensor_pose']])).float().to(self.device)
+        map_state = self.mapper.update_map(
+            batch_obs, poses, self.current_step,
+            list(self.detected_classes), self.current_episode_id
+        )
+
+        rgb_bgr = cv2.cvtColor(self.latest_obs['rgb'], cv2.COLOR_RGB2BGR)
+        _, detected_landmarks_step, _ = self.visualizer.save_step_visualization(
+            step=self.current_step,
+            episode_id=self.current_episode_id,
+            rgb=rgb_bgr,
+            full_map=map_state['full_map'],
+            trajectory_points=map_state.get('subtask_trajectory_points', []),
+            detected_classes=list(self.detected_classes),
+            current_pose=map_state['full_pose'],
+            floor=map_state['floor'],
+            hfov=self.config.MAP.HFOV,
+            detections=self.latest_detections_full if hasattr(self, 'latest_detections_full') else None,
+            labels=self.latest_labels_full if hasattr(self, 'latest_labels_full') else None,
+            masks=self.latest_masks_full if hasattr(self, 'latest_masks_full') else None,
+            landmark_classes=self.landmark_classes,
+            mapping_classes=self.mapping_classes,
+            landmark_config={
+                'min_total_pixels': self.landmark_min_total_pixels,
+                'min_area_threshold': self.landmark_min_area_threshold
+            },
+            waypoint_positions=map_state.get('waypoint_positions', []),
+            waypoint_ids=map_state.get('waypoint_ids', []),
+            phase=action_phase,
+            global_trajectory_points=map_state.get('global_trajectory_points', []),
+            crop_offset=map_state.get('crop_offset'),
+            controller=self,
+        )
+
+        if not hasattr(self, 'current_step_landmarks'):
+            self.current_step_landmarks = {}
+        self.current_step_landmarks[self.current_step] = detected_landmarks_step or []
+        return True
     
     def _raycast_on_rotated_map(
         self,
