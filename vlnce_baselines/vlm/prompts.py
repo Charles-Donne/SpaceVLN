@@ -12,6 +12,8 @@ Example: "Stop at chair and open doors" → Navigation ends at "chair".
 
 **Task**: {instruction}
 
+- **Initial state note**: This is the very first planning step. No place has been visited yet (no prior waypoint/history). Your immediate goal is to plan and complete subtask #1: move to the FIRST landmark/destination vicinity.
+
 - Initial planning is right after reset: start from the FIRST unfinished stage.
 
 # Inputs
