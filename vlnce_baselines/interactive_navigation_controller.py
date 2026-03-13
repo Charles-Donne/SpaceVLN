@@ -358,10 +358,12 @@ class InteractiveNavigationController:
             else []
         )
         landmark_masks = np.zeros((len(landmark_classes_list), self.height, self.width), dtype=np.float32)
+        lm_name_to_idx = {lm.strip().lower(): idx for idx, lm in enumerate(landmark_classes_list)}
 
         for i, label in enumerate(labels_all):
             parts = label.split()
             label_name = ' '.join(parts[:-1]) if len(parts) > 1 else parts[0]
+            label_name_norm = label_name.strip().lower()
             confidence = float(parts[-1]) if len(parts) > 1 else 0.5
             
             # 只有mapping_classes的检测进入语义地图
@@ -371,13 +373,16 @@ class InteractiveNavigationController:
                 valid_confidences.append(confidence)
             
             # Landmark classes：收集mask投影到地图额外通道（仅精确短语匹配，避免与通用类混淆）
-            if label_name in landmark_classes_list:
-                lm_idx = landmark_classes_list.index(label_name)
+            if label_name_norm in lm_name_to_idx:
+                lm_idx = lm_name_to_idx[label_name_norm]
                 landmark_masks[lm_idx] = np.maximum(
                     landmark_masks[lm_idx], masks_all[i].astype(np.float32))
             
             # 所有检测到的类别都记录（包括landmark）
             self.detected_classes.add(label_name)
+            # 规范化精确匹配到landmark时，记录canonical短语名
+            if label_name_norm in lm_name_to_idx:
+                self.detected_classes.add(landmark_classes_list[lm_name_to_idx[label_name_norm]])
         
         if len(valid_masks) == 0:
             # 没有检测到mapping类别，但可能有landmark检测
@@ -425,8 +430,9 @@ class InteractiveNavigationController:
         if save_object_detection:
             for j, lm_cls in enumerate(landmark_classes_list):
                 lm_m = landmark_masks[j]
+                _lm_norm = lm_cls.strip().lower()
                 lm_detected = any(
-                    (' '.join(l.split()[:-1]) if len(l.split()) > 1 else l.split()[0]) == lm_cls
+                    ((' '.join(l.split()[:-1]) if len(l.split()) > 1 else l.split()[0]).strip().lower() == _lm_norm)
                     for l in labels_all if len(l.split()) > 0
                 )
                 d_val = lm_depth_m.get(lm_cls)

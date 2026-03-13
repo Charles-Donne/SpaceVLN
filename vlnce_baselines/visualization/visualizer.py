@@ -1124,11 +1124,13 @@ class MapVisualizer:
             label_name = ' '.join(parts[:-1]) if len(parts) > 1 else (parts[0] if len(parts) > 0 else "unknown")
             confidence = float(parts[-1]) if len(parts) > 1 else 0.0
             
-            # 只标注在landmark_classes中的类别（仅精确短语匹配）
+            # 只标注在landmark_classes中的类别（规范化后精确短语匹配）
             matched_landmark = None
             if landmark_classes:
-                if label_name in landmark_classes:
-                    matched_landmark = label_name
+                lm_name_map = {lm.strip().lower(): lm for lm in landmark_classes}
+                label_name_norm = label_name.strip().lower()
+                if label_name_norm in lm_name_map:
+                    matched_landmark = lm_name_map[label_name_norm]
             if matched_landmark is None:
                 continue  # 跳过非Landmark类别
             
