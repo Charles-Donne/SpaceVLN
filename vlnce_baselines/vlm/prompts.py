@@ -18,6 +18,11 @@ Example: "Stop at chair and open doors" → Navigation ends at "chair".
 - If completion of current work is uncertain, continue current work (do not jump).
 - Initial planning starts right after reset: begin from the FIRST unfinished task stage.
 
+**Thinking Style (Concise but Complete)**:
+- Keep reasoning compact and structured (checklist style), but DO NOT omit any required step.
+- Cover all 6 parts in order; each part should be short and evidence-based.
+- Avoid repetition and long prose; prefer clear key facts + conclusion.
+
 # Inputs
 **12 Views** (30° FOV, 360°): IMAGE 1=Front 0°, angles increase CCW (30°, 60°, ..., 330°)
 - **Obstacle distances**: label = **nearest obstacle in that direction** (NOT the distance to far objects visible in the scene). <0.5m=blocked | 0.5-1.0m=caution | >1.0m=passable
@@ -33,14 +38,8 @@ Example: "Stop at chair and open doors" → Navigation ends at "chair".
 
 # Reasoning (6 Parts)
 
-**Concise-but-complete style (MANDATORY)**:
-- Keep all 6 parts, do not omit any part.
-- Use short bullet/checklist style, avoid long prose repetition.
-- Prefer compact evidence statements: "IMAGE # → object, distance, obstacle".
-- Keep reasoning focused on decisions; no redundant narration.
-
 **1) 12-View Analysis (MUST analyze EACH IMAGE 1-12)** 
-**Format for each IMAGE**: "IMAGE # (Angle°): room, key objects+distance, Obs X.Xm"
+**Format for each IMAGE**: "IMAGE # (Direction Angle°): room_type, object1 distance1, object2 distance2. Obs: X.Xm NEAR/FAR"
 
 **REQUIRED - Analyze ALL 12 IMAGEs sequentially**:
 **Distance classification**: NEAR<1m (large, current position) | FAR>1.5m (small, next destination)
@@ -98,7 +97,7 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
     "next_waypoint_landmark": "<Single, detectable noun (1-2 words)>",
     "completion_criteria": "<Detection: NEAR<1m | Map: area | Position: region>",
     "global_task_finish": <true if ALL✓, no(Current), at final. Else false>,
-    "reasoning": "<6 parts REQUIRED, concise checklist style: 1)12-Views(all IMAGE1-12), 2)Maps, 3)Position+Task chain, 4)Direction decision, 5)Near-term, 6)Long-term. Clear evidence, no omission, no redundancy>"
+    "reasoning": "<Concise checklist with ALL 6 parts (no omission): 1)12-Views (IMAGE1-12 with key evidence), 2)Maps, 3)Position+Task chain(✓→Current→unmarked), 4)Direction choice, 5)Near-term action, 6)Long-term path. Short but complete>"
 }}
 
 #Examples (abbreviated):
@@ -139,6 +138,7 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
 
 **Critical Rules**:
 - **Current-work-first**: Must finish current nearest unfinished stage before any later stage.
+- **Concise-but-complete**: reasoning can be short, but all required 6 parts must be present.
 - **Reasoning thoroughness**: Part 1 MUST analyze ALL 12 IMAGEs with angle+direction+content. Part 3 MUST detail position and complete task chain (✓→Current→unmarked)
 - **Initial position**: Determine from NEAR<1m + Local Map 0.5m circle. Mark current=(Current), future=unmarked
 - **Position awareness**: NEAR<1m (multiple IMAGEs) = current position ≠ destination FAR>1.5m (1-2 views)
@@ -165,6 +165,11 @@ Example: "Stop at chair and open doors" → Navigation ends at "chair".
 - Do NOT skip current work and directly start a later subtask.
 - Verification must decide current subtask completion first; only then move to the next stage.
 
+**Thinking Style (Concise but Complete)**:
+- Keep reasoning compact and structured (checklist style), but DO NOT omit any required step.
+- Cover all 6 parts in order; each part should be short and evidence-based.
+- Avoid repetition and long prose; prefer clear key facts + conclusion.
+
 **Previous Subtask**:
 - Destination: {subtask_destination}
 - Instruction: {subtask_instruction}
@@ -184,14 +189,8 @@ Example: "Stop at chair and open doors" → Navigation ends at "chair".
 
 # Reasoning (6 Parts)
 
-**Concise-but-complete style (MANDATORY)**:
-- Keep all 6 parts, do not omit any part.
-- Use short bullet/checklist style, avoid long prose repetition.
-- Prefer compact evidence statements: "IMAGE # → object, distance, obstacle, blue-circle".
-- Keep reasoning focused on verification decision + next immediate step.
-
 **1) 12-View Analysis (MUST analyze EACH IMAGE 1-12)**
-**Format**: "IMAGE # (Angle°): room, key objects+distance, [Blue Circle #X if visible], Obs X.Xm"
+**Format**: "IMAGE # (Direction Angle°): room, object1 dist1, object2 dist2. [Blue Circle #X if visible]. Obs: X.Xm NEAR/FAR"
 
 **REQUIRED - Analyze ALL 12 IMAGEs sequentially**:
 **Distance**: NEAR<1m (large) | FAR>1.5m (small)
@@ -257,7 +256,7 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
     "next_waypoint_landmark": "<Single, detectable noun (1-2 words)>",
     "completion_criteria": "<Detection: NEAR<1m | Map: area | Position: region>",
     "global_task_finish": <true if ALL✓, no(Current), at final. Else false>,
-    "reasoning": "<6 parts REQUIRED, concise checklist style: 1)12-Views(all IMAGE1-12), 2)Maps+history, 3)Position+Task chain+completion check, 4)Direction decision, 5)Near-term, 6)Long-term. Clear evidence, no omission, no redundancy>"
+    "reasoning": "<Concise checklist with ALL 6 parts (no omission): 1)12-Views (IMAGE1-12 + blue circles evidence), 2)Maps, 3)Position+Task chain(✓→Current→unmarked), 4)Direction choice, 5)Near-term action, 6)Long-term path. Short but complete>"
 }}
 
 # Examples (abbreviated):
@@ -318,6 +317,7 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
 
 **Critical Rules**:
 - **Current-work-first**: Must finish current nearest unfinished stage before planning later stages.
+- **Concise-but-complete**: reasoning can be short, but all required 6 parts must be present.
 - **Reasoning thoroughness**: Part 1 MUST analyze ALL 12 IMAGEs with angle+direction+content+blue circles. Part 3 MUST detail position and task chain (✓→Current→unmarked, blue behind=✓)
 - **Base on actual**: Say only what's visible. Wall=wall, don't guess beyond
 - **IMAGE-angle**: IMAGE1=0°, IMAGE2=30°, ..., IMAGE7=180°, ..., IMAGE12=330°
