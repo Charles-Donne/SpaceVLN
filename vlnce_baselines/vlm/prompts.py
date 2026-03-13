@@ -12,9 +12,7 @@ Example: "Stop at chair and open doors" → Navigation ends at "chair".
 
 **Task**: {instruction}
 
-- **Initial state note**: This is the very first planning step. No place has been visited yet (no prior waypoint/history). Your immediate goal is to plan and complete subtask #1: move to the FIRST landmark/destination vicinity.
-
-- Initial planning is right after reset: start from the FIRST unfinished stage.
+**Initial state note**: This is the first planning step. No place has been visited yet. Your immediate goal is to complete the FIRST sentence/stage of the instruction first: go to the nearest relevant landmark/destination vicinity.
 
 # Inputs
 **12 Views** (30° FOV, 360°): IMAGE 1=Front 0°, angles increase CCW (30°, 60°, ..., 330°)
@@ -59,6 +57,11 @@ Example: "Stop at chair and open doors" → Navigation ends at "chair".
 4. **Waypoint sequence**: Write complete chain: Completed(✓) → Current → Next → ... → Goal
 5. **Task chain analysis**: What's next step? Which waypoint to navigate to? Why?
 6. **Arrival check**: FAR(>1.5m, 1-2 views)=Continue | SURROUNDED(<1m, 3+ views)=STOP
+
+**Landmark spatial-relation rule (MANDATORY)**:
+- Preserve landmark order and spatial relations from the instruction.
+- Plan with explicit relations such as: pass-by / left-of / right-of / through / after / then.
+- Example pattern: "go to oven" → "pass arch near painting" → "enter the arch on your right".
 
 **4) Direction Selection**
 A) Next destination + task direction?
@@ -131,6 +134,9 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
 
 **Critical Rules**:
 - **Current-work-first**: Must finish current nearest unfinished stage before any later stage.
+- **First-sentence-first (initial)**: In initial planning, complete the first sentence/stage before moving to later stages.
+- **Nearest relevant landmark first**: Prefer the nearest landmark that advances the current stage.
+- **Landmark relations**: Keep directional/relational constraints between landmarks (e.g., near, beside, left/right, through, after).
 - **Reasoning thoroughness**: Part 1 MUST analyze ALL 12 IMAGEs with angle+direction+content. Part 3 MUST detail position and complete task chain (✓→Current→unmarked)
 - **Initial position**: Determine from NEAR<1m + Local Map 0.5m circle. Mark current=(Current), future=unmarked
 - **Position awareness**: NEAR<1m (multiple IMAGEs) = current position ≠ destination FAR>1.5m (1-2 views)
@@ -206,6 +212,10 @@ Example: "Stop at chair and open doors" → Navigation ends at "chair".
 4. **Waypoint sequence**: Completed(✓) → Current → Next → ... → Goal (blue circles behind = ✓)
 5. **Task chain analysis**: What's completed? What's next? Which waypoint now? Why?
 6. **Arrival check**: FAR(>1.5m, 1-2 views)=Continue | SURROUNDED(<1m, 3+ views)=STOP
+
+**Landmark spatial-relation rule (MANDATORY)**:
+- Preserve landmark order and spatial relations from the instruction.
+- Continue with explicit relations such as pass-by / left-of / right-of / through / after / then.
 
 **4) Direction Selection (Exploration Priority)**
 A) Next + task direction?
@@ -299,6 +309,8 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
 
 **Critical Rules**:
 - **Current-work-first**: Must finish current nearest unfinished stage before planning later stages.
+- **Nearest relevant landmark first**: For current unfinished stage, prefer the nearest landmark that advances that stage.
+- **Landmark relations**: Preserve directional/relational constraints between landmarks (e.g., near, beside, left/right, through, after).
 - **Reasoning thoroughness**: Part 1 MUST analyze ALL 12 IMAGEs with angle+direction+content+blue circles. Part 3 MUST detail position and task chain (✓→Current→unmarked, blue behind=✓)
 - **Base on actual**: Say only what's visible. Wall=wall, don't guess beyond
 - **IMAGE-angle**: IMAGE1=0°, IMAGE2=30°, ..., IMAGE7=180°, ..., IMAGE12=330°
