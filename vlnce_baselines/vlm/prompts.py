@@ -12,6 +12,12 @@ Example: "Stop at chair and open doors" → Navigation ends at "chair".
 
 **Task**: {instruction}
 
+**Execution Order (MANDATORY)**:
+- Complete the nearest CURRENT unfinished work first.
+- Do NOT skip current work and jump to a later subtask.
+- If completion of current work is uncertain, continue current work (do not jump).
+- Initial planning starts right after reset: begin from the FIRST unfinished task stage.
+
 # Inputs
 **12 Views** (30° FOV, 360°): IMAGE 1=Front 0°, angles increase CCW (30°, 60°, ..., 330°)
 - **Obstacle distances**: label = **nearest obstacle in that direction** (NOT the distance to far objects visible in the scene). <0.5m=blocked | 0.5-1.0m=caution | >1.0m=passable
@@ -67,6 +73,10 @@ E) Choose: Task direction > Waypoint visible > **obs>1.0m** > Map green path
 **5) Near-term**: Auto-rotate → detailed subtask with room+object
 **6) Long-term**: Remaining waypoints → goal
 
+**Sequential planning rule (strict)**:
+- Output only the immediate next waypoint for current-stage progress.
+- Forbidden: planning stage +2/+3 destination while stage +1 is unfinished.
+
 # Actions
 TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
 
@@ -79,7 +89,7 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
     "next_waypoint_direction": "<IMAGE 1-12>",
     "next_waypoint_destination": "<Next waypoint>",
     "subtask_instruction": "<DETAILED: [room]+[relation]+[object]. After auto-rotate to Front view>",
-    "next_waypoint_landmark": "<Single, detectable noun (1-2 words), e.g., door/window/table/chair/painting/bed>",
+    "next_waypoint_landmark": "<Single, detectable noun (1-2 words)>",
     "completion_criteria": "<Detection: NEAR<1m | Map: area | Position: region>",
     "global_task_finish": <true if ALL✓, no(Current), at final. Else false>,
     "reasoning": "<6 parts REQUIRED: 1)12-Views(MUST analyze EACH IMAGE 1-12 with angle+direction+room+objects+distance+obstacle), 2)Maps(local 0.5m circle+global layout), 3)Position(detailed current location)+Task chain(✓→Current→unmarked, front-to-back consistency), 4)Direction(why this IMAGE?), 5)Near-term plan, 6)Long-term plan. Be thorough>"
@@ -122,6 +132,7 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
 }}
 
 **Critical Rules**:
+- **Current-work-first**: Must finish current nearest unfinished stage before any later stage.
 - **Reasoning thoroughness**: Part 1 MUST analyze ALL 12 IMAGEs with angle+direction+content. Part 3 MUST detail position and complete task chain (✓→Current→unmarked)
 - **Initial position**: Determine from NEAR<1m + Local Map 0.5m circle. Mark current=(Current), future=unmarked
 - **Position awareness**: NEAR<1m (multiple IMAGEs) = current position ≠ destination FAR>1.5m (1-2 views)
@@ -130,9 +141,6 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
 - **Entrance vs interior**: "Wait at entrance" = doorway, NOT inside room
 - **Room-first strategy**: "[room]'s [object]" → navigate to [room] first, then [object]
 - **Auto-rotation**: System rotates to your IMAGE → write from Front view after
-- **Landmark output constraint (very important)**: `next_waypoint_landmark` must be a simple detectable noun (prefer 1 word, max 2 words). Avoid long phrases, colors, relative clauses, and overly specific modifiers.
-    - ✅ Good: `door`, `window`, `table`, `chair`, `painting`, `bed`, `sofa`, `sink`, `toilet`, `bookshelf`
-    - ❌ Bad: `painting of the girl in a blue bonnet`, `left wooden table near doorway`, `the second chair beside cabinet`
 - **Detail instructions**: Use [room]+[relation]+[object]. "Living room's gray couch" NOT "couch"
 - **IMAGE-angle match**: IMAGE1=0°, IMAGE2=30°, ..., IMAGE7=180°, ..., IMAGE12=330°
 """
@@ -145,6 +153,11 @@ VERIFICATION_REPLANNING_PROMPT = """VLN Verification: Verify subtask completion 
 Example: "Stop at chair and open doors" → Navigation ends at "chair".
 
 **Task**: {instruction}
+
+**Execution Order (MANDATORY)**:
+- Complete the nearest CURRENT unfinished work first.
+- Do NOT skip current work and directly start a later subtask.
+- Verification must decide current subtask completion first; only then move to the next stage.
 
 **Previous Subtask**:
 - Destination: {subtask_destination}
@@ -213,6 +226,10 @@ F) Choose: Task dir > **Unexplored (no blue)** > **obs>1.0m** > Map green path
 **5) Near-term**: Auto-rotate → detailed subtask with room+object
 **6) Long-term**: Remaining → final
 
+**Sequential planning rule (strict)**:
+- If current subtask is unfinished, next output must continue current subtask.
+- Only after current subtask is complete can `next_waypoint_destination` move to the next stage.
+
 # Actions
 TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
 
@@ -225,7 +242,7 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
     "next_waypoint_direction": "<IMAGE 1-12>",
     "next_waypoint_destination": "<Next waypoint>",
     "subtask_instruction": "<DETAILED: [room]+[relation]+[object]. From current after auto-rotate>",
-    "next_waypoint_landmark": "<Single, detectable noun (1-2 words), e.g., door/window/table/chair/painting/bed>",
+    "next_waypoint_landmark": "<Single, detectable noun (1-2 words)>",
     "completion_criteria": "<Detection: NEAR<1m | Map: area | Position: region>",
     "global_task_finish": <true if ALL✓, no(Current), at final. Else false>,
     "reasoning": "<6 parts REQUIRED: 1)12-Views(MUST analyze EACH IMAGE 1-12 with angle+direction+room+objects+distance+obstacle+blue circles), 2)Maps(local 0.5m+global history+blue circles), 3)Position(detailed)+Task chain(✓→Current→unmarked, blue behind=✓)+arrived?, 4)Direction(why? exploration priority), 5)Near-term, 6)Long-term. Be thorough>"
@@ -288,6 +305,7 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
 }}
 
 **Critical Rules**:
+- **Current-work-first**: Must finish current nearest unfinished stage before planning later stages.
 - **Reasoning thoroughness**: Part 1 MUST analyze ALL 12 IMAGEs with angle+direction+content+blue circles. Part 3 MUST detail position and task chain (✓→Current→unmarked, blue behind=✓)
 - **Base on actual**: Say only what's visible. Wall=wall, don't guess beyond
 - **IMAGE-angle**: IMAGE1=0°, IMAGE2=30°, ..., IMAGE7=180°, ..., IMAGE12=330°
@@ -300,9 +318,6 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
 - **NO IMAGE7/180° EVER**: Turning 180° backward is DISABLED. Goals are ahead. Only use IMAGEs 1-6, 8-12 (Front/Left/Right). If FRONT blocked, go LEFT or RIGHT, NEVER back.
 - **Room-first**: "[room]'s [object]" → navigate to [room], then [object]
 - **Detail instructions**: [room]+[relation]+[object]. "Living room's gray couch" NOT "couch"
-- **Landmark output constraint (very important)**: `next_waypoint_landmark` must be a simple detectable noun (prefer 1 word, max 2 words). Avoid long phrases, colors, relative clauses, and overly specific modifiers.
-    - ✅ Good: `door`, `window`, `table`, `chair`, `painting`, `bed`, `sofa`, `sink`, `toilet`, `bookshelf`
-    - ❌ Bad: `painting of the girl in a blue bonnet`, `left wooden table near doorway`, `the second chair beside cabinet`
 - **Auto-rotation**: System rotates to your IMAGE → write from Front after
 - **Map Part 2**: NO IMAGE numbers in Part 2, use only map
 """
