@@ -1711,7 +1711,7 @@ class MapVisualizer:
     
     # ========== 一键保存方法 ==========
     
-    def save_step_visualization(self, 
+    def save_step_visualization(self,
                                step: int,
                                episode_id: int,
                                rgb: np.ndarray,
@@ -1723,30 +1723,18 @@ class MapVisualizer:
                                hfov: float = 90.0,
                                detections=None,  # sv.Detections对象（新）
                                labels: Optional[List[str]] = None,
-                            landmark_masks: Optional[np.ndarray] = None,
-                            landmark_dist_map_multi: Optional[Dict[str, List[Tuple[float, float]]]] = None,
-                               mapping_classes: Optional[List[str]] = None,  # 新增
+                               landmark_classes: Optional[List[str]] = None,
+                               mapping_classes: Optional[List[str]] = None,
                                landmark_config: Optional[Dict] = None,
                                waypoint_positions: Optional[List[Tuple[int, int]]] = None,
                                waypoint_ids: Optional[List[int]] = None,
-                            if landmark_dist_map_multi and label_name in landmark_dist_map_multi:
-                                candidates = landmark_dist_map_multi[label_name]
-                                if candidates:
-                                    if depth_angle_deg is not None:
-                                        # 用角度最接近当前bbox的地图实例（解决同类多实例被“最近距离”覆盖）
-                                        map_dist_m, map_angle_deg = min(candidates, key=lambda x: abs(x[1] - depth_angle_deg))
-                                    else:
-                                        map_dist_m, map_angle_deg = min(candidates, key=lambda x: x[0])
-                            elif landmark_dist_map and label_name in landmark_dist_map:
-                                map_dist_m, map_angle_deg = landmark_dist_map[label_name]
+                               masks: Optional[np.ndarray] = None,
+                               phase: str = "action",
                                global_trajectory_points: Optional[List[Tuple[int, int]]] = None,
-                               controller = None,
-                            landmark_dist_map = {}
-                            landmark_dist_map_multi = {}
+                               controller=None,
+                               crop_offset: Optional[Tuple[int, int]] = None) -> Tuple[Dict[str, str], List, Optional[float]]:
         """
         一键保存当前步骤的所有可视化（支持新detection渲染 + 平滑轨迹线 + waypoint标记）
-        
-                                    landmark_dist_map_multi.setdefault(cls_name, []).append((dist_m, angle_deg))
             trajectory_points: [(x, y), ...] 当前子任务轨迹（用于local map）
             global_trajectory_points: [(x, y), ...] 完整导航历史轨迹（用于global map，可选）
                 - 如果提供，global map显示此轨迹
