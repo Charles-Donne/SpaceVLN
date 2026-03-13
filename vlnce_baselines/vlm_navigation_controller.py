@@ -121,7 +121,7 @@ class VLMNavigationController(InteractiveNavigationController):
         self.direction_images = {}  # {direction_name: image_path}
         self.latest_map_image = None
 
-        # 累积跟踪的landmark类别（跨子任务保留），用于多landmark同时检测
+        # 当前子任务跟踪的landmark类别（每个子任务重置）
         self.tracked_landmark_classes = set()
         
         # 障碍物距离缓存
@@ -206,6 +206,20 @@ class VLMNavigationController(InteractiveNavigationController):
         """
         # 通过call_at调用environment 0的get_agent_pose方法
         return self.envs.call_at(0, "get_agent_pose")
+
+    def _set_current_landmark_tracking(self, next_waypoint_landmark: Optional[str]) -> None:
+        """每个子任务只保留当前目标landmark，不跨子任务累积。"""
+        self.tracked_landmark_classes.clear()
+
+        if next_waypoint_landmark:
+            self.tracked_landmark_classes.add(next_waypoint_landmark)
+            self.target_landmark = next_waypoint_landmark
+        else:
+            self.target_landmark = None
+
+        self.landmark_classes = sorted(list(self.tracked_landmark_classes))
+        extra_landmarks = [c for c in self.landmark_classes if c not in self.mapping_classes]
+        self.classes = self.mapping_classes + extra_landmarks
     
     def _draw_navigable_area_on_view(self, image: np.ndarray, view_angle: float) -> np.ndarray:
         """
@@ -1151,18 +1165,8 @@ class VLMNavigationController(InteractiveNavigationController):
         # 动态更新目标landmark（直接使用VLM输出的next_waypoint_landmark）
         next_waypoint_landmark = response.get('next_waypoint_landmark', None)
         
-        # 直接使用VLM输出，不自动提取
-        if next_waypoint_landmark:
-            self.tracked_landmark_classes.add(next_waypoint_landmark)
-            self.landmark_classes = sorted(list(self.tracked_landmark_classes))
-            self.target_landmark = next_waypoint_landmark
-            # 更新GroundedSAM检测类别：如果lankmark不在mapping_classes中，动态添加
-            extra_landmarks = [c for c in self.landmark_classes if c not in self.mapping_classes]
-            self.classes = self.mapping_classes + extra_landmarks
-        else:
-            self.target_landmark = None
-            self.landmark_classes = sorted(list(self.tracked_landmark_classes))
-            self.classes = self.mapping_classes
+        # 直接使用VLM输出，不自动提取；新子任务会覆盖旧landmark
+        self._set_current_landmark_tracking(next_waypoint_landmark)
         
         # 打印子任务信息
         self._print_subtask_info(response, is_initial=True)
@@ -1412,6 +1416,7 @@ class VLMNavigationController(InteractiveNavigationController):
             # 清空旧状态（为新子任务准备）
             self.mapper.clear_trajectory()
             self.landmark_classes = []
+            self.tracked_landmark_classes.clear()
             self.progress_summary = ""
             self.previous_action_reason = ""
             self.pose_before_action = None
@@ -1436,18 +1441,8 @@ class VLMNavigationController(InteractiveNavigationController):
             # 动态更新目标landmark（直接使用VLM输出的next_waypoint_landmark）
             next_waypoint_landmark = response.get('next_waypoint_landmark', None)
             
-            # 直接使用VLM输出，不自动提取
-            if next_waypoint_landmark:
-                self.tracked_landmark_classes.add(next_waypoint_landmark)
-                self.landmark_classes = sorted(list(self.tracked_landmark_classes))
-                self.target_landmark = next_waypoint_landmark
-                # 更新GroundedSAM检测类别：如果lankmark不在mapping_classes中，动态添加
-                extra_landmarks = [c for c in self.landmark_classes if c not in self.mapping_classes]
-                self.classes = self.mapping_classes + extra_landmarks
-            else:
-                self.target_landmark = None
-                self.landmark_classes = sorted(list(self.tracked_landmark_classes))
-                self.classes = self.mapping_classes
+            # 直接使用VLM输出，不自动提取；新子任务会覆盖旧landmark
+            self._set_current_landmark_tracking(next_waypoint_landmark)
             
             # ⚠️ 重要：self.classes更新已在上方完成
             
