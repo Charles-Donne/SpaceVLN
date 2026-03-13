@@ -7,21 +7,12 @@ VLM规划提示词模板
 # 初始规划提示词 - 在任务开始时生成第一个子任务
 INITIAL_PLANNING_PROMPT = """VLN Planning: Analyze environment + Global Task → design next subtask.
 
-**Role**: Spatial reasoning and navigation planning — you are the cognitive decision-making core. Build a mental spatial model of the environment, determine exactly where you are, decide where to go next, and issue precise navigation instructions. NOT manipulation (doors/objects). End at final waypoint.
+**Role**: Spatial reasoning and navigation planning. Build a mental spatial model, locate current position, choose the next move, and issue precise navigation instructions. NOT manipulation (doors/objects). End at final waypoint.
 Example: "Stop at chair and open doors" → Navigation ends at "chair".
 
 **Task**: {instruction}
 
-**Execution Order (MANDATORY)**:
-- Complete the nearest CURRENT unfinished work first.
-- Do NOT skip current work and jump to a later subtask.
-- If completion of current work is uncertain, continue current work (do not jump).
-- Initial planning starts right after reset: begin from the FIRST unfinished task stage.
-
-**Thinking Style (Concise but Complete)**:
-- Keep reasoning compact and structured (checklist style), but DO NOT omit any required step.
-- Cover all 6 parts in order; each part should be short and evidence-based.
-- Avoid repetition and long prose; prefer clear key facts + conclusion.
+- Initial planning is right after reset: start from the FIRST unfinished stage.
 
 # Inputs
 **12 Views** (30° FOV, 360°): IMAGE 1=Front 0°, angles increase CCW (30°, 60°, ..., 330°)
@@ -80,7 +71,7 @@ E) Choose: Task direction > Waypoint visible > **obs>1.0m** > Map green path
 
 **Sequential planning rule (strict)**:
 - Output only the immediate next waypoint for current-stage progress.
-- Forbidden: planning stage +2/+3 destination while stage +1 is unfinished.
+- Forbidden: planning stage +2/+3 while stage +1 is unfinished.
 
 # Actions
 TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
@@ -97,7 +88,7 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
     "next_waypoint_landmark": "<Single, detectable noun (1-2 words)>",
     "completion_criteria": "<Detection: NEAR<1m | Map: area | Position: region>",
     "global_task_finish": <true if ALL✓, no(Current), at final. Else false>,
-    "reasoning": "<Concise checklist with ALL 6 parts (no omission): 1)12-Views (IMAGE1-12 with key evidence), 2)Maps, 3)Position+Task chain(✓→Current→unmarked), 4)Direction choice, 5)Near-term action, 6)Long-term path. Short but complete>"
+    "reasoning": "<6 parts REQUIRED: 1)12-Views(MUST analyze IMAGE 1-12 with angle+direction+room+objects+distance+obstacle), 2)Maps(local 0.5m circle+global layout), 3)Position(current location)+Task chain(✓→Current→unmarked), 4)Direction(why this IMAGE), 5)Near-term plan, 6)Long-term plan. Keep concise but complete>"
 }}
 
 #Examples (abbreviated):
@@ -138,7 +129,6 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
 
 **Critical Rules**:
 - **Current-work-first**: Must finish current nearest unfinished stage before any later stage.
-- **Concise-but-complete**: reasoning can be short, but all required 6 parts must be present.
 - **Reasoning thoroughness**: Part 1 MUST analyze ALL 12 IMAGEs with angle+direction+content. Part 3 MUST detail position and complete task chain (✓→Current→unmarked)
 - **Initial position**: Determine from NEAR<1m + Local Map 0.5m circle. Mark current=(Current), future=unmarked
 - **Position awareness**: NEAR<1m (multiple IMAGEs) = current position ≠ destination FAR>1.5m (1-2 views)
@@ -159,16 +149,6 @@ VERIFICATION_REPLANNING_PROMPT = """VLN Verification: Verify subtask completion 
 Example: "Stop at chair and open doors" → Navigation ends at "chair".
 
 **Task**: {instruction}
-
-**Execution Order (MANDATORY)**:
-- Complete the nearest CURRENT unfinished work first.
-- Do NOT skip current work and directly start a later subtask.
-- Verification must decide current subtask completion first; only then move to the next stage.
-
-**Thinking Style (Concise but Complete)**:
-- Keep reasoning compact and structured (checklist style), but DO NOT omit any required step.
-- Cover all 6 parts in order; each part should be short and evidence-based.
-- Avoid repetition and long prose; prefer clear key facts + conclusion.
 
 **Previous Subtask**:
 - Destination: {subtask_destination}
@@ -238,8 +218,8 @@ F) Choose: Task dir > **Unexplored (no blue)** > **obs>1.0m** > Map green path
 **6) Long-term**: Remaining → final
 
 **Sequential planning rule (strict)**:
-- If current subtask is unfinished, next output must continue current subtask.
-- Only after current subtask is complete can `next_waypoint_destination` move to the next stage.
+- If current subtask is unfinished, continue it.
+- Only after completion can `next_waypoint_destination` move to the next stage.
 
 # Actions
 TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
@@ -256,7 +236,7 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
     "next_waypoint_landmark": "<Single, detectable noun (1-2 words)>",
     "completion_criteria": "<Detection: NEAR<1m | Map: area | Position: region>",
     "global_task_finish": <true if ALL✓, no(Current), at final. Else false>,
-    "reasoning": "<Concise checklist with ALL 6 parts (no omission): 1)12-Views (IMAGE1-12 + blue circles evidence), 2)Maps, 3)Position+Task chain(✓→Current→unmarked), 4)Direction choice, 5)Near-term action, 6)Long-term path. Short but complete>"
+    "reasoning": "<6 parts REQUIRED: 1)12-Views(MUST analyze IMAGE 1-12 with angle+direction+room+objects+distance+obstacle+blue circles), 2)Maps(local 0.5m+global history+blue circles), 3)Position+Task chain(✓→Current→unmarked, blue behind=✓)+arrival check, 4)Direction(exploration priority), 5)Near-term, 6)Long-term. Keep concise but complete>"
 }}
 
 # Examples (abbreviated):
@@ -317,7 +297,6 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
 
 **Critical Rules**:
 - **Current-work-first**: Must finish current nearest unfinished stage before planning later stages.
-- **Concise-but-complete**: reasoning can be short, but all required 6 parts must be present.
 - **Reasoning thoroughness**: Part 1 MUST analyze ALL 12 IMAGEs with angle+direction+content+blue circles. Part 3 MUST detail position and task chain (✓→Current→unmarked, blue behind=✓)
 - **Base on actual**: Say only what's visible. Wall=wall, don't guess beyond
 - **IMAGE-angle**: IMAGE1=0°, IMAGE2=30°, ..., IMAGE7=180°, ..., IMAGE12=330°
@@ -325,7 +304,7 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
 - **Seeing ≠ Arriving**: NEAR<1m multiple IMAGEs = current. FAR>1.5m one view ≠ arrived. Must be SURROUNDED<0.5m to stop
 - **Markers**: Behind=(✓) | Now=(Current) ONE only | Ahead=unmarked. Backtrack→rollback
 - **Progress**: Completed✓ | Current(Current) ONE | Future unmarked. ALL✓+NO(Current)=complete→global_task_finish=true
-- **Task chain consistency**: Blue circles behind=(✓), current=(Current), ahead=unmarked. Chain analysis determines next direction
+- **Task chain consistency**: Blue circles behind=(✓), current=(Current), ahead=unmarked
 - **Entrance vs interior**: "At entrance" = doorway, NOT inside
 - **NO IMAGE7/180° EVER**: Turning 180° backward is DISABLED. Goals are ahead. Only use IMAGEs 1-6, 8-12 (Front/Left/Right). If FRONT blocked, go LEFT or RIGHT, NEVER back.
 - **Room-first**: "[room]'s [object]" → navigate to [room], then [object]
