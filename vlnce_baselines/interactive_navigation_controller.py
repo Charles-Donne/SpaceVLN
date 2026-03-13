@@ -370,25 +370,14 @@ class InteractiveNavigationController:
                 valid_labels.append(label_name)
                 valid_confidences.append(confidence)
             
-            # Landmark classes：收集mask投影到地图额外通道（精确匹配 + 子串匹配）
+            # Landmark classes：收集mask投影到地图额外通道（仅精确短语匹配，避免与通用类混淆）
             if label_name in landmark_classes_list:
                 lm_idx = landmark_classes_list.index(label_name)
                 landmark_masks[lm_idx] = np.maximum(
                     landmark_masks[lm_idx], masks_all[i].astype(np.float32))
-            else:
-                # 子串匹配：检测词是landmark短语的组成词（如'painting'→'painting of girl in blue bonnet'）
-                for lc in landmark_classes_list:
-                    if label_name in lc:
-                        lm_idx = landmark_classes_list.index(lc)
-                        landmark_masks[lm_idx] = np.maximum(
-                            landmark_masks[lm_idx], masks_all[i].astype(np.float32))
             
             # 所有检测到的类别都记录（包括landmark）
             self.detected_classes.add(label_name)
-            # 子串匹配：若检测词是某landmark短语的组成词，也记录该landmark
-            for lc in landmark_classes_list:
-                if label_name != lc and label_name in lc:
-                    self.detected_classes.add(lc)
         
         if len(valid_masks) == 0:
             # 没有检测到mapping类别，但可能有landmark检测
@@ -436,7 +425,10 @@ class InteractiveNavigationController:
         if save_object_detection:
             for j, lm_cls in enumerate(landmark_classes_list):
                 lm_m = landmark_masks[j]
-                lm_detected = any(lm_cls in l or any(w in lm_cls for w in l.split()[:-1]) for l in labels_all)
+                lm_detected = any(
+                    (' '.join(l.split()[:-1]) if len(l.split()) > 1 else l.split()[0]) == lm_cls
+                    for l in labels_all if len(l.split()) > 0
+                )
                 d_val = lm_depth_m.get(lm_cls)
                 d_info = f"  depth(median={d_val:.2f}m valid={int((lm_m>0.5).sum())}px)" if d_val is not None else "  depth=N/A"
                 print(f"[LM 1/3 DETECT] '{lm_cls}'  in_detections={lm_detected}  mask_pixels={int((lm_m>0.5).sum())}{d_info}")

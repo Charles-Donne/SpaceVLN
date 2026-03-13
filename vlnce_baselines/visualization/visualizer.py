@@ -1124,17 +1124,11 @@ class MapVisualizer:
             label_name = ' '.join(parts[:-1]) if len(parts) > 1 else (parts[0] if len(parts) > 0 else "unknown")
             confidence = float(parts[-1]) if len(parts) > 1 else 0.0
             
-            # 只标注在landmark_classes中的类别（精确匹配 + 子串匹配）
+            # 只标注在landmark_classes中的类别（仅精确短语匹配）
             matched_landmark = None
             if landmark_classes:
                 if label_name in landmark_classes:
                     matched_landmark = label_name
-                else:
-                    # 子串匹配：检测词是landmark短语的组成词（如'painting'→'painting of girl in blue bonnet'）
-                    for lc in landmark_classes:
-                        if label_name in lc:
-                            matched_landmark = lc
-                            break
             if matched_landmark is None:
                 continue  # 跳过非Landmark类别
             
