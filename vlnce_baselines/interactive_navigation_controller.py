@@ -75,6 +75,23 @@ class InteractiveNavigationController:
         
         self.current_episode_id = None
         self.current_step = 0
+
+    def _clear_landmark_detection_cache(self) -> None:
+        """清空当前帧的landmark检测缓存，避免非检测步复用旧结果。"""
+        self.latest_landmark_dist_map = {}
+        self.latest_landmark_dist_map_multi = {}
+        self.latest_visible_landmark_entries = []
+
+    def _record_landmark_detection_step(self, step_idx: int, detected_landmarks_step) -> None:
+        """记录当前step的landmark检测结果和地图矫正后的距离/角度。"""
+        if not hasattr(self, 'current_step_landmarks'):
+            self.current_step_landmarks = {}
+        if not hasattr(self, 'current_step_landmark_entries'):
+            self.current_step_landmark_entries = {}
+
+        self.current_step_landmarks[step_idx] = detected_landmarks_step or []
+        entries = getattr(self, 'latest_visible_landmark_entries', []) or []
+        self.current_step_landmark_entries[step_idx] = [dict(item) for item in entries]
     
     @property
     def detected_classes(self):
@@ -92,6 +109,9 @@ class InteractiveNavigationController:
         self.classes = self.category_config.detection_classes
         self.mapper.reset()
         self.mapper.init_map_and_pose(num_detected_classes=0)
+        self.current_step_landmarks = {}
+        self.current_step_landmark_entries = {}
+        self._clear_landmark_detection_cache()
         
         current_episodes = self.envs.current_episodes()
         self.current_instruction = current_episodes[0].instruction.instruction_text
@@ -178,7 +198,17 @@ class InteractiveNavigationController:
 # print(f" +{new_classes}类" if new_classes > 0 else "")
         
         if save_vis:
-            vis_landmark_classes = self.landmark_classes if enable_landmark_detection else []
+            if enable_landmark_detection:
+                vis_landmark_classes = self.landmark_classes
+                vis_detections = self.latest_detections_full if hasattr(self, 'latest_detections_full') else None
+                vis_labels = self.latest_labels_full if hasattr(self, 'latest_labels_full') else None
+                vis_masks = self.latest_masks_full if hasattr(self, 'latest_masks_full') else None
+            else:
+                vis_landmark_classes = []
+                vis_detections = None
+                vis_labels = None
+                vis_masks = None
+                self._clear_landmark_detection_cache()
             # action执行时不传waypoint信息，不计算角度（只在环视后计算）
             rgb_bgr = cv2.cvtColor(obs[0]['rgb'], cv2.COLOR_RGB2BGR)
             _, detected_landmarks_step, _ = self.visualizer.save_step_visualization(
@@ -191,8 +221,9 @@ class InteractiveNavigationController:
                 current_pose=map_state['full_pose'],
                 floor=map_state['floor'],
                 hfov=self.config.MAP.HFOV,
-                detections=self.latest_detections_full if hasattr(self, 'latest_detections_full') else None,
-                labels=self.latest_labels_full if hasattr(self, 'latest_labels_full') else None,
+                detections=vis_detections,
+                labels=vis_labels,
+                masks=vis_masks,
                 landmark_classes=vis_landmark_classes,
                 mapping_classes=self.mapping_classes,
                 landmark_config={
@@ -209,9 +240,7 @@ class InteractiveNavigationController:
             
             # 记录当前step的landmark检测结果（用于action决策与去重）
             if enable_landmark_detection:
-                if not hasattr(self, 'current_step_landmarks'):
-                    self.current_step_landmarks = {}
-                self.current_step_landmarks[self.current_step] = detected_landmarks_step or []
+                self._record_landmark_detection_step(self.current_step, detected_landmarks_step)
         
         return {
             'obs': obs[0],

@@ -763,7 +763,7 @@ class VLMNavigationController(InteractiveNavigationController):
                 # 返回空列表，调用方需要处理这种情况
                 return [], []
             
-            # 旋转扫描阶段：仅更新mapping地图，不做landmark检测（节省算力）
+            # 环视阶段不做自定义landmark检测；子任务后续自动转向/动作前快照再检测
             prev_class_count = len(self.detected_classes)
             batch_obs = self._batch_obs(obs, save_object_detection=False)
             poses = torch.from_numpy(np.array([item['sensor_pose'] for item in obs])).float().to(self.device)
@@ -780,6 +780,11 @@ class VLMNavigationController(InteractiveNavigationController):
             # 地图可视化（保存地图+检测landmarks）
             # 环视过程中不传waypoint，不计算角度（环视结束后统一计算）
             rgb_bgr = cv2.cvtColor(obs[0]['rgb'], cv2.COLOR_RGB2BGR)
+            vis_detections = None
+            vis_labels = None
+            vis_masks = None
+            vis_landmark_classes = []
+            self._clear_landmark_detection_cache()
             
             paths, detected_landmarks_step, _ = self.visualizer.save_step_visualization(
                 step=look_step,
@@ -791,10 +796,10 @@ class VLMNavigationController(InteractiveNavigationController):
                 current_pose=map_state['full_pose'],
                 floor=map_state['floor'],
                 hfov=self.config.MAP.HFOV,
-                detections=self.latest_detections_full if hasattr(self, 'latest_detections_full') else None,
-                labels=self.latest_labels_full if hasattr(self, 'latest_labels_full') else None,
-                masks=self.latest_masks_full if hasattr(self, 'latest_masks_full') else None,
-                landmark_classes=self.landmark_classes,
+                detections=vis_detections,
+                labels=vis_labels,
+                masks=vis_masks,
+                landmark_classes=vis_landmark_classes,
                 mapping_classes=self.mapping_classes,
                 landmark_config={
                     'min_total_pixels': self.landmark_min_total_pixels,
@@ -807,12 +812,6 @@ class VLMNavigationController(InteractiveNavigationController):
                 crop_offset=map_state.get('crop_offset'),  # 从map_state获取
                 controller=self
             )
-            
-            # 累积当前step检测到的landmarks
-            if detected_landmarks_step:
-                if not hasattr(self, 'current_step_landmarks'):
-                    self.current_step_landmarks = {}
-                self.current_step_landmarks[look_step] = detected_landmarks_step
             
             # 保存导航可视化（RGB+俯视图拼接）
             if self.nav_visualizer:
@@ -1425,6 +1424,9 @@ class VLMNavigationController(InteractiveNavigationController):
             self.last_action_name = ""
             if hasattr(self, 'current_step_landmarks'):
                 self.current_step_landmarks.clear()
+            if hasattr(self, 'current_step_landmark_entries'):
+                self.current_step_landmark_entries.clear()
+            self._clear_landmark_detection_cache()
             
             # 更新到新子任务：递增计数，重置尝试
             self.subtask_count += 1
@@ -1582,12 +1584,15 @@ class VLMNavigationController(InteractiveNavigationController):
         # 获取detection图像对应的landmark类别
         # 使用找到的detection图像对应的step
         detected_landmarks = None
+        step_landmark_entries = []
+        if detection_step is not None and hasattr(self, 'current_step_landmark_entries'):
+            step_landmark_entries = self.current_step_landmark_entries.get(detection_step, []) or []
+
         if detection_step is not None and hasattr(self, 'current_step_landmarks') and detection_step in self.current_step_landmarks:
             # 当前step检测到的landmarks: [(name, confidence), ...]
             step_landmarks = self.current_step_landmarks[detection_step]
             if step_landmarks:
-                # 格式化为 "name1 (conf1), name2 (conf2)"
-                detected_landmarks = ', '.join([f"{name} ({conf:.2f})" for name, conf in step_landmarks])
+                detected_landmarks = ', '.join([name for name, _ in step_landmarks])
         
         # 退化策略：如果没有检测结果，报告"未检测到"
         if not detected_landmarks:
@@ -1649,53 +1654,88 @@ class VLMNavigationController(InteractiveNavigationController):
                 return "Front 0deg"
             return f"R{abs(a_snap):.0f}deg" if a_snap > 0 else f"L{abs(a_snap):.0f}deg"
 
-        if landmark_dist_map or landmark_dist_map_multi:
-            # 判断当前帧可见的 landmark
-            if detection_step is not None and hasattr(self, 'current_step_landmarks') and detection_step in self.current_step_landmarks:
-                visible_names = {n for n, _ in self.current_step_landmarks[detection_step]}
-            else:
-                visible_names = set()
+        def _landmark_hint(angle_deg: float, is_visible: bool = False) -> str:
+            snap_deg = _snap_angle_to_action(angle_deg)
+            if is_visible and snap_deg == 0:
+                return ""
+            if snap_deg == 0:
+                return " → move forward"
+            if snap_deg > 0:
+                return f" → TURN RIGHT {abs(snap_deg)}deg then move forward"
+            return f" → TURN LEFT {abs(snap_deg)}deg then move forward"
 
+        if landmark_dist_map or landmark_dist_map_multi or step_landmark_entries:
             lines = []
 
-            # 优先使用多实例；若无则回退到每类最近实例
+            visible_entries = sorted(
+                [
+                    (
+                        entry.get('name'),
+                        float(entry.get('distance_m')),
+                        float(entry.get('angle_deg')),
+                    )
+                    for entry in step_landmark_entries
+                    if entry.get('name') is not None
+                    and entry.get('distance_m') is not None
+                    and entry.get('angle_deg') is not None
+                ],
+                key=lambda x: x[1]
+            )
+
+            visible_match_indices = {}
+            for cls_name, dist_m, angle_deg in visible_entries:
+                lines.append(
+                    f"  • [Visible] {cls_name}: {dist_m:.1f}m, "
+                    f"{_fmt_dir_action(angle_deg)}{_landmark_hint(angle_deg, is_visible=True)}"
+                )
+
             if landmark_dist_map_multi:
-                for cls_name, candidates in sorted(landmark_dist_map_multi.items(), key=lambda x: min([p[0] for p in x[1]]) if x[1] else 1e9):
+                for cls_name, dist_m_vis, angle_deg_vis in visible_entries:
+                    candidates = landmark_dist_map_multi.get(cls_name, [])
                     if not candidates:
                         continue
-                    sorted_candidates = sorted(candidates, key=lambda p: p[0])
-                    for idx_c, (dist_m, angle_deg) in enumerate(sorted_candidates, 1):
-                        tag = "[Visible-class]" if cls_name in visible_names else "[Map-offscreen]"
-                        snap_deg = _snap_angle_to_action(angle_deg)
-                        if cls_name in visible_names and abs(snap_deg) <= 0:
-                            hint = ""
-                        elif snap_deg == 0:
-                            hint = " → move forward"
-                        elif snap_deg > 0:
-                            hint = f" → TURN RIGHT {abs(snap_deg)}deg then move forward"
-                        else:
-                            hint = f" → TURN LEFT {abs(snap_deg)}deg then move forward"
-                        suffix = f" #{idx_c}" if len(sorted_candidates) > 1 else ""
-                        lines.append(
-                            f"  • {tag} {cls_name}{suffix}: {dist_m:.1f}m, "
-                            f"{_fmt_dir_action(angle_deg)}{hint}"
-                        )
-            else:
-                for cls_name, (dist_m, angle_deg) in sorted(landmark_dist_map.items(), key=lambda x: x[1][0]):
-                    tag = "[Visible-class]" if cls_name in visible_names else "[Map-offscreen]"
-                    snap_deg = _snap_angle_to_action(angle_deg)
-                    if cls_name in visible_names and abs(snap_deg) <= 0:
-                        hint = ""
-                    elif snap_deg == 0:
-                        hint = " → move forward"
-                    elif snap_deg > 0:
-                        hint = f" → TURN RIGHT {abs(snap_deg)}deg then move forward"
-                    else:
-                        hint = f" → TURN LEFT {abs(snap_deg)}deg then move forward"
+                    used_set = visible_match_indices.setdefault(cls_name, set())
+                    best_idx = None
+                    best_cost = None
+                    for idx_c, (dist_m_c, angle_deg_c) in enumerate(candidates):
+                        if idx_c in used_set:
+                            continue
+                        cost = abs(angle_deg_c - angle_deg_vis) + 0.5 * abs(dist_m_c - dist_m_vis)
+                        if best_cost is None or cost < best_cost:
+                            best_cost = cost
+                            best_idx = idx_c
+                    if best_idx is not None:
+                        used_set.add(best_idx)
 
+                offscreen_items = []
+                for cls_name, candidates in sorted(
+                    landmark_dist_map_multi.items(),
+                    key=lambda x: min([p[0] for p in x[1]]) if x[1] else 1e9
+                ):
+                    if not candidates:
+                        continue
+                    used_set = visible_match_indices.get(cls_name, set())
+                    sorted_with_idx = sorted(list(enumerate(candidates)), key=lambda x: x[1][0])
+                    cls_total = len(candidates)
+                    for idx_c, (dist_m, angle_deg) in sorted_with_idx:
+                        if idx_c in used_set:
+                            continue
+                        suffix = f" #{idx_c + 1}" if cls_total > 1 else ""
+                        offscreen_items.append((cls_name, suffix, dist_m, angle_deg))
+
+                for cls_name, suffix, dist_m, angle_deg in sorted(offscreen_items, key=lambda x: x[2]):
                     lines.append(
-                        f"  • {tag} {cls_name}: {dist_m:.1f}m, "
-                        f"{_fmt_dir_action(angle_deg)}{hint}"
+                        f"  • [Off-screen] {cls_name}{suffix}: {dist_m:.1f}m, "
+                        f"{_fmt_dir_action(angle_deg)}{_landmark_hint(angle_deg)}"
+                    )
+            else:
+                visible_names = {name for name, _, _ in visible_entries}
+                for cls_name, (dist_m, angle_deg) in sorted(landmark_dist_map.items(), key=lambda x: x[1][0]):
+                    if cls_name in visible_names:
+                        continue
+                    lines.append(
+                        f"  • [Off-screen] {cls_name}: {dist_m:.1f}m, "
+                        f"{_fmt_dir_action(angle_deg)}{_landmark_hint(angle_deg)}"
                     )
 
             action_landmark_map_info = "\n".join(lines) if lines else None
@@ -1866,7 +1906,7 @@ class VLMNavigationController(InteractiveNavigationController):
 
         if not hasattr(self, 'current_step_landmarks'):
             self.current_step_landmarks = {}
-        self.current_step_landmarks[self.current_step] = detected_landmarks_step or []
+        self._record_landmark_detection_step(self.current_step, detected_landmarks_step)
         return True
     
     def _raycast_on_rotated_map(

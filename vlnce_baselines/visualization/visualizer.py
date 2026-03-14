@@ -1104,12 +1104,16 @@ class MapVisualizer:
         detection_vis = rgb.copy()
         
         if detections is None or len(detections.xyxy) == 0:
+            if controller is not None:
+                controller.latest_visible_landmark_entries = []
             return detection_vis, [], set()
         
         # 统计检测到的landmark
         detected_landmarks = []
         visible_entries = []  # [(name, dist_m, angle_deg), ...] using corrected map values when available
+        visible_entries_meta = []
         matched_in_view: set = set()  # 当前帧中实际可见的landmark类名
+        used_map_candidates = {}
 
         def _snap_angle_to_action(a_deg: float) -> int:
             """仅用于渲染标注：将角度量化到30°动作栅格（不改真实坐标）。"""
@@ -1159,73 +1163,34 @@ class MapVisualizer:
             bbox_cx = (x1 + x2) / 2.0
             bbox_cy = (y1 + y2) / 2.0
 
-            # ── 方式A：每个 bbox 独立从 RGB-D 深度图采样 ──
-            # 每个检测实例用自己的 SAM mask（通过 sv.Detections.mask）或 bbox 中心区域
-            # 完全独立，多实例同类各自拿到真实距离
-            depth_dist_m = None
-            depth_angle_deg = None
-
-            _depth = depth_meters
-            if _depth is None and controller is not None and hasattr(controller, 'latest_depth_meters'):
-                _depth = controller.latest_depth_meters
-
-            if _depth is not None and _depth.size > 0:
-                sampled = False
-                # ① 优先：用该实例自己的 SAM mask（detections.mask[i]）
-                if (detections is not None
-                        and hasattr(detections, 'mask')
-                        and detections.mask is not None
-                        and i < len(detections.mask)
-                        and detections.mask[i] is not None):
-                    inst_mask = detections.mask[i].astype(np.float32)
-                    if inst_mask.shape != _depth.shape[:2]:
-                        inst_mask = cv2.resize(inst_mask,
-                                               (_depth.shape[1], _depth.shape[0]),
-                                               interpolation=cv2.INTER_NEAREST)
-                    valid_d = _depth[inst_mask > 0.5]
-                    valid_d = valid_d[valid_d > 0.1]
-                    if len(valid_d) > 0:
-                        depth_dist_m = float(np.median(valid_d))
-                        sampled = True
-                # ② fallback：bbox 内部像素（不依赖 mask）
-                if not sampled:
-                    dh, dw = _depth.shape[:2]
-                    bx0, bx1 = max(0, x1), min(dw, x2)
-                    by0, by1 = max(0, y1), min(dh, y2)
-                    if bx1 > bx0 and by1 > by0:
-                        patch = _depth[by0:by1, bx0:bx1]
-                        valid_vals = patch[patch > 0.1]
-                        if len(valid_vals) > 0:
-                            depth_dist_m = float(np.median(valid_vals))
-
-            if depth_dist_m is not None:
-                depth_angle_deg = (bbox_cx - w_img / 2.0) / w_img * hfov
-
-            # ── 方式B：从世界地图质心获取（优先同类多实例匹配） ──
+            # 只使用地图里已经投影/存储的 landmark 相对当前 pose 的距离与角度。
             map_dist_m = None
             map_angle_deg = None
             if landmark_dist_map_multi and label_name in landmark_dist_map_multi:
-                candidates = landmark_dist_map_multi[label_name]
-                if candidates:
-                    if depth_angle_deg is not None:
-                        map_dist_m, map_angle_deg = min(candidates, key=lambda x: abs(x[1] - depth_angle_deg))
-                    else:
-                        map_dist_m, map_angle_deg = min(candidates, key=lambda x: x[0])
+                used_set = used_map_candidates.setdefault(label_name, set())
+                candidates = sorted(landmark_dist_map_multi[label_name], key=lambda x: x[0])
+                for idx_c, (dist_m_c, angle_deg_c) in enumerate(candidates):
+                    if idx_c in used_set:
+                        continue
+                    map_dist_m, map_angle_deg = dist_m_c, angle_deg_c
+                    used_set.add(idx_c)
+                    break
+                if map_dist_m is None and candidates:
+                    map_dist_m, map_angle_deg = candidates[0]
             elif landmark_dist_map and label_name in landmark_dist_map:
                 map_dist_m, map_angle_deg = landmark_dist_map[label_name]
 
-            # 动作输入图优先显示地图矫正后的距离和角度；无地图时退化到depth估计。
-            display_dist_m = None
-            display_angle_deg = None
-            if map_dist_m is not None and map_angle_deg is not None:
-                display_dist_m = map_dist_m
-                display_angle_deg = map_angle_deg
-            elif depth_dist_m is not None and depth_angle_deg is not None:
-                display_dist_m = depth_dist_m
-                display_angle_deg = depth_angle_deg
+            display_dist_m = map_dist_m
+            display_angle_deg = map_angle_deg
 
             if display_dist_m is not None and display_angle_deg is not None:
                 visible_entries.append((label_name, display_dist_m, display_angle_deg))
+                visible_entries_meta.append({
+                    "name": label_name,
+                    "confidence": float(confidence),
+                    "distance_m": float(display_dist_m),
+                    "angle_deg": float(display_angle_deg),
+                })
 
             # bbox上方只显示最终用于决策的距离和动作角度
             row1 = ""
@@ -1356,6 +1321,9 @@ class MapVisualizer:
                 cv2.putText(strip, txt, (x_c, y_c), font2, fs2, (0, 0, 200), 1, cv2.LINE_AA)
 
             detection_vis = np.vstack([detection_vis, strip])
+
+        if controller is not None:
+            controller.latest_visible_landmark_entries = visible_entries_meta
 
         # 返回检测可视化、检测到的landmark列表、已匹配的类名集合
         return detection_vis, detected_landmarks, matched_in_view
@@ -1846,6 +1814,12 @@ class MapVisualizer:
             )
             paths['detection'] = self.save_detection(step, episode_id, detection_vis, phase)
 
+        else:
+            if controller is not None:
+                controller.latest_landmark_dist_map = {}
+                controller.latest_landmark_dist_map_multi = {}
+                controller.latest_visible_landmark_entries = []
+
         # 统计：本步 landmark 配置/检测/地图实例数量
         n_cfg = len(landmark_classes) if landmark_classes else 0
         n_det_inst = len(detected_landmarks_step)
@@ -1864,7 +1838,7 @@ class MapVisualizer:
 
         # 将当前地图中的landmark距离/角度信息存到controller，供LLM/VLM提示词使用
         # 注意：latest_landmark_dist_map_multi保留每类多实例；latest_landmark_dist_map是每类最近实例
-        if controller is not None:
+        if controller is not None and detections is not None and labels is not None:
             controller.latest_landmark_dist_map = landmark_dist_map if landmark_dist_map else {}
             controller.latest_landmark_dist_map_multi = landmark_dist_map_multi if landmark_dist_map_multi else {}
         
