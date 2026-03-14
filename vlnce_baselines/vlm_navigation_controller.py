@@ -1864,8 +1864,22 @@ class VLMNavigationController(InteractiveNavigationController):
         if self.latest_obs is None:
             return False
 
-        # 若当前step已做过landmark检测（例如自动转向最后一步），直接复用，避免重复计算
-        if hasattr(self, 'current_step_landmarks') and self.current_step in self.current_step_landmarks:
+        detection_path = os.path.join(
+            self.episode_dir, 'detection', f'step_{self.current_step:04d}_{action_phase}.png'
+        )
+        rgb_path = os.path.join(
+            self.episode_dir, 'rgb', f'step_{self.current_step:04d}_{action_phase}.png'
+        )
+        local_map_path = os.path.join(
+            self.episode_dir, 'local_map', f'step_{self.current_step:04d}_{action_phase}.png'
+        )
+
+        # 若当前step已经有当前phase的快照文件和检测记录，直接复用。
+        if (hasattr(self, 'current_step_landmarks')
+                and self.current_step in self.current_step_landmarks
+                and os.path.exists(detection_path)
+                and os.path.exists(rgb_path)
+                and os.path.exists(local_map_path)):
             return True
 
         obs = [self.latest_obs]

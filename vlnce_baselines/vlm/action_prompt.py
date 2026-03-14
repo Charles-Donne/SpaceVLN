@@ -40,9 +40,11 @@ You are provided with 1 image:
 2. **Landmark Map**: Read the Known Landmark Map section above. If distance < 0.5m, **STOP immediately**
 3. **Distance Lines**: Which directions are blocked (red) vs safe (green/yellow)?
 4. **Distance Estimation**: How far to destination? (e.g., "~3m", "<0.5m")
-5. **Action Decision**: Choose the safest action toward the destination, avoiding blocked directions
+5. **Action Decision**: If not near the destination and FRONT is clear, move forward; if FRONT is blocked, choose the safest side direction that stays closest to the destination
 
-**STOP Condition** — You must get as close as possible to the destination or fully complete the subtask instruction, then STOP immediately — do not move past it or take unnecessary extra steps.
+**STOP Condition** — As soon as you are near the destination area or the subtask is fulfilled, STOP immediately — do not move past it or take unnecessary extra steps.
+
+**Movement Rule**: Move forward when the destination remains ahead and the path is clear; once near the destination, STOP immediately.
 
 **Safety Priority**: Avoid directions with red distance lines (obstacle <0.5m)
 
@@ -92,6 +94,8 @@ You are provided with 1 image:
 
 **Critical Rules**:
 - **STOP immediately** if destination is < 0.5m or subtask instruction is fulfilled
+- If the destination is ahead and FRONT is clear, prefer MOVE_FORWARD
+- If FRONT is blocked, choose the closest safe side direction toward the destination, not a wider detour
 - For off-screen landmarks, **always turn toward the indicated direction first**
 - progress_summary must describe orientation, locations entered/passed, obstacles bypassed
 """
