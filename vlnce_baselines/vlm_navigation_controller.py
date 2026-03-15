@@ -207,58 +207,20 @@ class VLMNavigationController(InteractiveNavigationController):
         # 通过call_at调用environment 0的get_agent_pose方法
         return self.envs.call_at(0, "get_agent_pose")
 
-    @staticmethod
-    def _generic_landmark_terms() -> set:
-        return {
-            "door", "doors", "doorway", "doorways", "hallway", "hallways",
-            "corridor", "corridors", "wall", "walls", "entrance", "entrances",
-            "room", "rooms", "area", "areas", "path", "paths", "interior",
-            "outside", "inside", "place", "spot", "location", "locations",
-        }
-
-    @staticmethod
-    def _landmark_stopwords() -> set:
-        return {
-            "a", "an", "the", "to", "toward", "towards", "into", "through",
-            "past", "by", "near", "at", "in", "on", "of", "for", "from",
-            "with", "and", "or", "then", "go", "move", "walk", "turn",
-            "stop", "wait", "enter", "reach", "face", "facing", "current",
-            "next", "goal", "destination", "visible", "nearby", "ahead",
-            "behind", "detection", "map", "position", "region",
-        }
-
     @classmethod
-    def _normalize_landmark_candidate(cls, text: Optional[str]) -> Tuple[Optional[str], bool]:
-        """将候选 landmark 规整为最多3词，并标记是否偏泛化。"""
+    def _normalize_landmark_candidate(cls, text: Optional[str]) -> Optional[str]:
+        """清洗 landmark 文本，但不再限制短语长度。"""
         if not text:
-            return None, True
+            return None
 
         cleaned = str(text).strip().lower()
         for token in ["|", "/", "\\", "->", "=>", ":", ";", ",", ".", "!", "?", "(", ")", "[", "]", "{", "}", "\"", "'"]:
             cleaned = cleaned.replace(token, " ")
         cleaned = " ".join(cleaned.split())
         if not cleaned:
-            return None, True
+            return None
 
-        generic_terms = cls._generic_landmark_terms()
-        stopwords = cls._landmark_stopwords()
-        words = cleaned.split()
-        is_generic = any(word in generic_terms for word in words)
-
-        if len(words) <= 3:
-            return cleaned, is_generic
-
-        content_words = [w for w in words if w not in stopwords and w not in generic_terms]
-        if content_words:
-            preferred_words = content_words[-2:] if (is_generic and len(content_words) >= 2) else content_words[-3:]
-            return " ".join(preferred_words), False
-
-        non_stop_words = [w for w in words if w not in stopwords]
-        if non_stop_words:
-            fallback_words = non_stop_words[-3:]
-            return " ".join(fallback_words), any(word in generic_terms for word in fallback_words)
-
-        return None, True
+        return cleaned
 
     @classmethod
     def _iter_landmark_source_candidates(cls, source: Optional[str]) -> List[str]:
@@ -302,25 +264,19 @@ class VLMNavigationController(InteractiveNavigationController):
         next_waypoint_landmark: Optional[str],
         fallback_sources: Optional[List[Optional[str]]] = None,
     ) -> Optional[str]:
-        """优先用LLM原始输出；不合适时从结构化字段回退一个可检测短语。"""
-        primary_candidate, primary_generic = cls._normalize_landmark_candidate(next_waypoint_landmark)
-        if primary_candidate and not primary_generic:
+        """优先保留LLM原始输出；为空时再从结构化字段回退。"""
+        primary_candidate = cls._normalize_landmark_candidate(next_waypoint_landmark)
+        if primary_candidate:
             return primary_candidate
 
-        generic_fallback = primary_candidate if primary_candidate else None
         for source in fallback_sources or []:
             for piece in cls._iter_landmark_source_candidates(source):
-                candidate, is_generic = cls._normalize_landmark_candidate(piece)
-                if candidate and not is_generic:
-                    if candidate != primary_candidate:
-                        print(f"  [INFO] Fallback landmark: {candidate}")
+                candidate = cls._normalize_landmark_candidate(piece)
+                if candidate:
+                    print(f"  [INFO] Fallback landmark: {candidate}")
                     return candidate
-                if candidate and generic_fallback is None:
-                    generic_fallback = candidate
 
-        if generic_fallback:
-            print(f"  [WARN] Using generic landmark fallback: {generic_fallback}")
-        return generic_fallback
+        return None
 
     def _set_current_landmark_tracking(
         self,
@@ -338,8 +294,7 @@ class VLMNavigationController(InteractiveNavigationController):
             self.target_landmark = None
 
         self.landmark_classes = sorted(list(self.tracked_landmark_classes))
-        extra_landmarks = [c for c in self.landmark_classes if c not in self.mapping_classes]
-        self.classes = self.mapping_classes + extra_landmarks
+        self.classes = list(self.landmark_classes)
 
     def _reset_custom_landmark_state(self) -> None:
         """在新子任务开始前清空旧自定义 landmark 的类别、记录和地图通道。"""
@@ -351,7 +306,7 @@ class VLMNavigationController(InteractiveNavigationController):
         self.landmark_classes = []
         self.tracked_landmark_classes.clear()
         self.target_landmark = None
-        self.classes = list(self.mapping_classes)
+        self.classes = []
 
         if hasattr(self, 'current_step_landmarks'):
             self.current_step_landmarks.clear()

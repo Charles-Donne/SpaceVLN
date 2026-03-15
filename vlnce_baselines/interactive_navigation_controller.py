@@ -235,7 +235,7 @@ class InteractiveNavigationController:
         self.current_episode_id = episode_id if episode_id is not None else 0
         
         self.category_config.reset_detected()
-        self.classes = self.category_config.detection_classes
+        self.classes = []
         self.mapper.reset()
         self.mapper.init_map_and_pose(num_detected_classes=0)
         self.current_step_landmarks = {}
@@ -484,31 +484,28 @@ class InteractiveNavigationController:
         语义分割：GroundedSAM检测 + Winner-Takes-All
         
         检测逻辑：
-        - detection_classes = mapping_classes(15个固定) + landmark_classes(动态)
-        - mapping_classes检测结果 → 进入15通道语义地图
-        - landmark_classes检测结果 → 保留但不进入地图，用于可视化标注
+        - 默认不检测固定 mapping_classes，减少扫描建图开销
+        - obstacle / explored 来自深度建图，不依赖语义检测
+        - 仅在 save_object_detection=True 时检测当前自定义 landmark
+        - 自定义 landmark 检测结果 → 投影到额外 landmark 通道，用于可视化与地图距离/方向
         
         Returns:
             semantic_masks: [H, W, 15] 固定15个通道的语义地图
         """
-        # mapping 与自定义 landmark 分开检测，避免重叠框在单次多类检测中互相覆盖。
+        # 为了压缩扫描/建图开销，默认不再跑固定 mapping 类别检测：
+        # - obstacle / explored 由深度建图提供
+        # - floor 由 explored 与 obstacle 推导
+        # - 仅在需要时独立检测当前自定义 landmark，并把结果投影进额外 landmark 通道
         landmark_classes_list = (
             self.landmark_classes
             if (save_object_detection and hasattr(self, 'landmark_classes'))
             else []
         )
-        extra_landmark_queries = [
-            lm for lm in landmark_classes_list
-            if lm not in self.mapping_classes
-        ]
 
         detection_batches = []
-        mapping_result = self.segment_module.segment(rgb, classes=self.mapping_classes)
-        detection_batches.append((*mapping_result, 0))
-
-        if extra_landmark_queries:
-            landmark_result = self.segment_module.segment(rgb, classes=extra_landmark_queries)
-            detection_batches.append((*landmark_result, len(self.mapping_classes)))
+        for lm_idx, landmark_query in enumerate(landmark_classes_list):
+            landmark_result = self.segment_module.segment(rgb, classes=[landmark_query])
+            detection_batches.append((*landmark_result, lm_idx))
 
         masks_all, labels_all, annotated_images, current_detections = \
             self._merge_detection_batches(rgb, detection_batches)
@@ -531,13 +528,11 @@ class InteractiveNavigationController:
         landmark_masks = np.zeros((len(landmark_classes_list), self.height, self.width), dtype=np.float32)
         lm_name_to_idx = {lm.strip().lower(): idx for idx, lm in enumerate(landmark_classes_list)}
 
-        raw_detected_names = []
         for i, label in enumerate(labels_all):
             parts = label.split()
             label_name = ' '.join(parts[:-1]) if len(parts) > 1 else parts[0]
             label_name_norm = label_name.strip().lower()
             confidence = float(parts[-1]) if len(parts) > 1 else 0.5
-            raw_detected_names.append(label_name)
             
             # 只有mapping_classes的检测进入语义地图
             if label_name in predefined_classes:
