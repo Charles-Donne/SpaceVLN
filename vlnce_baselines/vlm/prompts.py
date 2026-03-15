@@ -88,7 +88,7 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
     "next_waypoint_direction": "<IMAGE 1-12>",
     "next_waypoint_destination": "<Next waypoint>",
     "subtask_instruction": "<Immediate instruction for the single nearest unfinished subtask only>",
-    "next_waypoint_landmark": "<Single, clear, recognizable object/furniture; avoid generic landmarks like door, doorway, hallway>",
+    "next_waypoint_landmark": "<1-3 words only; single clear recognizable object/furniture; avoid overly generic landmarks when possible>",
     "completion_criteria": "<Detection: NEAR<1m | Map: area | Position: region>",
     "global_task_finish": <true if ALL✓, no(Current), at final. Else false>,
     "reasoning": "<6 parts REQUIRED: 1)12-Views(MUST analyze IMAGE 1-12 with angle+direction+room+NEAR large objects+FAR small objects+distance+obstacle), 2)Maps(local+global), 3)Position+Task chain(✓→Current→unmarked), 4)Direction, 5)Near-term, 6)Long-term>"
@@ -116,7 +116,7 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
 **Critical Rules**:
 - **Current-work-first**: Finish the nearest unfinished stage before later stages.
 - **First-sentence-first (initial)**: Complete the first sentence/stage before later stages.
-- **Landmark choice**: Prefer clear, recognizable objects/furniture; avoid generic landmarks like door, doorway, hallway, corridor.
+- **Landmark choice**: Prefer clear, recognizable objects/furniture; `next_waypoint_landmark` must be 1-3 words only; avoid overly generic landmarks like door, doorway, hallway, corridor when possible.
 - **Reasoning**: Analyze all 12 IMAGEs; for each IMAGE report NEAR large objects and FAR small objects when visible.
 - **Progress consistency**: Before current=(✓), current=(Current), after current=unmarked.
 - **Subtask scope**: `subtask_instruction` must describe only the nearest unfinished subtask, not future stages.
@@ -219,7 +219,7 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
     "next_waypoint_direction": "<IMAGE 1-12>",
     "next_waypoint_destination": "<Next waypoint>",
     "subtask_instruction": "<Immediate instruction for the single nearest unfinished subtask only>",
-    "next_waypoint_landmark": "<Single, clear, recognizable object/furniture; avoid generic landmarks like door, doorway, hallway>",
+    "next_waypoint_landmark": "<1-3 words only; single clear recognizable object/furniture; avoid overly generic landmarks when possible>",
     "completion_criteria": "<Detection: NEAR<1m | Map: area | Position: region>",
     "global_task_finish": <true if ALL✓, no(Current), at final. Else false>,
     "reasoning": "<6 parts REQUIRED: 1)12-Views(MUST analyze IMAGE 1-12 with angle+direction+room+NEAR large objects+FAR small objects+distance+obstacle+blue circles), 2)Maps(local+global history), 3)Position+Task chain(✓→Current→unmarked)+arrival, 4)Direction, 5)Near-term, 6)Long-term>"
@@ -267,7 +267,7 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
 - **Current-work-first**: Must finish current nearest unfinished stage before planning later stages.
 - **Nearest relevant landmark first**: For current unfinished stage, prefer the nearest landmark that advances that stage.
 - **Landmark relations**: Preserve directional/relational constraints between landmarks (e.g., near, beside, left/right, through, after).
-- **Landmark choice**: Prefer clear, recognizable objects/furniture; avoid generic landmarks like door, doorway, hallway, corridor.
+- **Landmark choice**: Prefer clear, recognizable objects/furniture; `next_waypoint_landmark` must be 1-3 words only; avoid overly generic landmarks like door, doorway, hallway, corridor when possible.
 - **Reasoning thoroughness**: Part 1 MUST analyze ALL 12 IMAGEs (angle+direction+content+blue circles). Part 3 MUST detail position + task chain (✓→Current→unmarked, blue behind=✓)
 - **Per-view detail**: For every IMAGE, report NEAR large objects and FAR small objects when visible
 - **Base on actual**: Say only what's visible. Wall=wall, don't guess beyond

@@ -6,6 +6,7 @@ import numpy as np
 import cv2
 import torch
 from typing import Dict, Any
+from types import SimpleNamespace
 from torchvision import transforms
 from habitat import Config
 from habitat.core.simulator import Observations
@@ -125,6 +126,101 @@ class InteractiveNavigationController:
             status_items = [f"{name}=未检测" for name in tracked_landmarks]
 
         print(f"| 自定义类别: {'; '.join(status_items)}")
+
+    def _draw_detection_overlay(self, image: np.ndarray, detections, labels, color) -> np.ndarray:
+        """在已有图像上补画一组检测框，便于同时保留多 query 结果。"""
+        if image is None:
+            return None
+        if detections is None or getattr(detections, 'xyxy', None) is None or len(detections.xyxy) == 0:
+            return image
+
+        overlay = image.copy()
+        for i, bbox in enumerate(detections.xyxy):
+            x1, y1, x2, y2 = map(int, bbox)
+            label = labels[i] if i < len(labels) else f"object_{i}"
+            cv2.rectangle(overlay, (x1, y1), (x2, y2), color, 2)
+            cv2.putText(
+                overlay,
+                label,
+                (x1, max(18, y1 - 8)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                color,
+                2,
+                cv2.LINE_AA,
+            )
+        return overlay
+
+    def _merge_detection_batches(self, rgb: np.ndarray, detection_batches) -> tuple:
+        """合并多次检测结果，保留重叠框的多个 query 输出。"""
+        merged_labels = []
+        merged_masks = []
+        xyxy_parts = []
+        confidence_parts = []
+        class_id_parts = []
+        tracker_id_parts = []
+        tracker_available = False
+        annotated_image = rgb.copy()
+
+        for batch_idx, batch in enumerate(detection_batches):
+            masks, labels, batch_annotated, detections, class_offset = batch
+            if batch_idx == 0 and batch_annotated is not None:
+                annotated_image = batch_annotated.copy()
+            else:
+                annotated_image = self._draw_detection_overlay(
+                    annotated_image, detections, labels, color=(0, 255, 255)
+                )
+
+            if labels:
+                merged_labels.extend(labels)
+            if masks is not None and getattr(masks, 'size', 0) > 0:
+                merged_masks.append(masks.astype(np.float32))
+
+            if detections is None or getattr(detections, 'xyxy', None) is None or len(detections.xyxy) == 0:
+                continue
+
+            xyxy_parts.append(detections.xyxy.astype(np.float32))
+
+            confidence = getattr(detections, 'confidence', None)
+            if confidence is None:
+                confidence_parts.append(np.zeros((len(detections.xyxy),), dtype=np.float32))
+            else:
+                confidence_parts.append(np.asarray(confidence, dtype=np.float32))
+
+            class_id = getattr(detections, 'class_id', None)
+            if class_id is None:
+                class_id_arr = np.full((len(detections.xyxy),), -1, dtype=np.int32)
+            else:
+                class_id_arr = np.asarray(class_id, dtype=np.int32).copy()
+                valid_mask = class_id_arr >= 0
+                class_id_arr[valid_mask] += class_offset
+            class_id_parts.append(class_id_arr)
+
+            tracker_id = getattr(detections, 'tracker_id', None)
+            if tracker_id is not None:
+                tracker_available = True
+                tracker_id_parts.append(np.asarray(tracker_id))
+            else:
+                tracker_id_parts.append(np.full((len(detections.xyxy),), -1, dtype=np.int32))
+
+        merged_mask_array = (
+            np.concatenate(merged_masks, axis=0)
+            if merged_masks else
+            np.zeros((0, self.height, self.width), dtype=np.float32)
+        )
+
+        merged_detections = SimpleNamespace(
+            xyxy=np.concatenate(xyxy_parts, axis=0) if xyxy_parts else np.zeros((0, 4), dtype=np.float32),
+            confidence=np.concatenate(confidence_parts, axis=0) if confidence_parts else np.zeros((0,), dtype=np.float32),
+            class_id=np.concatenate(class_id_parts, axis=0) if class_id_parts else np.zeros((0,), dtype=np.int32),
+            tracker_id=(
+                np.concatenate(tracker_id_parts, axis=0)
+                if tracker_available and tracker_id_parts else None
+            ),
+            mask=merged_mask_array if merged_mask_array.size > 0 else None,
+        )
+
+        return merged_mask_array, merged_labels, annotated_image, merged_detections
     
     @property
     def detected_classes(self):
@@ -395,12 +491,27 @@ class InteractiveNavigationController:
         Returns:
             semantic_masks: [H, W, 15] 固定15个通道的语义地图
         """
-        # save_object_detection=False 时仅使用 mapping_classes，避免在旋转阶段做 landmark 检测
-        detect_classes = self.classes if save_object_detection else self.mapping_classes
+        # mapping 与自定义 landmark 分开检测，避免重叠框在单次多类检测中互相覆盖。
+        landmark_classes_list = (
+            self.landmark_classes
+            if (save_object_detection and hasattr(self, 'landmark_classes'))
+            else []
+        )
+        extra_landmark_queries = [
+            lm for lm in landmark_classes_list
+            if lm not in self.mapping_classes
+        ]
 
-        # 使用 detection_classes 进行检测
+        detection_batches = []
+        mapping_result = self.segment_module.segment(rgb, classes=self.mapping_classes)
+        detection_batches.append((*mapping_result, 0))
+
+        if extra_landmark_queries:
+            landmark_result = self.segment_module.segment(rgb, classes=extra_landmark_queries)
+            detection_batches.append((*landmark_result, len(self.mapping_classes)))
+
         masks_all, labels_all, annotated_images, current_detections = \
-            self.segment_module.segment(rgb, classes=detect_classes)
+            self._merge_detection_batches(rgb, detection_batches)
         self.mapper.mapping_module.rgb_vis = annotated_images
         
         self.latest_detections_full = current_detections
@@ -417,11 +528,6 @@ class InteractiveNavigationController:
         valid_confidences = []
         # Landmark masks (投影到地图的额外通道，channel 3+N_mapping 开始)
         # 仅在 save_object_detection=True 时启用landmark检测（动作前快照/动作阶段）
-        landmark_classes_list = (
-            self.landmark_classes
-            if (save_object_detection and hasattr(self, 'landmark_classes'))
-            else []
-        )
         landmark_masks = np.zeros((len(landmark_classes_list), self.height, self.width), dtype=np.float32)
         lm_name_to_idx = {lm.strip().lower(): idx for idx, lm in enumerate(landmark_classes_list)}
 
@@ -451,26 +557,19 @@ class InteractiveNavigationController:
             if label_name_norm in lm_name_to_idx:
                 self.detected_classes.add(landmark_classes_list[lm_name_to_idx[label_name_norm]])
 
-        if len(valid_masks) == 0:
-            # 没有检测到mapping类别，但可能有landmark检测
-            combined = np.concatenate([
-                np.zeros((len(predefined_classes), self.height, self.width), dtype=np.float32),
-                landmark_masks  # [N_lm, H, W]
-            ], axis=0)
-            return combined.transpose(1, 2, 0)  # [H, W, 15+N]
-        
-        # Winner-Takes-All处理（只处理mapping类别）
-        valid_masks = np.array(valid_masks)
-        masks_processed = self._process_masks_with_labels(valid_masks, valid_labels, valid_confidences)
-        
-        # 按照预定义类别顺序组织mask（固定15通道）
         global_masks = np.zeros((len(predefined_classes), self.height, self.width), dtype=np.float32)
-        
-        for i, cls_name in enumerate(valid_labels):
-            if cls_name in predefined_classes:
-                global_idx = predefined_classes.index(cls_name)
-                if i < masks_processed.shape[0]:
-                    global_masks[global_idx] = masks_processed[i]
+
+        if len(valid_masks) > 0:
+            # Winner-Takes-All处理（只处理mapping类别）
+            valid_masks = np.array(valid_masks)
+            masks_processed = self._process_masks_with_labels(valid_masks, valid_labels, valid_confidences)
+
+            # 按照预定义类别顺序组织mask（固定15通道）
+            for i, cls_name in enumerate(valid_labels):
+                if cls_name in predefined_classes:
+                    global_idx = predefined_classes.index(cls_name)
+                    if i < masks_processed.shape[0]:
+                        global_masks[global_idx] = masks_processed[i]
         
         # 合并mapping通道 + landmark通道：[15+N, H, W] → [H, W, 15+N]
         combined = np.concatenate([global_masks, landmark_masks], axis=0)

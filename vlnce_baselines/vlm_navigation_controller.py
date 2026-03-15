@@ -207,13 +207,133 @@ class VLMNavigationController(InteractiveNavigationController):
         # 通过call_at调用environment 0的get_agent_pose方法
         return self.envs.call_at(0, "get_agent_pose")
 
-    def _set_current_landmark_tracking(self, next_waypoint_landmark: Optional[str]) -> None:
+    @staticmethod
+    def _generic_landmark_terms() -> set:
+        return {
+            "door", "doors", "doorway", "doorways", "hallway", "hallways",
+            "corridor", "corridors", "wall", "walls", "entrance", "entrances",
+            "room", "rooms", "area", "areas", "path", "paths", "interior",
+            "outside", "inside", "place", "spot", "location", "locations",
+        }
+
+    @staticmethod
+    def _landmark_stopwords() -> set:
+        return {
+            "a", "an", "the", "to", "toward", "towards", "into", "through",
+            "past", "by", "near", "at", "in", "on", "of", "for", "from",
+            "with", "and", "or", "then", "go", "move", "walk", "turn",
+            "stop", "wait", "enter", "reach", "face", "facing", "current",
+            "next", "goal", "destination", "visible", "nearby", "ahead",
+            "behind", "detection", "map", "position", "region",
+        }
+
+    @classmethod
+    def _normalize_landmark_candidate(cls, text: Optional[str]) -> Tuple[Optional[str], bool]:
+        """将候选 landmark 规整为最多3词，并标记是否偏泛化。"""
+        if not text:
+            return None, True
+
+        cleaned = str(text).strip().lower()
+        for token in ["|", "/", "\\", "->", "=>", ":", ";", ",", ".", "!", "?", "(", ")", "[", "]", "{", "}", "\"", "'"]:
+            cleaned = cleaned.replace(token, " ")
+        cleaned = " ".join(cleaned.split())
+        if not cleaned:
+            return None, True
+
+        generic_terms = cls._generic_landmark_terms()
+        stopwords = cls._landmark_stopwords()
+        words = cleaned.split()
+        is_generic = any(word in generic_terms for word in words)
+
+        if len(words) <= 3:
+            return cleaned, is_generic
+
+        content_words = [w for w in words if w not in stopwords and w not in generic_terms]
+        if content_words:
+            preferred_words = content_words[-2:] if (is_generic and len(content_words) >= 2) else content_words[-3:]
+            return " ".join(preferred_words), False
+
+        non_stop_words = [w for w in words if w not in stopwords]
+        if non_stop_words:
+            fallback_words = non_stop_words[-3:]
+            return " ".join(fallback_words), any(word in generic_terms for word in fallback_words)
+
+        return None, True
+
+    @classmethod
+    def _iter_landmark_source_candidates(cls, source: Optional[str]) -> List[str]:
+        """从结构化字段里拆出更像物体短语的候选片段。"""
+        if not source:
+            return []
+
+        text = str(source).strip()
+        if not text:
+            return []
+
+        candidates = [text]
+
+        if "Detection:" in text:
+            detection_part = text.split("Detection:", 1)[1].split("|", 1)[0].strip()
+            if detection_part:
+                candidates.append(detection_part)
+
+        if "'s" in text:
+            tail = text.split("'s", 1)[1].strip()
+            if tail:
+                candidates.append(tail)
+
+        for sep in ["|", ",", ";"]:
+            if sep in text:
+                candidates.extend(
+                    part.strip() for part in text.split(sep) if part.strip()
+                )
+
+        unique = []
+        seen = set()
+        for item in candidates:
+            if item not in seen:
+                unique.append(item)
+                seen.add(item)
+        return unique
+
+    @classmethod
+    def _resolve_landmark_name(
+        cls,
+        next_waypoint_landmark: Optional[str],
+        fallback_sources: Optional[List[Optional[str]]] = None,
+    ) -> Optional[str]:
+        """优先用LLM原始输出；不合适时从结构化字段回退一个可检测短语。"""
+        primary_candidate, primary_generic = cls._normalize_landmark_candidate(next_waypoint_landmark)
+        if primary_candidate and not primary_generic:
+            return primary_candidate
+
+        generic_fallback = primary_candidate if primary_candidate else None
+        for source in fallback_sources or []:
+            for piece in cls._iter_landmark_source_candidates(source):
+                candidate, is_generic = cls._normalize_landmark_candidate(piece)
+                if candidate and not is_generic:
+                    if candidate != primary_candidate:
+                        print(f"  [INFO] Fallback landmark: {candidate}")
+                    return candidate
+                if candidate and generic_fallback is None:
+                    generic_fallback = candidate
+
+        if generic_fallback:
+            print(f"  [WARN] Using generic landmark fallback: {generic_fallback}")
+        return generic_fallback
+
+    def _set_current_landmark_tracking(
+        self,
+        next_waypoint_landmark: Optional[str],
+        fallback_sources: Optional[List[Optional[str]]] = None,
+    ) -> None:
         """每个子任务只保留当前目标landmark，不跨子任务累积。"""
         self.tracked_landmark_classes.clear()
+        clean_landmark = self._resolve_landmark_name(next_waypoint_landmark, fallback_sources)
 
-        if next_waypoint_landmark:
-            self.tracked_landmark_classes.add(next_waypoint_landmark)
-            self.target_landmark = next_waypoint_landmark
+        if clean_landmark:
+            self.tracked_landmark_classes.add(clean_landmark)
+            self.target_landmark = clean_landmark
         else:
             self.target_landmark = None
 
@@ -1191,7 +1311,15 @@ class VLMNavigationController(InteractiveNavigationController):
         next_waypoint_landmark = response.get('next_waypoint_landmark', None)
         
         # 直接使用VLM输出，不自动提取；新子任务会覆盖旧landmark
-        self._set_current_landmark_tracking(next_waypoint_landmark)
+        self._set_current_landmark_tracking(
+            next_waypoint_landmark,
+            fallback_sources=[
+                response.get('completion_criteria'),
+                response.get('next_waypoint_destination'),
+                response.get('subtask_instruction'),
+                response.get('current_waypoint'),
+            ]
+        )
         
         # 打印子任务信息
         self._print_subtask_info(response, is_initial=True)
@@ -1464,7 +1592,15 @@ class VLMNavigationController(InteractiveNavigationController):
             next_waypoint_landmark = response.get('next_waypoint_landmark', None)
             
             # 直接使用VLM输出，不自动提取；新子任务会覆盖旧landmark
-            self._set_current_landmark_tracking(next_waypoint_landmark)
+            self._set_current_landmark_tracking(
+                next_waypoint_landmark,
+                fallback_sources=[
+                    response.get('completion_criteria'),
+                    response.get('next_waypoint_destination'),
+                    response.get('subtask_instruction'),
+                    response.get('current_waypoint'),
+                ]
+            )
             
             # ⚠️ 重要：self.classes更新已在上方完成
             
