@@ -30,8 +30,7 @@ You are provided with 1 image:
 - **Yellow bounding box**: marks the subtask **landmark reference** ({detected_landmarks}) — a recognizable object near the destination area, **not the destination itself**; use it as a visual anchor to navigate into the right area
 - **Bottom white strip** (if present): all landmark names, distances and directions — `[Visible]` = detected in current frame, `[Off-screen]` = mapped but outside current view
 
-# Known Landmark Map (from semantic map, sorted by distance)
-{landmark_map_info}
+{known_landmark_section}
 
 # Your Task
 
@@ -114,8 +113,12 @@ def get_action_execution_prompt(next_waypoint_destination: str,
     """获取动作执行提示词"""
     if not progress_summary:
         progress_summary = "Just started"
-    if not landmark_map_info:
-        landmark_map_info = "No landmarks mapped yet"
+    known_landmark_section = ""
+    if landmark_map_info:
+        known_landmark_section = (
+            "# Known Landmark Map (from semantic map, sorted by distance)\n"
+            f"{landmark_map_info}\n"
+        )
 
     return ACTION_EXECUTION_PROMPT.format(
         subtask_destination=next_waypoint_destination,
@@ -123,7 +126,7 @@ def get_action_execution_prompt(next_waypoint_destination: str,
         progress_summary=progress_summary,
         previous_action_reason=previous_action_reason or "N/A (first step)",
         detected_landmarks=detected_landmarks or "none",
-        landmark_map_info=landmark_map_info,
+        known_landmark_section=known_landmark_section,
         move_distance=move_distance,
         turn_angle=turn_angle,
     )

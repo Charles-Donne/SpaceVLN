@@ -92,6 +92,39 @@ class InteractiveNavigationController:
         self.current_step_landmarks[step_idx] = detected_landmarks_step or []
         entries = getattr(self, 'latest_visible_landmark_entries', []) or []
         self.current_step_landmark_entries[step_idx] = [dict(item) for item in entries]
+
+    def _get_detected_custom_landmarks(self) -> set:
+        """读取当前帧检测结果中的自定义 landmark 类别。"""
+        if not getattr(self, 'landmark_classes', None):
+            return set()
+
+        canonical = {name.strip().lower(): name for name in self.landmark_classes}
+        detected = set()
+        for label in getattr(self, 'latest_labels_full', []) or []:
+            parts = label.split()
+            label_name = ' '.join(parts[:-1]) if len(parts) > 1 else parts[0]
+            matched_name = canonical.get(label_name.strip().lower())
+            if matched_name:
+                detected.add(matched_name)
+        return detected
+
+    def _print_custom_landmark_status(self, detection_enabled: bool) -> None:
+        """命令行仅打印当前子任务自定义类别及其识别状态。"""
+        tracked_landmarks = list(getattr(self, 'landmark_classes', []) or [])
+        if not tracked_landmarks:
+            print()
+            return
+
+        if detection_enabled:
+            detected_landmarks = self._get_detected_custom_landmarks()
+            status_items = [
+                f"{name}=识别" if name in detected_landmarks else f"{name}=未识别"
+                for name in tracked_landmarks
+            ]
+        else:
+            status_items = [f"{name}=未检测" for name in tracked_landmarks]
+
+        print(f"| 自定义类别: {'; '.join(status_items)}")
     
     @property
     def detected_classes(self):
@@ -242,6 +275,8 @@ class InteractiveNavigationController:
             # 记录当前step的landmark检测结果（用于action决策与去重）
             if enable_landmark_detection:
                 self._record_landmark_detection_step(self.current_step, detected_landmarks_step)
+
+        self._print_custom_landmark_status(enable_landmark_detection)
         
         return {
             'obs': obs[0],
