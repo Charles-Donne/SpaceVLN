@@ -1083,6 +1083,7 @@ class MapVisualizer:
                               landmark_dist_map: Optional[Dict[str, Tuple[float, float]]] = None,
                               landmark_dist_map_multi: Optional[Dict[str, List[Tuple[float, float]]]] = None,
                               landmark_masks: Optional[np.ndarray] = None,
+                              append_bottom_strip: bool = True,
                               controller=None) -> np.ndarray:
         """
         直接在RGB上渲染边界框（只标注Landmark类别，显示距离+水平偏角）
@@ -1093,10 +1094,10 @@ class MapVisualizer:
             labels: 标签列表 (例如: ["chair 0.85", "table 0.92"])
             landmark_classes: Landmark类别列表（只标注这些类别）
             mapping_classes: Mapping类别列表（不标注，仅用于建图）
-            depth_meters: 深度图（保留兼容性，当landmark_dist_map不可用时使用）
-            hfov: 相机水平视野角（度），用于计算水平偏角，默认79°
+            depth_meters: 深度图（保留兼容性，当前不参与 landmark 方向/距离计算）
+            hfov: 保留兼容性，当前不参与 landmark 方向/距离计算
             landmark_dist_map: {class_name: (dist_m, rel_angle_deg)} 由地图世界坐标预计算
-                               优先使用，比深度图采样更高效准确
+            landmark_dist_map_multi: {class_name: [(dist_m, rel_angle_deg), ...]} 同类多实例地图信息
         
         Returns:
             detection_vis: 检测可视化图像（只显示Landmark边界框）
@@ -1106,7 +1107,7 @@ class MapVisualizer:
         if detections is None or len(detections.xyxy) == 0:
             if controller is not None:
                 controller.latest_visible_landmark_entries = []
-            return detection_vis, [], set()
+            return detection_vis, [], set(), None
         
         # 统计检测到的landmark
         detected_landmarks = []
@@ -1158,27 +1159,27 @@ class MapVisualizer:
             x1, y1, x2, y2 = map(int, bbox)
             cv2.rectangle(detection_vis, (x1, y1), (x2, y2), color, thickness)
 
-            # 计算bbox中心像素坐标
-            h_img, w_img = rgb.shape[:2]
-            bbox_cx = (x1 + x2) / 2.0
-            bbox_cy = (y1 + y2) / 2.0
+            # 计算bbox中心像素坐标（仅用于文字框定位，不参与角度计算）
+            _, w_img = rgb.shape[:2]
 
             # 只使用地图里已经投影/存储的 landmark 相对当前 pose 的距离与角度。
             map_dist_m = None
             map_angle_deg = None
+            map_instance_idx = None
             if landmark_dist_map_multi and label_name in landmark_dist_map_multi:
                 used_set = used_map_candidates.setdefault(label_name, set())
                 candidates = sorted(landmark_dist_map_multi[label_name], key=lambda x: x[0])
                 for idx_c, (dist_m_c, angle_deg_c) in enumerate(candidates):
                     if idx_c in used_set:
                         continue
-                    map_dist_m, map_angle_deg = dist_m_c, angle_deg_c
-                    used_set.add(idx_c)
+                    map_instance_idx, map_dist_m, map_angle_deg = idx_c, dist_m_c, angle_deg_c
+                    used_set.add(map_instance_idx)
                     break
                 if map_dist_m is None and candidates:
-                    map_dist_m, map_angle_deg = candidates[0]
+                    map_instance_idx, (map_dist_m, map_angle_deg) = 0, candidates[0]
             elif landmark_dist_map and label_name in landmark_dist_map:
                 map_dist_m, map_angle_deg = landmark_dist_map[label_name]
+                map_instance_idx = 0
 
             display_dist_m = map_dist_m
             display_angle_deg = map_angle_deg
@@ -1190,12 +1191,13 @@ class MapVisualizer:
                     "confidence": float(confidence),
                     "distance_m": float(display_dist_m),
                     "angle_deg": float(display_angle_deg),
+                    "instance_idx": map_instance_idx,
                 })
 
             # bbox上方只显示最终用于决策的距离和动作角度
             row1 = ""
             if display_dist_m is not None and display_angle_deg is not None:
-                row1 = f"{display_dist_m:.1f}m {_dir_str(display_angle_deg, True)}"
+                row1 = f"{display_dist_m:.1f}m {_dir_str(display_angle_deg, False)}"
             elif display_dist_m is not None:
                 row1 = f"{display_dist_m:.1f}m"
             if row1:
@@ -1225,40 +1227,26 @@ class MapVisualizer:
         # 仅用于渲染展示，不改变任何真实地图坐标。
         offscreen_items = []  # [(cls_name, inst_idx, dist_m, angle_deg)]
         if landmark_dist_map_multi:
-            used_indices_by_class = {}
-            # 尽量把可见实例和地图实例做一一对应，剩余的作为离屏
-            for lm_name, d_m_vis, a_deg_vis in visible_entries:
-                candidates = landmark_dist_map_multi.get(lm_name, [])
-                if not candidates:
+            visible_instance_indices = {}
+            for entry in visible_entries_meta:
+                if entry.get("instance_idx") is None:
                     continue
-                used_set = used_indices_by_class.setdefault(lm_name, set())
-                best_idx = None
-                best_cost = None
-                for idx_c, (d_m_c, a_deg_c) in enumerate(candidates):
-                    if idx_c in used_set:
-                        continue
-                    cost = abs(a_deg_c - a_deg_vis) + 0.5 * abs(d_m_c - d_m_vis)
-                    if best_cost is None or cost < best_cost:
-                        best_cost = cost
-                        best_idx = idx_c
-                if best_idx is not None:
-                    used_set.add(best_idx)
+                visible_instance_indices.setdefault(entry["name"], set()).add(entry["instance_idx"])
 
             for cls_name, candidates in landmark_dist_map_multi.items():
-                used_set = used_indices_by_class.get(cls_name, set())
-                sorted_with_idx = sorted(list(enumerate(candidates)), key=lambda x: x[1][0])
-                inst_id = 0
-                for idx_c, (d_m, a_deg) in sorted_with_idx:
-                    if idx_c in used_set:
+                sorted_candidates = sorted(candidates, key=lambda x: x[0])
+                used_set = visible_instance_indices.get(cls_name, set())
+                for inst_idx, (d_m, a_deg) in enumerate(sorted_candidates, 1):
+                    if (inst_idx - 1) in used_set:
                         continue
-                    inst_id += 1
-                    offscreen_items.append((cls_name, inst_id, d_m, a_deg))
+                    offscreen_items.append((cls_name, inst_idx, d_m, a_deg))
         elif landmark_dist_map:
             for cls_name, (d_m, a_deg) in sorted(landmark_dist_map.items(), key=lambda x: x[1][0]):
                 if cls_name in matched_in_view:
                     continue
                 offscreen_items.append((cls_name, 1, d_m, a_deg))
 
+        strip = None
         if detected_landmarks or offscreen_items:
             w_img2 = detection_vis.shape[1]
             font2 = cv2.FONT_HERSHEY_SIMPLEX
@@ -1267,11 +1255,27 @@ class MapVisualizer:
             item_lines = []  # list of (text, is_separator)
 
             # ── 可见landmark（逐实例显示） ──
-            for idx_vis, (lm_name, d_m, a_deg) in enumerate(visible_entries, 1):
+            visible_cls_total = {}
+            for entry in visible_entries_meta:
+                cls_name = entry["name"]
+                total_candidates = len(landmark_dist_map_multi.get(cls_name, [])) if landmark_dist_map_multi else 1
+                visible_cls_total[cls_name] = max(
+                    visible_cls_total.get(cls_name, 0),
+                    total_candidates,
+                    (entry.get("instance_idx") or 0) + 1
+                )
+
+            for entry in visible_entries_meta:
+                lm_name = entry["name"]
+                d_m = entry["distance_m"]
+                a_deg = entry["angle_deg"]
                 sn = lm_name if len(lm_name) <= 40 else lm_name[:38] + ".."
-                suffix = f" #{idx_vis}" if len(visible_entries) > 1 else ""
+                inst_idx = entry.get("instance_idx")
+                suffix = ""
+                if inst_idx is not None and visible_cls_total.get(lm_name, 0) > 1:
+                    suffix = f" #{inst_idx + 1}"
                 item_lines.append((
-                    f"[Vis]{suffix} {sn}  {d_m:.1f}m  {_dir_str(a_deg, True)}",
+                    f"[Vis]{suffix} {sn}  {d_m:.1f}m  {_dir_str(a_deg, False)}",
                     False
                 ))
 
@@ -1295,7 +1299,7 @@ class MapVisualizer:
                 sn = cls_name if len(cls_name) <= 40 else cls_name[:38] + ".."
                 suffix = f" #{inst_idx}" if cls_total.get(cls_name, 0) > 1 else ""
                 item_lines.append((
-                    f"[Off]{suffix} {sn}  {d_m:.1f}m  {_dir_str(a_deg, True)}",
+                    f"[Off]{suffix} {sn}  {d_m:.1f}m  {_dir_str(a_deg, False)}",
                     False
                 ))
 
@@ -1320,13 +1324,14 @@ class MapVisualizer:
                 y_c = pad_v + row_h * i + th
                 cv2.putText(strip, txt, (x_c, y_c), font2, fs2, (0, 0, 200), 1, cv2.LINE_AA)
 
-            detection_vis = np.vstack([detection_vis, strip])
+            if append_bottom_strip:
+                detection_vis = np.vstack([detection_vis, strip])
 
         if controller is not None:
             controller.latest_visible_landmark_entries = visible_entries_meta
 
-        # 返回检测可视化、检测到的landmark列表、已匹配的类名集合
-        return detection_vis, detected_landmarks, matched_in_view
+        # 返回检测可视化、检测到的landmark列表、已匹配的类名集合和底部条带
+        return detection_vis, detected_landmarks, matched_in_view, strip
     
     # ========== 保存方法 ==========
     
@@ -1788,8 +1793,18 @@ class MapVisualizer:
                 if cls_name not in landmark_dist_map or dist_m < landmark_dist_map[cls_name][0]:
                     landmark_dist_map[cls_name] = (dist_m, angle_deg)
 
-            # 直接从full_map算出7方向距离，立即画到rgb_for_det上
+            # 先渲染bbox，再叠加7方向距离线，避免距离线参与实例匹配。
             rgb_for_det = rgb.copy()
+            detection_vis, detected_landmarks_step, _visible, landmark_strip = self.render_detection_bbox(
+                rgb_for_det, detections, labels,
+                landmark_classes, mapping_classes,
+                hfov=hfov,
+                landmark_dist_map=landmark_dist_map if landmark_dist_map else None,
+                landmark_dist_map_multi=landmark_dist_map_multi if landmark_dist_map_multi else None,
+                append_bottom_strip=False,
+                controller=controller
+            )
+
             try:
                 obs_mask = self._get_channel_mask(full_map, 0)  # obstacle channel
                 obs_flipped = np.flipud(obs_mask)
@@ -1798,20 +1813,14 @@ class MapVisualizer:
                     (480, 480), interpolation=cv2.INTER_NEAREST) > 127
                 obstacle_distances = self.calculate_obstacle_distances_from_rotated_map(
                     obs_resized, 240, 240)
-                rgb_for_det = self.draw_distance_on_action_view(rgb_for_det, obstacle_distances)
+                detection_vis = self.draw_distance_on_action_view(detection_vis, obstacle_distances)
                 if controller is not None:
                     controller.latest_obstacle_distances = obstacle_distances
             except Exception:
                 pass
 
-            detection_vis, detected_landmarks_step, _visible = self.render_detection_bbox(
-                rgb_for_det, detections, labels,
-                landmark_classes, mapping_classes,
-                hfov=hfov,
-                landmark_dist_map=landmark_dist_map if landmark_dist_map else None,
-                landmark_dist_map_multi=landmark_dist_map_multi if landmark_dist_map_multi else None,
-                controller=controller
-            )
+            if landmark_strip is not None:
+                detection_vis = np.vstack([detection_vis, landmark_strip])
             paths['detection'] = self.save_detection(step, episode_id, detection_vis, phase)
 
         else:

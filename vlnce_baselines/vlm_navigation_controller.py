@@ -220,6 +220,29 @@ class VLMNavigationController(InteractiveNavigationController):
         self.landmark_classes = sorted(list(self.tracked_landmark_classes))
         extra_landmarks = [c for c in self.landmark_classes if c not in self.mapping_classes]
         self.classes = self.mapping_classes + extra_landmarks
+
+    def _reset_custom_landmark_state(self) -> None:
+        """在新子任务开始前清空旧自定义 landmark 的类别、记录和地图通道。"""
+        old_landmarks = list(getattr(self, 'landmark_classes', []) or [])
+
+        if hasattr(self, 'mapper') and self.mapper is not None:
+            self.mapper.clear_custom_landmarks()
+
+        self.landmark_classes = []
+        self.tracked_landmark_classes.clear()
+        self.target_landmark = None
+        self.classes = list(self.mapping_classes)
+
+        if hasattr(self, 'current_step_landmarks'):
+            self.current_step_landmarks.clear()
+        if hasattr(self, 'current_step_landmark_entries'):
+            self.current_step_landmark_entries.clear()
+        self._clear_landmark_detection_cache()
+
+        detected = getattr(self.category_config, '_detected_classes', None)
+        if detected is not None and hasattr(detected, '_dict'):
+            for lm_name in old_landmarks:
+                detected._dict.pop(lm_name, None)
     
     def _draw_navigable_area_on_view(self, image: np.ndarray, view_angle: float) -> np.ndarray:
         """
@@ -1161,6 +1184,9 @@ class VLMNavigationController(InteractiveNavigationController):
         # waypoint_summary = self._get_waypoint_summary()
         # self.save_manager.save_waypoint_memory(...)
         
+        # 初始子任务开始前也显式清空旧自定义 landmark 状态
+        self._reset_custom_landmark_state()
+
         # 动态更新目标landmark（直接使用VLM输出的next_waypoint_landmark）
         next_waypoint_landmark = response.get('next_waypoint_landmark', None)
         
@@ -1414,19 +1440,13 @@ class VLMNavigationController(InteractiveNavigationController):
             
             # 清空旧状态（为新子任务准备）
             self.mapper.clear_trajectory()
-            self.landmark_classes = []
-            self.tracked_landmark_classes.clear()
+            self._reset_custom_landmark_state()
             self.progress_summary = ""
             self.previous_action_reason = ""
             self.pose_before_action = None
             self.last_planned_degrees = 0
             self.last_planned_meters = 0
             self.last_action_name = ""
-            if hasattr(self, 'current_step_landmarks'):
-                self.current_step_landmarks.clear()
-            if hasattr(self, 'current_step_landmark_entries'):
-                self.current_step_landmark_entries.clear()
-            self._clear_landmark_detection_cache()
             
             # 更新到新子任务：递增计数，重置尝试
             self.subtask_count += 1
@@ -1649,10 +1669,9 @@ class VLMNavigationController(InteractiveNavigationController):
             return int(round(a_deg / 30.0) * 30)
 
         def _fmt_dir_action(a_deg: float) -> str:
-            a_snap = _snap_angle_to_action(a_deg)
-            if a_snap == 0:
+            if abs(a_deg) < 1e-6:
                 return "Front 0deg"
-            return f"R{abs(a_snap):.0f}deg" if a_snap > 0 else f"L{abs(a_snap):.0f}deg"
+            return f"Right {abs(a_deg):.0f}deg" if a_deg > 0 else f"Left {abs(a_deg):.0f}deg"
 
         def _landmark_hint(angle_deg: float, is_visible: bool = False) -> str:
             snap_deg = _snap_angle_to_action(angle_deg)
@@ -1673,6 +1692,7 @@ class VLMNavigationController(InteractiveNavigationController):
                         entry.get('name'),
                         float(entry.get('distance_m')),
                         float(entry.get('angle_deg')),
+                        entry.get('instance_idx'),
                     )
                     for entry in step_landmark_entries
                     if entry.get('name') is not None
@@ -1682,31 +1702,22 @@ class VLMNavigationController(InteractiveNavigationController):
                 key=lambda x: x[1]
             )
 
-            visible_match_indices = {}
-            for cls_name, dist_m, angle_deg in visible_entries:
+            visible_instance_indices = {}
+            for cls_name, dist_m, angle_deg, instance_idx in visible_entries:
+                if instance_idx is not None:
+                    visible_instance_indices.setdefault(cls_name, set()).add(int(instance_idx))
+                same_cls_count = len(landmark_dist_map_multi.get(cls_name, [])) if landmark_dist_map_multi else sum(
+                    1 for n, _, _, _inst in visible_entries if n == cls_name
+                )
+                suffix = ""
+                if instance_idx is not None and same_cls_count > 1:
+                    suffix = f" #{int(instance_idx) + 1}"
                 lines.append(
-                    f"  • [Visible] {cls_name}: {dist_m:.1f}m, "
+                    f"  • [Visible] {cls_name}{suffix}: {dist_m:.1f}m, "
                     f"{_fmt_dir_action(angle_deg)}{_landmark_hint(angle_deg, is_visible=True)}"
                 )
 
             if landmark_dist_map_multi:
-                for cls_name, dist_m_vis, angle_deg_vis in visible_entries:
-                    candidates = landmark_dist_map_multi.get(cls_name, [])
-                    if not candidates:
-                        continue
-                    used_set = visible_match_indices.setdefault(cls_name, set())
-                    best_idx = None
-                    best_cost = None
-                    for idx_c, (dist_m_c, angle_deg_c) in enumerate(candidates):
-                        if idx_c in used_set:
-                            continue
-                        cost = abs(angle_deg_c - angle_deg_vis) + 0.5 * abs(dist_m_c - dist_m_vis)
-                        if best_cost is None or cost < best_cost:
-                            best_cost = cost
-                            best_idx = idx_c
-                    if best_idx is not None:
-                        used_set.add(best_idx)
-
                 offscreen_items = []
                 for cls_name, candidates in sorted(
                     landmark_dist_map_multi.items(),
@@ -1714,10 +1725,10 @@ class VLMNavigationController(InteractiveNavigationController):
                 ):
                     if not candidates:
                         continue
-                    used_set = visible_match_indices.get(cls_name, set())
-                    sorted_with_idx = sorted(list(enumerate(candidates)), key=lambda x: x[1][0])
-                    cls_total = len(candidates)
-                    for idx_c, (dist_m, angle_deg) in sorted_with_idx:
+                    used_set = visible_instance_indices.get(cls_name, set())
+                    sorted_candidates = sorted(candidates, key=lambda x: x[0])
+                    cls_total = len(sorted_candidates)
+                    for idx_c, (dist_m, angle_deg) in enumerate(sorted_candidates):
                         if idx_c in used_set:
                             continue
                         suffix = f" #{idx_c + 1}" if cls_total > 1 else ""
@@ -1729,7 +1740,7 @@ class VLMNavigationController(InteractiveNavigationController):
                         f"{_fmt_dir_action(angle_deg)}{_landmark_hint(angle_deg)}"
                     )
             else:
-                visible_names = {name for name, _, _ in visible_entries}
+                visible_names = {name for name, _, _, _ in visible_entries}
                 for cls_name, (dist_m, angle_deg) in sorted(landmark_dist_map.items(), key=lambda x: x[1][0]):
                     if cls_name in visible_names:
                         continue
@@ -2498,16 +2509,13 @@ class VLMNavigationController(InteractiveNavigationController):
 
     @staticmethod
     def _bearing_to_description(bearing_deg: float) -> str:
-        """将相对方位角转换为可读描述（0=Front, CCW positive）"""
+        """将相对方位角转换为精确方向描述（0=Front, CW positive=Right）。"""
         b = ((bearing_deg + 180) % 360) - 180  # normalize to [-180, 180]
-        if abs(b) < 22.5:
-            return "Front"
-        elif abs(b) > 157.5:
-            return "Behind"
-        elif b < 0:
+        if abs(b) < 1e-3:
+            return "Front 0°"
+        if b < 0:
             return f"Left {abs(b):.0f}°"
-        else:
-            return f"Right {b:.0f}°"
+        return f"Right {b:.0f}°"
 
     def _get_waypoint_summary(self) -> str:
         """

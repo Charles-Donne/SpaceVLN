@@ -233,6 +233,11 @@ class SemanticMapper:
         - 每个子任务都有独立的轨迹显示，不会累积
         """
         self.mapping_module.clear_trajectory()  # 清空Agent通道中的轨迹
+
+    def clear_custom_landmarks(self):
+        """清空地图中累计的自定义 landmark 通道。"""
+        if hasattr(self.mapping_module, 'clear_landmark_channels'):
+            self.mapping_module.clear_landmark_channels(n_mapping=len(mapping_classes))
     
     # ========== Waypoint管理方法 ==========
     

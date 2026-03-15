@@ -219,6 +219,25 @@ class Semantic_Mapping(nn.Module):
         """清空子任务轨迹点列表（用于local map，global map的轨迹保留）"""
         self.subtask_trajectory_points.clear()
         # 注意：不清空 global_trajectory_points，它用于global map显示完整历史
+
+    def clear_landmark_channels(self, n_mapping: int = 15) -> None:
+        """清空自定义 landmark 语义通道，避免跨子任务残留。"""
+        lm_start_ch = self.MAP_CHANNELS + n_mapping
+
+        def _zero_map_channels(map_tensor) -> None:
+            if map_tensor is None or map_tensor.shape[1] <= lm_start_ch:
+                return
+            map_tensor[:, lm_start_ch:, :, :] = 0.0
+
+        _zero_map_channels(self.local_map)
+        _zero_map_channels(self.one_step_local_map)
+        _zero_map_channels(self.full_map)
+        _zero_map_channels(self.one_step_full_map)
+
+        for tile in self.tiles.values():
+            _zero_map_channels(tile)
+        for tile in self.one_step_tiles.values():
+            _zero_map_channels(tile)
     
     def _draw_line_on_tile(self, tile_key, x0, y0, x1, y1):
         """
