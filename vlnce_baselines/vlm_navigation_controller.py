@@ -1569,6 +1569,9 @@ class VLMNavigationController(InteractiveNavigationController):
                 if success and action_sequence:
                     self.execute_rotation_sequence(action_sequence)
                     print()  # newline after rotation steps
+
+            attempt_letter = chr(ord('a') + self.subtask_attempt)
+            self._run_pre_action_detection_snapshot(f"action{self.subtask_count}{attempt_letter}")
         
         # 返回response（prompt已保存到save_dir）
         return response, None
@@ -2267,6 +2270,11 @@ class VLMNavigationController(InteractiveNavigationController):
             if success and action_sequence:
                 self.execute_rotation_sequence(action_sequence)
                 print()  # newline after rotation steps
+
+        # 新子任务开始前，立刻在当前朝向做一次快照检测，确保地图中的自定义 landmark
+        # 及其距离/角度在 action 前已经初始化完成。
+        attempt_letter = chr(ord('a') + self.subtask_attempt)
+        self._run_pre_action_detection_snapshot(f"action{self.subtask_count}{attempt_letter}")
         
         # 3. 主导航循环
         total_steps = self.current_step
@@ -2609,13 +2617,16 @@ class VLMNavigationController(InteractiveNavigationController):
 
     @staticmethod
     def _bearing_to_description(bearing_deg: float) -> str:
-        """将相对方位角转换为精确方向描述（0=Front, CW positive=Right）。"""
+        """将相对方位角归并为 action/detection 同风格方向描述。"""
         b = ((bearing_deg + 180) % 360) - 180  # normalize to [-180, 180]
-        if abs(b) < 1e-3:
-            return "Front 0°"
-        if b < 0:
-            return f"Left {abs(b):.0f}°"
-        return f"Right {b:.0f}°"
+        mag = abs(b)
+        if mag <= 15.0:
+            return "Front 0deg"
+        if mag >= 165.0:
+            return "Back 180deg"
+        bucket = int((mag - 15.0 - 1e-6) // 30.0) + 1
+        snapped = min(bucket * 30, 150)
+        return f"Left {snapped:.0f}deg" if b < 0 else f"Right {snapped:.0f}deg"
 
     def _get_waypoint_summary(self) -> str:
         """

@@ -1070,8 +1070,8 @@ class MapVisualizer:
             labels: 标签列表 (例如: ["chair 0.85", "table 0.92"])
             landmark_classes: Landmark类别列表（只标注这些类别）
             mapping_classes: Mapping类别列表（不标注，仅用于建图）
-            depth_meters: 深度图（保留兼容性，当前不参与 landmark 方向/距离计算）
-            hfov: 保留兼容性，当前不参与 landmark 方向/距离计算
+            depth_meters: 深度图；仅在同类多实例时用于把当前检测实例匹配到地图实例
+            hfov: 相机水平视场角；仅用于实例匹配，不用于最终距离/角度显示
             landmark_dist_map: {class_name: (dist_m, rel_angle_deg)} 由地图世界坐标预计算
             landmark_dist_map_multi: {class_name: [(dist_m, rel_angle_deg), ...]} 同类多实例地图信息
         
@@ -1112,7 +1112,47 @@ class MapVisualizer:
             if abs(a) >= 165.0:
                 return "Back 180deg"
             return f"Right {abs(a):.0f}deg" if a > 0 else f"Left {abs(a):.0f}deg"
-        
+
+        def _mask_rel_xy(mask_2d: np.ndarray, depth_img: np.ndarray) -> Optional[Tuple[float, float]]:
+            """用当前检测 mask + 深度估计目标在 agent 坐标系中的前向/右向位置，仅用于匹配地图实例。"""
+            if mask_2d is None or depth_img is None:
+                return None
+
+            if mask_2d.shape != depth_img.shape:
+                mask_2d = cv2.resize(
+                    mask_2d.astype(np.float32),
+                    (depth_img.shape[1], depth_img.shape[0]),
+                    interpolation=cv2.INTER_NEAREST,
+                )
+
+            valid_mask = (mask_2d > 0.5) & np.isfinite(depth_img) & (depth_img > 0.05)
+            if not np.any(valid_mask):
+                return None
+
+            ys, xs = np.nonzero(valid_mask)
+            # 只做实例匹配时不需要全部像素；均匀抽样可显著降低 CPU 开销。
+            sample_stride = 4
+            if sample_stride > 1 and ys.size > sample_stride:
+                ys = ys[::sample_stride]
+                xs = xs[::sample_stride]
+            depth_vals = depth_img[ys, xs].astype(np.float32)
+            if depth_vals.size == 0:
+                return None
+
+            h_img, w_img = depth_img.shape[:2]
+            xc = (w_img - 1) / 2.0
+            focal = (w_img / 2.0) / np.tan(np.deg2rad(float(hfov)) / 2.0)
+            if focal <= 1e-6:
+                return None
+
+            right_vals = ((xs.astype(np.float32) - xc) * depth_vals) / float(focal)
+            forward_vals = depth_vals
+            return float(np.median(forward_vals)), float(np.median(right_vals))
+
+        depth_for_match = depth_meters
+        if depth_for_match is None and controller is not None:
+            depth_for_match = getattr(controller, "latest_depth_meters", None)
+
         for i in range(len(detections.xyxy)):
             bbox = detections.xyxy[i]
             label = labels[i] if i < len(labels) else f"object_{i}"
@@ -1144,8 +1184,15 @@ class MapVisualizer:
             x1, y1, x2, y2 = map(int, bbox)
             cv2.rectangle(detection_vis, (x1, y1), (x2, y2), color, thickness)
 
-            # 计算bbox中心像素坐标（仅用于文字框定位，不参与角度计算）
+            # 仅用 bbox 中心做文字框定位；同类多实例时才做 mask+depth 到地图实例的匹配。
             _, w_img = rgb.shape[:2]
+            same_cls_total = len(landmark_dist_map_multi.get(label_name, [])) if landmark_dist_map_multi else 1
+            det_rel_xy = None
+            if same_cls_total > 1:
+                det_mask = None
+                if getattr(detections, "mask", None) is not None and i < len(detections.mask):
+                    det_mask = detections.mask[i]
+                det_rel_xy = _mask_rel_xy(det_mask, depth_for_match)
 
             # 只使用地图里已经投影/存储的 landmark 相对当前 pose 的距离与角度。
             map_dist_m = None
@@ -1154,12 +1201,29 @@ class MapVisualizer:
             if landmark_dist_map_multi and label_name in landmark_dist_map_multi:
                 used_set = used_map_candidates.setdefault(label_name, set())
                 candidates = sorted(landmark_dist_map_multi[label_name], key=lambda x: x[0])
+                ranked_candidates = []
                 for idx_c, (dist_m_c, angle_deg_c) in enumerate(candidates):
                     if idx_c in used_set:
                         continue
-                    map_instance_idx, map_dist_m, map_angle_deg = idx_c, dist_m_c, angle_deg_c
+                    angle_rad_c = np.deg2rad(angle_deg_c)
+                    cand_rel_xy = (
+                        float(dist_m_c * np.cos(angle_rad_c)),
+                        float(dist_m_c * np.sin(angle_rad_c)),
+                    )
+                    if det_rel_xy is not None:
+                        match_cost = float(np.hypot(
+                            cand_rel_xy[0] - det_rel_xy[0],
+                            cand_rel_xy[1] - det_rel_xy[1],
+                        ))
+                    else:
+                        match_cost = float(dist_m_c)
+                    ranked_candidates.append(
+                        (idx_c, dist_m_c, angle_deg_c, match_cost)
+                    )
+                if ranked_candidates:
+                    ranked_candidates.sort(key=lambda item: (item[3], item[1]))
+                    map_instance_idx, map_dist_m, map_angle_deg, _ = ranked_candidates[0]
                     used_set.add(map_instance_idx)
-                    break
                 if map_dist_m is None and candidates:
                     map_instance_idx, (map_dist_m, map_angle_deg) = 0, candidates[0]
             elif landmark_dist_map and label_name in landmark_dist_map:
@@ -1181,10 +1245,13 @@ class MapVisualizer:
 
             # bbox上方只显示最终用于决策的距离和动作角度
             row1 = ""
+            inst_prefix = ""
+            if map_instance_idx is not None and same_cls_total > 1:
+                inst_prefix = f"#{map_instance_idx + 1} "
             if display_dist_m is not None and display_angle_deg is not None:
-                row1 = f"{display_dist_m:.1f}m {_dir_str(display_angle_deg, True)}"
+                row1 = f"{inst_prefix}{display_dist_m:.1f}m {_dir_str(display_angle_deg, True)}"
             elif display_dist_m is not None:
-                row1 = f"{display_dist_m:.1f}m"
+                row1 = f"{inst_prefix}{display_dist_m:.1f}m"
             if row1:
                 font = cv2.FONT_HERSHEY_SIMPLEX
                 font_scale = 0.5
@@ -1786,6 +1853,7 @@ class MapVisualizer:
             detection_vis, detected_landmarks_step, _visible, landmark_strip = self.render_detection_bbox(
                 rgb_for_det, detections, labels,
                 landmark_classes, mapping_classes,
+                depth_meters=getattr(controller, 'latest_depth_meters', None) if controller is not None else None,
                 hfov=hfov,
                 landmark_dist_map=landmark_dist_map if landmark_dist_map else None,
                 landmark_dist_map_multi=landmark_dist_map_multi if landmark_dist_map_multi else None,
