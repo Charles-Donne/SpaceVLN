@@ -289,14 +289,6 @@ class SemanticMapper:
         self.waypoint_ids.append(waypoint_id)
         self.waypoint_descriptions.append(description)
         
-        # ===== 关键：写入地图tiles中的Channel 2 =====
-        self.mapping_module.mark_waypoint(
-            agent_x_m=agent_x_m,
-            agent_y_m=agent_y_m,
-            waypoint_id=waypoint_id,
-            clear_radius_m=2.0
-        )
-        
         # print(f"  📍 Waypoint #{waypoint_id} @ (py={pixel_y}, px={pixel_x}) - {description}")
         
         return waypoint_id
@@ -314,7 +306,6 @@ class SemanticMapper:
     
     def clear_waypoints(self):
         """清空所有waypoint"""
-        # 清除列表即可，不需要操作Channel 2
         self.waypoint_positions.clear()
         self.waypoint_ids.clear()
         self.waypoint_descriptions.clear()

@@ -204,7 +204,8 @@ class InteractiveNavigationController:
                 vis_labels = self.latest_labels_full if hasattr(self, 'latest_labels_full') else None
                 vis_masks = self.latest_masks_full if hasattr(self, 'latest_masks_full') else None
             else:
-                vis_landmark_classes = []
+                # 即使当前帧不做新的 landmark 检测，也继续渲染地图中已累计的 custom landmark
+                vis_landmark_classes = self.landmark_classes
                 vis_detections = None
                 vis_labels = None
                 vis_masks = None

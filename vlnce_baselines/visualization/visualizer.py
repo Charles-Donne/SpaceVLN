@@ -376,18 +376,17 @@ class MapVisualizer:
             - global_map_rotated: 旋转地图（无轨迹，440×440）
             - last_waypoint_angle: 最后一个waypoint相对于正前方的角度（弧度），None表示无waypoint
         
-        渲染层次（严格按照ZS_Evaluator）:
+        渲染层次:
             - 白色(0): 未探索区域
-            - 浅灰色(2): 已探索自由空间（先渲染）
-            - 黑色(1): 障碍物（覆盖已探索）
-            - 浅绿色(5): Floor（通过形态学计算，覆盖障碍物）
-            - 橙色(3): Agent轨迹（在语义层中渲染，覆盖floor）
-            - 蓝色(4): Waypoint（在语义层中渲染，覆盖轨迹）
-            
+            - 浅灰色(2): 已探索自由空间
+            - 黑色(1): 障碍物
+            - 浅绿色(5): Floor
+            - 橙色: 轨迹（OpenCV后绘制）
+            - 蓝色: waypoint（由 waypoint_positions 列表绘制）
+
         注意：
-        - 轨迹作为语义层的一部分（值=3）在调色板渲染阶段处理，存储在Channel 2
-        - Waypoint作为语义层的一部分（值=4）在调色板渲染阶段处理，存储在Channel 3
-        - 不渲染bed/chair等语义类别的颜色，只用于landmark标注
+        - 不再从 Channel 2 读取 waypoint；waypoint 只由 mapper 返回的世界坐标列表绘制
+        - 不渲染 bed/chair 等语义类别颜色，只用于 landmark 标注
         """
         # ===== 阶段1: 从 full_map 提取各层 mask（统一流程，obstacle/floor/landmark 均来自同一投影）=====
         # 通道布局：[0] obstacle  [1] explored  [3..3+M-1] mapping_classes  [3+M..] landmark_classes
@@ -411,14 +410,7 @@ class MapVisualizer:
             floor_display_mask = np.logical_and(floor.astype(bool), explored_mask)
             semantic_map[floor_display_mask] = 5  # 浅绿色
 
-        # Layer 3: 不再从Channel 2提取轨迹，后续在PIL渲染后用OpenCV连线绘制
-        
-        # Layer 4: Waypoint（蓝色）- 从Channel 2提取
-        if full_map.shape[0] > 2:  # 确保有通道2
-            waypoint_channel = full_map[2]  # [H, W] - Agent通道（合并）
-            # 提取waypoint（值>=1.0表示有waypoint）
-            waypoint_mask = waypoint_channel >= 1.0
-            semantic_map[waypoint_mask] = 4  # 蓝色（调色板索引4）
+        # 轨迹与 waypoint 都在后续用 OpenCV 叠加；这里不再读取 Channel 2 的旧残留逻辑
         
         # ===== 阶段2: PIL调色板渲染 =====
         # 现在semantic_map包含：0=未知, 1=障碍物, 2=已探索, 4=waypoint, 5=floor（轨迹稍后用OpenCV绘制）
@@ -623,19 +615,7 @@ class MapVisualizer:
             # rotation_matrix已在阶段5.52计算
             
             if len(landmarks) > 0:
-                landmark_summary = {}
                 for marker_x, marker_y, cls_name, _dist_m, _angle_deg in landmarks:
-                    # 计算像素数
-                    cls_idx = detected_classes.index(cls_name)
-                    semantic_channel_idx = 4 + cls_idx
-                    if semantic_channel_idx < full_map.shape[0]:
-                        cls_mask = full_map[semantic_channel_idx, ...] > 0.5
-                        pixel_count = int(cls_mask.sum())
-                        if cls_name not in landmark_summary:
-                            landmark_summary[cls_name] = {'count': 0, 'total_pixels': 0}
-                        landmark_summary[cls_name]['count'] += 1
-                        landmark_summary[cls_name]['total_pixels'] += pixel_count
-                    
                     # 转换landmark坐标到显示坐标系（不旋转，因为已经在旋转后的地图上了）
                     # centroids返回(cx, cy)格式，cx是列坐标(map_y方向)，cy是行坐标(map_x方向)
                     # 所以 marker_x=cx(列), marker_y=cy(行)
@@ -649,13 +629,9 @@ class MapVisualizer:
                     cv2.circle(global_map_with_trajectory, 
                               (int(display_x), int(display_y)), 
                               landmark_marker_radius, landmark_marker_border, 1)
-                
-                # 静默处理，不输出标注统计
             
-            # ===== 阶段7: Waypoint已在调色板渲染阶段处理（蓝色层）=====
-            # Waypoint现在作为semantic_map的一层（值=4，蓝色）在调色板渲染中统一处理
-            # 不再需要手动绘制和坐标转换
-            last_waypoint_angle = None  # 保留用于计算（未来可从Channel 3提取）
+            # ===== 阶段7: waypoint 已在上方通过 waypoint_positions 手动绘制 =====
+            last_waypoint_angle = None  # 预留返回值，当前未使用
             
             # ===== 可选：裁剪到440×440（中心区域）=====
             # 默认关闭裁剪，保持完整的480×480地图
@@ -1795,13 +1771,16 @@ class MapVisualizer:
         detected_landmarks_step = []
         landmark_dist_map = {}
         landmark_dist_map_multi = {}
-        if detections is not None and labels is not None:
-            # 从地图landmarks构建距离/角度查找表（同一类取最近实例）
-            for _, _, cls_name, dist_m, angle_deg in landmarks:
-                landmark_dist_map_multi.setdefault(cls_name, []).append((dist_m, angle_deg))
-                if cls_name not in landmark_dist_map or dist_m < landmark_dist_map[cls_name][0]:
-                    landmark_dist_map[cls_name] = (dist_m, angle_deg)
+        for _, _, cls_name, dist_m, angle_deg in landmarks:
+            landmark_dist_map_multi.setdefault(cls_name, []).append((dist_m, angle_deg))
+            if cls_name not in landmark_dist_map or dist_m < landmark_dist_map[cls_name][0]:
+                landmark_dist_map[cls_name] = (dist_m, angle_deg)
 
+        if controller is not None:
+            controller.latest_landmark_dist_map = landmark_dist_map if landmark_dist_map else {}
+            controller.latest_landmark_dist_map_multi = landmark_dist_map_multi if landmark_dist_map_multi else {}
+
+        if detections is not None and labels is not None:
             # 先渲染bbox，再叠加7方向距离线，避免距离线参与实例匹配。
             rgb_for_det = rgb.copy()
             detection_vis, detected_landmarks_step, _visible, landmark_strip = self.render_detection_bbox(
@@ -1834,8 +1813,6 @@ class MapVisualizer:
 
         else:
             if controller is not None:
-                controller.latest_landmark_dist_map = {}
-                controller.latest_landmark_dist_map_multi = {}
                 controller.latest_visible_landmark_entries = []
 
         # 统计：本步 landmark 配置/检测/地图实例数量
@@ -1854,12 +1831,6 @@ class MapVisualizer:
                 'mapped_classes': n_map_cls,
             }
 
-        # 将当前地图中的landmark距离/角度信息存到controller，供LLM/VLM提示词使用
-        # 注意：latest_landmark_dist_map_multi保留每类多实例；latest_landmark_dist_map是每类最近实例
-        if controller is not None and detections is not None and labels is not None:
-            controller.latest_landmark_dist_map = landmark_dist_map if landmark_dist_map else {}
-            controller.latest_landmark_dist_map_multi = landmark_dist_map_multi if landmark_dist_map_multi else {}
-        
         # 5. 保存semantic masks（用于action模式的地面分割）
         if masks is not None:
             paths['masks'] = self.save_semantic_masks(step, episode_id, masks, phase)
@@ -1951,7 +1922,7 @@ class MapVisualizer:
         Returns:
             [(cx, cy, class_name, dist_m, rel_angle_deg), ...]
         """
-        if not landmark_classes or len(detected_classes) == 0:
+        if not landmark_classes:
             return []
 
         from vlnce_baselines.config_system.constants import landmark_merge_distance
@@ -1965,8 +1936,6 @@ class MapVisualizer:
 
         landmarks = []
         for lm_idx, cls_name in enumerate(landmark_classes):
-            if cls_name not in detected_classes:
-                continue
             if mapping_classes is not None:
                 ch_idx = MAP_CH + n_mapping + lm_idx
             else:

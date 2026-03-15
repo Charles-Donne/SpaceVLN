@@ -280,23 +280,6 @@ class Semantic_Mapping(nn.Module):
                 err += dx
                 y += sy
     
-    def mark_waypoint(self, agent_x_m: float, agent_y_m: float, waypoint_id: int, clear_radius_m: float = 2.0):
-        """
-        标记waypoint（已弃用，保留为空实现）
-        
-        注意：waypoint现在只存储在mapper的waypoint_positions列表中（世界坐标），
-        不需要在Channel 2中标记。此方法保留仅用于向后兼容。
-        
-        Args:
-            agent_x_m: Agent世界X坐标（米）
-            agent_y_m: Agent世界Y坐标（米）
-            waypoint_id: Waypoint ID
-            clear_radius_m: 清除半径（米）
-        """
-        # 不再使用Channel 2，所有可视化数据用列表存储世界坐标
-        pass
-    
-    
     def reset(self) -> None:
         """重置地图系统（分块架构）"""
         # 清空分类和tiles
@@ -1030,7 +1013,7 @@ class Semantic_Mapping(nn.Module):
             self.full_pose[e, 1] = self.state[e, 1]  # 世界Y坐标（米）
             self.full_pose[e, 2] = self.local_pose[e, 2]  # 朝向（度数）
         
-        # 标记轨迹（在通道2中）
+        # 记录轨迹点（世界坐标列表，仅用于可视化连线）
         # 使用第一个环境的位置（单环境模式）
         agent_x_m = self.full_pose[0, 0].item()
         agent_y_m = self.full_pose[0, 1].item()
@@ -1064,7 +1047,7 @@ class Semantic_Mapping(nn.Module):
             
             self.last_trajectory_pos = current_pos
         
-        # Channel 2 已废弃，当前位置直接从 full_pose 获取
+        # 当前位置直接从 full_pose 获取；不再依赖旧的 Channel 2 waypoint 逻辑
         
         # 将更新后的Local Map写回到对应的tiles
         for e in range(self.num_environments):
