@@ -1117,15 +1117,24 @@ class MapVisualizer:
         used_map_candidates = {}
 
         def _snap_angle_to_action(a_deg: float) -> int:
-            """仅用于渲染标注：将角度量化到30°动作栅格（不改真实坐标）。"""
-            if abs(a_deg) < 15.0:
+            """仅用于显示：将角度归并到 Front/Back 和 30° 栅格。"""
+            a = ((a_deg + 180.0) % 360.0) - 180.0
+            mag = abs(a)
+            if mag <= 15.0:
                 return 0
-            return int(round(a_deg / 30.0) * 30)
+            if mag >= 165.0:
+                return 180 if a >= 0 else -180
+            bucket = int((mag - 15.0 - 1e-6) // 30.0) + 1
+            snapped = min(bucket * 30, 150)
+            return snapped if a > 0 else -snapped
 
         def _dir_str(a_deg: float, use_action_snap: bool = False) -> str:
-            a = _snap_angle_to_action(a_deg) if use_action_snap else a_deg
-            if abs(a) < 1e-6:
+            a = ((a_deg + 180.0) % 360.0) - 180.0
+            a = _snap_angle_to_action(a) if use_action_snap else a
+            if abs(a) <= 15.0:
                 return "Front 0deg"
+            if abs(a) >= 165.0:
+                return "Back 180deg"
             return f"Right {abs(a):.0f}deg" if a > 0 else f"Left {abs(a):.0f}deg"
         
         for i in range(len(detections.xyxy)):
@@ -1197,7 +1206,7 @@ class MapVisualizer:
             # bbox上方只显示最终用于决策的距离和动作角度
             row1 = ""
             if display_dist_m is not None and display_angle_deg is not None:
-                row1 = f"{display_dist_m:.1f}m {_dir_str(display_angle_deg, False)}"
+                row1 = f"{display_dist_m:.1f}m {_dir_str(display_angle_deg, True)}"
             elif display_dist_m is not None:
                 row1 = f"{display_dist_m:.1f}m"
             if row1:
@@ -1275,7 +1284,7 @@ class MapVisualizer:
                 if inst_idx is not None and visible_cls_total.get(lm_name, 0) > 1:
                     suffix = f" #{inst_idx + 1}"
                 item_lines.append((
-                    f"[Vis]{suffix} {sn}  {d_m:.1f}m  {_dir_str(a_deg, False)}",
+                    f"[Vis]{suffix} {sn}  {d_m:.1f}m  {_dir_str(a_deg, True)}",
                     False
                 ))
 
@@ -1299,7 +1308,7 @@ class MapVisualizer:
                 sn = cls_name if len(cls_name) <= 40 else cls_name[:38] + ".."
                 suffix = f" #{inst_idx}" if cls_total.get(cls_name, 0) > 1 else ""
                 item_lines.append((
-                    f"[Off]{suffix} {sn}  {d_m:.1f}m  {_dir_str(a_deg, False)}",
+                    f"[Off]{suffix} {sn}  {d_m:.1f}m  {_dir_str(a_deg, True)}",
                     False
                 ))
 

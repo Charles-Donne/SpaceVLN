@@ -1664,14 +1664,23 @@ class VLMNavigationController(InteractiveNavigationController):
 
         def _snap_angle_to_action(a_deg: float) -> int:
             # 仅用于action提示文本，不改变真实地图角度
-            if abs(a_deg) < 15.0:
+            a = ((a_deg + 180.0) % 360.0) - 180.0
+            mag = abs(a)
+            if mag <= 15.0:
                 return 0
-            return int(round(a_deg / 30.0) * 30)
+            if mag >= 165.0:
+                return 180 if a >= 0 else -180
+            bucket = int((mag - 15.0 - 1e-6) // 30.0) + 1
+            snapped = min(bucket * 30, 150)
+            return snapped if a > 0 else -snapped
 
         def _fmt_dir_action(a_deg: float) -> str:
-            if abs(a_deg) < 1e-6:
+            a = _snap_angle_to_action(a_deg)
+            if abs(a) <= 15.0:
                 return "Front 0deg"
-            return f"Right {abs(a_deg):.0f}deg" if a_deg > 0 else f"Left {abs(a_deg):.0f}deg"
+            if abs(a) >= 165.0:
+                return "Back 180deg"
+            return f"Right {abs(a):.0f}deg" if a > 0 else f"Left {abs(a):.0f}deg"
 
         def _landmark_hint(angle_deg: float, is_visible: bool = False) -> str:
             snap_deg = _snap_angle_to_action(angle_deg)
