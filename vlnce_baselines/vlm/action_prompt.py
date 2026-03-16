@@ -17,6 +17,9 @@ ACTION_EXECUTION_PROMPT = """You are the action execution module for Vision-Lang
 # Progress Summary
 {progress_summary}
 
+# Waypoint History
+{waypoint_summary}
+
 # Previous Step Analysis
 {previous_action_reason}
 
@@ -36,10 +39,11 @@ You are provided with 1 image:
 
 **Decision Process**:
 1. **Detection View**: Check the **bottom strip** for all landmark names and distances. Is a yellow bbox visible? It marks the **subtask landmark reference** (nearby anchor, NOT the final destination) — navigate toward it to reach the destination area.
-2. **Landmark Map**: Read the Known Landmark Map section above. If distance < 0.5m, **STOP immediately**
-3. **Distance Lines**: Which directions are blocked (red) vs safe (green/yellow)?
-4. **Distance Estimation**: How far to destination? (e.g., "~3m", "<0.5m")
-5. **Action Decision**: If not near the destination and FRONT is clear, move forward; if FRONT is blocked, choose the safest side direction that stays closest to the destination
+2. **Waypoint History**: Read WP#1 -> ... -> LAST in order. Use each waypoint's snapped direction/distance to infer which direction continues toward the most likely task-relevant space from the explored route.
+3. **Landmark Map**: Read the Known Landmark Map section above. If distance < 0.5m, **STOP immediately**
+4. **Distance Lines**: Which directions are blocked (red) vs safe (green/yellow)?
+5. **Distance Estimation**: How far to destination? (e.g., "~3m", "<0.5m")
+6. **Action Decision**: Prefer the direction that best matches waypoint history + current landmark evidence toward the relevant room/object. Avoid drifting into unrelated rooms or unnecessary revisits. If FRONT is blocked, choose the safest side direction that still stays closest to the destination/relevant space.
 
 **STOP Condition** — As soon as you are near the destination area or the subtask is fulfilled, STOP immediately — do not move past it or take unnecessary extra steps.
 
@@ -96,6 +100,7 @@ You are provided with 1 image:
 - If the destination is ahead and FRONT is clear, prefer MOVE_FORWARD
 - If FRONT is blocked, choose the closest safe side direction toward the destination, not a wider detour
 - For off-screen landmarks, **always turn toward the indicated direction first**
+- Use waypoint history and explored-route context to keep moving toward the most relevant space; avoid unrelated rooms and unnecessary revisits
 - progress_summary must describe orientation, locations entered/passed, obstacles bypassed
 """
 
@@ -103,6 +108,7 @@ You are provided with 1 image:
 def get_action_execution_prompt(next_waypoint_destination: str,
                                 subtask_instruction: str,
                                 progress_summary: str = "",
+                                waypoint_summary: str = "",
                                 detected_landmarks: str = None,
                                 previous_action_reason: str = "",
                                 landmark_map_info: str = None,
@@ -113,6 +119,8 @@ def get_action_execution_prompt(next_waypoint_destination: str,
     """获取动作执行提示词"""
     if not progress_summary:
         progress_summary = "Just started"
+    if not waypoint_summary:
+        waypoint_summary = "No waypoints visited yet."
     known_landmark_section = ""
     if landmark_map_info:
         known_landmark_section = (
@@ -124,6 +132,7 @@ def get_action_execution_prompt(next_waypoint_destination: str,
         subtask_destination=next_waypoint_destination,
         subtask_instruction=subtask_instruction,
         progress_summary=progress_summary,
+        waypoint_summary=waypoint_summary,
         previous_action_reason=previous_action_reason or "N/A (first step)",
         detected_landmarks=detected_landmarks or "none",
         known_landmark_section=known_landmark_section,

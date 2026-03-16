@@ -184,6 +184,7 @@ class ActionExecutor(BaseAPIClient):
                      first_person_image: str,
                      action_mapping: Dict[str, int],
                      progress_summary: str = "",
+                     waypoint_summary: str = "",
                      detection_image: str = None,
                      local_map_image: str = None,
                      detected_landmarks: str = None,
@@ -202,6 +203,7 @@ class ActionExecutor(BaseAPIClient):
             first_person_image: 第一人称RGB图像路径
             action_mapping: 动作名称到ID的映射
             progress_summary: 当前子任务进度摘要
+            waypoint_summary: waypoint历史摘要（含相对当前pose的方向和距离）
             detection_image: 目标检测图像路径（可选）
             local_map_image: 局部语义地图路径（可选）
             detected_landmarks: 已检测landmark类别字符串（可选）
@@ -232,6 +234,7 @@ class ActionExecutor(BaseAPIClient):
             next_waypoint_destination=next_waypoint_destination,
             subtask_instruction=subtask_instruction,
             progress_summary=progress_summary,
+            waypoint_summary=waypoint_summary,
             detected_landmarks=detected_landmarks,
             previous_action_reason=previous_action_reason,
             distance_front=obstacle_distances['front'],

@@ -1744,6 +1744,8 @@ class VLMNavigationController(InteractiveNavigationController):
         subtask_dir = os.path.join(self.save_manager.episode_dir, "action", f"subtask_{subtask_id}")
         action_save_dir = os.path.join(subtask_dir, f"step_{self.current_step + 1}")
         os.makedirs(action_save_dir, exist_ok=True)
+
+        waypoint_summary = self._get_waypoint_summary()
         
         # 保存子任务信息（首次创建时）
         info_file = os.path.join(subtask_dir, "info.json")
@@ -1862,6 +1864,7 @@ class VLMNavigationController(InteractiveNavigationController):
             first_person_image=fp_image,
             action_mapping=ACTION_MAPPING,
             progress_summary=self.progress_summary,
+            waypoint_summary=waypoint_summary,
             detection_image=detection_image,
             local_map_image=local_map,
             detected_landmarks=detected_landmarks,

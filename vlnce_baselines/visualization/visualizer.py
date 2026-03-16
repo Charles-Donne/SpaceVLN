@@ -617,25 +617,8 @@ class MapVisualizer:
             global_map_with_trajectory[obstacle_mask_display] = [0, 0, 0]  # 黑色BGR
             global_map_rotated[obstacle_mask_display] = [0, 0, 0]  # 无轨迹版本也叠加
             
-            # ===== 阶段6: 在显示副本上绘制Landmark标记 =====
-            # rotation_matrix已在阶段5.52计算
-            
-            if len(landmarks) > 0:
-                for marker_x, marker_y, cls_name, _dist_m, _angle_deg in landmarks:
-                    # 转换landmark坐标到显示坐标系（不旋转，因为已经在旋转后的地图上了）
-                    # centroids返回(cx, cy)格式，cx是列坐标(map_y方向)，cy是行坐标(map_x方向)
-                    # 所以 marker_x=cx(列), marker_y=cy(行)
-                    display_x = marker_x * 480 / w  # 列坐标 → display_x
-                    display_y = (h - 1 - marker_y) * 480 / h  # 行坐标 → display_y（翻转）
-                    
-                    # 绘制紫色圆球（在显示副本上）
-                    cv2.circle(global_map_with_trajectory, 
-                              (int(display_x), int(display_y)), 
-                              landmark_marker_radius, landmark_marker_color, -1)
-                    cv2.circle(global_map_with_trajectory, 
-                              (int(display_x), int(display_y)), 
-                              landmark_marker_radius, landmark_marker_border, 1)
-            
+            # ===== 阶段6: global map 不绘制自定义 landmark，仅保留内部 landmarks 列表供后续距离/角度计算 =====
+
             # ===== 阶段7: waypoint 已在上方通过 waypoint_positions 手动绘制 =====
             last_waypoint_angle = None  # 预留返回值，当前未使用
             
@@ -952,6 +935,7 @@ class MapVisualizer:
         local_map[obstacle_local] = [0, 0, 0]  # 黑色BGR
         
         # ===== 阶段9: 绘制Landmark标记（紫色圆球，最上层，不被遮挡）=====
+        landmarks = []
         if landmark_instances:
             landmarks = self._build_landmarks_from_instances(
                 landmark_instances, full_map, current_pose, crop_offset
@@ -968,31 +952,26 @@ class MapVisualizer:
                 mapping_classes=mapping_classes
             )
 
-            for marker_x, marker_y, cls_name, _dist_m, _angle_deg in landmarks:
-                # 1. 缩放到 480×480 显示坐标（与 global map 相同）
-                display_x = marker_x * 480.0 / w   # 列坐标 → display_x
-                display_y = (h - 1 - marker_y) * 480.0 / h  # 行坐标 → flipud → display_y
-                local_x_dbg = (display_x - 120) * 2
-                local_y_dbg = (display_y - 120) * 2
-                _res_m = self.resolution / 100.0  # 5cm/px → 0.05m/px
-                fwd_m = (marker_y - h // 2) * _res_m   # row>center=前方
-                right_m = (marker_x - w // 2) * _res_m  # col>center=右方
+        for marker_x, marker_y, cls_name, _dist_m, _angle_deg in landmarks:
+            # 1. 缩放到 480×480 显示坐标（与 global map 相同）
+            display_x = marker_x * 480.0 / w   # 列坐标 → display_x
+            display_y = (h - 1 - marker_y) * 480.0 / h  # 行坐标 → flipud → display_y
 
-                # 2. 裁剪中心 240×240（rows/cols 120-360）并放大到 480×480
-                local_x = (display_x - 120) * 2
-                local_y = (display_y - 120) * 2
-                
-                # 3. 只绘制在可见范围内的landmark
-                if 0 <= local_x < 480 and 0 <= local_y < 480:
-                    local_landmark_radius = 10
-                    cv2.circle(local_map,
-                               (int(local_x), int(local_y)),
-                               local_landmark_radius,
-                               landmark_marker_color, -1)
-                    cv2.circle(local_map,
-                               (int(local_x), int(local_y)),
-                               local_landmark_radius,
-                               landmark_marker_border, 1)
+            # 2. 裁剪中心 240×240（rows/cols 120-360）并放大到 480×480
+            local_x = (display_x - 120) * 2
+            local_y = (display_y - 120) * 2
+
+            # 3. 只绘制在 local map 可见范围内的 landmark
+            if 0 <= local_x < 480 and 0 <= local_y < 480:
+                local_landmark_radius = 10
+                cv2.circle(local_map,
+                           (int(local_x), int(local_y)),
+                           local_landmark_radius,
+                           landmark_marker_color, -1)
+                cv2.circle(local_map,
+                           (int(local_x), int(local_y)),
+                           local_landmark_radius,
+                           landmark_marker_border, 1)
         
         # ===== 阶段10: 最终裁剪到440×440（中心区域）=====
         # 从480x480裁剪中心440x440区域
@@ -1202,12 +1181,23 @@ class MapVisualizer:
         rotated_row = (rotated_norm_y + 1.0) * map_h / 2.0
         rotated_col = (rotated_norm_x + 1.0) * map_w / 2.0
 
+        if "world_x_m" in inst and "world_y_m" in inst:
+            dx_m = float(inst["world_x_m"]) - float(current_pose[0])
+            dy_m = float(inst["world_y_m"]) - float(current_pose[1])
+            dist_m = float(np.hypot(dx_m, dy_m))
+            abs_angle = np.degrees(np.arctan2(dy_m, dx_m)) if dist_m > 1e-6 else float(current_pose[2])
+            rel_bearing = float(current_pose[2]) - abs_angle
+            rel_bearing = ((rel_bearing + 180.0) % 360.0) - 180.0
+        else:
+            dist_m = float(inst.get("distance_m", 0.0))
+            rel_bearing = float(inst.get("angle_deg", 0.0))
+
         return (
             float(rotated_col),
             float(rotated_row),
             inst["name"],
-            float(inst["distance_m"]),
-            float(inst["angle_deg"]),
+            dist_m,
+            rel_bearing,
         )
 
     def _build_landmarks_from_instances(self,
@@ -1366,8 +1356,6 @@ class MapVisualizer:
                     ranked_candidates.sort(key=lambda item: (item[3], item[1]))
                     map_instance_idx, map_dist_m, map_angle_deg, _ = ranked_candidates[0]
                     used_set.add(map_instance_idx)
-                if map_dist_m is None and candidates:
-                    map_instance_idx, (map_dist_m, map_angle_deg) = 0, candidates[0]
             elif landmark_dist_map and label_name in landmark_dist_map:
                 map_dist_m, map_angle_deg = landmark_dist_map[label_name]
                 map_instance_idx = 0
