@@ -16,6 +16,7 @@ VLM Navigation Controller
 - 结果保存供后续测评
 """
 import os
+import re
 import cv2
 import json
 import numpy as np
@@ -320,6 +321,110 @@ class VLMNavigationController(InteractiveNavigationController):
         if detected is not None and hasattr(detected, '_dict'):
             for lm_name in old_landmarks:
                 detected._dict.pop(lm_name, None)
+
+    @staticmethod
+    def _sanitize_subtask_instruction_text(
+        text: Optional[str],
+        destination: Optional[str] = None,
+    ) -> str:
+        """把 thinking 产出的子指令约束为“动作 + 目的地”，去掉自动转向相关前缀。"""
+        text = (text or "").strip()
+        destination = (destination or "").strip()
+        if not text:
+            return f"Move toward {destination}." if destination else "Move toward the target."
+
+        cleaned = text.replace("\n", " ").strip()
+        cleaned = re.sub(r"\s+", " ", cleaned)
+
+        # 去掉显式的自动转向/视角前缀
+        prefix_patterns = [
+            r"^\s*image\s*\d+\s*(?:\([^)]*\))?\s*[:,-]?\s*",
+            r"^\s*from\s+image\s*\d+\s*(?:\([^)]*\))?\s*(?:view)?\s*[:,-]?\s*",
+            r"^\s*from\s+[-+]?\d{1,3}\s*(?:deg(?:ree)?s?|°)\s+view\s*[:,-]?\s*",
+            r"^\s*from\s+(?:front|left|right|back)\s*[-+]?\d{0,3}\s*(?:deg(?:ree)?s?|°)?\s+view\s*[:,-]?\s*",
+            r"^\s*(?:after|once)\s+(?:auto-)?rotat(?:e|ing)[^,.;:]*[,.;:]\s*",
+            r"^\s*(?:after|once)\s+(?:turn(?:ing)?|rotat(?:e|ing)|facing)[^,.;:]*[,.;:]\s*",
+            r"^\s*(?:turn|rotate|face|look)\b[^,.;:]*[,.;:]\s*",
+            r"^\s*(?:from|via|toward|towards|to)\s+(?:image\s*\d+|the\s+)?(?:left|right|front|back)\b[^,.;:]*[,.;:]\s*",
+            r"^\s*(?:on|from)\s+the\s+(?:left|right|front|back)\b[^,.;:]*[,.;:]\s*",
+        ]
+        changed = True
+        while changed:
+            changed = False
+            for pattern in prefix_patterns:
+                updated = re.sub(pattern, "", cleaned, flags=re.IGNORECASE)
+                if updated != cleaned:
+                    cleaned = updated.strip()
+                    changed = True
+
+        # 若前面是转向说明，截断到真正的动作动词
+        action_match = re.search(
+            r"\b(move|go|walk|enter|pass|follow|cross|approach|continue|stop|head)\b",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+        if action_match and action_match.start() > 0:
+            prefix = cleaned[:action_match.start()]
+            if re.search(r"turn|rotate|face|image|left|right|front|back", prefix, flags=re.IGNORECASE):
+                cleaned = cleaned[action_match.start():].strip()
+
+        # 去掉动作开头紧跟的方向模板，保留动作本身
+        cleaned = re.sub(
+            r"^\s*(move|go|walk|head|continue)\s+(?:to\s+)?(?:the\s+)?(?:left|right|forward|back(?:ward)?)\b\s*",
+            r"\1 ",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+        cleaned = re.sub(
+            r"^\s*(move|go|walk|enter|head|continue)\s+from\s+(?:the\s+)?(?:left|right|front|back)\b\s*",
+            r"\1 ",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+        cleaned = re.sub(r"^\s*start\s*[,;:-]\s*", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"^\s*start\s+by\s+", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"^\s*(?:then|and then)\s+", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,;:-")
+
+        if not cleaned:
+            cleaned = f"Move toward {destination}" if destination else "Move toward the target"
+
+        dest_aliases = [destination] if destination else []
+        if destination and "'s" in destination:
+            room_part, obj_part = destination.split("'s", 1)
+            if room_part.strip():
+                dest_aliases.append(room_part.strip())
+            if obj_part.strip():
+                dest_aliases.append(obj_part.strip())
+
+        has_destination_ref = any(
+            alias and re.search(re.escape(alias), cleaned, flags=re.IGNORECASE)
+            for alias in dest_aliases
+        )
+
+        if destination and not has_destination_ref:
+            if re.match(r"^\s*stop\b", cleaned, flags=re.IGNORECASE):
+                pass
+            elif re.search(r"\btoward\b|\bthrough\b|\binto\b|\balong\b|\bpast\b|\baround\b", cleaned, flags=re.IGNORECASE):
+                cleaned = f"{cleaned.rstrip('.')} toward {destination}"
+            else:
+                cleaned = f"{cleaned.rstrip('.')} {destination}"
+
+        cleaned = cleaned[0].upper() + cleaned[1:] if cleaned else cleaned
+        if cleaned and cleaned[-1] not in ".!?":
+            cleaned += "."
+        return cleaned
+
+    def _sanitize_planner_response(self, response: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """统一收紧 planner 输出里的子任务指令格式。"""
+        if not response:
+            return response
+        response = dict(response)
+        response["subtask_instruction"] = self._sanitize_subtask_instruction_text(
+            response.get("subtask_instruction"),
+            response.get("next_waypoint_destination"),
+        )
+        return response
     
     def _draw_navigable_area_on_view(self, image: np.ndarray, view_angle: float) -> np.ndarray:
         """
@@ -1251,6 +1356,8 @@ class VLMNavigationController(InteractiveNavigationController):
         if not response:
             print("[ERR] LLM Planning failed")
             return None
+
+        response = self._sanitize_planner_response(response)
         
         # 保存response（API返回后）
         with open(os.path.join(thinking_dir, "response.json"), 'w', encoding='utf-8') as f:
@@ -1519,6 +1626,8 @@ class VLMNavigationController(InteractiveNavigationController):
         if not response:
             print("[ERR] LLM Verify failed")
             return None, None
+
+        response = self._sanitize_planner_response(response)
         
         # 保存response（API返回后）
         with open(os.path.join(thinking_dir, "response.json"), 'w', encoding='utf-8') as f:
