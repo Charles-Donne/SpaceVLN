@@ -312,6 +312,8 @@ class VLMNavigationController(InteractiveNavigationController):
             self.current_step_landmarks.clear()
         if hasattr(self, 'current_step_landmark_entries'):
             self.current_step_landmark_entries.clear()
+        if hasattr(self, 'latest_landmark_instances_world'):
+            self.latest_landmark_instances_world = []
         self._clear_landmark_detection_cache()
 
         detected = getattr(self.category_config, '_detected_classes', None)
@@ -882,7 +884,6 @@ class VLMNavigationController(InteractiveNavigationController):
             vis_labels = None
             vis_masks = None
             vis_landmark_classes = []
-            self._clear_landmark_detection_cache()
             
             paths, detected_landmarks_step, _ = self.visualizer.save_step_visualization(
                 step=look_step,

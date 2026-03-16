@@ -28,6 +28,7 @@ from vlnce_baselines.config_system.constants import (
     landmark_marker_color,
     landmark_marker_border,
     landmark_marker_radius,
+    landmark_instance_topk,
 )
 
 
@@ -347,6 +348,7 @@ class MapVisualizer:
                          floor: Optional[np.ndarray] = None,
                          current_pose: Optional[Tuple[float, float, float]] = None,
                          landmark_classes: Optional[List[str]] = None,
+                         landmark_instances: Optional[List[Dict[str, Any]]] = None,
                          landmark_config: Optional[Dict] = None,
                          waypoint_positions: Optional[List[Tuple[int, int]]] = None,
                          waypoint_ids: Optional[List[int]] = None,
@@ -427,7 +429,11 @@ class MapVisualizer:
         
         # ===== 阶段3: 提取Landmark位置（但不绘制）=====
         landmarks = []
-        if landmark_classes and landmark_config:
+        if landmark_instances:
+            landmarks = self._build_landmarks_from_instances(
+                landmark_instances, full_map, current_pose, crop_offset
+            )
+        elif landmark_classes and landmark_config:
             landmarks = self._extract_landmarks(
                 full_map, detected_classes, landmark_classes,
                 landmark_config['min_total_pixels'],
@@ -671,6 +677,7 @@ class MapVisualizer:
                         current_pose: Tuple[float, float, float],
                         floor: Optional[np.ndarray] = None,
                         landmark_classes: Optional[List[str]] = None,
+                        landmark_instances: Optional[List[Dict[str, Any]]] = None,
                         landmark_config: Optional[Dict] = None,
                         hfov: float = 90.0,
                         waypoint_positions: Optional[List[Tuple[int, int]]] = None,
@@ -945,7 +952,11 @@ class MapVisualizer:
         local_map[obstacle_local] = [0, 0, 0]  # 黑色BGR
         
         # ===== 阶段9: 绘制Landmark标记（紫色圆球，最上层，不被遮挡）=====
-        if landmark_classes and landmark_config:
+        if landmark_instances:
+            landmarks = self._build_landmarks_from_instances(
+                landmark_instances, full_map, current_pose, crop_offset
+            )
+        elif landmark_classes and landmark_config:
             # full_map 已由 get_full_map_for_rendering(rotate_to_agent_heading=True) 旋转过
             # _extract_landmarks 返回的 (marker_x, marker_y) 已经是旋转后地图的像素坐标
             # 与 render_global_map 的处理完全一致：scale + flipud + 裁剪中心区域
@@ -1047,6 +1058,173 @@ class MapVisualizer:
                        font, font_scale, text_color, text_thickness, cv2.LINE_AA)
         
         return labeled_map
+
+    def _estimate_mask_rel_xy(self,
+                              mask_2d: np.ndarray,
+                              depth_img: np.ndarray,
+                              hfov: float,
+                              sample_stride: int = 4) -> Optional[Tuple[float, float]]:
+        """用 mask+depth 估计目标在 agent 坐标系中的前向/右向位置。"""
+        if mask_2d is None or depth_img is None:
+            return None
+
+        if mask_2d.shape != depth_img.shape:
+            mask_2d = cv2.resize(
+                mask_2d.astype(np.float32),
+                (depth_img.shape[1], depth_img.shape[0]),
+                interpolation=cv2.INTER_NEAREST,
+            )
+
+        valid_mask = (mask_2d > 0.5) & np.isfinite(depth_img) & (depth_img > 0.05)
+        if not np.any(valid_mask):
+            return None
+
+        ys, xs = np.nonzero(valid_mask)
+        if sample_stride > 1 and ys.size > sample_stride:
+            ys = ys[::sample_stride]
+            xs = xs[::sample_stride]
+
+        depth_vals = depth_img[ys, xs].astype(np.float32)
+        if depth_vals.size == 0:
+            return None
+
+        _, w_img = depth_img.shape[:2]
+        xc = (w_img - 1) / 2.0
+        focal = (w_img / 2.0) / np.tan(np.deg2rad(float(hfov)) / 2.0)
+        if focal <= 1e-6:
+            return None
+
+        right_vals = ((xs.astype(np.float32) - xc) * depth_vals) / float(focal)
+        forward_vals = depth_vals
+        return float(np.median(forward_vals)), float(np.median(right_vals))
+
+    def _project_landmark_instances_from_detections(self,
+                                                    detections,
+                                                    labels: Optional[List[str]],
+                                                    landmark_classes: Optional[List[str]],
+                                                    depth_meters: Optional[np.ndarray],
+                                                    current_pose: Optional[Tuple[float, float, float]],
+                                                    hfov: float,
+                                                    topk: int = landmark_instance_topk) -> List[Dict[str, Any]]:
+        """将每个 landmark 检测实例直接投影为世界坐标实例列表（每类最多 top-k）。"""
+        if (detections is None or getattr(detections, 'xyxy', None) is None or
+                len(detections.xyxy) == 0 or not labels or not landmark_classes or
+                depth_meters is None or current_pose is None):
+            return []
+
+        canonical = {name.strip().lower(): name for name in landmark_classes}
+        curr_x_m, curr_y_m, curr_ori_deg = float(current_pose[0]), float(current_pose[1]), float(current_pose[2])
+        theta = np.deg2rad(curr_ori_deg)
+
+        per_class: Dict[str, List[Dict[str, Any]]] = {}
+        for i in range(len(detections.xyxy)):
+            label = labels[i] if i < len(labels) else f"object_{i}"
+            parts = label.split()
+            label_name = ' '.join(parts[:-1]) if len(parts) > 1 else (parts[0] if parts else "unknown")
+            confidence = float(parts[-1]) if len(parts) > 1 else 0.0
+            matched_landmark = canonical.get(label_name.strip().lower())
+            if matched_landmark is None:
+                continue
+
+            det_mask = None
+            if getattr(detections, 'mask', None) is not None and i < len(detections.mask):
+                det_mask = detections.mask[i]
+            rel_xy = self._estimate_mask_rel_xy(det_mask, depth_meters, hfov)
+            if rel_xy is None:
+                continue
+
+            forward_m, right_m = rel_xy
+            dx = forward_m * np.cos(theta) + right_m * np.sin(theta)
+            dy = forward_m * np.sin(theta) - right_m * np.cos(theta)
+            world_x_m = curr_x_m + dx
+            world_y_m = curr_y_m + dy
+
+            world_row_px = int(round(world_y_m * 100.0 / self.resolution))
+            world_col_px = int(round(world_x_m * 100.0 / self.resolution))
+            abs_angle = np.degrees(np.arctan2(dy, dx))
+            rel_bearing = curr_ori_deg - abs_angle
+            rel_bearing = ((rel_bearing + 180.0) % 360.0) - 180.0
+            dist_m = float(np.hypot(dx, dy))
+
+            per_class.setdefault(matched_landmark, []).append({
+                "name": matched_landmark,
+                "confidence": float(confidence),
+                "distance_m": dist_m,
+                "angle_deg": float(rel_bearing),
+                "world_row_px": world_row_px,
+                "world_col_px": world_col_px,
+                "world_x_m": float(world_x_m),
+                "world_y_m": float(world_y_m),
+            })
+
+        projected_instances: List[Dict[str, Any]] = []
+        for cls_name, candidates in per_class.items():
+            ranked = sorted(candidates, key=lambda item: (-item["confidence"], item["distance_m"]))
+            kept = ranked[:max(1, int(topk))]
+            kept = sorted(kept, key=lambda item: item["distance_m"])
+            for inst_idx, item in enumerate(kept):
+                item["instance_idx"] = inst_idx
+                projected_instances.append(item)
+
+        return projected_instances
+
+    def _world_instance_to_rotated_landmark(self,
+                                            inst: Dict[str, Any],
+                                            full_map: np.ndarray,
+                                            current_pose: Optional[Tuple[float, float, float]],
+                                            crop_offset: Optional[Tuple[int, int]]) -> Optional[Tuple[float, float, str, float, float]]:
+        """将世界坐标实例转换到当前旋转后 full_map 像素坐标。"""
+        if current_pose is None or crop_offset is None or full_map is None:
+            return None
+
+        import math
+
+        map_h, map_w = full_map.shape[1], full_map.shape[2]
+        start_px, start_py = crop_offset  # (world_row_px, world_col_px)
+        world_row_px = int(inst["world_row_px"])
+        world_col_px = int(inst["world_col_px"])
+
+        rel_px = world_row_px - start_px
+        rel_py = world_col_px - start_py
+        if not (0 <= rel_px < map_h and 0 <= rel_py < map_w):
+            return None
+
+        agent_orientation_deg = float(current_pose[2])
+        rotation_angle_deg = agent_orientation_deg - 90.0
+        rotation_angle_rad = math.radians(rotation_angle_deg)
+        cos_theta = math.cos(rotation_angle_rad)
+        sin_theta = math.sin(rotation_angle_rad)
+
+        norm_y = (rel_px / map_h) * 2.0 - 1.0
+        norm_x = (rel_py / map_w) * 2.0 - 1.0
+        rotated_norm_x = cos_theta * norm_x + sin_theta * norm_y
+        rotated_norm_y = -sin_theta * norm_x + cos_theta * norm_y
+        rotated_row = (rotated_norm_y + 1.0) * map_h / 2.0
+        rotated_col = (rotated_norm_x + 1.0) * map_w / 2.0
+
+        return (
+            float(rotated_col),
+            float(rotated_row),
+            inst["name"],
+            float(inst["distance_m"]),
+            float(inst["angle_deg"]),
+        )
+
+    def _build_landmarks_from_instances(self,
+                                        landmark_instances: Optional[List[Dict[str, Any]]],
+                                        full_map: np.ndarray,
+                                        current_pose: Optional[Tuple[float, float, float]],
+                                        crop_offset: Optional[Tuple[int, int]]) -> List[Tuple[float, float, str, float, float]]:
+        """把显式实例列表转换成当前渲染使用的 landmark 点。"""
+        if not landmark_instances:
+            return []
+
+        landmarks: List[Tuple[float, float, str, float, float]] = []
+        for inst in landmark_instances:
+            converted = self._world_instance_to_rotated_landmark(inst, full_map, current_pose, crop_offset)
+            if converted is not None:
+                landmarks.append(converted)
+        return landmarks
     
     def render_detection_bbox(self, 
                               rgb: np.ndarray,
@@ -1113,42 +1291,6 @@ class MapVisualizer:
                 return "Back 180deg"
             return f"Right {abs(a):.0f}deg" if a > 0 else f"Left {abs(a):.0f}deg"
 
-        def _mask_rel_xy(mask_2d: np.ndarray, depth_img: np.ndarray) -> Optional[Tuple[float, float]]:
-            """用当前检测 mask + 深度估计目标在 agent 坐标系中的前向/右向位置，仅用于匹配地图实例。"""
-            if mask_2d is None or depth_img is None:
-                return None
-
-            if mask_2d.shape != depth_img.shape:
-                mask_2d = cv2.resize(
-                    mask_2d.astype(np.float32),
-                    (depth_img.shape[1], depth_img.shape[0]),
-                    interpolation=cv2.INTER_NEAREST,
-                )
-
-            valid_mask = (mask_2d > 0.5) & np.isfinite(depth_img) & (depth_img > 0.05)
-            if not np.any(valid_mask):
-                return None
-
-            ys, xs = np.nonzero(valid_mask)
-            # 只做实例匹配时不需要全部像素；均匀抽样可显著降低 CPU 开销。
-            sample_stride = 4
-            if sample_stride > 1 and ys.size > sample_stride:
-                ys = ys[::sample_stride]
-                xs = xs[::sample_stride]
-            depth_vals = depth_img[ys, xs].astype(np.float32)
-            if depth_vals.size == 0:
-                return None
-
-            h_img, w_img = depth_img.shape[:2]
-            xc = (w_img - 1) / 2.0
-            focal = (w_img / 2.0) / np.tan(np.deg2rad(float(hfov)) / 2.0)
-            if focal <= 1e-6:
-                return None
-
-            right_vals = ((xs.astype(np.float32) - xc) * depth_vals) / float(focal)
-            forward_vals = depth_vals
-            return float(np.median(forward_vals)), float(np.median(right_vals))
-
         depth_for_match = depth_meters
         if depth_for_match is None and controller is not None:
             depth_for_match = getattr(controller, "latest_depth_meters", None)
@@ -1192,7 +1334,7 @@ class MapVisualizer:
                 det_mask = None
                 if getattr(detections, "mask", None) is not None and i < len(detections.mask):
                     det_mask = detections.mask[i]
-                det_rel_xy = _mask_rel_xy(det_mask, depth_for_match)
+                det_rel_xy = self._estimate_mask_rel_xy(det_mask, depth_for_match, hfov)
 
             # 只使用地图里已经投影/存储的 landmark 相对当前 pose 的距离与角度。
             map_dist_m = None
@@ -1811,6 +1953,29 @@ class MapVisualizer:
         2. waypoint数据建议直接从mapper.get_waypoints()传入，无需手动管理
         """
         paths = {}
+        depth_for_instances = getattr(controller, 'latest_depth_meters', None) if controller is not None else None
+        existing_landmark_instances = list(getattr(controller, 'latest_landmark_instances_world', []) or []) \
+            if controller is not None else []
+        projected_landmark_instances = self._project_landmark_instances_from_detections(
+            detections=detections,
+            labels=labels,
+            landmark_classes=landmark_classes,
+            depth_meters=depth_for_instances,
+            current_pose=current_pose,
+            hfov=hfov,
+        )
+
+        if projected_landmark_instances:
+            seen_classes = {inst['name'] for inst in projected_landmark_instances}
+            landmark_instances_world = [
+                dict(inst) for inst in existing_landmark_instances
+                if inst.get('name') not in seen_classes
+            ] + [dict(inst) for inst in projected_landmark_instances]
+        else:
+            landmark_instances_world = [dict(inst) for inst in existing_landmark_instances]
+
+        if controller is not None:
+            controller.latest_landmark_instances_world = [dict(inst) for inst in landmark_instances_world]
         
         # 1. 保存RGB（传入controller用于绘制距离线）
         paths['rgb'] = self.save_rgb(step, episode_id, rgb, phase, controller)
@@ -1821,7 +1986,7 @@ class MapVisualizer:
         # print(f"[DEBUG] Local map trajectory: {len(trajectory_points) if trajectory_points else 0} points")
         _, global_map_with_trajectory, landmarks, global_map_clean, last_waypoint_angle = self.render_global_map(
             full_map, global_traj_to_use, detected_classes, floor,
-            current_pose, landmark_classes, landmark_config,
+            current_pose, landmark_classes, landmark_instances_world, landmark_config,
             waypoint_positions, waypoint_ids, crop_offset,
             mapping_classes=mapping_classes
         )
@@ -1830,7 +1995,7 @@ class MapVisualizer:
         # 3. 渲染并保存局部地图（使用trajectory_points）
         local_map = self.render_local_map(
             full_map, trajectory_points, detected_classes, current_pose,
-            floor, landmark_classes, landmark_config, hfov,
+            floor, landmark_classes, landmark_instances_world, landmark_config, hfov,
             waypoint_positions, waypoint_ids, crop_offset,
             mapping_classes=mapping_classes
         )
@@ -1927,7 +2092,8 @@ class MapVisualizer:
                                channel_idx: int,
                                min_area: int,
                                merge_dist: float,
-                               threshold: float = 0.5) -> List[Tuple[int, int, int]]:
+                               threshold: float = 0.5,
+                               apply_closing: bool = True) -> List[Tuple[int, int, int]]:
         """从 full_map 指定通道提取连通域质心（landmark 的额外聚类步骤）。
 
         obstacle / floor 只需 _get_channel_mask；
@@ -1940,12 +2106,16 @@ class MapVisualizer:
         if mask is None or not mask.any():
             return []
 
-        # 形态学闭运算（填补间隙，合并相近检测，7×7 椭圆核）
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
-        closed = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_CLOSE, kernel)
+        if apply_closing:
+            # 形态学闭运算（填补间隙，合并相近检测）
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+            proc_mask = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_CLOSE, kernel)
+        else:
+            # 对 landmark 直接使用原始投影 mask，避免把不同实例粘成一个紫色点。
+            proc_mask = mask.astype(np.uint8)
 
         # 连通域分析
-        _, _, stats, centroids = cv2.connectedComponentsWithStats(closed, connectivity=8)
+        _, _, stats, centroids = cv2.connectedComponentsWithStats(proc_mask, connectivity=8)
 
         regions: dict = {}  # {(cx, cy): area}
         for i in range(1, len(stats)):
@@ -1955,6 +2125,9 @@ class MapVisualizer:
             cx, cy = int(centroids[i][0]), int(centroids[i][1])
 
             # 空间合并：距离 < merge_dist 的连通域归并到面积较大者
+            if merge_dist <= 0:
+                regions[(cx, cy)] = area
+                continue
             merged = False
             for pos in list(regions.keys()):
                 if np.hypot(cx - pos[0], cy - pos[1]) < merge_dist:
@@ -2013,7 +2186,12 @@ class MapVisualizer:
 
             # _get_channel_centroids 内部调用 _get_channel_mask，与 obstacle 同一基础
             for cx, cy, _area in self._get_channel_centroids(
-                    full_map, ch_idx, min_area_threshold, landmark_merge_distance):
+                    full_map,
+                    ch_idx,
+                    min_area_threshold,
+                    landmark_merge_distance,
+                    threshold=0.0,
+                    apply_closing=False):
                 d_fwd   = cy - agent_cy   # 正 = 前方
                 d_right = cx - agent_cx   # 正 = 右侧
                 dist_m = _math.hypot(d_fwd, d_right) * resolution_m

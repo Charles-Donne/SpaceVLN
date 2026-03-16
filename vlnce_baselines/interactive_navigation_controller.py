@@ -76,9 +76,10 @@ class InteractiveNavigationController:
         
         self.current_episode_id = None
         self.current_step = 0
+        self.latest_landmark_instances_world = []
 
     def _clear_landmark_detection_cache(self) -> None:
-        """清空当前帧的landmark检测缓存，避免非检测步复用旧结果。"""
+        """清空landmark检测缓存；仅在episode/subtask重置时调用。"""
         self.latest_landmark_dist_map = {}
         self.latest_landmark_dist_map_multi = {}
         self.latest_visible_landmark_entries = []
@@ -236,6 +237,7 @@ class InteractiveNavigationController:
         
         self.category_config.reset_detected()
         self.classes = []
+        self.latest_landmark_instances_world = []
         self.mapper.reset()
         self.mapper.init_map_and_pose(num_detected_classes=0)
         self.current_step_landmarks = {}
@@ -338,7 +340,6 @@ class InteractiveNavigationController:
                 vis_detections = None
                 vis_labels = None
                 vis_masks = None
-                self._clear_landmark_detection_cache()
             # action执行时不传waypoint信息，不计算角度（只在环视后计算）
             rgb_bgr = cv2.cvtColor(obs[0]['rgb'], cv2.COLOR_RGB2BGR)
             _, detected_landmarks_step, _ = self.visualizer.save_step_visualization(
