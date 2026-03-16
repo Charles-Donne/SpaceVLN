@@ -141,6 +141,11 @@ class Semantic_Mapping(nn.Module):
         self.cat_pred_threshold = args.CAT_PRED_THRESHOLD
         self.exp_pred_threshold = args.EXP_PRED_THRESHOLD
         self.map_pred_threshold = args.MAP_PRED_THRESHOLD
+        self.obstacle_decay_enabled = bool(getattr(args, "OBSTACLE_DECAY_ENABLED", True))
+        self.obstacle_decay_rate = float(getattr(args, "OBSTACLE_DECAY_RATE", 0.99))
+        self.obstacle_decay_clear_threshold = float(
+            getattr(args, "OBSTACLE_DECAY_CLEAR_THRESHOLD", 0.05)
+        )
         
         # 分块地图：{(tile_x, tile_y): tensor[batch, C, 240, 240]}
         self.tiles = defaultdict(lambda: None)
@@ -214,6 +219,23 @@ class Semantic_Mapping(nn.Module):
             self.vision_range, self.vision_range,
             self.max_height - self.min_height
         ).float().to(self.device)
+
+    def _apply_obstacle_decay(self, map_tensor: torch.Tensor) -> torch.Tensor:
+        """对历史 obstacle 通道做指数衰减，让陈旧障碍逐步淡出。"""
+        if (
+            map_tensor is None
+            or map_tensor.shape[1] <= 0
+            or not self.obstacle_decay_enabled
+            or self.obstacle_decay_rate >= 0.999999
+        ):
+            return map_tensor
+
+        obstacle_ch = map_tensor[:, 0:1, :, :]
+        obstacle_ch.mul_(self.obstacle_decay_rate)
+        if self.obstacle_decay_clear_threshold > 0.0:
+            weak_mask = obstacle_ch < self.obstacle_decay_clear_threshold
+            obstacle_ch.masked_fill_(weak_mask, 0.0)
+        return map_tensor
     
     def clear_trajectory(self) -> None:
         """清空子任务轨迹点列表（用于local map，global map的轨迹保留）"""
@@ -1423,8 +1445,11 @@ class Semantic_Mapping(nn.Module):
 
         rotated = F.grid_sample(agent_view, rot_mat, align_corners=True)
         translated = F.grid_sample(rotated, trans_mat, align_corners=True) # shape: [bs, c, 240, 240]
-        maps2 = torch.cat((self.local_map.unsqueeze(1), translated.unsqueeze(1)), 1)
-        one_step_maps2 = torch.cat((self.one_step_local_map.unsqueeze(1), translated.unsqueeze(1)), 1)
+        # 历史 obstacle 先衰减，再与当前观测做 max 融合；新观测会立即覆盖旧值。
+        decayed_local_map = self._apply_obstacle_decay(self.local_map.clone())
+        decayed_one_step_local_map = self._apply_obstacle_decay(self.one_step_local_map.clone())
+        maps2 = torch.cat((decayed_local_map.unsqueeze(1), translated.unsqueeze(1)), 1)
+        one_step_maps2 = torch.cat((decayed_one_step_local_map.unsqueeze(1), translated.unsqueeze(1)), 1)
 
         map_pred, _ = torch.max(maps2, 1)
         one_step_map_pred, _ = torch.max(one_step_maps2, 1)

@@ -120,7 +120,7 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
 - **Subtask scope**: `subtask_instruction` must be one short immediate sentence for only the nearest unfinished room/object subtask.
 - **Space choice**: Move toward the most likely task-relevant space; avoid unrelated spaces and unnecessary revisits.
 - **Position awareness**: NEAR<1m across multiple IMAGEs = current position; FAR>1.5m in 1-2 views is usually destination, not arrival.
-- **Landmark relations**: Keep landmark order/relations. "At entrance" = doorway. "[room]'s [object]" → room first, then object.
+- **Landmark relations**: Keep landmark order/relations. "At entrance" = doorway. "[room]'s [object]" → room first, then object; if final goal reached, stop.
 """
 
 
@@ -140,6 +140,7 @@ VERIFICATION_REPLANNING_PROMPT = """VLN Verification: Verify subtask completion 
 **12 Views** (30° FOV): IMAGE1=Front 0°, angles increase CCW
 - **Obstacle distances**: **nearest obstacle in that direction** (not far visible objects). <0.5m=blocked | 0.5-1.0m=caution | >1.0m=passable
 - **Auto-rotation**: System rotates to your IMAGE
+- **Custom landmark bbox** (if present): yellow bbox text is a view-only cue for the current custom landmark; use it as visual evidence, not map memory or path-clearance proof
 
 **2 Maps**: Global (full + history) + Local (nearby + 0.5m circle)
 **Colors**: White=unexplored | Black=obstacles | Green=safe | Orange=trajectory | Red=you | Blue numbered circles=history waypoints on Global Map only
@@ -200,6 +201,7 @@ F) Choose: most likely task-relevant space from waypoint history > visible targe
 **Sequential planning rule**:
 - If current subtask is unfinished, continue it.
 - Only after completion can `next_waypoint_destination` move to the next stage.
+- If the final "[room]'s [object]" is reached, STOP and set `global_task_finish=true`.
 
 # Actions
 TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
@@ -270,7 +272,7 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (<0.5m)
 - **Markers**: Behind=(✓) | Now=(Current) ONE only | Ahead=unmarked. Backtrack→rollback
 - **Entrance vs interior**: "At entrance" = doorway, NOT inside
 - **Space choice**: Follow waypoint history and trajectory toward the most likely task-relevant space; avoid unrelated spaces and minimize revisiting explored space.
-- **Room-first**: "[room]'s [object]" → navigate to [room], then [object]
+- **Room-first**: "[room]'s [object]" → navigate to [room], then [object]; if already at the final room/object, stop.
 - **Detail instructions**: [room]+[relation]+[object]. "Living room's gray couch" NOT "couch"
 - **Destination format**: `next_waypoint_destination` must be in "[room]'s [object]" form.
 - **Subtask scope**: `subtask_instruction` must be one short immediate sentence for only the nearest unfinished room/object subtask.

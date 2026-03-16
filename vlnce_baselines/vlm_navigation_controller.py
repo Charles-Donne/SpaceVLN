@@ -841,6 +841,7 @@ class VLMNavigationController(InteractiveNavigationController):
         
         # 存储12张环视图像用于合成全景图（step 1-12）
         lookaround_images = []
+        lookaround_depths = []
         total_new_classes = 0
         
         from habitat.sims.habitat_simulator.actions import HabitatSimActions
@@ -936,6 +937,7 @@ class VLMNavigationController(InteractiveNavigationController):
             
             # 保存所有12张环视图像（用于后续合成全景图）
             lookaround_images.append(rgb_bgr.copy())
+            lookaround_depths.append(self._depth_to_meters(obs[0]['depth']))
         
         # 环视建图完成
         # 注意：不恢复轨迹，轨迹会自然显示在地图上
@@ -1021,6 +1023,25 @@ class VLMNavigationController(InteractiveNavigationController):
             # lookaround_images[0] = step 1 (30°)
             # lookaround_images[11] = step 12 (0°)
             image = lookaround_images[step_idx - 1].copy()
+            depth_meters = lookaround_depths[step_idx - 1] if step_idx - 1 < len(lookaround_depths) else None
+
+            # 仅为 12 视角思考图做自定义 landmark 检测与 bbox 可视化，不写入世界地图。
+            if getattr(self, 'landmark_classes', None):
+                dets_view, labels_view, _ = self._detect_landmarks_for_visualization(
+                    image, self.landmark_classes
+                )
+                image, _, _, _ = self.visualizer.render_detection_bbox(
+                    image,
+                    dets_view,
+                    labels_view,
+                    landmark_classes=self.landmark_classes,
+                    depth_meters=depth_meters,
+                    hfov=self.config.MAP.HFOV,
+                    landmark_dist_map=None,
+                    landmark_dist_map_multi=None,
+                    append_bottom_strip=False,
+                    controller=None,
+                )
             
             # 不再绘制可导航区域（去掉绿色地面分割，加快速度）
             # image = self._draw_navigable_area_on_view(image, angle)

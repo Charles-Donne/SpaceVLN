@@ -5,7 +5,7 @@ Interactive Navigation Controller
 import numpy as np
 import cv2
 import torch
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
 from types import SimpleNamespace
 from torchvision import transforms
 from habitat import Config
@@ -222,6 +222,38 @@ class InteractiveNavigationController:
         )
 
         return merged_mask_array, merged_labels, annotated_image, merged_detections
+
+    def _depth_to_meters(self, depth_obs: np.ndarray) -> np.ndarray:
+        """将 Habitat 归一化 depth 转成米制深度图。"""
+        if depth_obs is None:
+            return None
+
+        depth_raw = depth_obs[:, :, 0] if depth_obs.ndim == 3 else depth_obs
+        min_depth = self.config.TASK_CONFIG.SIMULATOR.DEPTH_SENSOR.MIN_DEPTH
+        max_depth = self.config.TASK_CONFIG.SIMULATOR.DEPTH_SENSOR.MAX_DEPTH
+        valid_mask = (depth_raw > 0.0) & (depth_raw < 0.99)
+        return np.where(
+            valid_mask,
+            min_depth + depth_raw * (max_depth - min_depth),
+            0.0,
+        ).astype(np.float32)
+
+    def _detect_landmarks_for_visualization(self,
+                                            rgb: np.ndarray,
+                                            landmark_queries: Optional[List[str]] = None):
+        """仅为可视化做自定义 landmark 检测，不写入地图。"""
+        queries = landmark_queries if landmark_queries is not None else list(getattr(self, 'landmark_classes', []) or [])
+        if not queries:
+            return None, [], None
+
+        detection_batches = []
+        for lm_idx, landmark_query in enumerate(queries):
+            landmark_result = self.segment_module.segment(rgb, classes=[landmark_query])
+            detection_batches.append((*landmark_result, lm_idx))
+
+        merged_masks, merged_labels, annotated_image, merged_detections = \
+            self._merge_detection_batches(rgb, detection_batches)
+        return merged_detections, merged_labels, merged_masks
     
     @property
     def detected_classes(self):
@@ -620,13 +652,7 @@ class InteractiveNavigationController:
         env_frame_width = self.config.TASK_CONFIG.SIMULATOR.RGB_SENSOR.WIDTH
 
         # 保存原始深度（米）用于landmark距离可视化（在预处理之前）
-        depth_raw = state[:, :, 3]  # [H, W], range [0, 1]
-        valid_mask = (depth_raw > 0.0) & (depth_raw < 0.99)
-        self.latest_depth_meters = np.where(
-            valid_mask,
-            min_depth + depth_raw * (max_depth - min_depth),  # Habitat标准公式
-            0.0
-        ).astype(np.float32)
+        self.latest_depth_meters = self._depth_to_meters(state[:, :, 3:4])
 
         sem_seg_pred = self._get_sem_pred(rgb, save_object_detection, step)
         depth = self._preprocess_depth(depth, min_depth, max_depth)

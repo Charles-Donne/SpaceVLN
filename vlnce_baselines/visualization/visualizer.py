@@ -29,6 +29,7 @@ from vlnce_baselines.config_system.constants import (
     landmark_marker_border,
     landmark_marker_radius,
     landmark_instance_topk,
+    landmark_instance_merge_radius_m,
 )
 
 
@@ -1084,8 +1085,8 @@ class MapVisualizer:
                                                     depth_meters: Optional[np.ndarray],
                                                     current_pose: Optional[Tuple[float, float, float]],
                                                     hfov: float,
-                                                    topk: int = landmark_instance_topk) -> List[Dict[str, Any]]:
-        """将每个 landmark 检测实例直接投影为世界坐标实例列表（每类最多 top-k）。"""
+                                                    topk: Optional[int] = None) -> List[Dict[str, Any]]:
+        """将每个 landmark 检测实例直接投影为世界坐标实例列表。"""
         if (detections is None or getattr(detections, 'xyxy', None) is None or
                 len(detections.xyxy) == 0 or not labels or not landmark_classes or
                 depth_meters is None or current_pose is None):
@@ -1139,13 +1140,93 @@ class MapVisualizer:
         projected_instances: List[Dict[str, Any]] = []
         for cls_name, candidates in per_class.items():
             ranked = sorted(candidates, key=lambda item: (-item["confidence"], item["distance_m"]))
-            kept = ranked[:max(1, int(topk))]
-            kept = sorted(kept, key=lambda item: item["distance_m"])
-            for inst_idx, item in enumerate(kept):
+            if topk is not None and int(topk) > 0:
+                ranked = ranked[:max(1, int(topk))]
+            for inst_idx, item in enumerate(ranked):
                 item["instance_idx"] = inst_idx
                 projected_instances.append(item)
 
         return projected_instances
+
+    def _merge_landmark_instances_world(self,
+                                        existing_instances: Optional[List[Dict[str, Any]]],
+                                        new_instances: Optional[List[Dict[str, Any]]],
+                                        current_pose: Optional[Tuple[float, float, float]],
+                                        topk: int = landmark_instance_topk,
+                                        merge_radius_m: float = landmark_instance_merge_radius_m
+                                        ) -> List[Dict[str, Any]]:
+        """在同一子任务内累计 landmark 实例，并按世界坐标去重后保留每类 top-k。"""
+        merged_by_class: Dict[str, List[Dict[str, Any]]] = {}
+
+        def _curr_metrics(inst: Dict[str, Any]) -> Tuple[float, float]:
+            if current_pose is None or "world_x_m" not in inst or "world_y_m" not in inst:
+                return (
+                    float(inst.get("distance_m", 1e9)),
+                    float(inst.get("angle_deg", 0.0)),
+                )
+            curr_x, curr_y, curr_ori = float(current_pose[0]), float(current_pose[1]), float(current_pose[2])
+            dx_m = float(inst["world_x_m"]) - curr_x
+            dy_m = float(inst["world_y_m"]) - curr_y
+            dist_m = float(np.hypot(dx_m, dy_m))
+            abs_angle = np.degrees(np.arctan2(dy_m, dx_m)) if dist_m > 1e-6 else curr_ori
+            rel_bearing = curr_ori - abs_angle
+            rel_bearing = ((rel_bearing + 180.0) % 360.0) - 180.0
+            return dist_m, float(rel_bearing)
+
+        def _merge_one(inst: Dict[str, Any]) -> None:
+            cls_name = inst.get("name")
+            if not cls_name:
+                return
+            cls_bucket = merged_by_class.setdefault(cls_name, [])
+            best_idx = None
+            best_dist = None
+            if "world_x_m" in inst and "world_y_m" in inst:
+                for idx, old in enumerate(cls_bucket):
+                    if "world_x_m" not in old or "world_y_m" not in old:
+                        continue
+                    dist = float(np.hypot(
+                        float(old["world_x_m"]) - float(inst["world_x_m"]),
+                        float(old["world_y_m"]) - float(inst["world_y_m"]),
+                    ))
+                    if best_dist is None or dist < best_dist:
+                        best_dist = dist
+                        best_idx = idx
+
+            if best_idx is not None and best_dist is not None and best_dist <= merge_radius_m:
+                old = cls_bucket[best_idx]
+                refreshed = dict(old)
+                refreshed.update(inst)
+                refreshed["confidence"] = max(
+                    float(old.get("confidence", 0.0)),
+                    float(inst.get("confidence", 0.0)),
+                )
+                cls_bucket[best_idx] = refreshed
+            else:
+                cls_bucket.append(dict(inst))
+
+        for inst in existing_instances or []:
+            _merge_one(dict(inst))
+        for inst in new_instances or []:
+            _merge_one(dict(inst))
+
+        merged_instances: List[Dict[str, Any]] = []
+        keep_n = max(1, int(topk))
+        for cls_name, bucket in merged_by_class.items():
+            ranked = sorted(
+                bucket,
+                key=lambda item: (-float(item.get("confidence", 0.0)), _curr_metrics(item)[0]),
+            )
+            kept = ranked[:keep_n]
+            kept = sorted(kept, key=lambda item: _curr_metrics(item)[0])
+            for inst_idx, item in enumerate(kept):
+                dist_m, angle_deg = _curr_metrics(item)
+                normalized = dict(item)
+                normalized["distance_m"] = float(dist_m)
+                normalized["angle_deg"] = float(angle_deg)
+                normalized["instance_idx"] = inst_idx
+                merged_instances.append(normalized)
+
+        return merged_instances
 
     def _world_instance_to_rotated_landmark(self,
                                             inst: Dict[str, Any],
@@ -1281,6 +1362,14 @@ class MapVisualizer:
                 return "Back 180deg"
             return f"Right {abs(a):.0f}deg" if a > 0 else f"Left {abs(a):.0f}deg"
 
+        def _bbox_center_angle_deg(x1: int, x2: int, width: int) -> float:
+            xc = (width - 1) / 2.0
+            focal = (width / 2.0) / np.tan(np.deg2rad(float(hfov)) / 2.0)
+            if focal <= 1e-6:
+                return 0.0
+            center_x = (float(x1) + float(x2)) / 2.0
+            return float(np.degrees(np.arctan2(center_x - xc, focal)))
+
         depth_for_match = depth_meters
         if depth_for_match is None and controller is not None:
             depth_for_match = getattr(controller, "latest_depth_meters", None)
@@ -1319,11 +1408,11 @@ class MapVisualizer:
             # 仅用 bbox 中心做文字框定位；同类多实例时才做 mask+depth 到地图实例的匹配。
             _, w_img = rgb.shape[:2]
             same_cls_total = len(landmark_dist_map_multi.get(label_name, [])) if landmark_dist_map_multi else 1
+            det_mask = None
+            if getattr(detections, "mask", None) is not None and i < len(detections.mask):
+                det_mask = detections.mask[i]
             det_rel_xy = None
-            if same_cls_total > 1:
-                det_mask = None
-                if getattr(detections, "mask", None) is not None and i < len(detections.mask):
-                    det_mask = detections.mask[i]
+            if det_mask is not None and depth_for_match is not None:
                 det_rel_xy = self._estimate_mask_rel_xy(det_mask, depth_for_match, hfov)
 
             # 只使用地图里已经投影/存储的 landmark 相对当前 pose 的距离与角度。
@@ -1382,6 +1471,20 @@ class MapVisualizer:
                 row1 = f"{inst_prefix}{display_dist_m:.1f}m {_dir_str(display_angle_deg, True)}"
             elif display_dist_m is not None:
                 row1 = f"{inst_prefix}{display_dist_m:.1f}m"
+            else:
+                fallback_angle_deg = None
+                fallback_dist_str = None
+                if det_rel_xy is not None:
+                    forward_m, right_m = det_rel_xy
+                    fallback_dist_m = float(np.hypot(forward_m, right_m))
+                    fallback_angle_deg = float(np.degrees(np.arctan2(right_m, forward_m)))
+                    if fallback_dist_m > 0.05:
+                        fallback_dist_str = f"{min(fallback_dist_m, 5.0):.1f}m"
+                if fallback_angle_deg is None:
+                    fallback_angle_deg = _bbox_center_angle_deg(x1, x2, w_img)
+                if fallback_dist_str is None:
+                    fallback_dist_str = ">5.0m"
+                row1 = f"{fallback_dist_str} {_dir_str(fallback_angle_deg, True)}"
             if row1:
                 font = cv2.FONT_HERSHEY_SIMPLEX
                 font_scale = 0.5
@@ -1429,7 +1532,7 @@ class MapVisualizer:
                 offscreen_items.append((cls_name, 1, d_m, a_deg))
 
         strip = None
-        if detected_landmarks or offscreen_items:
+        if visible_entries or offscreen_items:
             w_img2 = detection_vis.shape[1]
             font2 = cv2.FONT_HERSHEY_SIMPLEX
             fs2, ft2 = 0.5, 1
@@ -1461,14 +1564,8 @@ class MapVisualizer:
                     False
                 ))
 
-            # 若可见实例未能得到距离，则退化显示名称
-            if detected_landmarks and not visible_entries:
-                for lm_name, _conf in detected_landmarks:
-                    sn = lm_name if len(lm_name) <= 40 else lm_name[:38] + ".."
-                    item_lines.append((f"[Vis] {sn}", False))
-
             # 空行分隔（两组都有时）
-            if (visible_entries or detected_landmarks) and offscreen_items:
+            if visible_entries and offscreen_items:
                 item_lines.append(("", True))
 
             # ── 离屏landmark ──
@@ -1951,16 +2048,14 @@ class MapVisualizer:
             depth_meters=depth_for_instances,
             current_pose=current_pose,
             hfov=hfov,
+            topk=None,
         )
 
-        if projected_landmark_instances:
-            seen_classes = {inst['name'] for inst in projected_landmark_instances}
-            landmark_instances_world = [
-                dict(inst) for inst in existing_landmark_instances
-                if inst.get('name') not in seen_classes
-            ] + [dict(inst) for inst in projected_landmark_instances]
-        else:
-            landmark_instances_world = [dict(inst) for inst in existing_landmark_instances]
+        landmark_instances_world = self._merge_landmark_instances_world(
+            existing_instances=existing_landmark_instances,
+            new_instances=projected_landmark_instances,
+            current_pose=current_pose,
+        )
 
         if controller is not None:
             controller.latest_landmark_instances_world = [dict(inst) for inst in landmark_instances_world]

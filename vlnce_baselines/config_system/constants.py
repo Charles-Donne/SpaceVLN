@@ -149,6 +149,7 @@ landmark_min_total_pixels = 1       # 总像素数阈值（1=不过滤）
 landmark_min_area_threshold = 1     # 单个连通域最小面积(像素)，1=不过滤稀疏投影
 landmark_merge_distance = 0         # 合并距离(像素)，0=不再合并相邻landmark连通域
 landmark_instance_topk = 3          # 每类landmark最多保留的检测实例数（按置信度排序）
+landmark_instance_merge_radius_m = 0.60  # 同类实例世界坐标去重半径（米）
 
 
 # ========================================
