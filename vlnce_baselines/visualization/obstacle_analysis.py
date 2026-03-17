@@ -133,10 +133,10 @@ def sample_depth_distance_for_angle(
     max_distance_m: float = 5.0,
     row_start_ratio: float = 0.30,
     row_end_ratio: float = 0.90,
-    column_band_ratio: float = 0.04,
+    angle_band_deg: float = 5.0,
     sample_percentile: float = 20.0,
 ) -> Optional[float]:
-    """Estimate obstacle distance directly from the current depth frame."""
+    """Estimate obstacle distance from an angular depth band in the current view."""
     depth = _prepare_depth_array(depth_meters)
     if depth is None or hfov_deg <= 1e-6:
         return None
@@ -148,20 +148,35 @@ def sample_depth_distance_for_angle(
     height, width = depth.shape
     row_start = max(0, min(height - 1, int(height * row_start_ratio)))
     row_end = max(row_start + 1, min(height, int(height * row_end_ratio)))
-    center_x = ((angle_deg + half_fov) / hfov_deg) * (width - 1)
-    half_band = max(2, int(width * column_band_ratio))
-    col_start = max(0, int(round(center_x)) - half_band)
-    col_end = min(width, int(round(center_x)) + half_band + 1)
+    band_candidates = []
+    for band_deg in (float(angle_band_deg), max(float(angle_band_deg) * 2.0, 10.0)):
+        if band_deg > 0:
+            band_candidates.append(band_deg)
 
-    window = depth[row_start:row_end, col_start:col_end]
-    valid = window[np.isfinite(window) & (window > 0.02)]
-    if valid.size == 0:
-        return None
+    for band_deg in band_candidates:
+        left_angle = max(-half_fov, float(angle_deg) - band_deg / 2.0)
+        right_angle = min(half_fov, float(angle_deg) + band_deg / 2.0)
+        left_ratio = (left_angle + half_fov) / hfov_deg
+        right_ratio = (right_angle + half_fov) / hfov_deg
+        col_start = max(0, int(np.floor(left_ratio * (width - 1))))
+        col_end = min(width, int(np.ceil(right_ratio * (width - 1))) + 1)
+        if col_end <= col_start:
+            center_x = ((angle_deg + half_fov) / hfov_deg) * (width - 1)
+            center_col = int(round(center_x))
+            col_start = max(0, center_col - 1)
+            col_end = min(width, center_col + 2)
 
-    clipped = valid[valid <= max_distance_m]
-    if clipped.size == 0:
-        return max_distance_m + 0.1
-    return float(np.percentile(clipped, sample_percentile))
+        window = depth[row_start:row_end, col_start:col_end]
+        valid = window[np.isfinite(window) & (window > 0.02)]
+        if valid.size == 0:
+            continue
+
+        clipped = valid[valid <= max_distance_m]
+        if clipped.size == 0:
+            return max_distance_m + 0.1
+        return float(np.percentile(clipped, sample_percentile))
+
+    return None
 
 
 def calculate_obstacle_distances_from_depth(
@@ -169,6 +184,9 @@ def calculate_obstacle_distances_from_depth(
     hfov_deg: float = 79.0,
     directions: Optional[Dict[str, float]] = None,
     max_distance_m: float = 5.0,
+    angle_band_deg: float = 5.0,
+    fallback_distances: Optional[Dict[str, str]] = None,
+    default_distance: str = ">2.0m open",
 ) -> Dict[str, str]:
     """Calculate lightweight action-side obstacle distances from the current depth frame."""
     direction_map = directions or ACTION_VIEW_DIRECTIONS
@@ -179,8 +197,12 @@ def calculate_obstacle_distances_from_depth(
             angle_deg=angle_deg,
             hfov_deg=hfov_deg,
             max_distance_m=max_distance_m,
+            angle_band_deg=angle_band_deg,
         )
-        distances[key] = format_distance(distance_m)
+        if distance_m is None:
+            distances[key] = (fallback_distances or {}).get(key, default_distance)
+        else:
+            distances[key] = format_distance(distance_m)
     return distances
 
 

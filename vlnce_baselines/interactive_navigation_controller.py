@@ -395,10 +395,12 @@ class InteractiveNavigationController:
                 },
                 waypoint_positions=map_state.get('waypoint_positions', []),  # 从map_state获取（已旋转）
                 waypoint_ids=map_state.get('waypoint_ids', []),  # 从map_state获取
+                room_area_layer=map_state.get('room_area_layer'),
+                room_area_records=map_state.get('room_area_records', []),
                 phase=phase,
                 global_trajectory_points=map_state.get('global_trajectory_points', []),  # 从map_state获取（global map用全局轨迹）
                 crop_offset=map_state.get('crop_offset'),  # 从map_state获取
-                controller=self  # 传入controller以获取latest_depth_meters和latest_landmark_masks
+                controller=self  # 传入controller以获取latest_depth_meters等当前帧信息
             )
             
             # 记录当前step的landmark检测结果（用于action决策与去重）
@@ -601,24 +603,6 @@ class InteractiveNavigationController:
         
         # 合并mapping通道 + landmark通道：[15+N, H, W] → [H, W, 15+N]
         combined = np.concatenate([global_masks, landmark_masks], axis=0)
-
-        # 保存按landmark_classes索引的masks
-        self.latest_landmark_masks = landmark_masks.copy()  # [N_lm, H, W] indexed by landmark_classes
-
-        # 直接从RGB-D深度图采样每个landmark的距离（最准确，当帧可见时直接可用）
-        # 结果缓存到 self.latest_landmark_depth_m 供 render_detection_bbox 直接取用
-        lm_depth_m: dict = {}
-        if hasattr(self, 'latest_depth_meters') and self.latest_depth_meters is not None:
-            for j, lm_cls in enumerate(landmark_classes_list):
-                lm_m = landmark_masks[j]
-                try:
-                    valid_d = self.latest_depth_meters[lm_m > 0.5]
-                    valid_d = valid_d[valid_d > 0.1]
-                    if len(valid_d) > 0:
-                        lm_depth_m[lm_cls] = float(np.median(valid_d))
-                except Exception:
-                    pass
-        self.latest_landmark_depth_m = lm_depth_m
 
         return combined.transpose(1, 2, 0)  # [H, W, 15+N_lm]
     

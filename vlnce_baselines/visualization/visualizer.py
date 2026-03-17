@@ -92,6 +92,58 @@ class MapVisualizer:
         )
 
     @staticmethod
+    def _room_area_color(area_id: int, room_type: str) -> Tuple[int, int, int]:
+        room_text = str(room_type)
+        seed = int(area_id) * 131
+        for index, ch in enumerate(room_text):
+            seed += (index + 17) * ord(ch)
+        hue = int(seed % 180)
+        hsv = np.uint8([[[hue, 110, 235]]])
+        bgr = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)[0, 0]
+        return int(bgr[0]), int(bgr[1]), int(bgr[2])
+
+    def _prepare_room_area_display_layer(
+        self,
+        room_area_layer: Optional[np.ndarray],
+        output_size: int = 480,
+    ) -> Optional[np.ndarray]:
+        if room_area_layer is None or room_area_layer.size == 0:
+            return None
+        layer = np.flipud(np.asarray(room_area_layer, dtype=np.int32))
+        return cv2.resize(layer, (output_size, output_size), interpolation=cv2.INTER_NEAREST)
+
+    def _overlay_room_areas(
+        self,
+        image: np.ndarray,
+        room_area_layer: Optional[np.ndarray],
+        room_area_records: Optional[List[Dict[str, Any]]],
+        alpha: float = 0.32,
+    ) -> np.ndarray:
+        display_layer = self._prepare_room_area_display_layer(room_area_layer, output_size=image.shape[1])
+        if display_layer is None or not room_area_records:
+            return image
+
+        overlay = image.copy()
+        output = image.copy()
+        for record in room_area_records:
+            area_id = int(record.get("id", 0) or 0)
+            if area_id <= 0:
+                continue
+            mask = display_layer == area_id
+            if not np.any(mask):
+                continue
+            color = self._room_area_color(area_id, str(record.get("room_type", "")))
+            overlay[mask] = color
+
+            mask_uint8 = (mask.astype(np.uint8) * 255)
+            contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if contours:
+                cv2.drawContours(output, contours, -1, color, 2)
+
+        blended = cv2.addWeighted(overlay, alpha, output, 1.0 - alpha, 0)
+        return blended
+
+    @staticmethod
     def _bbox_iou(
         bbox_a: Tuple[int, int, int, int],
         bbox_b: Tuple[int, int, int, int],
@@ -195,12 +247,32 @@ class MapVisualizer:
         self,
         depth_meters: np.ndarray,
         hfov: float = 79.0,
+        fallback_distances: Optional[Dict[str, str]] = None,
+        angle_band_deg: float = 5.0,
     ) -> Dict[str, str]:
-        """Estimate front-view obstacle distances directly from the current depth frame."""
+        """Estimate front-view obstacle distances from the current depth frame with fallback."""
         return scan_obstacle_distances_from_depth(
             depth_meters,
             hfov_deg=hfov,
             directions=ACTION_VIEW_DIRECTIONS,
+            angle_band_deg=angle_band_deg,
+            fallback_distances=fallback_distances,
+        )
+
+    def calculate_obstacle_distances_from_full_map(
+        self,
+        full_map: Optional[np.ndarray],
+        center_x: int = 240,
+        center_y: int = 240,
+    ) -> Dict[str, str]:
+        """Fallback obstacle distances from the rotated obstacle map."""
+        if full_map is None:
+            return {}
+        obstacle_mask_rotated = build_rotated_obstacle_mask(full_map)
+        return self.calculate_obstacle_distances_from_rotated_map(
+            obstacle_mask_rotated,
+            center_x=center_x,
+            center_y=center_y,
         )
     
     def calculate_obstacle_distances_12_directions(
@@ -233,6 +305,22 @@ class MapVisualizer:
             center_x=center_x,
             center_y=center_y,
         )
+
+    def calculate_obstacle_distances_12_directions_from_full_map(
+        self,
+        full_map: Optional[np.ndarray],
+        center_x: int = 240,
+        center_y: int = 240,
+    ) -> Dict[str, str]:
+        """Fallback 12-view obstacle distances from the rotated obstacle map."""
+        if full_map is None:
+            return {}
+        obstacle_mask_rotated = build_rotated_obstacle_mask(full_map)
+        return self.calculate_obstacle_distances_12_directions(
+            obstacle_mask_rotated,
+            center_x=center_x,
+            center_y=center_y,
+        )
     
     @staticmethod
     def get_distance_summary(distances: Dict[str, str]) -> str:
@@ -254,6 +342,8 @@ class MapVisualizer:
                          landmark_config: Optional[Dict] = None,
                          waypoint_positions: Optional[List[Tuple[int, int]]] = None,
                          waypoint_ids: Optional[List[int]] = None,
+                         room_area_layer: Optional[np.ndarray] = None,
+                         room_area_records: Optional[List[Dict[str, Any]]] = None,
                          crop_offset: Optional[Tuple[int, int]] = None,
                          mapping_classes: Optional[List[str]] = None) -> Tuple[np.ndarray, np.ndarray, List, np.ndarray, Optional[float]]:
         """
@@ -325,6 +415,7 @@ class MapVisualizer:
         sem_map_vis = np.array(sem_map_vis)
         sem_map_vis = sem_map_vis[:, :, [2, 1, 0]]  # RGB → BGR
         sem_map_vis = cv2.resize(sem_map_vis, (480, 480), interpolation=cv2.INTER_NEAREST)
+        sem_map_vis = self._overlay_room_areas(sem_map_vis, room_area_layer, room_area_records)
         
         # ===== 阶段3: 提取Landmark位置（但不绘制）=====
         landmarks = []
@@ -467,6 +558,8 @@ class MapVisualizer:
                         hfov: float = 90.0,
                         waypoint_positions: Optional[List[Tuple[int, int]]] = None,
                         waypoint_ids: Optional[List[int]] = None,
+                        room_area_layer: Optional[np.ndarray] = None,
+                        room_area_records: Optional[List[Dict[str, Any]]] = None,
                         crop_offset: Optional[Tuple[int, int]] = None,
                         mapping_classes: Optional[List[str]] = None) -> np.ndarray:
         """
@@ -524,6 +617,7 @@ class MapVisualizer:
         sem_map_vis = np.array(sem_map_vis)
         sem_map_vis = sem_map_vis[:, :, [2, 1, 0]]  # RGB → BGR
         sem_map_vis = cv2.resize(sem_map_vis, (480, 480), interpolation=cv2.INTER_NEAREST)
+        sem_map_vis = self._overlay_room_areas(sem_map_vis, room_area_layer, room_area_records, alpha=0.28)
         
         # ===== 阶段3: 准备显示（地图已在提取时旋转）=====
         projector = self._build_map_projector(full_map, current_pose, crop_offset)
@@ -795,11 +889,31 @@ class MapVisualizer:
                 interpolation=cv2.INTER_NEAREST,
             )
 
-        valid_mask = (mask_2d > 0.5) & np.isfinite(depth_img) & (depth_img > 0.02)
+        mask_bool = mask_2d > 0.5
+        valid_mask = mask_bool & np.isfinite(depth_img) & (depth_img > 0.02)
         if not np.any(valid_mask):
             return None
 
-        ys, xs = np.nonzero(valid_mask)
+        sample_mask = valid_mask
+        if mask_bool.sum() >= 36:
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+            interior_mask = cv2.erode(mask_bool.astype(np.uint8), kernel, iterations=1) > 0
+            interior_valid = interior_mask & valid_mask
+            edge_valid = valid_mask & (~interior_mask)
+
+            if np.count_nonzero(interior_valid) >= 24 and np.count_nonzero(edge_valid) >= 24:
+                edge_depth = depth_img[edge_valid].astype(np.float32)
+                interior_depth = depth_img[interior_valid].astype(np.float32)
+                edge_median = float(np.median(edge_depth))
+                interior_median = float(np.median(interior_depth))
+                opening_gap_m = interior_median - edge_median
+                opening_gap_threshold = max(0.6, 0.35 * max(edge_median, 0.1))
+                if opening_gap_m >= opening_gap_threshold:
+                    # Opening-like structures (doorways / hallways) are often much deeper
+                    # in the center than at the frame edges, so use edge geometry instead.
+                    sample_mask = edge_valid
+
+        ys, xs = np.nonzero(sample_mask)
         if sample_stride > 1 and ys.size > sample_stride:
             ys = ys[::sample_stride]
             xs = xs[::sample_stride]
@@ -1712,6 +1826,8 @@ class MapVisualizer:
                                landmark_config: Optional[Dict] = None,
                                waypoint_positions: Optional[List[Tuple[int, int]]] = None,
                                waypoint_ids: Optional[List[int]] = None,
+                               room_area_layer: Optional[np.ndarray] = None,
+                               room_area_records: Optional[List[Dict[str, Any]]] = None,
                                masks: Optional[np.ndarray] = None,
                                phase: str = "action",
                                global_trajectory_points: Optional[List[Tuple[int, int]]] = None,
@@ -1777,7 +1893,7 @@ class MapVisualizer:
         _, global_map_with_trajectory, landmarks, global_map_clean, last_waypoint_angle = self.render_global_map(
             full_map, global_traj_to_use, detected_classes, floor,
             current_pose, landmark_classes, landmark_instances_world, landmark_config,
-            waypoint_positions, waypoint_ids, crop_offset,
+            waypoint_positions, waypoint_ids, room_area_layer, room_area_records, crop_offset,
             mapping_classes=mapping_classes
         )
         paths['global_map'] = self.save_global_map(step, episode_id, global_map_with_trajectory, phase)
@@ -1786,7 +1902,7 @@ class MapVisualizer:
         local_map = self.render_local_map(
             full_map, trajectory_points, detected_classes, current_pose,
             floor, landmark_classes, landmark_instances_world, landmark_config, hfov,
-            waypoint_positions, waypoint_ids, crop_offset,
+            waypoint_positions, waypoint_ids, room_area_layer, room_area_records, crop_offset,
             mapping_classes=mapping_classes
         )
         paths['local_map'] = self.save_local_map(step, episode_id, local_map, phase)        # 4. 渲染并保存检测结果
@@ -1816,16 +1932,23 @@ class MapVisualizer:
                 controller=controller
             )
 
+            map_obstacle_distances = self.calculate_obstacle_distances_from_full_map(full_map)
             try:
                 obstacle_distances = self.calculate_obstacle_distances_from_depth(
                     getattr(controller, 'latest_depth_meters', None) if controller is not None else None,
                     hfov=hfov,
+                    fallback_distances=map_obstacle_distances,
                 )
-                detection_vis = self.draw_distance_on_action_view(detection_vis, obstacle_distances)
-                if controller is not None:
-                    controller.latest_obstacle_distances = obstacle_distances
             except Exception:
-                pass
+                obstacle_distances = map_obstacle_distances or {
+                    'front': '>2.0m open',
+                    'left_30': '>2.0m open',
+                    'right_30': '>2.0m open',
+                }
+
+            detection_vis = self.draw_distance_on_action_view(detection_vis, obstacle_distances)
+            if controller is not None:
+                controller.latest_obstacle_distances = obstacle_distances
 
             if landmark_strip is not None:
                 detection_vis = np.vstack([detection_vis, landmark_strip])

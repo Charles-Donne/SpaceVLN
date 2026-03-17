@@ -48,12 +48,22 @@ def build_waypoint_summary(
     waypoint_positions: Sequence[Tuple[int, int]],
     waypoint_ids: Sequence[int],
     waypoint_descriptions: Sequence[str],
+    waypoint_area_labels: Optional[Sequence[str]],
     current_pose: Optional[Sequence[float]],
     resolution_cm: float,
+    current_room_area_label: str = "",
+    current_room_area_type: str = "",
 ) -> str:
     """Summarize visited waypoints relative to the current pose."""
+    header_lines: List[str] = []
+    if current_room_area_label:
+        room_type_note = f" ({current_room_area_type})" if current_room_area_type else ""
+        header_lines.append(f"Current Area: {current_room_area_label}{room_type_note}")
+
     if not waypoint_ids:
-        return "No waypoints visited yet."
+        if not header_lines:
+            return "No waypoints visited yet."
+        return "\n".join(header_lines + ["No waypoints visited yet."])
 
     node_lines: List[str] = []
     for index, (wp_id, wp_desc, (wp_py, wp_px)) in enumerate(
@@ -77,7 +87,11 @@ def build_waypoint_summary(
             direction = format_relative_direction(relative_bearing_deg)
             spatial_info = f"{distance_m:.1f}m, {direction}"
 
-        node_lines.append(f"WP#{wp_id} [{wp_desc}] -- {spatial_info}{suffix}")
+        area_label = ""
+        if waypoint_area_labels and index < len(waypoint_area_labels):
+            area_label = waypoint_area_labels[index]
+        area_note = f" | area={area_label}" if area_label else ""
+        node_lines.append(f"WP#{wp_id} [{wp_desc}{area_note}] -- {spatial_info}{suffix}")
 
     path_segments: List[str] = []
     for index in range(len(waypoint_ids) - 1):
@@ -91,12 +105,20 @@ def build_waypoint_summary(
             f"WP#{waypoint_ids[index]}->WP#{waypoint_ids[index + 1]}({segment_distance_m:.1f}m)"
         )
 
+    first_waypoint_id = waypoint_ids[0]
     path_line = (
         "Path: " + " -> ".join(path_segments) + " -> Current"
         if path_segments
-        else "Path: WP#1 -> Current"
+        else f"Path: WP#{first_waypoint_id} -> Current"
     )
-    return "\n".join(node_lines) + "\n" + path_line
+    if waypoint_area_labels:
+        area_chain = [label for label in waypoint_area_labels if label]
+        if current_room_area_label and (not area_chain or area_chain[-1] != current_room_area_label):
+            area_chain.append(current_room_area_label)
+        if area_chain:
+            header_lines.append("Area Chain: " + " -> ".join(area_chain))
+    lines = header_lines + node_lines + [path_line]
+    return "\n".join(lines)
 
 
 def build_action_landmark_map_info(

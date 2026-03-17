@@ -687,6 +687,8 @@ class VLMNavigationController(InteractiveNavigationController):
                 },
                 waypoint_positions=map_state.get('waypoint_positions', []),  # 从map_state获取（已旋转）
                 waypoint_ids=map_state.get('waypoint_ids', []),  # 从map_state获取
+                room_area_layer=map_state.get('room_area_layer'),
+                room_area_records=map_state.get('room_area_records', []),
                 phase=phase,
                 global_trajectory_points=map_state.get('global_trajectory_points', []),  # 全局轨迹（global map用）
                 crop_offset=map_state.get('crop_offset'),  # 从map_state获取
@@ -771,6 +773,8 @@ class VLMNavigationController(InteractiveNavigationController):
                     },
                     waypoint_positions=wp_positions,  # 旋转后的坐标
                     waypoint_ids=wp_ids,
+                    room_area_layer=map_state.get('room_area_layer'),
+                    room_area_records=map_state.get('room_area_records', []),
                     phase=phase,
                     global_trajectory_points=map_state.get('global_trajectory_points', []),  # global map用全局轨迹
                     crop_offset=map_state.get('crop_offset')  # 从map_state获取
@@ -1645,6 +1649,8 @@ class VLMNavigationController(InteractiveNavigationController):
             },
             waypoint_positions=map_state.get('waypoint_positions', []),
             waypoint_ids=map_state.get('waypoint_ids', []),
+            room_area_layer=map_state.get('room_area_layer'),
+            room_area_records=map_state.get('room_area_records', []),
             phase=action_phase,
             global_trajectory_points=map_state.get('global_trajectory_points', []),
             crop_offset=map_state.get('crop_offset'),
@@ -1657,11 +1663,18 @@ class VLMNavigationController(InteractiveNavigationController):
         return True
     
     def _update_obstacle_distances_12_directions(self, lookaround_depths: Optional[List[np.ndarray]] = None):
-        """更新12个环视方向的障碍物距离（基于每张view自己的depth前向采样）。"""
+        """更新12个环视方向的障碍物距离（深度角度带采样，失败时回退到地图障碍物）。"""
         try:
             depth_views = lookaround_depths or []
             if len(depth_views) < 12:
                 raise ValueError("Lookaround depths incomplete")
+
+            map_fallback = {}
+            if hasattr(self, 'mapper') and self.mapper is not None and self.visualizer is not None:
+                map_state = self.mapper.get_map_state()
+                map_fallback = self.visualizer.calculate_obstacle_distances_12_directions_from_full_map(
+                    map_state.get('full_map'),
+                )
 
             distances = {}
             for config in DIRECTION_CONFIG:
@@ -1670,26 +1683,52 @@ class VLMNavigationController(InteractiveNavigationController):
                     depth_meters,
                     hfov_deg=float(self.config.MAP.HFOV),
                     directions={"front": 0.0},
+                    angle_band_deg=5.0,
+                    fallback_distances={
+                        "front": map_fallback.get(f'angle_{config["angle"]}', ">2.0m open")
+                    },
                 ).get("front", "Unknown")
                 distances[f'angle_{config["angle"]}'] = front_distance
             self.latest_obstacle_distances_12 = distances
         except Exception:
+            try:
+                map_state = self.mapper.get_map_state() if hasattr(self, 'mapper') and self.mapper is not None else {}
+                fallback = self.visualizer.calculate_obstacle_distances_12_directions_from_full_map(
+                    map_state.get('full_map'),
+                ) if self.visualizer is not None else {}
+            except Exception:
+                fallback = {}
             self.latest_obstacle_distances_12 = {
-                f'angle_{i}': 'Unknown' for i in range(0, 360, 30)
+                f'angle_{i}': fallback.get(f'angle_{i}', '>2.0m open') for i in range(0, 360, 30)
             }
-    
+
     def _update_obstacle_distances(self):
-        """更新当前位置的障碍物距离（用于Action模式，Left30/Front/Right30）。"""
+        """更新当前位置的障碍物距离（深度角度带采样，失败时回退到地图障碍物）。"""
         try:
+            map_fallback = {}
+            if hasattr(self, 'mapper') and self.mapper is not None and self.visualizer is not None:
+                map_state = self.mapper.get_map_state()
+                map_fallback = self.visualizer.calculate_obstacle_distances_from_full_map(
+                    map_state.get('full_map'),
+                )
             self.latest_obstacle_distances = calculate_obstacle_distances_from_depth(
                 getattr(self, 'latest_depth_meters', None),
                 hfov_deg=float(self.config.MAP.HFOV),
+                angle_band_deg=5.0,
+                fallback_distances=map_fallback,
             )
         except Exception:
+            try:
+                map_state = self.mapper.get_map_state() if hasattr(self, 'mapper') and self.mapper is not None else {}
+                fallback = self.visualizer.calculate_obstacle_distances_from_full_map(
+                    map_state.get('full_map'),
+                ) if self.visualizer is not None else {}
+            except Exception:
+                fallback = {}
             self.latest_obstacle_distances = {
-                'front': 'Unknown',
-                'left_30': 'Unknown',
-                'right_30': 'Unknown',
+                'front': fallback.get('front', '>2.0m open'),
+                'left_30': fallback.get('left_30', '>2.0m open'),
+                'right_30': fallback.get('right_30', '>2.0m open'),
             }
     
     def run_vlm_navigation(self, max_subtask_steps: int = 5) -> Dict[str, Any]:
@@ -2051,8 +2090,11 @@ class VLMNavigationController(InteractiveNavigationController):
             waypoint_positions=wp_pos,
             waypoint_ids=wp_ids,
             waypoint_descriptions=wp_descs,
+            waypoint_area_labels=self.mapper.get_waypoint_area_labels(),
             current_pose=self.mapper.full_pose,
             resolution_cm=self.mapper.resolution,
+            current_room_area_label=getattr(self.mapper, 'current_room_area_label', ""),
+            current_room_area_type=getattr(self.mapper, 'current_room_area_type', ""),
         )
 
     # ========== 原有方法 ==========

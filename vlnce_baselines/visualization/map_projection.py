@@ -53,6 +53,26 @@ class RotatedMapProjector:
         rotated_col = (rotated_norm_x + 1.0) * self.map_w / 2.0
         return rotated_row, rotated_col
 
+    def rotated_to_world_pixel(
+        self,
+        rotated_row: float,
+        rotated_col: float,
+    ) -> Optional[Tuple[float, float]]:
+        if not (0.0 <= rotated_row < self.map_h and 0.0 <= rotated_col < self.map_w):
+            return None
+
+        rotated_norm_y = (float(rotated_row) / self.map_h) * 2.0 - 1.0
+        rotated_norm_x = (float(rotated_col) / self.map_w) * 2.0 - 1.0
+
+        norm_x = self._cos_theta * rotated_norm_x - self._sin_theta * rotated_norm_y
+        norm_y = self._sin_theta * rotated_norm_x + self._cos_theta * rotated_norm_y
+
+        rel_row = (norm_y + 1.0) * self.map_h / 2.0
+        rel_col = (norm_x + 1.0) * self.map_w / 2.0
+        world_row = rel_row + self.crop_row_px
+        world_col = rel_col + self.crop_col_px
+        return world_row, world_col
+
     def rotated_to_global_display(
         self,
         rotated_row: float,
