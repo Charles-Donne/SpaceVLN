@@ -6,6 +6,7 @@ controller stays focused on orchestration instead of per-image rendering.
 """
 
 import os
+from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import cv2
@@ -16,6 +17,8 @@ from vlnce_baselines.vlm.navigation_config import DIRECTION_CONFIG
 
 class ThinkingViewRenderer:
     """Render and save the 12 annotated direction views used by the thinking model."""
+
+    THINKING_DETECTION_TOPK = 4
 
     @staticmethod
     def _build_text_strip(
@@ -59,17 +62,89 @@ class ThinkingViewRenderer:
 
     @staticmethod
     def _summarize_detected_landmarks(detected_landmarks: List[Tuple[str, float]]) -> str:
-        counts: Dict[str, int] = {}
-        for name, _confidence in detected_landmarks or []:
-            counts[name] = counts.get(name, 0) + 1
-
-        if not counts:
+        if not detected_landmarks:
             return "Detected landmark: none"
 
-        parts = []
-        for name, count in counts.items():
-            parts.append(f"{name} x{count}" if count > 1 else name)
+        ranked = sorted(
+            [(str(name), float(confidence)) for name, confidence in detected_landmarks],
+            key=lambda item: item[1],
+            reverse=True,
+        )
+        parts = [f"{name} {confidence:.2f}" for name, confidence in ranked]
         return "Detected landmark: " + ", ".join(parts)
+
+    @staticmethod
+    def _filter_detection_payload(detections, labels: List[str], keep_indices: List[int]):
+        if detections is None or getattr(detections, "xyxy", None) is None:
+            return None, []
+
+        if not keep_indices:
+            return (
+                SimpleNamespace(
+                    xyxy=np.zeros((0, 4), dtype=np.float32),
+                    confidence=np.zeros((0,), dtype=np.float32),
+                    class_id=np.zeros((0,), dtype=np.int32),
+                    tracker_id=None,
+                    mask=None,
+                ),
+                [],
+            )
+
+        keep = np.asarray(sorted(set(int(idx) for idx in keep_indices)), dtype=np.int32)
+        all_xyxy = np.asarray(detections.xyxy, dtype=np.float32)
+        all_conf = getattr(detections, "confidence", None)
+        all_class_id = getattr(detections, "class_id", None)
+        all_tracker_id = getattr(detections, "tracker_id", None)
+        all_mask = getattr(detections, "mask", None)
+
+        return (
+            SimpleNamespace(
+                xyxy=all_xyxy[keep],
+                confidence=(
+                    np.asarray(all_conf, dtype=np.float32)[keep]
+                    if all_conf is not None else np.zeros((len(keep),), dtype=np.float32)
+                ),
+                class_id=(
+                    np.asarray(all_class_id, dtype=np.int32)[keep]
+                    if all_class_id is not None else np.full((len(keep),), -1, dtype=np.int32)
+                ),
+                tracker_id=(
+                    np.asarray(all_tracker_id, dtype=np.int32)[keep]
+                    if all_tracker_id is not None else None
+                ),
+                mask=(
+                    np.asarray(all_mask, dtype=np.float32)[keep]
+                    if all_mask is not None else None
+                ),
+            ),
+            [labels[idx] for idx in keep if 0 <= idx < len(labels)],
+        )
+
+    def _collect_topk_detection_indices(
+        self,
+        payloads: List[Tuple[Any, List[str], np.ndarray, Optional[np.ndarray], float, str]],
+        topk: int,
+    ) -> Dict[int, List[int]]:
+        if topk <= 0:
+            return {}
+
+        ranked: List[Tuple[float, int, int]] = []
+        for view_idx, (detections, _labels, _image, _depth, _angle, _name) in enumerate(payloads):
+            if detections is None or getattr(detections, "xyxy", None) is None:
+                continue
+            confidences = getattr(detections, "confidence", None)
+            if confidences is None:
+                confidences = np.zeros((len(detections.xyxy),), dtype=np.float32)
+            else:
+                confidences = np.asarray(confidences, dtype=np.float32)
+            for det_idx, confidence in enumerate(confidences):
+                ranked.append((float(confidence), view_idx, det_idx))
+
+        ranked.sort(key=lambda item: item[0], reverse=True)
+        keep_by_view: Dict[int, List[int]] = {}
+        for _confidence, view_idx, det_idx in ranked[:topk]:
+            keep_by_view.setdefault(view_idx, []).append(det_idx)
+        return keep_by_view
 
     @staticmethod
     def _should_draw_waypoint(view_angle: float, waypoint_angle_deg: Optional[float]) -> bool:
@@ -103,11 +178,13 @@ class ThinkingViewRenderer:
         waypoint_info: Optional[tuple],
         waypoint_angle_deg: Optional[float],
         draw_waypoints_fn: Callable[[np.ndarray, float, tuple], np.ndarray],
+        detection_topk: int = THINKING_DETECTION_TOPK,
     ) -> Tuple[List[str], List[str]]:
         os.makedirs(directions_dir, exist_ok=True)
 
         direction_paths: List[str] = []
         direction_names: List[str] = []
+        view_payloads: List[Tuple[Any, List[str], np.ndarray, Optional[np.ndarray], float, str]] = []
 
         for config in DIRECTION_CONFIG:
             step_idx = config["step"]
@@ -116,14 +193,25 @@ class ThinkingViewRenderer:
 
             image = lookaround_images[step_idx - 1].copy()
             depth_meters = lookaround_depths[step_idx - 1] if step_idx - 1 < len(lookaround_depths) else None
-            detected_landmarks_view: List[Tuple[str, float]] = []
-
+            dets_view, labels_view = None, []
             if landmark_classes:
                 dets_view, labels_view, _ = detect_landmarks_fn(image, landmark_classes)
-                image, detected_landmarks_view, _, _ = render_detection_fn(
-                    image,
+            view_payloads.append((dets_view, labels_view, image, depth_meters, angle, direction_name))
+
+        keep_by_view = self._collect_topk_detection_indices(view_payloads, topk=detection_topk)
+
+        for view_idx, (dets_view, labels_view, image, depth_meters, angle, direction_name) in enumerate(view_payloads):
+            detected_landmarks_view: List[Tuple[str, float]] = []
+            if landmark_classes:
+                filtered_dets, filtered_labels = self._filter_detection_payload(
                     dets_view,
                     labels_view,
+                    keep_by_view.get(view_idx, []),
+                )
+                image, detected_landmarks_view, _, _ = render_detection_fn(
+                    image,
+                    filtered_dets,
+                    filtered_labels,
                     depth_meters,
                 )
 

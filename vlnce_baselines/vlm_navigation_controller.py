@@ -27,17 +27,19 @@ from datetime import datetime
 from habitat import Config
 from habitat.sims.habitat_simulator.actions import HabitatSimActions
 
+from vlnce_baselines.common.spatial_formatter import (
+    build_action_landmark_map_info,
+    build_waypoint_summary,
+)
 from vlnce_baselines.interactive_navigation_controller import InteractiveNavigationController
 from vlnce_baselines.vlm import (
     LLMPlanner, ActionExecutor, SaveManager, NavigationVisualizer
 )
 from vlnce_baselines.vlm.thinking_view_renderer import ThinkingViewRenderer
 from vlnce_baselines.visualization.obstacle_analysis import (
-    build_rotated_obstacle_mask,
-    calculate_obstacle_distances_12_directions,
-    calculate_obstacle_distances_from_rotated_map,
+    calculate_obstacle_distances_from_depth,
 )
-from vlnce_baselines.vlm.navigation_config import ACTION_MAPPING
+from vlnce_baselines.vlm.navigation_config import ACTION_MAPPING, DIRECTION_CONFIG
 from habitat_extensions.pose_utils import get_sim_location
 
 
@@ -129,15 +131,11 @@ class VLMNavigationController(InteractiveNavigationController):
         self.latest_obstacle_distances_12 = {
             f'angle_{i}': 'Unknown' for i in range(0, 360, 30)
         }
-        # Action模式：7个方向（前方扇形）
+        # Action模式：3个方向（Left 30 / Front / Right 30）
         self.latest_obstacle_distances = {
             'front': 'Unknown',
             'left_30': 'Unknown',
-            'left_60': 'Unknown',
-            'left_90': 'Unknown',
             'right_30': 'Unknown',
-            'right_60': 'Unknown',
-            'right_90': 'Unknown'
         }
         
         # NavigationVisualizer（用于RGB+俯视图拼接和GIF生成）
@@ -511,7 +509,7 @@ class VLMNavigationController(InteractiveNavigationController):
     
     def _draw_distance_rays_on_first_person_view(self, image: np.ndarray, distances: Dict[str, str]) -> np.ndarray:
         """
-        在第一人称视图上绘制多条距离射线（复用统一计算的距离数据）
+        在第一人称视图上绘制多条距离射线（复用当前depth采样的距离数据）
         
         Args:
             image: 第一人称RGB图像 (H, W, 3) BGR格式
@@ -519,13 +517,14 @@ class VLMNavigationController(InteractiveNavigationController):
         """
         h, w = image.shape[:2]
         center_x, bottom_y = w // 2, h - 20
-        fov_half = 39.5
-        
-        # 方向映射：key -> (相对角度, X位置比例)
+        hfov = float(self.config.MAP.HFOV)
+        fov_half = hfov / 2.0
+
+        # 方向映射：只显示 Left 30 / Front / Right 30
         ray_map = {
-            'left_90': -90, 'left_60': -60, 'left_30': -30,
+            'left_30': -30,
             'front': 0,
-            'right_30': 30, 'right_60': 60, 'right_90': 90
+            'right_30': 30,
         }
         
         for key, angle in ray_map.items():
@@ -702,7 +701,7 @@ class VLMNavigationController(InteractiveNavigationController):
         self.latest_obs = obs[0]
         
         # 扫描完成，更新距离（静默处理）
-        self._update_obstacle_distances_12_directions()
+        self._update_obstacle_distances_12_directions(lookaround_depths)
         
         # 检查是否完成了完整的12步环视
         if len(lookaround_images) < 12:
@@ -886,11 +885,7 @@ class VLMNavigationController(InteractiveNavigationController):
         obstacle_distances = getattr(self, 'latest_obstacle_distances', {
             'front': 'Unknown',
             'left_30': 'Unknown',
-            'left_60': 'Unknown',
-            'left_90': 'Unknown',
             'right_30': 'Unknown',
-            'right_60': 'Unknown',
-            'right_90': 'Unknown'
         })
         
         # 先构建thinking_record（不含response）
@@ -1134,11 +1129,7 @@ class VLMNavigationController(InteractiveNavigationController):
         obstacle_distances = getattr(self, 'latest_obstacle_distances', {
             'front': 'Unknown',
             'left_30': 'Unknown',
-            'left_60': 'Unknown',
-            'left_90': 'Unknown',
             'right_30': 'Unknown',
-            'right_60': 'Unknown',
-            'right_90': 'Unknown'
         })
         
         # 先构建thinking_record（不含response）
@@ -1410,11 +1401,7 @@ class VLMNavigationController(InteractiveNavigationController):
         obstacle_distances = getattr(self, 'latest_obstacle_distances', {
             'front': 'Unknown',
             'left_30': 'Unknown',
-            'left_60': 'Unknown',
-            'left_90': 'Unknown',
             'right_30': 'Unknown',
-            'right_60': 'Unknown',
-            'right_90': 'Unknown'
         })
         
         # 准备action记录
@@ -1445,107 +1432,13 @@ class VLMNavigationController(InteractiveNavigationController):
         
         # 构建 landmark_map_info：可见 + 地图离屏两类（按距离升序）
         # action VLM 只有第一人称图，需要文字告知离屏的已映射 landmark 方向距离
-        action_landmark_map_info = None
         landmark_dist_map = getattr(self, 'latest_landmark_dist_map', {})
         landmark_dist_map_multi = getattr(self, 'latest_landmark_dist_map_multi', {})
-
-        def _snap_angle_to_action(a_deg: float) -> int:
-            # 仅用于action提示文本，不改变真实地图角度
-            a = ((a_deg + 180.0) % 360.0) - 180.0
-            mag = abs(a)
-            if mag <= 15.0:
-                return 0
-            if mag >= 165.0:
-                return 180 if a >= 0 else -180
-            bucket = int((mag - 15.0 - 1e-6) // 30.0) + 1
-            snapped = min(bucket * 30, 150)
-            return snapped if a > 0 else -snapped
-
-        def _fmt_dir_action(a_deg: float) -> str:
-            a = _snap_angle_to_action(a_deg)
-            if abs(a) <= 15.0:
-                return "Front 0deg"
-            if abs(a) >= 165.0:
-                return "Back 180deg"
-            return f"Right {abs(a):.0f}deg" if a > 0 else f"Left {abs(a):.0f}deg"
-
-        def _landmark_hint(angle_deg: float, is_visible: bool = False) -> str:
-            snap_deg = _snap_angle_to_action(angle_deg)
-            if is_visible and snap_deg == 0:
-                return ""
-            if snap_deg == 0:
-                return " → move forward"
-            if snap_deg > 0:
-                return f" → TURN RIGHT {abs(snap_deg)}deg then move forward"
-            return f" → TURN LEFT {abs(snap_deg)}deg then move forward"
-
-        if landmark_dist_map or landmark_dist_map_multi or step_landmark_entries:
-            lines = []
-
-            visible_entries = sorted(
-                [
-                    (
-                        entry.get('name'),
-                        float(entry.get('distance_m')),
-                        float(entry.get('angle_deg')),
-                        entry.get('instance_idx'),
-                    )
-                    for entry in step_landmark_entries
-                    if entry.get('name') is not None
-                    and entry.get('distance_m') is not None
-                    and entry.get('angle_deg') is not None
-                ],
-                key=lambda x: x[1]
-            )
-
-            visible_instance_indices = {}
-            for cls_name, dist_m, angle_deg, instance_idx in visible_entries:
-                if instance_idx is not None:
-                    visible_instance_indices.setdefault(cls_name, set()).add(int(instance_idx))
-                same_cls_count = len(landmark_dist_map_multi.get(cls_name, [])) if landmark_dist_map_multi else sum(
-                    1 for n, _, _, _inst in visible_entries if n == cls_name
-                )
-                suffix = ""
-                if instance_idx is not None and same_cls_count > 1:
-                    suffix = f" #{int(instance_idx) + 1}"
-                lines.append(
-                    f"  • [Visible] {cls_name}{suffix}: {dist_m:.1f}m, "
-                    f"{_fmt_dir_action(angle_deg)}{_landmark_hint(angle_deg, is_visible=True)}"
-                )
-
-            if landmark_dist_map_multi:
-                offscreen_items = []
-                for cls_name, candidates in sorted(
-                    landmark_dist_map_multi.items(),
-                    key=lambda x: min([p[0] for p in x[1]]) if x[1] else 1e9
-                ):
-                    if not candidates:
-                        continue
-                    used_set = visible_instance_indices.get(cls_name, set())
-                    sorted_candidates = sorted(candidates, key=lambda x: x[0])
-                    cls_total = len(sorted_candidates)
-                    for idx_c, (dist_m, angle_deg) in enumerate(sorted_candidates):
-                        if idx_c in used_set:
-                            continue
-                        suffix = f" #{idx_c + 1}" if cls_total > 1 else ""
-                        offscreen_items.append((cls_name, suffix, dist_m, angle_deg))
-
-                for cls_name, suffix, dist_m, angle_deg in sorted(offscreen_items, key=lambda x: x[2]):
-                    lines.append(
-                        f"  • [Off-screen] {cls_name}{suffix}: {dist_m:.1f}m, "
-                        f"{_fmt_dir_action(angle_deg)}{_landmark_hint(angle_deg)}"
-                    )
-            else:
-                visible_names = {name for name, _, _, _ in visible_entries}
-                for cls_name, (dist_m, angle_deg) in sorted(landmark_dist_map.items(), key=lambda x: x[1][0]):
-                    if cls_name in visible_names:
-                        continue
-                    lines.append(
-                        f"  • [Off-screen] {cls_name}: {dist_m:.1f}m, "
-                        f"{_fmt_dir_action(angle_deg)}{_landmark_hint(angle_deg)}"
-                    )
-
-            action_landmark_map_info = "\n".join(lines) if lines else None
+        action_landmark_map_info = build_action_landmark_map_info(
+            step_landmark_entries=step_landmark_entries,
+            landmark_dist_map=landmark_dist_map,
+            landmark_dist_map_multi=landmark_dist_map_multi,
+        )
 
         # 调用VLM决策（save_dir使call_api在发送时保存压缩图片+prompt）
         result = self.action_executor.decide_action(
@@ -1731,60 +1624,40 @@ class VLMNavigationController(InteractiveNavigationController):
         self._record_landmark_detection_step(self.current_step, detected_landmarks_step)
         return True
     
-    def _update_obstacle_distances_12_directions(self):
-        """更新当前位置的12个方向障碍物距离（用于Thinking模式环视）
-        每个方向使用±5°的5条光线取中位数
-        """
+    def _update_obstacle_distances_12_directions(self, lookaround_depths: Optional[List[np.ndarray]] = None):
+        """更新12个环视方向的障碍物距离（基于每张view自己的depth前向采样）。"""
         try:
-            # 检查地图是否已初始化
-            if not hasattr(self, 'mapper') or self.mapper is None:
-                raise ValueError("Mapper not initialized")
-            
-            if self.mapper.full_map is None:
-                raise ValueError("Map not initialized yet")
-            
-            if self.mapper.full_pose is None:
-                raise ValueError("Pose not initialized yet")
-            
-            obstacle_mask_display = build_rotated_obstacle_mask(self.mapper.full_map)
-            self.latest_obstacle_distances_12 = calculate_obstacle_distances_12_directions(
-                obstacle_mask_display,
-                center_x=240,
-                center_y=240,
-            )
+            depth_views = lookaround_depths or []
+            if len(depth_views) < 12:
+                raise ValueError("Lookaround depths incomplete")
+
+            distances = {}
+            for config in DIRECTION_CONFIG:
+                depth_meters = depth_views[config["step"] - 1]
+                front_distance = calculate_obstacle_distances_from_depth(
+                    depth_meters,
+                    hfov_deg=float(self.config.MAP.HFOV),
+                    directions={"front": 0.0},
+                ).get("front", "Unknown")
+                distances[f'angle_{config["angle"]}'] = front_distance
+            self.latest_obstacle_distances_12 = distances
         except Exception:
             self.latest_obstacle_distances_12 = {
                 f'angle_{i}': 'Unknown' for i in range(0, 360, 30)
             }
     
     def _update_obstacle_distances(self):
-        """更新当前位置的障碍物距离（用于Action模式，7个方向）"""
+        """更新当前位置的障碍物距离（用于Action模式，Left30/Front/Right30）。"""
         try:
-            # 检查地图是否已初始化
-            if not hasattr(self, 'mapper') or self.mapper is None:
-                raise ValueError("Mapper not initialized")
-            
-            if self.mapper.full_map is None:
-                raise ValueError("Map not initialized yet")
-            
-            if self.mapper.full_pose is None:
-                raise ValueError("Pose not initialized yet")
-            
-            obstacle_mask_display = build_rotated_obstacle_mask(self.mapper.full_map)
-            self.latest_obstacle_distances = calculate_obstacle_distances_from_rotated_map(
-                obstacle_mask_display,
-                center_x=240,
-                center_y=240,
+            self.latest_obstacle_distances = calculate_obstacle_distances_from_depth(
+                getattr(self, 'latest_depth_meters', None),
+                hfov_deg=float(self.config.MAP.HFOV),
             )
         except Exception:
             self.latest_obstacle_distances = {
                 'front': 'Unknown',
                 'left_30': 'Unknown',
-                'left_60': 'Unknown', 
-                'left_90': 'Unknown',
                 'right_30': 'Unknown',
-                'right_60': 'Unknown',
-                'right_90': 'Unknown'
             }
     
     def run_vlm_navigation(self, max_subtask_steps: int = 5) -> Dict[str, Any]:
@@ -2136,74 +2009,18 @@ class VLMNavigationController(InteractiveNavigationController):
     
     # ========== Waypoint辅助方法 ==========
 
-    @staticmethod
-    def _bearing_to_description(bearing_deg: float) -> str:
-        """将相对方位角归并为 action/detection 同风格方向描述。"""
-        b = ((bearing_deg + 180) % 360) - 180  # normalize to [-180, 180]
-        mag = abs(b)
-        if mag <= 15.0:
-            return "Front 0deg"
-        if mag >= 165.0:
-            return "Back 180deg"
-        bucket = int((mag - 15.0 - 1e-6) // 30.0) + 1
-        snapped = min(bucket * 30, 150)
-        return f"Left {snapped:.0f}deg" if b < 0 else f"Right {snapped:.0f}deg"
-
     def _get_waypoint_summary(self) -> str:
         """
         获取waypoint摘要（用于LLM提示词）
         包含每个waypoint相对当前pose的距离和方向，以及顺序拓扑路径。
         """
-        import math
         wp_pos, wp_ids, wp_descs = self.mapper.get_waypoints()
-        if len(wp_ids) == 0:
-            return "No waypoints visited yet."
-
-        curr_pose = self.mapper.full_pose  # [x_m, y_m, orientation_deg]
-        resolution = self.mapper.resolution  # cm/pixel
-
-        node_lines = []
-        for i, (wp_id, wp_desc, (wp_py, wp_px)) in enumerate(zip(wp_ids, wp_descs, wp_pos)):
-            is_last = (i == len(wp_ids) - 1)
-            suffix = "  ← LAST VISITED (came from here)" if is_last else ""
-
-            if curr_pose is not None:
-                # 世界像素 → 米
-                wp_x = wp_px * resolution / 100.0
-                wp_y = wp_py * resolution / 100.0
-                curr_x, curr_y, curr_ori = curr_pose[0], curr_pose[1], curr_pose[2]
-
-                dx = wp_x - curr_x
-                dy = wp_y - curr_y
-                dist = math.sqrt(dx ** 2 + dy ** 2)
-
-                # 世界绝对角（数学惯例：0=东, CCW正方向）
-                abs_angle = math.degrees(math.atan2(dy, dx))
-                # curr_ori 同为数学惯例（0=东，90=北，CCW正向）
-                # 相对方位角（CW为正：正=右，负=左），与 _bearing_to_description 约定一致
-                rel_bearing = curr_ori - abs_angle
-                direction = self._bearing_to_description(rel_bearing)
-                spatial_info = f"{dist:.1f}m, {direction}"
-            else:
-                spatial_info = "distance unknown"
-
-            node_lines.append(f"WP#{wp_id} [{wp_desc}] — {spatial_info}{suffix}")
-
-        # 顺序拓扑路径（各段距离）
-        path_segments = []
-        for i in range(len(wp_ids) - 1):
-            py1, px1 = wp_pos[i]
-            py2, px2 = wp_pos[i + 1]
-            seg_dist = math.sqrt(
-                ((px2 - px1) * resolution / 100) ** 2 +
-                ((py2 - py1) * resolution / 100) ** 2
-            )
-            path_segments.append(f"WP#{wp_ids[i]}→WP#{wp_ids[i+1]}({seg_dist:.1f}m)")
-        if path_segments:
-            path_line = "Path: " + " → ".join(path_segments) + " → Current"
-        else:
-            path_line = "Path: WP#1 → Current"
-
-        return "\n".join(node_lines) + "\n" + path_line
+        return build_waypoint_summary(
+            waypoint_positions=wp_pos,
+            waypoint_ids=wp_ids,
+            waypoint_descriptions=wp_descs,
+            current_pose=self.mapper.full_pose,
+            resolution_cm=self.mapper.resolution,
+        )
 
     # ========== 原有方法 ==========

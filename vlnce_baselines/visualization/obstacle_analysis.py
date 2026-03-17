@@ -4,6 +4,12 @@ import cv2
 import numpy as np
 
 
+ACTION_VIEW_DIRECTIONS = {
+    "left_30": -30.0,
+    "front": 0.0,
+    "right_30": 30.0,
+}
+
 ACTION_DIRECTIONS = {
     "front": -90,
     "left_30": -120,
@@ -106,6 +112,75 @@ def calculate_distances_for_directions(
                 ray_distances.append(dist_m)
 
         distances[key] = format_distance(float(np.median(ray_distances))) if ray_distances else "Unknown"
+    return distances
+
+
+def _prepare_depth_array(depth_meters: np.ndarray) -> Optional[np.ndarray]:
+    if depth_meters is None:
+        return None
+    depth = np.asarray(depth_meters, dtype=np.float32)
+    if depth.ndim == 3 and depth.shape[-1] == 1:
+        depth = depth[:, :, 0]
+    if depth.ndim != 2:
+        return None
+    return depth
+
+
+def sample_depth_distance_for_angle(
+    depth_meters: np.ndarray,
+    angle_deg: float,
+    hfov_deg: float = 79.0,
+    max_distance_m: float = 5.0,
+    row_start_ratio: float = 0.38,
+    row_end_ratio: float = 0.78,
+    column_band_ratio: float = 0.03,
+    sample_percentile: float = 25.0,
+) -> Optional[float]:
+    """Estimate obstacle distance directly from the current depth frame."""
+    depth = _prepare_depth_array(depth_meters)
+    if depth is None or hfov_deg <= 1e-6:
+        return None
+
+    half_fov = hfov_deg / 2.0
+    if abs(angle_deg) > half_fov + 1e-6:
+        return None
+
+    height, width = depth.shape
+    row_start = max(0, min(height - 1, int(height * row_start_ratio)))
+    row_end = max(row_start + 1, min(height, int(height * row_end_ratio)))
+    center_x = ((angle_deg + half_fov) / hfov_deg) * (width - 1)
+    half_band = max(2, int(width * column_band_ratio))
+    col_start = max(0, int(round(center_x)) - half_band)
+    col_end = min(width, int(round(center_x)) + half_band + 1)
+
+    window = depth[row_start:row_end, col_start:col_end]
+    valid = window[np.isfinite(window) & (window > 0.05)]
+    if valid.size == 0:
+        return None
+
+    clipped = valid[valid <= max_distance_m]
+    if clipped.size == 0:
+        return max_distance_m + 0.1
+    return float(np.percentile(clipped, sample_percentile))
+
+
+def calculate_obstacle_distances_from_depth(
+    depth_meters: np.ndarray,
+    hfov_deg: float = 79.0,
+    directions: Optional[Dict[str, float]] = None,
+    max_distance_m: float = 5.0,
+) -> Dict[str, str]:
+    """Calculate lightweight action-side obstacle distances from the current depth frame."""
+    direction_map = directions or ACTION_VIEW_DIRECTIONS
+    distances: Dict[str, str] = {}
+    for key, angle_deg in direction_map.items():
+        distance_m = sample_depth_distance_for_angle(
+            depth_meters,
+            angle_deg=angle_deg,
+            hfov_deg=hfov_deg,
+            max_distance_m=max_distance_m,
+        )
+        distances[key] = format_distance(distance_m)
     return distances
 
 

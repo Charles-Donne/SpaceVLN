@@ -19,10 +19,13 @@ import numpy as np
 from PIL import Image
 from typing import List, Tuple, Optional, Dict, Any
 
+from vlnce_baselines.common.spatial_formatter import format_relative_direction
 from vlnce_baselines.visualization import rendering as vu
 from vlnce_baselines.visualization.map_projection import RotatedMapProjector
 from vlnce_baselines.visualization.obstacle_analysis import (
+    ACTION_VIEW_DIRECTIONS,
     build_rotated_obstacle_mask,
+    calculate_obstacle_distances_from_depth as scan_obstacle_distances_from_depth,
     calculate_obstacle_distances_12_directions as scan_obstacle_distances_12_directions,
     calculate_obstacle_distances_from_rotated_map as scan_obstacle_distances_from_rotated_map,
 )
@@ -112,15 +115,25 @@ class MapVisualizer:
             距离字典 {
                 'front': "X.XXm" | ">2.0m open" | "<0.5m WARNING",
                 'left_30': ...,
-                'right_30': ...,
-                'left_90': ...,
-                'right_90': ...
+                'right_30': ...
             }
         """
         return scan_obstacle_distances_from_rotated_map(
             obstacle_mask_rotated,
             center_x=center_x,
             center_y=center_y,
+        )
+
+    def calculate_obstacle_distances_from_depth(
+        self,
+        depth_meters: np.ndarray,
+        hfov: float = 79.0,
+    ) -> Dict[str, str]:
+        """Estimate front-view obstacle distances directly from the current depth frame."""
+        return scan_obstacle_distances_from_depth(
+            depth_meters,
+            hfov_deg=hfov,
+            directions=ACTION_VIEW_DIRECTIONS,
         )
     
     def calculate_obstacle_distances_12_directions(
@@ -159,9 +172,7 @@ class MapVisualizer:
         """生成距离摘要字符串（供日志打印）"""
         return (f"FRONT={distances.get('front', 'Unknown')}, "
                 f"L30={distances.get('left_30', 'Unknown')}, "
-                f"R30={distances.get('right_30', 'Unknown')}, "
-                f"L90={distances.get('left_90', 'Unknown')}, "
-                f"R90={distances.get('right_90', 'Unknown')}")
+                f"R30={distances.get('right_30', 'Unknown')}")
     
     # ========== 渲染方法 ==========
     
@@ -990,27 +1001,6 @@ class MapVisualizer:
         matched_in_view: set = set()  # 当前帧中实际可见的landmark类名
         used_map_candidates = {}
 
-        def _snap_angle_to_action(a_deg: float) -> int:
-            """仅用于显示：将角度归并到 Front/Back 和 30° 栅格。"""
-            a = ((a_deg + 180.0) % 360.0) - 180.0
-            mag = abs(a)
-            if mag <= 15.0:
-                return 0
-            if mag >= 165.0:
-                return 180 if a >= 0 else -180
-            bucket = int((mag - 15.0 - 1e-6) // 30.0) + 1
-            snapped = min(bucket * 30, 150)
-            return snapped if a > 0 else -snapped
-
-        def _dir_str(a_deg: float, use_action_snap: bool = False) -> str:
-            a = ((a_deg + 180.0) % 360.0) - 180.0
-            a = _snap_angle_to_action(a) if use_action_snap else a
-            if abs(a) <= 15.0:
-                return "Front 0deg"
-            if abs(a) >= 165.0:
-                return "Back 180deg"
-            return f"Right {abs(a):.0f}deg" if a > 0 else f"Left {abs(a):.0f}deg"
-
         def _bbox_center_angle_deg(x1: int, x2: int, width: int) -> float:
             xc = (width - 1) / 2.0
             focal = (width / 2.0) / np.tan(np.deg2rad(float(hfov)) / 2.0)
@@ -1117,7 +1107,7 @@ class MapVisualizer:
             if map_instance_idx is not None and same_cls_total > 1:
                 inst_prefix = f"#{map_instance_idx + 1} "
             if display_dist_m is not None and display_angle_deg is not None:
-                row1 = f"{inst_prefix}{display_dist_m:.1f}m {_dir_str(display_angle_deg, True)}"
+                row1 = f"{inst_prefix}{display_dist_m:.1f}m {format_relative_direction(display_angle_deg)}"
             elif display_dist_m is not None:
                 row1 = f"{inst_prefix}{display_dist_m:.1f}m"
             else:
@@ -1133,7 +1123,7 @@ class MapVisualizer:
                     fallback_angle_deg = _bbox_center_angle_deg(x1, x2, w_img)
                 if fallback_dist_str is None:
                     fallback_dist_str = ">5.0m"
-                row1 = f"{fallback_dist_str} {_dir_str(fallback_angle_deg, True)}"
+                row1 = f"{fallback_dist_str} {format_relative_direction(fallback_angle_deg)}"
             if row1:
                 font = cv2.FONT_HERSHEY_SIMPLEX
                 font_scale = 0.5
@@ -1209,7 +1199,7 @@ class MapVisualizer:
                 if inst_idx is not None and visible_cls_total.get(lm_name, 0) > 1:
                     suffix = f" #{inst_idx + 1}"
                 item_lines.append((
-                    f"[Vis]{suffix} {sn}  {d_m:.1f}m  {_dir_str(a_deg, True)}",
+                    f"[Vis]{suffix} {sn}  {d_m:.1f}m  {format_relative_direction(a_deg)}",
                     False
                 ))
 
@@ -1227,7 +1217,7 @@ class MapVisualizer:
                 sn = cls_name if len(cls_name) <= 40 else cls_name[:38] + ".."
                 suffix = f" #{inst_idx}" if cls_total.get(cls_name, 0) > 1 else ""
                 item_lines.append((
-                    f"[Off]{suffix} {sn}  {d_m:.1f}m  {_dir_str(a_deg, True)}",
+                    f"[Off]{suffix} {sn}  {d_m:.1f}m  {format_relative_direction(a_deg)}",
                     False
                 ))
 
@@ -1381,11 +1371,11 @@ class MapVisualizer:
     
     def draw_distance_on_action_view(self, image: np.ndarray, distance_dict: Dict[str, str]) -> np.ndarray:
         """
-        在Action模式视图上绘制7个方向的距离信息（从底部中心引出）
-        
+        在Action模式视图上绘制3个方向的距离信息（Left 30 / Front / Right 30）
+
         Args:
             image: 图像 (H, W, 3) BGR格式
-            distance_dict: 距离字典，key为方向（'front', 'left_30', 'right_30', 'left_90', 'right_90'等）
+            distance_dict: 距离字典，key为方向（'front', 'left_30', 'right_30'）
         """
         h, w = image.shape[:2]
         center_x = w // 2
@@ -1400,16 +1390,11 @@ class MapVisualizer:
                     break
         bottom_y = h_rgb - 10
 
-        # 7个方向：左90, 左60, 左30, 前, 右30, 右60, 右90
-        # 对应的像素角度（从底部向上，-90°是正上方）
+        # 3个方向：左30, 前, 右30
         direction_configs = [
-            {'key': 'left_90', 'angle': -180, 'label': 'Left 90'},
-            {'key': 'left_60', 'angle': -150, 'label': 'Left 60'},
             {'key': 'left_30', 'angle': -120, 'label': 'Left 30'},
             {'key': 'front', 'angle': -90, 'label': 'FRONT'},
             {'key': 'right_30', 'angle': -60, 'label': 'Right 30'},
-            {'key': 'right_60', 'angle': -30, 'label': 'Right 60'},
-            {'key': 'right_90', 'angle': 0, 'label': 'Right 90'}
         ]
         
         for config in direction_configs:
@@ -1437,7 +1422,7 @@ class MapVisualizer:
             thickness = 3 if config['key'] == 'front' else 2
             cv2.line(image, (center_x, bottom_y), (end_x, end_y), color, thickness)
             
-            # FRONT用大字号，其他用稍大字号（0.4→0.5）
+            # FRONT用大字号，其他用稍大字号
             font_scale = 0.6 if config['key'] == 'front' else 0.5
             font_thickness = 2 if config['key'] == 'front' else 1
             
@@ -1455,14 +1440,14 @@ class MapVisualizer:
                 # FRONT标签居中
                 text_x = base_x - label_size[0] // 2
                 text_y = base_y + label_size[1] // 2
-            elif config['key'] in ['left_30', 'left_60', 'left_90']:
+            elif config['key'] == 'left_30':
                 # 左侧标签：向左延伸，右对齐（文字在线条左侧）
-                side_offset = 15 if config['key'] in ['left_30', 'left_60'] else 0
+                side_offset = 15
                 text_x = base_x - label_size[0] - side_offset
                 text_y = base_y + label_size[1] // 2
-            else:  # right_30, right_60, right_90
+            else:  # right_30
                 # 右侧标签：向右延伸，左对齐（文字在线条右侧）
-                side_offset = 15 if config['key'] in ['right_30', 'right_60'] else 0
+                side_offset = 15
                 text_x = base_x + side_offset
                 text_y = base_y + label_size[1] // 2
             
@@ -1478,7 +1463,7 @@ class MapVisualizer:
                                                distance_dict: Dict[str, str] = None, classes: List[str] = None,
                                                use_floor: bool = True, use_distance: bool = True) -> str:
         """
-        为action模式准备增强图像：添加地面分割（绿色）和7方向距离辅助线
+        为action模式准备增强图像：添加地面分割（绿色）和3方向距离辅助线
         
         Args:
             image_path: 原始图像路径
@@ -1679,7 +1664,7 @@ class MapVisualizer:
             (paths, landmarks, obstacle_distances, last_waypoint_angle)
             - paths: 保存路径字典 {'rgb', 'global_map', 'local_map', 'detection'}
             - landmarks: Landmark列表
-            - obstacle_distances: {'front': "X.XXm", 'left_30': ..., ...} 5方向距离
+            - obstacle_distances: {'front': "X.XXm", 'left_30': ..., 'right_30': ...}
             - last_waypoint_angle: 最后一个waypoint相对于正前方的角度（弧度），None表示无waypoint
             
         注意:
@@ -1745,7 +1730,7 @@ class MapVisualizer:
             controller.latest_landmark_dist_map_multi = landmark_dist_map_multi if landmark_dist_map_multi else {}
 
         if detections is not None and labels is not None:
-            # 先渲染bbox，再叠加7方向距离线，避免距离线参与实例匹配。
+            # 先渲染bbox，再叠加当前深度采样的距离线，避免距离线参与实例匹配。
             rgb_for_det = rgb.copy()
             detection_vis, detected_landmarks_step, _visible, landmark_strip = self.render_detection_bbox(
                 rgb_for_det, detections, labels,
@@ -1759,13 +1744,10 @@ class MapVisualizer:
             )
 
             try:
-                obs_mask = self._get_channel_mask(full_map, 0)  # obstacle channel
-                obs_flipped = np.flipud(obs_mask)
-                obs_resized = cv2.resize(
-                    obs_flipped.astype(np.uint8) * 255,
-                    (480, 480), interpolation=cv2.INTER_NEAREST) > 127
-                obstacle_distances = self.calculate_obstacle_distances_from_rotated_map(
-                    obs_resized, 240, 240)
+                obstacle_distances = self.calculate_obstacle_distances_from_depth(
+                    getattr(controller, 'latest_depth_meters', None) if controller is not None else None,
+                    hfov=hfov,
+                )
                 detection_vis = self.draw_distance_on_action_view(detection_vis, obstacle_distances)
                 if controller is not None:
                     controller.latest_obstacle_distances = obstacle_distances
