@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
 
+from vlnce_baselines.mapping.space_types import normalize_space_type
 from vlnce_baselines.visualization.map_projection import RotatedMapProjector
 
 
@@ -21,8 +22,8 @@ class RoomAreaManager:
     def reset(self) -> None:
         self.room_area_records: List[Dict[str, Any]] = []
         self.room_area_counter = 0
-        self.current_room_area_label = ""
-        self.current_room_area_type = ""
+        self.current_room_area_label = "Unknown"
+        self.current_room_area_type = "Unknown"
 
     def update_from_waypoint(
         self,
@@ -34,6 +35,8 @@ class RoomAreaManager:
         crop_offset: Optional[Tuple[int, int]],
     ) -> str:
         room_type = self._parse_room_type(description)
+        if room_type == "Unknown":
+            return "Unknown"
         room_key = self._room_type_key(room_type)
         world_pixels = self._compute_room_area_world_pixels(
             pixel_y=pixel_y,
@@ -94,6 +97,7 @@ class RoomAreaManager:
         crop_offset: Optional[Tuple[int, int]],
     ) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
         if full_map is None:
+            self._set_unknown_current_area()
             return np.zeros(self.map_shape, dtype=np.int32), []
 
         h_map, w_map = full_map.shape[1], full_map.shape[2]
@@ -101,6 +105,7 @@ class RoomAreaManager:
         best_distance = np.full((h_map, w_map), np.inf, dtype=np.float32)
         projector = self._build_projector(full_map, full_pose, crop_offset)
         if projector is None:
+            self._set_unknown_current_area()
             return layer, []
 
         area_records: List[Dict[str, Any]] = []
@@ -139,7 +144,7 @@ class RoomAreaManager:
         for sep in ("|", "-", "Nearby", "Connected"):
             if sep in text:
                 text = text.split(sep)[0].strip()
-        return " ".join(text.split()) or "Unknown"
+        return normalize_space_type(" ".join(text.split()))
 
     @staticmethod
     def _room_type_key(room_type: str) -> str:
@@ -203,7 +208,7 @@ class RoomAreaManager:
         full_map: Optional[np.ndarray],
         full_pose: Optional[Sequence[float]],
         crop_offset: Optional[Tuple[int, int]],
-        max_radius_m: float = 3.0,
+        max_radius_m: float = 2.0,
     ) -> Set[Tuple[int, int]]:
         fallback = {(int(pixel_y), int(pixel_x))}
         projector = self._build_projector(full_map, full_pose, crop_offset)
@@ -266,12 +271,11 @@ class RoomAreaManager:
         projector: RotatedMapProjector,
     ) -> None:
         if full_pose is None or not self.room_area_records:
+            self._set_unknown_current_area()
             return
 
         curr_py = int(round(float(full_pose[1]) * 100.0 / float(self.resolution)))
         curr_px = int(round(float(full_pose[0]) * 100.0 / float(self.resolution)))
-        current_record = None
-
         rotated = projector.world_to_rotated_pixel(curr_py, curr_px)
         if rotated is not None:
             row = int(round(rotated[0]))
@@ -283,15 +287,13 @@ class RoomAreaManager:
                         (record for record in self.room_area_records if int(record["id"]) == area_id),
                         None,
                     )
+                    if current_record is not None:
+                        self.current_room_area_label = str(current_record["label"])
+                        self.current_room_area_type = str(current_record["room_type"])
+                        return
 
-        if current_record is None:
-            current_record = min(
-                self.room_area_records,
-                key=lambda record: float(np.hypot(
-                    curr_py - record["center_world_px"][0],
-                    curr_px - record["center_world_px"][1],
-                )),
-            )
+        self._set_unknown_current_area()
 
-        self.current_room_area_label = str(current_record["label"])
-        self.current_room_area_type = str(current_record["room_type"])
+    def _set_unknown_current_area(self) -> None:
+        self.current_room_area_label = "Unknown"
+        self.current_room_area_type = "Unknown"

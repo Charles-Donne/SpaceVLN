@@ -4,6 +4,11 @@ VLM规划提示词模板
 用于LLM高层规划的提示词模板
 """
 
+COMMON_SPACE_TYPES_TEXT = (
+    "bedroom, bathroom, kitchen, living room, dining room, office, laundry room, "
+    "entryway, stairs, hallway, closet, garage, balcony, patio, lobby, gym, storage"
+)
+
 # 初始规划提示词 - 在任务开始时生成第一个子任务
 INITIAL_PLANNING_PROMPT = """**Role**: You are a VLN planning module. Analyze the environment and task, determine position, choose the next move, and output precise navigation instructions. No manipulation.
 
@@ -19,6 +24,7 @@ INITIAL_PLANNING_PROMPT = """**Role**: You are a VLN planning module. Analyze th
 - **Subtask instruction scope**: After auto-rotation, plan only the easiest immediate action from the current front view
 
 **2 Maps**: Global (full area) + Local (nearby, agent-centered)
+**Room/space types**: Use only common canonical room/space types: {common_space_types}. Remove modifiers/adjectives and keep one type only.
 
 # Map Legend
 **Colors**: White=unexplored | Black=obstacles | Green=safe floor | Orange=trajectory | Red=you
@@ -103,7 +109,7 @@ E) Choose: most likely task-relevant space/object > visible target/landmark > pl
 - **Planning priority**: Finish the nearest unfinished stage first; in initial planning, finish the first stage before later ones. Follow current views and waypoint history toward the most likely task-relevant space/object, and preserve landmark order/relations.
 - **Reasoning discipline**: Part 1 must cover all 12 IMAGEs with room/space, NEAR/FAR, landmark cue, and obstacle distance; Part 3 must detail position + task chain (✓→Current→unmarked). NEAR<1m across multiple IMAGEs = current position; FAR>1.5m in 1-2 views is destination evidence, not arrival.
 - **Progress and arrival**: Before current=(✓), current=(Current), after current=unmarked. Judge arrival in two steps: confirm the room/space, then confirm the room's target object is within ~1m; do not STOP before both hold. If the current room-object target is already within ~1m, STOP immediately.
-- **Output constraints**: `next_waypoint_landmark` must be a clear recognizable object/furniture phrase, never door/doorway/hallway/corridor. `next_waypoint_destination` must be "[room]'s [object]"; "At entrance" means doorway. `subtask_instruction` must be one short immediate sentence for only the nearest unfinished room/object subtask, in the fixed form "From [next_waypoint_direction] view, start, [action + optional pass-by/path cue + destination]." Use direct verbs such as move/go/walk/enter/pass/follow/cross/approach/continue/head/climb/ascend/descend/stop. The action module automatically drops the "From ... view, start," prefix.
+- **Output constraints**: `current_waypoint`, `next_waypoint_destination`, and all room/space references must use one common canonical room/space type only from {common_space_types}; remove modifiers/adjectives and map corridor-like wording to `hallway`. `next_waypoint_landmark` must be a clear recognizable object/furniture phrase, never door/doorway/hallway/corridor. `next_waypoint_destination` must be "[room]'s [object]"; "At entrance" means doorway. `subtask_instruction` must be one short immediate sentence for only the nearest unfinished room/object subtask, in the fixed form "From [next_waypoint_direction] view, start, [action + optional pass-by/path cue + destination]." Use direct verbs such as move/go/walk/enter/pass/follow/cross/approach/continue/head/climb/ascend/descend/stop. The action module automatically drops the "From ... view, start," prefix.
 """
 
 
@@ -126,8 +132,10 @@ VERIFICATION_REPLANNING_PROMPT = """**Role**: You are a VLN verification and rep
 
 **2 Maps**: Global (full + history) + Local (nearby + 0.5m circle)
 **Colors**: White=unexplored | Black=obstacles | Green=safe | Orange=trajectory | Red=you | Blue numbered circles=history waypoints on Global Map only
+**Room/space types**: Use only common canonical room/space types: {common_space_types}. Remove modifiers/adjectives and keep one type only.
 
 **Waypoint History**: {waypoint_summary}
+**Current mapped area**: The `Current Area: ...` line is updated from the agent's current pose. If it is `Unknown`, the current pose is not inside any mapped room-area region.
 
 # Reasoning (6 Parts)
 
@@ -232,7 +240,7 @@ F) Choose: most likely task-relevant space/object from waypoint history > visibl
 - **Planning priority**: Finish the current nearest unfinished stage before later stages, and for that stage prefer the nearest landmark that advances it. Follow waypoint history and trajectory toward the most likely task-relevant space/object.
 - **Reasoning discipline**: Base reasoning only on visible evidence. Part 1 MUST analyze all 12 IMAGEs with angle+direction+space+NEAR/FAR+landmark cue+obstacle, and Part 3 MUST detail position + task chain (✓→Current→unmarked). Determine position first, then mark progress.
 - **Progress and arrival**: Behind=(✓) | Now=(Current) ONE only | Ahead=unmarked; backtrack→rollback. Judge arrival in two steps: first confirm the room/space, then confirm the room's target object is within ~1m; far visibility alone is not arrival. "[room]'s [object]" means go to the room first, then the object; if the current/final room-object target is already within ~1m, STOP immediately.
-- **Output constraints**: `next_waypoint_landmark` must be a clear recognizable object/furniture phrase, not door/doorway/hallway/corridor. `next_waypoint_destination` must stay in "[room]'s [object]" form, and detail phrases should use [room]+[relation]+[object], e.g. "Living room's gray couch", not "couch". `subtask_instruction` must be one short immediate sentence for only the nearest unfinished room/object subtask, in the fixed form "From [next_waypoint_direction] view, start, [action + optional pass-by/path cue + destination]." Use direct verbs such as move/go/walk/enter/pass/follow/cross/approach/continue/head/climb/ascend/descend/stop. The action module automatically drops the "From ... view, start," prefix.
+- **Output constraints**: `current_waypoint`, `next_waypoint_destination`, and all room/space references must use one common canonical room/space type only from {common_space_types}; remove modifiers/adjectives and map corridor-like wording to `hallway`. `next_waypoint_landmark` must be a clear recognizable object/furniture phrase, not door/doorway/hallway/corridor. `next_waypoint_destination` must stay in "[room]'s [object]" form, and detail phrases should use [room]+[relation]+[object], e.g. "Living room's gray couch", not "couch". `subtask_instruction` must be one short immediate sentence for only the nearest unfinished room/object subtask, in the fixed form "From [next_waypoint_direction] view, start, [action + optional pass-by/path cue + destination]." Use direct verbs such as move/go/walk/enter/pass/follow/cross/approach/continue/head/climb/ascend/descend/stop. The action module automatically drops the "From ... view, start," prefix.
 - **Spatial wording**: "At entrance" = doorway, NOT inside.
 """
 
@@ -251,7 +259,8 @@ def get_initial_planning_prompt(instruction: str,
     """
     return INITIAL_PLANNING_PROMPT.format(
         instruction=instruction,
-        action_space=action_space
+        action_space=action_space,
+        common_space_types=COMMON_SPACE_TYPES_TEXT,
     )
 
 def get_verification_replanning_prompt(instruction: str,
@@ -285,5 +294,6 @@ def get_verification_replanning_prompt(instruction: str,
         subtask_instruction=subtask_instruction,
         action_space=action_space,
         detected_landmarks=detected_landmarks,
-        waypoint_summary=waypoint_summary
+        waypoint_summary=waypoint_summary,
+        common_space_types=COMMON_SPACE_TYPES_TEXT,
     )

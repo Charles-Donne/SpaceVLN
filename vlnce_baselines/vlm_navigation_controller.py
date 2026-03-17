@@ -32,6 +32,7 @@ from vlnce_baselines.common.spatial_formatter import (
     build_waypoint_summary,
 )
 from vlnce_baselines.interactive_navigation_controller import InteractiveNavigationController
+from vlnce_baselines.mapping.space_types import strip_space_type_variant_suffixes
 from vlnce_baselines.vlm import (
     LLMPlanner, ActionExecutor, SaveManager, NavigationVisualizer
 )
@@ -431,6 +432,15 @@ class VLMNavigationController(InteractiveNavigationController):
         if not response:
             return response
         response = dict(response)
+        for key in (
+            "current_waypoint",
+            "waypoint_sequence",
+            "task_progress",
+            "next_waypoint_destination",
+            "subtask_instruction",
+        ):
+            if isinstance(response.get(key), str):
+                response[key] = strip_space_type_variant_suffixes(response.get(key))
         response["subtask_instruction"] = self._sanitize_subtask_instruction_text(
             response.get("subtask_instruction"),
             response.get("next_waypoint_destination"),

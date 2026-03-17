@@ -45,6 +45,7 @@ from vlnce_baselines.config_system.constants import (
     landmark_marker_color,
     landmark_marker_border,
     landmark_marker_radius,
+    local_map_landmark_topk,
     landmark_instance_topk,
     landmark_instance_merge_radius_m,
 )
@@ -93,14 +94,19 @@ class MapVisualizer:
 
     @staticmethod
     def _room_area_color(area_id: int, room_type: str) -> Tuple[int, int, int]:
+        palette = [
+            (255, 225, 170),  # light blue
+            (220, 185, 255),  # pink
+            (150, 240, 255),  # yellow
+            (235, 205, 255),  # lavender
+            (180, 220, 255),  # peach
+            (255, 235, 200),  # pale cyan
+        ]
         room_text = str(room_type)
         seed = int(area_id) * 131
         for index, ch in enumerate(room_text):
             seed += (index + 17) * ord(ch)
-        hue = int(seed % 180)
-        hsv = np.uint8([[[hue, 110, 235]]])
-        bgr = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)[0, 0]
-        return int(bgr[0]), int(bgr[1]), int(bgr[2])
+        return palette[seed % len(palette)]
 
     def _prepare_room_area_display_layer(
         self,
@@ -117,7 +123,7 @@ class MapVisualizer:
         image: np.ndarray,
         room_area_layer: Optional[np.ndarray],
         room_area_records: Optional[List[Dict[str, Any]]],
-        alpha: float = 0.32,
+        alpha: float = 0.45,
     ) -> np.ndarray:
         display_layer = self._prepare_room_area_display_layer(room_area_layer, output_size=image.shape[1])
         if display_layer is None or not room_area_records:
@@ -138,7 +144,7 @@ class MapVisualizer:
             mask_uint8 = (mask.astype(np.uint8) * 255)
             contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             if contours:
-                cv2.drawContours(output, contours, -1, color, 2)
+                cv2.drawContours(output, contours, -1, color, 3)
 
         blended = cv2.addWeighted(overlay, alpha, output, 1.0 - alpha, 0)
         return blended
@@ -617,7 +623,7 @@ class MapVisualizer:
         sem_map_vis = np.array(sem_map_vis)
         sem_map_vis = sem_map_vis[:, :, [2, 1, 0]]  # RGB → BGR
         sem_map_vis = cv2.resize(sem_map_vis, (480, 480), interpolation=cv2.INTER_NEAREST)
-        sem_map_vis = self._overlay_room_areas(sem_map_vis, room_area_layer, room_area_records, alpha=0.28)
+        sem_map_vis = self._overlay_room_areas(sem_map_vis, room_area_layer, room_area_records, alpha=0.40)
         
         # ===== 阶段3: 准备显示（地图已在提取时旋转）=====
         projector = self._build_map_projector(full_map, current_pose, crop_offset)
@@ -777,8 +783,9 @@ class MapVisualizer:
         # ===== 阶段9: 绘制Landmark标记（紫色圆球，最上层，不被遮挡）=====
         landmarks = []
         if landmark_instances:
-            landmarks = self._build_landmarks_from_instances(
-                landmark_instances, full_map, current_pose, crop_offset
+            landmarks = self._build_local_landmarks_from_instances(
+                landmark_instances, full_map, current_pose, crop_offset,
+                topk=local_map_landmark_topk,
             )
         elif landmark_classes and landmark_config:
             # full_map 已由 get_full_map_for_rendering(rotate_to_agent_heading=True) 旋转过
@@ -1137,6 +1144,40 @@ class MapVisualizer:
             if converted is not None:
                 landmarks.append(converted)
         return landmarks
+
+    def _build_local_landmarks_from_instances(self,
+                                              landmark_instances: Optional[List[Dict[str, Any]]],
+                                              full_map: np.ndarray,
+                                              current_pose: Optional[Tuple[float, float, float]],
+                                              crop_offset: Optional[Tuple[int, int]],
+                                              topk: int = local_map_landmark_topk
+                                              ) -> List[Tuple[float, float, str, float, float]]:
+        """Keep only the highest-confidence landmark instances that land inside the local-map crop."""
+        if not landmark_instances:
+            return []
+
+        projector = self._build_map_projector(full_map, current_pose, crop_offset)
+        if projector is None:
+            return []
+
+        ranked_candidates: List[Tuple[float, float, Tuple[float, float, str, float, float]]] = []
+        for inst in landmark_instances:
+            converted = self._world_instance_to_rotated_landmark(inst, full_map, current_pose, crop_offset)
+            if converted is None:
+                continue
+            marker_x, marker_y, _cls_name, dist_m, _angle_deg = converted
+            local_display = projector.rotated_to_local_display(marker_y, marker_x)
+            if local_display is None:
+                continue
+            ranked_candidates.append((
+                float(inst.get("confidence", 0.0)),
+                float(dist_m),
+                converted,
+            ))
+
+        ranked_candidates.sort(key=lambda item: (-item[0], item[1]))
+        keep_n = max(1, int(topk))
+        return [item[2] for item in ranked_candidates[:keep_n]]
     
     def render_detection_bbox(self, 
                               rgb: np.ndarray,

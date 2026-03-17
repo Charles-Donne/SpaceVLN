@@ -56,13 +56,16 @@ def build_waypoint_summary(
 ) -> str:
     """Summarize visited waypoints relative to the current pose."""
     header_lines: List[str] = []
-    if current_room_area_label:
-        room_type_note = f" ({current_room_area_type})" if current_room_area_type else ""
-        header_lines.append(f"Current Area: {current_room_area_label}{room_type_note}")
+    display_area_label = current_room_area_label or "Unknown"
+    display_area_type = current_room_area_type or "Unknown"
+    room_type_note = (
+        f" ({display_area_type})"
+        if display_area_type and display_area_type != "Unknown" and display_area_type != display_area_label
+        else ""
+    )
+    header_lines.append(f"Current Area: {display_area_label}{room_type_note}")
 
     if not waypoint_ids:
-        if not header_lines:
-            return "No waypoints visited yet."
         return "\n".join(header_lines + ["No waypoints visited yet."])
 
     node_lines: List[str] = []
@@ -113,7 +116,11 @@ def build_waypoint_summary(
     )
     if waypoint_area_labels:
         area_chain = [label for label in waypoint_area_labels if label]
-        if current_room_area_label and (not area_chain or area_chain[-1] != current_room_area_label):
+        if (
+            current_room_area_label
+            and current_room_area_label != "Unknown"
+            and (not area_chain or area_chain[-1] != current_room_area_label)
+        ):
             area_chain.append(current_room_area_label)
         if area_chain:
             header_lines.append("Area Chain: " + " -> ".join(area_chain))

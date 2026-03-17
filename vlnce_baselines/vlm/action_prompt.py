@@ -8,6 +8,11 @@
 - MOVE_FORWARD: 0.25m
 """
 
+COMMON_SPACE_TYPES_TEXT = (
+    "bedroom, bathroom, kitchen, living room, dining room, office, laundry room, "
+    "entryway, stairs, hallway, closet, garage, balcony, patio, lobby, gym, storage"
+)
+
 ACTION_EXECUTION_PROMPT = """You are the action execution module for Vision-Language Navigation. Analyze the environment and decide the next action.
 
 # Current Subtask
@@ -19,6 +24,7 @@ ACTION_EXECUTION_PROMPT = """You are the action execution module for Vision-Lang
 
 # Waypoint History
 {waypoint_summary}
+The `Current Area: ...` line is updated from the current pose in real time. If it is `Unknown`, the agent is not inside any mapped room-area region. Use only common canonical room/space types: {common_space_types}; remove modifiers/adjectives and map corridor-like wording to `hallway`.
 
 # Previous Step Analysis
 {previous_action_reason}
@@ -88,6 +94,7 @@ You are provided with 1 image:
 **Critical Rules**:
 - **STOP immediately** only when the correct room/space is confirmed and the destination object is within ~1.0m
 - reasoning must explicitly cover FRONT/LEFT30/RIGHT30 NEAR/FAR evidence, visible/off-screen landmarks, current position, destination room/object relation, and waypoint-history alignment before choosing an action
+- treat room/space names as common canonical types only: {common_space_types}; ignore modifiers/adjectives
 - output `action` must stay inside the fixed action space: `TURN_LEFT 30deg` / `TURN_RIGHT 30deg` / `MOVE_FORWARD {{0.25m, 0.5m, 0.75m, 1.0m, 1.25m}}` / `STOP`
 - If the destination is ahead and FRONT is clear, prefer MOVE_FORWARD
 - If FRONT is blocked, choose the closest safe side direction toward the destination, not a wider detour
@@ -120,6 +127,7 @@ def get_action_execution_prompt(next_waypoint_destination: str,
         waypoint_summary=waypoint_summary,
         previous_action_reason=previous_action_reason or "N/A (first step)",
         detected_landmarks=detected_landmarks or "none",
+        common_space_types=COMMON_SPACE_TYPES_TEXT,
         move_distance=move_distance,
         turn_angle=turn_angle,
     )
