@@ -45,6 +45,8 @@ from vlnce_baselines.config_system.constants import (
     landmark_duplicate_iou_loose,
     landmark_duplicate_rel_dist_m,
     landmark_duplicate_angle_diff_deg,
+    landmark_edge_depth_keywords,
+    landmark_edge_depth_min_gap_m,
     detection_colors,
     detection_thickness,
     landmark_marker_color,
@@ -1060,7 +1062,8 @@ class MapVisualizer:
                               mask_2d: np.ndarray,
                               depth_img: np.ndarray,
                               hfov: float,
-                              sample_stride: int = 4) -> Optional[Tuple[float, float]]:
+                              sample_stride: int = 4,
+                              landmark_name: Optional[str] = None) -> Optional[Tuple[float, float]]:
         """用 mask+depth 估计目标在 agent 坐标系中的前向/右向位置。"""
         if mask_2d is None or depth_img is None:
             return None
@@ -1091,7 +1094,13 @@ class MapVisualizer:
                 interior_median = float(np.median(interior_depth))
                 opening_gap_m = interior_median - edge_median
                 opening_gap_threshold = max(0.6, 0.35 * max(edge_median, 0.1))
-                if opening_gap_m >= opening_gap_threshold:
+                landmark_text = str(landmark_name or "").strip().lower()
+                keyword_forced_edge = (
+                    landmark_text and
+                    any(keyword in landmark_text for keyword in landmark_edge_depth_keywords) and
+                    opening_gap_m >= float(landmark_edge_depth_min_gap_m)
+                )
+                if keyword_forced_edge or opening_gap_m >= opening_gap_threshold:
                     # Opening-like structures (doorways / hallways) are often much deeper
                     # in the center than at the frame edges, so use edge geometry instead.
                     sample_mask = edge_valid
@@ -1145,7 +1154,12 @@ class MapVisualizer:
             det_mask = None
             if getattr(detections, 'mask', None) is not None and i < len(detections.mask):
                 det_mask = detections.mask[i]
-            rel_xy = self._estimate_mask_rel_xy(det_mask, depth_meters, hfov)
+            rel_xy = self._estimate_mask_rel_xy(
+                det_mask,
+                depth_meters,
+                hfov,
+                landmark_name=matched_landmark,
+            )
             if rel_xy is None:
                 continue
 
@@ -1591,7 +1605,12 @@ class MapVisualizer:
                 det_mask = detections.mask[i]
             det_rel_xy = None
             if det_mask is not None and depth_for_match is not None:
-                det_rel_xy = self._estimate_mask_rel_xy(det_mask, depth_for_match, hfov)
+                det_rel_xy = self._estimate_mask_rel_xy(
+                    det_mask,
+                    depth_for_match,
+                    hfov,
+                    landmark_name=label_name,
+                )
             world_xy = self._rel_xy_to_world_xy(det_rel_xy, current_pose)
 
             candidate_entries.append({

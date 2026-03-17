@@ -168,3 +168,19 @@ landmark_duplicate_iou_strict = 0.65               # 同帧几乎重合bbox，�
 landmark_duplicate_iou_loose = 0.25                # 配合距离/角度使用的较松bbox重叠阈值
 landmark_duplicate_rel_dist_m = 0.35               # 同帧深度投影相对坐标的最大距离差（米）
 landmark_duplicate_angle_diff_deg = 12.0           # 同帧深度投影允许的最大角度差（度）
+
+# mask测距时，以下开口/通道类词语优先尝试边缘测距
+landmark_edge_depth_keywords = (
+    "door",
+    "doorway",
+    "hallway",
+    "corridor",
+    "entry",
+    "entrance",
+    "arch",
+    "archway",
+    "passage",
+    "opening",
+    "walkway",
+)
+landmark_edge_depth_min_gap_m = 0.08               # 关键词类目标仅要求边缘比中心更近这一最小差值

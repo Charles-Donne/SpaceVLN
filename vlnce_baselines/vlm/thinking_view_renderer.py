@@ -18,6 +18,7 @@ from vlnce_baselines.visualization.landmark_overlay import (
     LandmarkStripSegment,
     render_landmark_strip,
 )
+from vlnce_baselines.common.spatial_formatter import snap_relative_bearing
 from vlnce_baselines.vlm.navigation_config import DIRECTION_CONFIG
 
 
@@ -144,7 +145,8 @@ class ThinkingViewRenderer:
             distance_m = float(math.hypot(dx, dy))
             absolute_angle_deg = float(math.degrees(math.atan2(dy, dx)))
             relative_bearing_deg = float(curr_orientation_deg - absolute_angle_deg)
-            view_angle_deg = cls._normalize_angle_deg(-relative_bearing_deg)
+            snapped_relative_bearing_deg = float(snap_relative_bearing(relative_bearing_deg))
+            view_angle_deg = cls._normalize_angle_deg(-snapped_relative_bearing_deg)
 
             area_label = str(area_labels[index] if index < len(area_labels) else "").strip()
             description = str(wp_desc or "").strip()
@@ -157,6 +159,7 @@ class ThinkingViewRenderer:
                 "area_label": area_label,
                 "distance_m": distance_m,
                 "relative_bearing_deg": relative_bearing_deg,
+                "snapped_relative_bearing_deg": snapped_relative_bearing_deg,
                 "view_angle_deg": view_angle_deg,
                 "is_last_visited": index == len(waypoint_ids) - 1,
             })
@@ -171,6 +174,7 @@ class ThinkingViewRenderer:
                 "area_label": current_area_text,
                 "distance_m": 0.0,
                 "relative_bearing_deg": float(last_entry["relative_bearing_deg"]),
+                "snapped_relative_bearing_deg": float(last_entry.get("snapped_relative_bearing_deg", 0.0)),
                 "view_angle_deg": float(last_entry["view_angle_deg"]),
                 "is_last_visited": False,
                 "is_current_area": True,
@@ -179,23 +183,51 @@ class ThinkingViewRenderer:
         return entries
 
     @classmethod
-    def _select_waypoints_for_view(
+    def _nearest_view_angle(
+        cls,
+        target_angle_deg: float,
+        view_angles_deg: List[float],
+    ) -> Optional[float]:
+        if not view_angles_deg:
+            return None
+
+        normalized_target = cls._normalize_angle_deg(target_angle_deg)
+        return min(
+            [float(angle) for angle in view_angles_deg],
+            key=lambda angle: (
+                abs(cls._angle_delta_deg(normalized_target, float(angle))),
+                cls._normalize_angle_deg(float(angle) - normalized_target),
+            ),
+        )
+
+    @classmethod
+    def _assign_waypoints_to_views(
         cls,
         waypoint_entries: List[Dict[str, Any]],
-        view_angle_deg: float,
-        hfov_deg: float,
-    ) -> List[Dict[str, Any]]:
-        if not waypoint_entries:
-            return []
+        view_angles_deg: List[float],
+    ) -> Dict[float, List[Dict[str, Any]]]:
+        assignments: Dict[float, List[Dict[str, Any]]] = {
+            float(angle): [] for angle in view_angles_deg
+        }
+        if not waypoint_entries or not view_angles_deg:
+            return assignments
 
-        half_fov = max(1.0, float(hfov_deg) / 2.0)
-        selected = [
-            dict(entry)
-            for entry in waypoint_entries
-            if abs(cls._angle_delta_deg(float(entry["view_angle_deg"]), float(view_angle_deg))) <= half_fov
-        ]
-        selected.sort(key=lambda item: (float(item["distance_m"]), int(item["id"])))
-        return selected
+        for entry in waypoint_entries:
+            entry_view_angle = cls._normalize_angle_deg(float(entry.get("view_angle_deg", 0.0)))
+            assigned_angle = (
+                entry_view_angle
+                if any(abs(entry_view_angle - float(angle)) < 1e-3 for angle in view_angles_deg)
+                else cls._nearest_view_angle(entry_view_angle, view_angles_deg)
+            )
+            if assigned_angle is None:
+                continue
+            assignments.setdefault(float(assigned_angle), []).append(dict(entry))
+
+        for angle in assignments:
+            assignments[angle].sort(
+                key=lambda item: (float(item["distance_m"]), int(item["id"]))
+            )
+        return assignments
 
     @classmethod
     def _build_bottom_strip_lines(
@@ -399,23 +431,22 @@ class ThinkingViewRenderer:
             keep_by_view.setdefault(view_idx, []).append(det_idx)
         return keep_by_view
 
-    @staticmethod
-    def _should_draw_waypoint(view_angle: float, waypoint_angle_deg: Optional[float]) -> bool:
+    @classmethod
+    def _should_draw_waypoint(
+        cls,
+        view_angle: float,
+        waypoint_angle_deg: Optional[float],
+        view_angles_deg: List[float],
+    ) -> bool:
         if waypoint_angle_deg is None:
             return False
 
-        waypoint_view_angle = -float(waypoint_angle_deg)
-        while waypoint_view_angle < 0:
-            waypoint_view_angle += 360
-        while waypoint_view_angle >= 360:
-            waypoint_view_angle -= 360
-
-        angle_diff = waypoint_view_angle - float(view_angle)
-        while angle_diff > 180:
-            angle_diff -= 360
-        while angle_diff < -180:
-            angle_diff += 360
-        return abs(angle_diff) <= 15
+        snapped_waypoint_bearing_deg = float(snap_relative_bearing(float(waypoint_angle_deg)))
+        waypoint_view_angle = cls._normalize_angle_deg(-snapped_waypoint_bearing_deg)
+        assigned_view_angle = cls._nearest_view_angle(waypoint_view_angle, view_angles_deg)
+        if assigned_view_angle is None:
+            return False
+        return abs(cls._angle_delta_deg(float(view_angle), float(assigned_view_angle))) < 1e-3
 
     def save_direction_views(
         self,
@@ -448,6 +479,11 @@ class ThinkingViewRenderer:
             current_pose=current_pose,
             resolution_cm=resolution_cm,
             current_room_area_label=current_room_area_label,
+        )
+        view_angles = [float(config["angle"]) for config in DIRECTION_CONFIG]
+        waypoint_entries_by_view = self._assign_waypoints_to_views(
+            waypoint_entries=waypoint_entries,
+            view_angles_deg=view_angles,
         )
 
         for config in DIRECTION_CONFIG:
@@ -484,7 +520,11 @@ class ThinkingViewRenderer:
             dist_str = distance_lookup.get(dist_key, "Unknown")
             image = draw_distance_fn(image, dist_str)
 
-            if waypoint_info and self._should_draw_waypoint(angle, waypoint_angle_deg):
+            if waypoint_info and self._should_draw_waypoint(
+                angle,
+                waypoint_angle_deg,
+                view_angles,
+            ):
                 image = draw_waypoints_fn(image, angle, waypoint_info)
 
             _h, width = image.shape[:2]
@@ -496,11 +536,7 @@ class ThinkingViewRenderer:
                 font_thickness=1,
                 text_color=(0, 0, 255),
             )
-            view_waypoint_entries = self._select_waypoints_for_view(
-                waypoint_entries=waypoint_entries,
-                view_angle_deg=float(angle),
-                hfov_deg=79.0,
-            )
+            view_waypoint_entries = list(waypoint_entries_by_view.get(float(angle), []))
             bottom_lines = self._build_bottom_strip_lines(
                 visible_entries_meta=visible_entries_meta,
                 waypoint_entries=view_waypoint_entries,
