@@ -39,7 +39,7 @@ You are provided with 1 image:
 1. **Detection + View Analysis**: Read `vis/off vis` first. Check whether each current detection is a valid subtask landmark, a duplicate of the same object, or weak/noisy evidence. Then analyze FRONT, Left 30deg, and Right 30deg using only visible evidence: likely room/space, near objects, far objects, and valid landmark(s) with distance/angle/confidence. If something is not visible, do not mention it and do not write filler like `none`.
 2. **Waypoint History**: Read WP#1 -> ... -> LAST. Use snapped direction/distance to infer which way continues toward the most likely task-relevant room/object.
 3. **Current Position + Destination Relation**: From the current view plus waypoint history, infer where you are and where the target room/object most likely is.
-4. **Arrival Check**: Confirm the room first, then the destination object in that room within <1.0m. Only then **STOP immediately**.
+4. **Arrival Check**: Check whether the current subtask destination is already reached. Confirm the room first, then the destination object in that room within <1.0m. If yes, **STOP immediately**.
 5. **Depth Lines**: Which of Left 30 / Front / Right 30 is blocked vs safe?
 6. **Action Decision**: Prefer the direction that best matches current position + destination relation + waypoint history + current room/object evidence. If FRONT is blocked, choose the safest side that stays closest to the destination.
 
@@ -76,12 +76,13 @@ You are provided with 1 image:
 
 **Ex3 - At destination**
 {{
-    "reasoning": "The current room is already the target room, and the destination object is already within about 0.5m. STOP immediately.",
-    "action_analysis": "Destination area is already reached, so stopping now avoids overshooting",
+    "reasoning": "The current subtask destination is already reached: the current room matches the target room, and the destination object is already within about 0.5m. STOP immediately.",
+    "action_analysis": "The current subtask destination is already within reach, so stopping now avoids overshooting",
     "action": "STOP"
 }}
 
 **Critical Rules**:
+- if the current subtask destination is already reached, **STOP immediately**
 - **STOP immediately** only when the correct room/space is confirmed and the destination object is within <1.0m
 - reasoning must stay concise and evidence-only: cover FRONT/LEFT30/RIGHT30, visible/off-screen landmarks if present, current position, destination room/object relation, waypoint-history alignment, and depth safety before choosing an action; omit empty items and never invent evidence
 - use one common room/space type only; ignore modifiers and normalize corridor-like wording to `hallway`
