@@ -8,11 +8,6 @@
 - MOVE_FORWARD: 0.25m
 """
 
-COMMON_SPACE_TYPES_TEXT = (
-    "bedroom, bathroom, kitchen, living room, dining room, office, laundry room, "
-    "entryway, stairs, hallway, closet, garage, balcony, patio, lobby, gym, storage"
-)
-
 ACTION_EXECUTION_PROMPT = """You are the action execution module for Vision-Language Navigation. Analyze the environment and decide the next action.
 
 # Current Subtask
@@ -24,7 +19,6 @@ ACTION_EXECUTION_PROMPT = """You are the action execution module for Vision-Lang
 
 # Waypoint History
 {waypoint_summary}
-`Current Area` is pose-based; `Unknown` means outside mapped areas. Use one common room/space type from {common_space_types}; remove modifiers and treat corridor-like wording as `hallway`.
 
 # Previous Step Analysis
 {previous_action_reason}
@@ -36,22 +30,18 @@ You are provided with 1 image:
 **Current View (front-facing, RGB HFOV about 79°)** — Object detection overlaid with 3 depth-sampled obstacle-distance lines:
 - Directions: Left 30deg, FRONT, Right 30deg
 - Red = nearest obstacle <0.5m (blocked), Yellow = 0.5–2m (caution), Green = >2m (open)
-- **Yellow bounding box**: candidate subtask-landmark detection ({detected_landmarks}); first judge whether it is a reliable task-relevant landmark cue or just duplicate/noisy evidence, then use valid landmark cues as visual anchors toward the right area
+- **Yellow bounding box**: candidate subtask-landmark detection ({detected_landmarks}); first judge whether it is valid task-relevant evidence or just duplicate/noisy evidence
 - **Bottom white strip** (if present): top-3 landmark entries only, ranked by confidence then distance, in the form `vis/off vis + landmark name + distance + direction + confidence`; `vis` = detected now, `off vis` = mapped earlier but outside the current view
 
 # Your Task
 
 **Decision Process**:
-1. **Detection + View Analysis**: Read `vis/off vis` first. Check whether each current detection is a valid subtask landmark, a duplicate of the same object, or weak/noisy evidence. Then analyze FRONT, Left 30deg, and Right 30deg by NEAR/FAR: likely room/space, near large objects, far smaller objects, and valid landmark(s) with distance/angle/confidence.
+1. **Detection + View Analysis**: Read `vis/off vis` first. Check whether each current detection is a valid subtask landmark, a duplicate of the same object, or weak/noisy evidence. Then analyze FRONT, Left 30deg, and Right 30deg using only visible evidence: likely room/space, near objects, far objects, and valid landmark(s) with distance/angle/confidence. If something is not visible, do not mention it and do not write filler like `none`.
 2. **Waypoint History**: Read WP#1 -> ... -> LAST. Use snapped direction/distance to infer which way continues toward the most likely task-relevant room/object.
 3. **Current Position + Destination Relation**: From the current view plus waypoint history, infer where you are and where the target room/object most likely is.
 4. **Arrival Check**: Confirm the room first, then the destination object in that room within <1.0m. Only then **STOP immediately**.
 5. **Depth Lines**: Which of Left 30 / Front / Right 30 is blocked vs safe?
 6. **Action Decision**: Prefer the direction that best matches current position + destination relation + waypoint history + current room/object evidence. If FRONT is blocked, choose the safest side that stays closest to the destination.
-
-**STOP Condition** — STOP immediately only when the correct room/space is reached and the destination object there is within <1.0m. Do not move past it, and do not STOP while still outside the room or away from the target object.
-
-**Movement Rule**: Move forward when the destination remains ahead and the path is clear; once the correct room/object target is reached, STOP immediately.
 
 **Safety Priority**: Avoid directions with red distance lines (<0.5m)
 
@@ -72,14 +62,14 @@ You are provided with 1 image:
 
 **Ex1 - Clear path ahead**
 {{
-    "reasoning": "CENTER-NEAR is open, CENTER-FAR shows the target area cue, LEFT/RIGHT do not better match the route. Waypoint history still points forward to the relevant room/object. Front depth line is open, so move forward.",
+    "reasoning": "Front is open, the target-area cue stays ahead, and waypoint history still aligns forward. Left and right do not better match the route, so move forward.",
     "action_analysis": "Forward best matches the visible target cue and waypoint history with a clear front path",
     "action": "MOVE_FORWARD 0.75m"
 }}
 
 **Ex2 - Obstacle detected**
 {{
-    "reasoning": "CENTER-NEAR is blocked, RIGHT-NEAR is open, and RIGHT still aligns better than LEFT with the waypoint route toward the sofa area. Turn right.",
+    "reasoning": "Front is blocked, right is open, and right aligns better than left with the waypoint route toward the sofa area. Turn right.",
     "action_analysis": "Front is blocked, and right is the safest direction that still stays aligned with the target route",
     "action": "TURN_RIGHT 30deg"
 }}
@@ -93,8 +83,8 @@ You are provided with 1 image:
 
 **Critical Rules**:
 - **STOP immediately** only when the correct room/space is confirmed and the destination object is within <1.0m
-- reasoning must explicitly cover FRONT/LEFT30/RIGHT30 NEAR/FAR evidence, visible/off-screen landmarks, current position, destination room/object relation, and waypoint-history alignment before choosing an action
-- treat room/space names as one common type from {common_space_types}; ignore modifiers
+- reasoning must stay concise and evidence-only: cover FRONT/LEFT30/RIGHT30, visible/off-screen landmarks if present, current position, destination room/object relation, waypoint-history alignment, and depth safety before choosing an action; omit empty items and never invent evidence
+- use one common room/space type only; ignore modifiers and normalize corridor-like wording to `hallway`
 - output `action` must stay inside the fixed action space: `TURN_LEFT 30deg` / `TURN_RIGHT 30deg` / `MOVE_FORWARD {{0.25m, 0.5m, 0.75m, 1.0m, 1.25m}}` / `STOP`
 - If the destination is ahead and FRONT is clear, prefer MOVE_FORWARD
 - If FRONT is blocked, choose the closest safe side direction toward the destination, not a wider detour
@@ -127,7 +117,6 @@ def get_action_execution_prompt(next_waypoint_destination: str,
         waypoint_summary=waypoint_summary,
         previous_action_reason=previous_action_reason or "N/A (first step)",
         detected_landmarks=detected_landmarks or "none",
-        common_space_types=COMMON_SPACE_TYPES_TEXT,
         move_distance=move_distance,
         turn_angle=turn_angle,
     )

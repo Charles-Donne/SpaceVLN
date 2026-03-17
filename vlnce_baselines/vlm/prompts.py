@@ -15,7 +15,6 @@ INITIAL_PLANNING_PROMPT = """**Role**: You are a VLN planning module. Analyze th
 **12 Views** (sampled every 30° around 360°; each RGB view HFOV is about 79°): IMAGE1=Front 0°, angles increase CCW
 - **Obstacle distance**: nearest obstacle only. <0.5m=blocked | 0.5-1.0m=caution | >1.0m=passable
 - **Custom landmark bbox** (if present): current-view cue only; use shown name + distance/angle only as room/object evidence, not map memory or path-clearance proof
-- **Auto-rotation + scope**: System rotates to your chosen IMAGE, then plan only the easiest immediate action from the new Front view
 **2 Maps**: Global (full area) + Local (nearby, agent-centered)
 **Map colors**: White=unexplored | Black=obstacles | Green=safe floor | Orange=trajectory | Red=you | Local: dark green circle=0.5m, blue=79° FOV
 
@@ -117,7 +116,6 @@ VERIFICATION_REPLANNING_PROMPT = """**Role**: You are a VLN verification and rep
 **12 Views** (sampled every 30°; each RGB view HFOV is about 79°): IMAGE1=Front 0°, angles increase CCW
 - **Obstacle distance**: nearest obstacle only. <0.5m=blocked | 0.5-1.0m=caution | >1.0m=passable
 - **Custom landmark bbox** (if present): current-view cue only; use shown name + distance/angle only as room/object evidence, not map memory or path-clearance proof
-- **Auto-rotation + scope**: System rotates to your chosen IMAGE, then plan only the easiest immediate action from the new Front view
 **2 Maps**: Global (full + history) + Local (nearby + 0.5m circle)
 **Map colors**: White=unexplored | Black=obstacles | Green=safe | Orange=trajectory | Red=you | Blue numbered circles=history waypoints on Global only
 
