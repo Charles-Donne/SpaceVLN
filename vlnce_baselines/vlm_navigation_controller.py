@@ -997,6 +997,7 @@ class VLMNavigationController(InteractiveNavigationController):
             waypoint_area_labels=map_state.get('waypoint_area_labels', []),
             current_pose=map_state.get('full_pose'),
             resolution_cm=float(getattr(self.mapper, 'resolution', 5)),
+            current_room_area_label=str(map_state.get('current_room_area_label', 'Unknown') or 'Unknown'),
             waypoint_angle_deg=last_waypoint_angle_deg,
             draw_waypoints_fn=self._draw_waypoints_on_view,
         )

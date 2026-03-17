@@ -25,6 +25,7 @@ class ThinkingViewRenderer:
     """Render and save the 12 annotated direction views used by the thinking model."""
 
     THINKING_DETECTION_TOPK = 3
+    CURRENT_AREA_OVERLAP_THRESHOLD_M = 2.0
 
     @staticmethod
     def _build_text_strip(
@@ -120,6 +121,7 @@ class ThinkingViewRenderer:
         waypoint_area_labels: Optional[List[str]],
         current_pose: Optional[np.ndarray],
         resolution_cm: float,
+        current_room_area_label: str,
     ) -> List[Dict[str, Any]]:
         if not waypoint_info or current_pose is None:
             return []
@@ -157,6 +159,21 @@ class ThinkingViewRenderer:
                 "relative_bearing_deg": relative_bearing_deg,
                 "view_angle_deg": view_angle_deg,
                 "is_last_visited": index == len(waypoint_ids) - 1,
+            })
+
+        if entries and float(entries[-1]["distance_m"]) <= cls.CURRENT_AREA_OVERLAP_THRESHOLD_M:
+            last_entry = entries.pop()
+            current_area_text = str(current_room_area_label or "Unknown").strip() or "Unknown"
+            entries.append({
+                "id": 0,
+                "label": cls._short_text(current_area_text, max_len=34),
+                "description": current_area_text,
+                "area_label": current_area_text,
+                "distance_m": 0.0,
+                "relative_bearing_deg": float(last_entry["relative_bearing_deg"]),
+                "view_angle_deg": float(last_entry["view_angle_deg"]),
+                "is_last_visited": False,
+                "is_current_area": True,
             })
 
         return entries
@@ -217,6 +234,20 @@ class ThinkingViewRenderer:
             )
 
         for entry in waypoint_entries:
+            if bool(entry.get("is_current_area")):
+                lines.append(
+                    LandmarkStripLine(
+                        distance_m=float(entry.get("distance_m", 0.0)),
+                        confidence=0.0,
+                        priority=1,
+                        segments=(
+                            LandmarkStripSegment("your current area: ", prefix_color),
+                            LandmarkStripSegment(cls._short_text(entry.get("label", "Unknown"), max_len=34), value_color),
+                        ),
+                    )
+                )
+                continue
+
             note = " (came from here)" if bool(entry.get("is_last_visited")) else ""
             waypoint_text = f"WP#{int(entry.get('id', 0))} {entry.get('label', 'Unknown')}".strip()
             lines.append(
@@ -401,6 +432,7 @@ class ThinkingViewRenderer:
         waypoint_area_labels: Optional[List[str]],
         current_pose: Optional[np.ndarray],
         resolution_cm: float,
+        current_room_area_label: str,
         waypoint_angle_deg: Optional[float],
         draw_waypoints_fn: Callable[[np.ndarray, float, tuple], np.ndarray],
         detection_topk: int = THINKING_DETECTION_TOPK,
@@ -415,6 +447,7 @@ class ThinkingViewRenderer:
             waypoint_area_labels=waypoint_area_labels,
             current_pose=current_pose,
             resolution_cm=resolution_cm,
+            current_room_area_label=current_room_area_label,
         )
 
         for config in DIRECTION_CONFIG:

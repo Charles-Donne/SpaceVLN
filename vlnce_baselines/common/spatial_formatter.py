@@ -1,6 +1,8 @@
 import math
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+CURRENT_AREA_OVERLAP_THRESHOLD_M = 2.0
+
 
 def normalize_relative_bearing(bearing_deg: float) -> float:
     """Normalize relative bearing into [-180, 180]."""
@@ -65,16 +67,40 @@ def build_waypoint_summary(
         if display_area_type and display_area_type != "Unknown" and display_area_type != display_area_label
         else ""
     )
-    header_lines.append(f"Current Area: {display_area_label}{room_type_note}")
+    header_lines.append(f"Your Current Area: {display_area_label}{room_type_note}")
 
     if not waypoint_ids:
         return "\n".join(header_lines + ["No waypoints visited yet."])
 
+    current_area_known = bool(
+        display_area_label
+        and str(display_area_label).strip()
+        and str(display_area_label).strip().lower() != "unknown"
+    )
+    waypoint_distances_m: List[Optional[float]] = []
+    close_last_waypoint = False
+    if current_pose is not None:
+        curr_x_m, curr_y_m, _curr_orientation_deg = current_pose[:3]
+        for wp_py, wp_px in waypoint_positions:
+            wp_x_m = wp_px * resolution_cm / 100.0
+            wp_y_m = wp_py * resolution_cm / 100.0
+            waypoint_distances_m.append(math.hypot(wp_x_m - curr_x_m, wp_y_m - curr_y_m))
+        if waypoint_distances_m and waypoint_distances_m[-1] <= CURRENT_AREA_OVERLAP_THRESHOLD_M:
+            close_last_waypoint = True
+    else:
+        waypoint_distances_m = [None] * len(waypoint_ids)
+
+    visible_indices = list(range(len(waypoint_ids)))
+    if (current_area_known or close_last_waypoint) and visible_indices:
+        visible_indices = visible_indices[:-1]
+    last_visible_index = visible_indices[-1] if visible_indices else None
+
     node_lines: List[str] = []
-    for index, (wp_id, wp_desc, (wp_py, wp_px)) in enumerate(
-        zip(waypoint_ids, waypoint_descriptions, waypoint_positions)
-    ):
-        is_last = index == len(waypoint_ids) - 1
+    for index in visible_indices:
+        wp_id = waypoint_ids[index]
+        wp_desc = waypoint_descriptions[index]
+        wp_py, wp_px = waypoint_positions[index]
+        is_last = last_visible_index is not None and index == last_visible_index
         suffix = "  <- LAST VISITED (came from here)" if is_last else ""
 
         if current_pose is None:
@@ -99,31 +125,40 @@ def build_waypoint_summary(
         node_lines.append(f"WP#{wp_id} [{wp_desc}{area_note}] -- {spatial_info}{suffix}")
 
     path_segments: List[str] = []
-    for index in range(len(waypoint_ids) - 1):
-        py1, px1 = waypoint_positions[index]
-        py2, px2 = waypoint_positions[index + 1]
+    visible_waypoint_ids = [waypoint_ids[index] for index in visible_indices]
+    visible_waypoint_positions = [waypoint_positions[index] for index in visible_indices]
+    visible_waypoint_area_labels = (
+        [waypoint_area_labels[index] for index in visible_indices]
+        if waypoint_area_labels else []
+    )
+
+    for index in range(len(visible_waypoint_ids) - 1):
+        py1, px1 = visible_waypoint_positions[index]
+        py2, px2 = visible_waypoint_positions[index + 1]
         segment_distance_m = math.sqrt(
             ((px2 - px1) * resolution_cm / 100.0) ** 2
             + ((py2 - py1) * resolution_cm / 100.0) ** 2
         )
         path_segments.append(
-            f"WP#{waypoint_ids[index]}->WP#{waypoint_ids[index + 1]}({segment_distance_m:.1f}m)"
+            f"WP#{visible_waypoint_ids[index]}->WP#{visible_waypoint_ids[index + 1]}({segment_distance_m:.1f}m)"
         )
 
-    first_waypoint_id = waypoint_ids[0]
-    path_line = (
-        "Path: " + " -> ".join(path_segments) + " -> Current"
-        if path_segments
-        else f"Path: WP#{first_waypoint_id} -> Current"
-    )
+    first_waypoint_id = visible_waypoint_ids[0] if visible_waypoint_ids else None
+    path_line = None
+    if first_waypoint_id is not None:
+        path_line = (
+            "Path: " + " -> ".join(path_segments) + " -> Current"
+            if path_segments
+            else f"Path: WP#{first_waypoint_id} -> Current"
+        )
 
     waypoint_area_path_line = None
-    if include_area_chain and waypoint_area_labels:
+    if include_area_chain:
         area_nodes: List[str] = []
-        for index, wp_id in enumerate(waypoint_ids):
+        for index, wp_id in enumerate(visible_waypoint_ids):
             area_label = ""
-            if index < len(waypoint_area_labels):
-                area_label = str(waypoint_area_labels[index] or "").strip()
+            if index < len(visible_waypoint_area_labels):
+                area_label = str(visible_waypoint_area_labels[index] or "").strip()
             if area_label:
                 area_nodes.append(f"WP#{wp_id}({area_label})")
             else:
@@ -135,7 +170,7 @@ def build_waypoint_summary(
     lines = header_lines + node_lines
     if waypoint_area_path_line:
         lines.append(waypoint_area_path_line)
-    elif include_path:
+    elif include_path and path_line:
         lines.append(path_line)
     return "\n".join(lines)
 

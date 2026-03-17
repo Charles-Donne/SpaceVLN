@@ -496,6 +496,13 @@ class MapVisualizer:
             # waypoint_positions 是世界像素坐标，需要转换到旋转后的full_map坐标
             if projector is not None and waypoint_positions is not None and waypoint_ids is not None and len(waypoint_positions) > 0:
                 for idx, wp_pos in enumerate(waypoint_positions):
+                    if idx == len(waypoint_positions) - 1:
+                        wp_x_m = float(wp_pos[1]) * float(self.resolution) / 100.0
+                        wp_y_m = float(wp_pos[0]) * float(self.resolution) / 100.0
+                        curr_x_m, curr_y_m = float(current_pose[0]), float(current_pose[1])
+                        if float(np.hypot(wp_x_m - curr_x_m, wp_y_m - curr_y_m)) <= 2.0:
+                            continue
+
                     projected = projector.world_to_global_display(wp_pos[0], wp_pos[1])
                     if projected is None:
                         continue
