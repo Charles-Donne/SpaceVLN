@@ -53,6 +53,7 @@ def build_waypoint_summary(
     resolution_cm: float,
     current_room_area_label: str = "",
     current_room_area_type: str = "",
+    include_area_chain: bool = True,
 ) -> str:
     """Summarize visited waypoints relative to the current pose."""
     header_lines: List[str] = []
@@ -114,7 +115,7 @@ def build_waypoint_summary(
         if path_segments
         else f"Path: WP#{first_waypoint_id} -> Current"
     )
-    if waypoint_area_labels:
+    if include_area_chain and waypoint_area_labels:
         area_chain = [label for label in waypoint_area_labels if label]
         if (
             current_room_area_label
@@ -123,7 +124,7 @@ def build_waypoint_summary(
         ):
             area_chain.append(current_room_area_label)
         if area_chain:
-            header_lines.append("Area Chain: " + " -> ".join(area_chain))
+            header_lines.append("Waypoint Area Chain: " + " -> ".join(area_chain))
     lines = header_lines + node_lines + [path_line]
     return "\n".join(lines)
 

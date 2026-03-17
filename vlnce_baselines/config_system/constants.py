@@ -149,7 +149,7 @@ local_map_landmark_topk = 3               # Local map仅渲染置信度最高的
 landmark_min_total_pixels = 1       # 总像素数阈值（1=不过滤）
 landmark_min_area_threshold = 1     # 单个连通域最小面积(像素)，1=不过滤稀疏投影
 landmark_merge_distance = 0         # 合并距离(像素)，0=不再合并相邻landmark连通域
-landmark_instance_topk = 3          # 每类landmark最多保留的检测实例数（按置信度排序）
+landmark_instance_topk = 0          # 每类landmark保留的检测实例数上限（0=当前子任务内全部保留）
 landmark_instance_merge_radius_m = 0.60  # 同类实例世界坐标去重半径（米）
 
 
@@ -161,3 +161,10 @@ landmark_instance_merge_radius_m = 0.60  # 同类实例世界坐标去重半径�
 detection_colors = {"landmark": (0, 255, 255)}     # 黄色(BGR)
 detection_thickness = {"landmark": 3}              # 线宽
 detection_visible_topk = 3                         # 当前帧最多显示/记录的自定义landmark检测数（按置信度）
+landmark_strip_topk = 3                            # Action底部白条最多显示的vis/off vis总条目数
+
+# 重复landmark合并阈值（调tight/loose时主要改这里）
+landmark_duplicate_iou_strict = 0.65               # 同帧几乎重合bbox，直接视为同一物体
+landmark_duplicate_iou_loose = 0.25                # 配合距离/角度使用的较松bbox重叠阈值
+landmark_duplicate_rel_dist_m = 0.35               # 同帧深度投影相对坐标的最大距离差（米）
+landmark_duplicate_angle_diff_deg = 12.0           # 同帧深度投影允许的最大角度差（度）

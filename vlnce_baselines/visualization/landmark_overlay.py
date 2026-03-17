@@ -23,6 +23,7 @@ class LandmarkStripSegment:
 @dataclass(frozen=True)
 class LandmarkStripLine:
     distance_m: float
+    confidence: float
     priority: int
     segments: Tuple[LandmarkStripSegment, ...]
 
@@ -178,6 +179,7 @@ def build_landmark_strip_lines(
         item_lines.append(
             LandmarkStripLine(
                 distance_m=float(distance_m),
+                confidence=float(entry.get('confidence', 0.0)),
                 priority=0,
                 segments=(
                     LandmarkStripSegment("vis ", status_color),
@@ -206,6 +208,7 @@ def build_landmark_strip_lines(
         item_lines.append(
             LandmarkStripLine(
                 distance_m=float(distance_m),
+                confidence=float(confidence),
                 priority=1,
                 segments=(
                     LandmarkStripSegment("off vis ", status_color),
@@ -218,13 +221,6 @@ def build_landmark_strip_lines(
             )
         )
 
-    item_lines.sort(
-        key=lambda item: (
-            item.distance_m,
-            item.priority,
-            "".join(segment.text for segment in item.segments),
-        )
-    )
     return item_lines
 
 

@@ -40,6 +40,11 @@ from vlnce_baselines.visualization.obstacle_analysis import (
 from vlnce_baselines.config_system.constants import (
     color_palette, 
     detection_visible_topk,
+    landmark_strip_topk,
+    landmark_duplicate_iou_strict,
+    landmark_duplicate_iou_loose,
+    landmark_duplicate_rel_dist_m,
+    landmark_duplicate_angle_diff_deg,
     detection_colors,
     detection_thickness,
     landmark_marker_color,
@@ -129,7 +134,6 @@ class MapVisualizer:
         if display_layer is None or not room_area_records:
             return image
 
-        overlay = image.copy()
         output = image.copy()
         for record in room_area_records:
             area_id = int(record.get("id", 0) or 0)
@@ -139,15 +143,14 @@ class MapVisualizer:
             if not np.any(mask):
                 continue
             color = self._room_area_color(area_id, str(record.get("room_type", "")))
-            overlay[mask] = color
+            output[mask] = color
 
             mask_uint8 = (mask.astype(np.uint8) * 255)
             contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             if contours:
                 cv2.drawContours(output, contours, -1, color, 3)
 
-        blended = cv2.addWeighted(overlay, alpha, output, 1.0 - alpha, 0)
-        return blended
+        return output
 
     @staticmethod
     def _bbox_iou(
@@ -192,7 +195,7 @@ class MapVisualizer:
         bbox = candidate["bbox"]
         kept_bbox = kept_candidate["bbox"]
         iou = self._bbox_iou(bbox, kept_bbox)
-        if iou >= 0.65:
+        if iou >= float(landmark_duplicate_iou_strict):
             return True
 
         rel_xy = candidate.get("det_rel_xy")
@@ -205,7 +208,11 @@ class MapVisualizer:
         angle_b = float(np.degrees(np.arctan2(kept_rel_xy[1], kept_rel_xy[0]))) if np.hypot(kept_rel_xy[0], kept_rel_xy[1]) > 1e-6 else 0.0
         angle_diff = self._angle_diff_deg(angle_a, angle_b)
 
-        return rel_dist <= 0.35 and angle_diff <= 12.0 and iou >= 0.25
+        return (
+            rel_dist <= float(landmark_duplicate_rel_dist_m) and
+            angle_diff <= float(landmark_duplicate_angle_diff_deg) and
+            iou >= float(landmark_duplicate_iou_loose)
+        )
     
     def _create_episode_directories(self, episode_id: int):
         """为特定episode创建保存目录"""
@@ -967,6 +974,7 @@ class MapVisualizer:
             if matched_landmark is None:
                 continue
 
+            x1, y1, x2, y2 = map(int, detections.xyxy[i])
             det_mask = None
             if getattr(detections, 'mask', None) is not None and i < len(detections.mask):
                 det_mask = detections.mask[i]
@@ -996,14 +1004,27 @@ class MapVisualizer:
                 "world_col_px": world_col_px,
                 "world_x_m": float(world_x_m),
                 "world_y_m": float(world_y_m),
+                "bbox": (x1, y1, x2, y2),
+                "det_rel_xy": (float(rel_xy[0]), float(rel_xy[1])),
+                "observation_count": 1,
+                "weight_sum": max(float(confidence), 1e-3),
             })
 
         projected_instances: List[Dict[str, Any]] = []
         for cls_name, candidates in per_class.items():
             ranked = sorted(candidates, key=lambda item: (-item["confidence"], item["distance_m"]))
-            if topk is not None and int(topk) > 0:
-                ranked = ranked[:max(1, int(topk))]
-            for inst_idx, item in enumerate(ranked):
+            selected: List[Dict[str, Any]] = []
+            for item in ranked:
+                if any(self._is_duplicate_detection_candidate(item, kept) for kept in selected):
+                    continue
+                selected.append(item)
+                if topk is not None and int(topk) > 0 and len(selected) >= int(topk):
+                    break
+
+            for inst_idx, item in enumerate(selected):
+                item = dict(item)
+                item.pop("bbox", None)
+                item.pop("det_rel_xy", None)
                 item["instance_idx"] = inst_idx
                 projected_instances.append(item)
 
@@ -1013,11 +1034,23 @@ class MapVisualizer:
                                         existing_instances: Optional[List[Dict[str, Any]]],
                                         new_instances: Optional[List[Dict[str, Any]]],
                                         current_pose: Optional[Tuple[float, float, float]],
-                                        topk: int = landmark_instance_topk,
+                                        topk: Optional[int] = landmark_instance_topk,
                                         merge_radius_m: float = landmark_instance_merge_radius_m
                                         ) -> List[Dict[str, Any]]:
-        """在同一子任务内累计 landmark 实例，并按世界坐标去重后保留每类 top-k。"""
+        """在同一子任务内累计 landmark 实例，并按世界坐标去重融合。"""
         merged_by_class: Dict[str, List[Dict[str, Any]]] = {}
+
+        def _inst_weight(inst: Dict[str, Any]) -> float:
+            stored = inst.get("weight_sum")
+            if stored is not None:
+                try:
+                    return max(float(stored), 1e-3)
+                except (TypeError, ValueError):
+                    pass
+            try:
+                return max(float(inst.get("confidence", 0.0)), 1e-3)
+            except (TypeError, ValueError):
+                return 1e-3
 
         def _curr_metrics(inst: Dict[str, Any]) -> Tuple[float, float]:
             if current_pose is None or "world_x_m" not in inst or "world_y_m" not in inst:
@@ -1056,14 +1089,41 @@ class MapVisualizer:
             if best_idx is not None and best_dist is not None and best_dist <= merge_radius_m:
                 old = cls_bucket[best_idx]
                 refreshed = dict(old)
+                old_weight = _inst_weight(old)
+                new_weight = _inst_weight(inst)
+                total_weight = old_weight + new_weight
+
                 refreshed.update(inst)
                 refreshed["confidence"] = max(
                     float(old.get("confidence", 0.0)),
                     float(inst.get("confidence", 0.0)),
                 )
+                refreshed["observation_count"] = int(old.get("observation_count", 1)) + int(inst.get("observation_count", 1))
+                refreshed["weight_sum"] = total_weight
+
+                if (
+                    "world_x_m" in old and "world_y_m" in old and
+                    "world_x_m" in inst and "world_y_m" in inst and
+                    total_weight > 1e-6
+                ):
+                    world_x_m = (
+                        float(old["world_x_m"]) * old_weight +
+                        float(inst["world_x_m"]) * new_weight
+                    ) / total_weight
+                    world_y_m = (
+                        float(old["world_y_m"]) * old_weight +
+                        float(inst["world_y_m"]) * new_weight
+                    ) / total_weight
+                    refreshed["world_x_m"] = float(world_x_m)
+                    refreshed["world_y_m"] = float(world_y_m)
+                    refreshed["world_row_px"] = int(round(world_y_m * 100.0 / self.resolution))
+                    refreshed["world_col_px"] = int(round(world_x_m * 100.0 / self.resolution))
                 cls_bucket[best_idx] = refreshed
             else:
-                cls_bucket.append(dict(inst))
+                normalized = dict(inst)
+                normalized["observation_count"] = int(normalized.get("observation_count", 1))
+                normalized["weight_sum"] = _inst_weight(normalized)
+                cls_bucket.append(normalized)
 
         for inst in existing_instances or []:
             _merge_one(dict(inst))
@@ -1071,13 +1131,15 @@ class MapVisualizer:
             _merge_one(dict(inst))
 
         merged_instances: List[Dict[str, Any]] = []
-        keep_n = max(1, int(topk))
         for cls_name, bucket in merged_by_class.items():
             ranked = sorted(
                 bucket,
                 key=lambda item: (-float(item.get("confidence", 0.0)), _curr_metrics(item)[0]),
             )
-            kept = ranked[:keep_n]
+            if topk is None or int(topk) <= 0:
+                kept = ranked
+            else:
+                kept = ranked[:max(1, int(topk))]
             kept = sorted(kept, key=lambda item: _curr_metrics(item)[0])
             for inst_idx, item in enumerate(kept):
                 dist_m, angle_deg = _curr_metrics(item)
@@ -1211,20 +1273,127 @@ class MapVisualizer:
             detection_vis: 检测可视化图像（只显示Landmark边界框）
         """
         detection_vis = rgb.copy()
+        landmark_dist_map = landmark_dist_map or {}
+        landmark_dist_map_multi = landmark_dist_map_multi or {}
         if show_action_partitions:
             draw_action_partition_lines(detection_vis, hfov_deg=float(hfov))
-        
-        if detections is None or len(detections.xyxy) == 0:
-            if controller is not None:
-                controller.latest_visible_landmark_entries = []
-            return detection_vis, [], set(), None
-        
+
         # 统计检测到的landmark
         detected_landmarks = []
         visible_entries_meta = []
         matched_in_view: set = set()  # 当前帧中实际可见的landmark类名
         candidate_entries: List[Dict[str, Any]] = []
         draw_items: List[LandmarkDrawItem] = []
+
+        def _build_landmark_strip(
+            current_visible_entries: List[Dict[str, Any]],
+            current_matched_in_view: set,
+        ) -> Tuple[Optional[np.ndarray], List[Dict[str, Any]]]:
+            offscreen_items: List[Dict[str, Any]] = []
+            visible_instance_indices: Dict[str, set] = {}
+            for entry in current_visible_entries:
+                if entry.get("instance_idx") is None:
+                    continue
+                visible_instance_indices.setdefault(entry["name"], set()).add(entry["instance_idx"])
+
+            if controller is not None and getattr(controller, "latest_landmark_instances_world", None):
+                ranked_instances = sorted(
+                    (dict(item) for item in controller.latest_landmark_instances_world),
+                    key=lambda item: (
+                        float(item.get("distance_m", 1e9)),
+                        str(item.get("name", "")),
+                        int(item.get("instance_idx", 0) or 0),
+                    ),
+                )
+                for inst in ranked_instances:
+                    cls_name = inst.get("name")
+                    inst_idx = inst.get("instance_idx")
+                    distance_m = inst.get("distance_m")
+                    angle_deg = inst.get("angle_deg")
+                    if cls_name is None or inst_idx is None or distance_m is None or angle_deg is None:
+                        continue
+                    if int(inst_idx) in visible_instance_indices.get(str(cls_name), set()):
+                        continue
+                    offscreen_items.append({
+                        "name": str(cls_name),
+                        "instance_idx": int(inst_idx),
+                        "distance_m": float(distance_m),
+                        "angle_deg": float(angle_deg),
+                        "confidence": float(inst.get("confidence", 0.0)),
+                    })
+            elif landmark_dist_map_multi:
+                for cls_name, candidates in landmark_dist_map_multi.items():
+                    sorted_candidates = sorted(candidates, key=lambda x: x[0])
+                    used_set = visible_instance_indices.get(cls_name, set())
+                    for inst_idx, (d_m, a_deg) in enumerate(sorted_candidates):
+                        if inst_idx in used_set:
+                            continue
+                        offscreen_items.append({
+                            "name": str(cls_name),
+                            "instance_idx": int(inst_idx),
+                            "distance_m": float(d_m),
+                            "angle_deg": float(a_deg),
+                            "confidence": 0.0,
+                        })
+            elif landmark_dist_map:
+                for cls_name, (d_m, a_deg) in sorted(landmark_dist_map.items(), key=lambda x: x[1][0]):
+                    if cls_name in current_matched_in_view:
+                        continue
+                    offscreen_items.append({
+                        "name": str(cls_name),
+                        "instance_idx": 0,
+                        "distance_m": float(d_m),
+                        "angle_deg": float(a_deg),
+                        "confidence": 0.0,
+                    })
+
+            combined_ranked: List[Tuple[str, float, float, Dict[str, Any]]] = []
+            for entry in current_visible_entries:
+                combined_ranked.append((
+                    "vis",
+                    float(entry.get("confidence", 0.0)),
+                    float(entry.get("distance_m", 1e9)),
+                    dict(entry),
+                ))
+            for item in offscreen_items:
+                combined_ranked.append((
+                    "off",
+                    float(item.get("confidence", 0.0)),
+                    float(item.get("distance_m", 1e9)),
+                    dict(item),
+                ))
+
+            combined_ranked.sort(
+                key=lambda item: (
+                    -item[1],
+                    item[2],
+                    0 if item[0] == "vis" else 1,
+                    str(item[3].get("name", "")),
+                )
+            )
+            keep_n = max(1, int(landmark_strip_topk))
+            selected_ranked = combined_ranked[:keep_n]
+            selected_visible_entries = [item[3] for item in selected_ranked if item[0] == "vis"]
+            selected_offscreen_items = [item[3] for item in selected_ranked if item[0] == "off"]
+
+            strip = None
+            if selected_visible_entries or selected_offscreen_items:
+                item_lines = build_landmark_strip_lines(
+                    selected_visible_entries,
+                    selected_offscreen_items,
+                    landmark_dist_map_multi=landmark_dist_map_multi,
+                )
+                strip = render_landmark_strip(detection_vis.shape[1], item_lines)
+
+            return strip, selected_offscreen_items
+
+        if detections is None or len(detections.xyxy) == 0:
+            strip, _ = _build_landmark_strip([], set())
+            if controller is not None:
+                controller.latest_visible_landmark_entries = []
+            if append_bottom_strip and strip is not None:
+                detection_vis = np.vstack([detection_vis, strip])
+            return detection_vis, [], set(), strip
 
         def _bbox_center_angle_deg(x1: int, x2: int, width: int) -> float:
             xc = (width - 1) / 2.0
@@ -1392,86 +1561,10 @@ class MapVisualizer:
         thickness = detection_thickness["landmark"]
         draw_landmark_boxes(detection_vis, draw_items, color, thickness)
         draw_landmark_labels(detection_vis, draw_items, color)
-        
-        # ── 底部条带：所有landmark信息（可见+离屏）拼接在图像下方，白底黑字 ──
-        # [Visible] = 当前帧检测到，[Off-screen] = 地图中存在但视野外
-        # 构建离屏landmark列表：优先保留多实例（同类多个实例分别显示距离/角度）
-        # 仅用于渲染展示，不改变任何真实地图坐标。
-        offscreen_items = []  # [{"name", "instance_idx", "distance_m", "angle_deg", "confidence"}]
-        if controller is not None and getattr(controller, "latest_landmark_instances_world", None):
-            visible_instance_indices = {}
-            for entry in visible_entries_meta:
-                if entry.get("instance_idx") is None:
-                    continue
-                visible_instance_indices.setdefault(entry["name"], set()).add(entry["instance_idx"])
 
-            ranked_instances = sorted(
-                (dict(item) for item in controller.latest_landmark_instances_world),
-                key=lambda item: (
-                    float(item.get("distance_m", 1e9)),
-                    str(item.get("name", "")),
-                    int(item.get("instance_idx", 0) or 0),
-                ),
-            )
-            for inst in ranked_instances:
-                cls_name = inst.get("name")
-                inst_idx = inst.get("instance_idx")
-                distance_m = inst.get("distance_m")
-                angle_deg = inst.get("angle_deg")
-                if cls_name is None or inst_idx is None or distance_m is None or angle_deg is None:
-                    continue
-                if int(inst_idx) in visible_instance_indices.get(cls_name, set()):
-                    continue
-                offscreen_items.append({
-                    "name": str(cls_name),
-                    "instance_idx": int(inst_idx),
-                    "distance_m": float(distance_m),
-                    "angle_deg": float(angle_deg),
-                    "confidence": float(inst.get("confidence", 0.0)),
-                })
-        elif landmark_dist_map_multi:
-            visible_instance_indices = {}
-            for entry in visible_entries_meta:
-                if entry.get("instance_idx") is None:
-                    continue
-                visible_instance_indices.setdefault(entry["name"], set()).add(entry["instance_idx"])
-
-            for cls_name, candidates in landmark_dist_map_multi.items():
-                sorted_candidates = sorted(candidates, key=lambda x: x[0])
-                used_set = visible_instance_indices.get(cls_name, set())
-                for inst_idx, (d_m, a_deg) in enumerate(sorted_candidates):
-                    if inst_idx in used_set:
-                        continue
-                    offscreen_items.append({
-                        "name": str(cls_name),
-                        "instance_idx": int(inst_idx),
-                        "distance_m": float(d_m),
-                        "angle_deg": float(a_deg),
-                        "confidence": 0.0,
-                    })
-        elif landmark_dist_map:
-            for cls_name, (d_m, a_deg) in sorted(landmark_dist_map.items(), key=lambda x: x[1][0]):
-                if cls_name in matched_in_view:
-                    continue
-                offscreen_items.append({
-                    "name": str(cls_name),
-                    "instance_idx": 0,
-                    "distance_m": float(d_m),
-                    "angle_deg": float(a_deg),
-                    "confidence": 0.0,
-                })
-
-        strip = None
-        if visible_entries_meta or offscreen_items:
-            item_lines = build_landmark_strip_lines(
-                visible_entries_meta,
-                offscreen_items,
-                landmark_dist_map_multi=landmark_dist_map_multi,
-            )
-            strip = render_landmark_strip(detection_vis.shape[1], item_lines)
-
-            if append_bottom_strip:
-                detection_vis = np.vstack([detection_vis, strip])
+        strip, _ = _build_landmark_strip(visible_entries_meta, matched_in_view)
+        if append_bottom_strip and strip is not None:
+            detection_vis = np.vstack([detection_vis, strip])
 
         if controller is not None:
             controller.latest_visible_landmark_entries = visible_entries_meta

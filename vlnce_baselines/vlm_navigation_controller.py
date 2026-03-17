@@ -21,7 +21,7 @@ import cv2
 import json
 import numpy as np
 import torch
-from typing import Dict, Any, List, Tuple, Optional
+from typing import Dict, Any, List, Tuple, Optional, Sequence
 from datetime import datetime
 
 from habitat import Config
@@ -141,8 +141,183 @@ class VLMNavigationController(InteractiveNavigationController):
         
         # NavigationVisualizer（用于RGB+俯视图拼接和GIF生成）
         self.nav_visualizer = None
-        
+
         # print("[Init] VLM模块初始化完成\n")
+
+    @staticmethod
+    def _parse_distance_text_m(distance_text: Optional[str]) -> Optional[float]:
+        """Extract numeric distance in meters from strings like '0.34m WARNING'."""
+        if distance_text is None:
+            return None
+        match = re.search(r'([0-9]+(?:\.[0-9]+)?)m', str(distance_text))
+        if not match:
+            return None
+        try:
+            return float(match.group(1))
+        except (TypeError, ValueError):
+            return None
+
+    def _is_obstacle_distance_blocked(self, distance_text: Optional[str], threshold_m: float = 0.5) -> bool:
+        distance_m = self._parse_distance_text_m(distance_text)
+        return distance_m is not None and distance_m < float(threshold_m)
+
+    def _all_action_directions_blocked(self, threshold_m: float = 0.5) -> bool:
+        distances = getattr(self, 'latest_obstacle_distances', {}) or {}
+        keys = ('left_30', 'front', 'right_30')
+        return all(self._is_obstacle_distance_blocked(distances.get(key), threshold_m=threshold_m) for key in keys)
+
+    def _append_progress_note(self, note: str) -> None:
+        note = (note or "").strip()
+        if not note:
+            return
+        if not self.progress_summary or self.progress_summary == "(Just started - no actions yet)":
+            self.progress_summary = note
+        else:
+            self.progress_summary = f"{self.progress_summary}, {note}"
+
+    def _parse_subtask_destination(self) -> Tuple[Optional[str], Optional[str]]:
+        destination = ""
+        if getattr(self, 'current_subtask', None):
+            destination = str(self.current_subtask.get('next_waypoint_destination', '') or '').strip()
+        if not destination or "'s " not in destination:
+            return None, None
+
+        room_text, object_text = destination.split("'s ", 1)
+        room_norm = strip_space_type_variant_suffixes(room_text.strip().lower())
+        object_norm = self._normalize_landmark_candidate(object_text)
+        return room_norm or None, object_norm or None
+
+    def _should_force_stop_for_subtask_destination(
+        self,
+        step_landmark_entries: Sequence[Dict[str, Any]],
+    ) -> Optional[float]:
+        dest_room, dest_object = self._parse_subtask_destination()
+        if not dest_room or not dest_object or self.mapper is None:
+            return None
+
+        current_area_type = strip_space_type_variant_suffixes(
+            str(getattr(self.mapper, 'current_room_area_type', 'Unknown') or 'Unknown').strip().lower()
+        )
+        if not current_area_type or current_area_type == 'unknown' or current_area_type != dest_room:
+            return None
+
+        candidate_names = {dest_object}
+        target_landmark = self._normalize_landmark_candidate(getattr(self, 'target_landmark', None))
+        if target_landmark:
+            candidate_names.add(target_landmark)
+
+        def _matches_target(name: Optional[str]) -> bool:
+            normalized = self._normalize_landmark_candidate(name)
+            if not normalized:
+                return False
+            return any(
+                normalized == candidate or normalized in candidate or candidate in normalized
+                for candidate in candidate_names
+            )
+
+        distances: List[float] = []
+        for entry in step_landmark_entries or []:
+            if _matches_target(entry.get('name')):
+                try:
+                    distances.append(float(entry.get('distance_m')))
+                except (TypeError, ValueError):
+                    pass
+
+        for inst in getattr(self, 'latest_landmark_instances_world', []) or []:
+            if _matches_target(inst.get('name')):
+                try:
+                    distances.append(float(inst.get('distance_m')))
+                except (TypeError, ValueError):
+                    pass
+
+        if not distances:
+            return None
+
+        nearest = min(distances)
+        return nearest if nearest < 1.0 else None
+
+    def _execute_auto_retreat(self, retreat_distance_m: float = 1.0) -> Tuple[float, bool]:
+        """Simulate a backward retreat because this Habitat task exposes no backward action."""
+        turn_steps = max(1, round(180.0 / float(self.turn_angle)))
+        move_steps = max(1, round(float(retreat_distance_m) / float(self.move_distance)))
+        retreated_m = 0.0
+        episode_done = False
+
+        print(
+            f"\n[AutoRetreat] FRONT/LEFT30/RIGHT30 all blocked (<0.5m). "
+            f"Retreat {retreat_distance_m:.2f}m via 180deg turn + forward + turn back."
+        )
+
+        for _ in range(turn_steps):
+            result = self.step_with_vlm(
+                HabitatSimActions.TURN_RIGHT,
+                action_name="AUTO_RETREAT_TURN_RIGHT",
+                save_vis=True,
+                enable_landmark_detection=True,
+            )
+            print(f"  [Step {self.current_step}] AUTO_RETREAT_TURN_RIGHT")
+            if result.get('done', False):
+                episode_done = True
+                break
+
+        for _ in range(move_steps):
+            if episode_done:
+                break
+            if self._is_obstacle_distance_blocked(
+                getattr(self, 'latest_obstacle_distances', {}).get('front'),
+                threshold_m=0.5,
+            ):
+                print("  [AutoRetreat] Reverse path is also blocked after turning around; stop retreat early.")
+                break
+
+            result = self.step_with_vlm(
+                HabitatSimActions.MOVE_FORWARD,
+                action_name="AUTO_RETREAT_FORWARD",
+                save_vis=True,
+                enable_landmark_detection=True,
+            )
+            retreated_m += float(self.move_distance)
+            print(
+                f"  [Step {self.current_step}] AUTO_RETREAT_FORWARD "
+                f"({retreated_m:.2f}/{retreat_distance_m:.2f}m)"
+            )
+            if result.get('done', False):
+                episode_done = True
+                break
+
+        for _ in range(turn_steps):
+            if episode_done:
+                break
+            result = self.step_with_vlm(
+                HabitatSimActions.TURN_LEFT,
+                action_name="AUTO_RETREAT_TURN_LEFT",
+                save_vis=True,
+                enable_landmark_detection=True,
+            )
+            print(f"  [Step {self.current_step}] AUTO_RETREAT_TURN_LEFT")
+            if result.get('done', False):
+                episode_done = True
+                break
+
+        if retreated_m > 0:
+            self._append_progress_note(
+                f"Had encountered obstacles on front/left30/right30 (<0.5m), then automatically retreated {retreated_m:.2f}m and triggered replan"
+            )
+            self.previous_action_reason = (
+                f"Front, Left 30deg, and Right 30deg were all blocked under 0.5m, "
+                f"so the system auto-retreated {retreated_m:.2f}m before rethinking."
+            )
+        else:
+            self._append_progress_note(
+                "Had encountered obstacles on front/left30/right30 (<0.5m), then attempted automatic retreat but the reverse path was also blocked, and triggered replan"
+            )
+            self.previous_action_reason = (
+                "Front, Left 30deg, and Right 30deg were all blocked under 0.5m, "
+                "and the reverse path was also blocked, so the system triggered rethinking."
+            )
+
+        self.pose_before_action = self._get_agent_pose()
+        return retreated_m, episode_done
     
     def reset_episode(self, episode_id: int = None):
         """重置Episode，包括VLM状态"""
@@ -1107,7 +1282,7 @@ class VLMNavigationController(InteractiveNavigationController):
         
         return True
     
-    def verify_and_replan(self) -> Tuple[bool, Optional[Dict], Optional[str]]:
+    def verify_and_replan(self) -> Tuple[Optional[Dict], Optional[str]]:
         """
         验证当前子任务并重新规划
         
@@ -1120,10 +1295,10 @@ class VLMNavigationController(InteractiveNavigationController):
         注意：重新扫描会占用新的12个step，验证完成后下一个action继续累加
         
         Returns:
-            (is_completed, new_subtask, prompt)
+            (new_subtask_or_finish_response, prompt)
         """
         if not self.planner or not self.current_subtask:
-            return False, None, None
+            return None, None
         
         # 重新执行环视建图并生成全景图（占用12个step）
         # 注意：如果子任务已完成，会在后面清空轨迹；如果未完成，轨迹继续累积
@@ -1136,7 +1311,7 @@ class VLMNavigationController(InteractiveNavigationController):
         if not image_paths:
             print("[ERR] Lookaround failed, cannot verify")
             # Episode提前结束，无法继续验证，返回失败
-            return False, None, None
+            return None, None
         
         # 从 vlm/observations/ 获取地图（已在 look_around_and_collect 中保存）
         _, _, global_map, local_map = self.get_observations_and_maps(phase)
@@ -1144,7 +1319,7 @@ class VLMNavigationController(InteractiveNavigationController):
         # 验证地图文件存在
         if not global_map or not os.path.exists(global_map):
             print(f"[ERR] Global map not found: {global_map}")
-            return False, None
+            return None, None
         
         # 地图已包含waypoint标记（在visualizer.save_step_visualization中渲染）
         global_map_for_llm = global_map
@@ -1163,7 +1338,7 @@ class VLMNavigationController(InteractiveNavigationController):
             detected_landmarks = sorted(list(self.detected_classes)) if hasattr(self, 'detected_classes') else []
         
         # 获取waypoint摘要
-        waypoint_summary = self._get_waypoint_summary()
+        waypoint_summary = self._get_waypoint_summary(include_area_chain=True)
         
         # 使用最近的障碍物距离（在look_around_and_collect中由visualizer计算）
         obstacle_distances = getattr(self, 'latest_obstacle_distances', {
@@ -1461,13 +1636,34 @@ class VLMNavigationController(InteractiveNavigationController):
         action_save_dir = os.path.join(subtask_dir, f"step_{self.current_step + 1}")
         os.makedirs(action_save_dir, exist_ok=True)
 
-        waypoint_summary = self._get_waypoint_summary()
+        waypoint_summary = self._get_waypoint_summary(include_area_chain=False)
         
         # 保存子任务信息（首次创建时）
         info_file = os.path.join(subtask_dir, "info.json")
         if not os.path.exists(info_file):
             with open(info_file, 'w', encoding='utf-8') as f:
                 json.dump(subtask_info, f, ensure_ascii=False, indent=2)
+
+        force_stop_distance = self._should_force_stop_for_subtask_destination(step_landmark_entries)
+        if force_stop_distance is not None:
+            response = {
+                "reasoning": (
+                    f"Current area already matches the subtask room, and the subtask destination object "
+                    f"is within {force_stop_distance:.2f}m, so stop immediately."
+                ),
+                "action_analysis": (
+                    f"Subtask destination is already within {force_stop_distance:.2f}m in the correct room, so stopping avoids overshooting"
+                ),
+                "action": "STOP",
+            }
+            with open(os.path.join(action_save_dir, "response.json"), 'w', encoding='utf-8') as f:
+                json.dump(response, f, ensure_ascii=False, indent=2)
+            self.previous_action_reason = response["action_analysis"]
+            self.last_planned_degrees = 0
+            self.last_planned_meters = 0
+            self.last_action_name = "STOP"
+            print(f"[AutoStop] Subtask destination already within {force_stop_distance:.2f}m in the correct room")
+            return ACTION_MAPPING["STOP"], "STOP", True, 1, response
         
         # 构建 landmark_map_info：可见 + 地图离屏两类（按距离升序）
         # action VLM 只有第一人称图，需要文字告知离屏的已映射 landmark 方向距离
@@ -1812,6 +2008,29 @@ class VLMNavigationController(InteractiveNavigationController):
             # 如果任务已完成（VLM判断或Habitat设置done），直接退出
             if navigation_complete:
                 break
+
+            if self._all_action_directions_blocked(threshold_m=0.5):
+                retreated_m, retreat_done = self._execute_auto_retreat(retreat_distance_m=1.0)
+                total_steps = self.current_step
+
+                if retreat_done:
+                    print("[WARN] Episode done during automatic retreat")
+                    navigation_complete = True
+                    break
+
+                print(
+                    f"[AutoRetreat] Finished safety retreat ({retreated_m:.2f}m). "
+                    f"Skip action VLM and start thinking/replan."
+                )
+                new_subtask, _ = self.verify_and_replan()
+
+                if new_subtask and new_subtask.get('global_task_finish', False):
+                    print(f"[DONE] Task complete (auto retreat replan) | steps={total_steps}")
+                    navigation_complete = True
+                    break
+
+                subtask_steps = 0
+                continue
             
             # VLM决策动作（失败则重试）
             max_retries = 3
@@ -2090,7 +2309,7 @@ class VLMNavigationController(InteractiveNavigationController):
     
     # ========== Waypoint辅助方法 ==========
 
-    def _get_waypoint_summary(self) -> str:
+    def _get_waypoint_summary(self, include_area_chain: bool = True) -> str:
         """
         获取waypoint摘要（用于LLM提示词）
         包含每个waypoint相对当前pose的距离和方向，以及顺序拓扑路径。
@@ -2105,6 +2324,7 @@ class VLMNavigationController(InteractiveNavigationController):
             resolution_cm=self.mapper.resolution,
             current_room_area_label=getattr(self.mapper, 'current_room_area_label', ""),
             current_room_area_type=getattr(self.mapper, 'current_room_area_type', ""),
+            include_area_chain=include_area_chain,
         )
 
     # ========== 原有方法 ==========

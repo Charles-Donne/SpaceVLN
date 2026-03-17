@@ -24,7 +24,7 @@ ACTION_EXECUTION_PROMPT = """You are the action execution module for Vision-Lang
 
 # Waypoint History
 {waypoint_summary}
-The `Current Area: ...` line is updated from the current pose in real time. If it is `Unknown`, the agent is not inside any mapped room-area region. Use only common canonical room/space types: {common_space_types}; remove modifiers/adjectives and map corridor-like wording to `hallway`.
+`Current Area` is pose-based; `Unknown` means outside mapped areas. Use one common room/space type from {common_space_types}; remove modifiers and treat corridor-like wording as `hallway`.
 
 # Previous Step Analysis
 {previous_action_reason}
@@ -36,20 +36,20 @@ You are provided with 1 image:
 **Current View (front-facing, RGB HFOV about 79°)** — Object detection overlaid with 3 depth-sampled obstacle-distance lines:
 - Directions: Left 30deg, FRONT, Right 30deg
 - Red = nearest obstacle <0.5m (blocked), Yellow = 0.5–2m (caution), Green = >2m (open)
-- **Yellow bounding box**: marks the subtask **landmark reference** ({detected_landmarks}) — a recognizable object near the destination area, **not the destination itself**; use it as a visual anchor to navigate into the right area
-- **Bottom white strip** (if present): all mapped landmark entries in the form `vis/off vis + landmark name + distance + direction + confidence`; `vis` = detected now, `off vis` = mapped earlier but outside the current view
+- **Yellow bounding box**: candidate subtask-landmark detection ({detected_landmarks}); first judge whether it is a reliable task-relevant landmark cue or just duplicate/noisy evidence, then use valid landmark cues as visual anchors toward the right area
+- **Bottom white strip** (if present): top-3 landmark entries only, ranked by confidence then distance, in the form `vis/off vis + landmark name + distance + direction + confidence`; `vis` = detected now, `off vis` = mapped earlier but outside the current view
 
 # Your Task
 
 **Decision Process**:
-1. **Detection + View Analysis**: Read `vis/off vis` first. Then analyze FRONT, Left 30deg, and Right 30deg by NEAR/FAR: likely room/space, near large objects, far smaller objects, and landmark(s) with distance/angle/confidence.
+1. **Detection + View Analysis**: Read `vis/off vis` first. Check whether each current detection is a valid subtask landmark, a duplicate of the same object, or weak/noisy evidence. Then analyze FRONT, Left 30deg, and Right 30deg by NEAR/FAR: likely room/space, near large objects, far smaller objects, and valid landmark(s) with distance/angle/confidence.
 2. **Waypoint History**: Read WP#1 -> ... -> LAST. Use snapped direction/distance to infer which way continues toward the most likely task-relevant room/object.
 3. **Current Position + Destination Relation**: From the current view plus waypoint history, infer where you are and where the target room/object most likely is.
-4. **Arrival Check**: Confirm the room first, then the destination object in that room within ~1.0m. Only then **STOP immediately**.
+4. **Arrival Check**: Confirm the room first, then the destination object in that room within <1.0m. Only then **STOP immediately**.
 5. **Depth Lines**: Which of Left 30 / Front / Right 30 is blocked vs safe?
 6. **Action Decision**: Prefer the direction that best matches current position + destination relation + waypoint history + current room/object evidence. If FRONT is blocked, choose the safest side that stays closest to the destination.
 
-**STOP Condition** — STOP immediately only when the correct room/space is reached and the destination object there is within ~1.0m. Do not move past it, and do not STOP while still outside the room or away from the target object.
+**STOP Condition** — STOP immediately only when the correct room/space is reached and the destination object there is within <1.0m. Do not move past it, and do not STOP while still outside the room or away from the target object.
 
 **Movement Rule**: Move forward when the destination remains ahead and the path is clear; once the correct room/object target is reached, STOP immediately.
 
@@ -92,9 +92,9 @@ You are provided with 1 image:
 }}
 
 **Critical Rules**:
-- **STOP immediately** only when the correct room/space is confirmed and the destination object is within ~1.0m
+- **STOP immediately** only when the correct room/space is confirmed and the destination object is within <1.0m
 - reasoning must explicitly cover FRONT/LEFT30/RIGHT30 NEAR/FAR evidence, visible/off-screen landmarks, current position, destination room/object relation, and waypoint-history alignment before choosing an action
-- treat room/space names as common canonical types only: {common_space_types}; ignore modifiers/adjectives
+- treat room/space names as one common type from {common_space_types}; ignore modifiers
 - output `action` must stay inside the fixed action space: `TURN_LEFT 30deg` / `TURN_RIGHT 30deg` / `MOVE_FORWARD {{0.25m, 0.5m, 0.75m, 1.0m, 1.25m}}` / `STOP`
 - If the destination is ahead and FRONT is clear, prefer MOVE_FORWARD
 - If FRONT is blocked, choose the closest safe side direction toward the destination, not a wider detour
