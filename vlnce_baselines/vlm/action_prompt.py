@@ -98,7 +98,7 @@ You are provided with 1 image:
 **Critical Rules**:
 - **STOP immediately** only when the correct room/space is confirmed and the destination object is within ~1.0m
 - reasoning must explicitly cover FRONT/LEFT30/RIGHT30 NEAR/FAR analysis, visible/off-screen landmark evidence, current position, destination room/object relation, and waypoint-history alignment before choosing an action
-- output action values must stay inside the fixed action space: TURN_LEFT/RIGHT=30 only; MOVE_FORWARD in {0.25, 0.5, 0.75, 1.0, 1.25}; STOP=0
+- output action values must stay inside the fixed action space: TURN_LEFT/RIGHT=30 only; MOVE_FORWARD in {{0.25, 0.5, 0.75, 1.0, 1.25}}; STOP=0
 - If the destination is ahead and FRONT is clear, prefer MOVE_FORWARD
 - If FRONT is blocked, choose the closest safe side direction toward the destination, not a wider detour
 - For off-screen landmarks, **always turn toward the indicated direction first**
