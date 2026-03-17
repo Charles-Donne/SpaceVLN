@@ -237,7 +237,7 @@ class VLMNavigationController(InteractiveNavigationController):
         return nearest if nearest < 1.0 else None
 
     def _execute_auto_retreat(self, retreat_distance_m: float = 1.0) -> Tuple[float, bool]:
-        """Simulate a backward retreat because this Habitat task exposes no backward action."""
+        """Turn around, move 1m away, then hand off directly to thinking/lookaround."""
         turn_steps = max(1, round(180.0 / float(self.turn_angle)))
         move_steps = max(1, round(float(retreat_distance_m) / float(self.move_distance)))
         retreated_m = 0.0
@@ -245,7 +245,7 @@ class VLMNavigationController(InteractiveNavigationController):
 
         print(
             f"\n[AutoRetreat] FRONT/LEFT30/RIGHT30 all blocked (<0.5m). "
-            f"Retreat {retreat_distance_m:.2f}m via 180deg turn + forward + turn back."
+            f"Turn around and move {retreat_distance_m:.2f}m, then start thinking/lookaround."
         )
 
         for _ in range(turn_steps):
@@ -285,35 +285,21 @@ class VLMNavigationController(InteractiveNavigationController):
                 episode_done = True
                 break
 
-        for _ in range(turn_steps):
-            if episode_done:
-                break
-            result = self.step_with_vlm(
-                HabitatSimActions.TURN_LEFT,
-                action_name="AUTO_RETREAT_TURN_LEFT",
-                save_vis=True,
-                enable_landmark_detection=True,
-            )
-            print(f"  [Step {self.current_step}] AUTO_RETREAT_TURN_LEFT")
-            if result.get('done', False):
-                episode_done = True
-                break
-
         if retreated_m > 0:
             self._append_progress_note(
-                f"Had encountered obstacles on front/left30/right30 (<0.5m), then automatically retreated {retreated_m:.2f}m and triggered replan"
+                f"Had encountered obstacles on front/left30/right30 (<0.5m), then turned around, moved {retreated_m:.2f}m, and triggered replan"
             )
             self.previous_action_reason = (
                 f"Front, Left 30deg, and Right 30deg were all blocked under 0.5m, "
-                f"so the system auto-retreated {retreated_m:.2f}m before rethinking."
+                f"so the system turned around, moved {retreated_m:.2f}m, and started rethinking from the new heading."
             )
         else:
             self._append_progress_note(
-                "Had encountered obstacles on front/left30/right30 (<0.5m), then attempted automatic retreat but the reverse path was also blocked, and triggered replan"
+                "Had encountered obstacles on front/left30/right30 (<0.5m), then turned around but the reverse path was also blocked, and triggered replan"
             )
             self.previous_action_reason = (
                 "Front, Left 30deg, and Right 30deg were all blocked under 0.5m, "
-                "and the reverse path was also blocked, so the system triggered rethinking."
+                "so the system turned around, found the reverse path blocked too, and triggered rethinking."
             )
 
         self.pose_before_action = self._get_agent_pose()
@@ -994,6 +980,7 @@ class VLMNavigationController(InteractiveNavigationController):
                 show_action_partitions=False,
                 append_bottom_strip=False,
                 controller=None,
+                return_visible_entries=True,
             )
 
         direction_paths, direction_names = self.thinking_view_renderer.save_direction_views(
@@ -1007,6 +994,9 @@ class VLMNavigationController(InteractiveNavigationController):
             draw_distance_fn=self.visualizer.draw_distance_on_view,
             distance_lookup=self.latest_obstacle_distances_12,
             waypoint_info=waypoint_info,
+            waypoint_area_labels=map_state.get('waypoint_area_labels', []),
+            current_pose=map_state.get('full_pose'),
+            resolution_cm=float(getattr(self.mapper, 'resolution', 5)),
             waypoint_angle_deg=last_waypoint_angle_deg,
             draw_waypoints_fn=self._draw_waypoints_on_view,
         )
@@ -1176,6 +1166,15 @@ class VLMNavigationController(InteractiveNavigationController):
                 response.get('subtask_instruction'),
                 response.get('current_waypoint'),
             ]
+        )
+
+        # 初始规划拿到第一个 waypoint / room-area / target landmark 后，
+        # 重新渲染一次 initial 地图，避免 episode 目录里的 initial map
+        # 仍停留在“规划前、无 area / 无 top-k landmark”的状态。
+        self._refresh_step_visualization_snapshot(
+            phase="initial",
+            enable_landmark_detection=True,
+            force=True,
         )
         
         # 打印子任务信息
@@ -1636,7 +1635,7 @@ class VLMNavigationController(InteractiveNavigationController):
         action_save_dir = os.path.join(subtask_dir, f"step_{self.current_step + 1}")
         os.makedirs(action_save_dir, exist_ok=True)
 
-        waypoint_summary = self._get_waypoint_summary(include_area_chain=False)
+        waypoint_summary = self._get_waypoint_summary(include_area_chain=False, include_path=False)
         
         # 保存子任务信息（首次创建时）
         info_file = os.path.join(subtask_dir, "info.json")
@@ -1803,37 +1802,43 @@ class VLMNavigationController(InteractiveNavigationController):
         
         return result
 
-    def _run_pre_action_detection_snapshot(self, action_phase: str) -> bool:
-        """在不移动agent的情况下，执行一次动作前landmark检测并保存可视化。"""
+    def _refresh_step_visualization_snapshot(
+        self,
+        phase: str,
+        enable_landmark_detection: bool = False,
+        force: bool = False,
+    ) -> bool:
+        """用当前 pose/obs 重新渲染当前 step 的可视化，不重复做地图融合。"""
         if self.latest_obs is None:
             return False
 
-        detection_path = os.path.join(
-            self.episode_dir, 'detection', f'step_{self.current_step:04d}_{action_phase}.png'
-        )
-        rgb_path = os.path.join(
-            self.episode_dir, 'rgb', f'step_{self.current_step:04d}_{action_phase}.png'
-        )
-        local_map_path = os.path.join(
-            self.episode_dir, 'local_map', f'step_{self.current_step:04d}_{action_phase}.png'
-        )
+        required_paths = [
+            os.path.join(self.episode_dir, 'rgb', f'step_{self.current_step:04d}_{phase}.png'),
+            os.path.join(self.episode_dir, 'global_map', f'step_{self.current_step:04d}_{phase}.png'),
+            os.path.join(self.episode_dir, 'local_map', f'step_{self.current_step:04d}_{phase}.png'),
+        ]
+        if enable_landmark_detection:
+            required_paths.append(
+                os.path.join(self.episode_dir, 'detection', f'step_{self.current_step:04d}_{phase}.png')
+            )
 
-        # 若当前step已经有当前phase的快照文件和检测记录，直接复用。
-        if (hasattr(self, 'current_step_landmarks')
-                and self.current_step in self.current_step_landmarks
-                and os.path.exists(detection_path)
-                and os.path.exists(rgb_path)
-                and os.path.exists(local_map_path)):
-            return True
+        if not force and all(os.path.exists(path) for path in required_paths):
+            if not enable_landmark_detection:
+                return True
+            if hasattr(self, 'current_step_landmarks') and self.current_step in self.current_step_landmarks:
+                return True
 
-        # Only refresh current-frame detections here.
-        # The latest observation has already been fused into the map during the
-        # real environment step / lookaround step, so replaying sensor_pose would
-        # apply the same delta twice and skew the rendered pose / heading.
-        self._batch_obs([self.latest_obs], save_object_detection=True)
+        # 当前观测已经在真实环境 step / 环视阶段写入地图，这里只刷新当前帧检测与渲染，
+        # 不能再把同一帧 pose 二次融合进语义地图。
+        self._batch_obs([self.latest_obs], save_object_detection=enable_landmark_detection)
         map_state = self.mapper.get_map_state()
 
         rgb_bgr = cv2.cvtColor(self.latest_obs['rgb'], cv2.COLOR_RGB2BGR)
+        landmark_classes = list(self.landmark_classes) if enable_landmark_detection else []
+        detections = self.latest_detections_full if enable_landmark_detection and hasattr(self, 'latest_detections_full') else None
+        labels = self.latest_labels_full if enable_landmark_detection and hasattr(self, 'latest_labels_full') else None
+        masks = self.latest_masks_full if enable_landmark_detection and hasattr(self, 'latest_masks_full') else None
+
         _, detected_landmarks_step, _ = self.visualizer.save_step_visualization(
             step=self.current_step,
             episode_id=self.current_episode_id,
@@ -1844,10 +1849,10 @@ class VLMNavigationController(InteractiveNavigationController):
             current_pose=map_state['full_pose'],
             floor=map_state['floor'],
             hfov=self.config.MAP.HFOV,
-            detections=self.latest_detections_full if hasattr(self, 'latest_detections_full') else None,
-            labels=self.latest_labels_full if hasattr(self, 'latest_labels_full') else None,
-            masks=self.latest_masks_full if hasattr(self, 'latest_masks_full') else None,
-            landmark_classes=self.landmark_classes,
+            detections=detections,
+            labels=labels,
+            masks=masks,
+            landmark_classes=landmark_classes,
             mapping_classes=self.mapping_classes,
             landmark_config={
                 'min_total_pixels': self.landmark_min_total_pixels,
@@ -1857,16 +1862,23 @@ class VLMNavigationController(InteractiveNavigationController):
             waypoint_ids=map_state.get('waypoint_ids', []),
             room_area_layer=map_state.get('room_area_layer'),
             room_area_records=map_state.get('room_area_records', []),
-            phase=action_phase,
+            phase=phase,
             global_trajectory_points=map_state.get('global_trajectory_points', []),
             crop_offset=map_state.get('crop_offset'),
             controller=self,
         )
 
-        if not hasattr(self, 'current_step_landmarks'):
-            self.current_step_landmarks = {}
-        self._record_landmark_detection_step(self.current_step, detected_landmarks_step)
+        if enable_landmark_detection:
+            self._record_landmark_detection_step(self.current_step, detected_landmarks_step)
         return True
+
+    def _run_pre_action_detection_snapshot(self, action_phase: str) -> bool:
+        """在不移动agent的情况下，执行一次动作前landmark检测并保存可视化。"""
+        return self._refresh_step_visualization_snapshot(
+            phase=action_phase,
+            enable_landmark_detection=True,
+            force=False,
+        )
     
     def _update_obstacle_distances_12_directions(self, lookaround_depths: Optional[List[np.ndarray]] = None):
         """更新12个环视方向的障碍物距离（深度角度带采样，失败时回退到地图障碍物）。"""
@@ -2019,8 +2031,8 @@ class VLMNavigationController(InteractiveNavigationController):
                     break
 
                 print(
-                    f"[AutoRetreat] Finished safety retreat ({retreated_m:.2f}m). "
-                    f"Skip action VLM and start thinking/replan."
+                    f"[AutoRetreat] Finished turn-around move ({retreated_m:.2f}m). "
+                    f"Skip action VLM and start 12-view thinking/replan."
                 )
                 new_subtask, _ = self.verify_and_replan()
 
@@ -2309,7 +2321,7 @@ class VLMNavigationController(InteractiveNavigationController):
     
     # ========== Waypoint辅助方法 ==========
 
-    def _get_waypoint_summary(self, include_area_chain: bool = True) -> str:
+    def _get_waypoint_summary(self, include_area_chain: bool = True, include_path: bool = True) -> str:
         """
         获取waypoint摘要（用于LLM提示词）
         包含每个waypoint相对当前pose的距离和方向，以及顺序拓扑路径。
@@ -2325,6 +2337,7 @@ class VLMNavigationController(InteractiveNavigationController):
             current_room_area_label=getattr(self.mapper, 'current_room_area_label', ""),
             current_room_area_type=getattr(self.mapper, 'current_room_area_type', ""),
             include_area_chain=include_area_chain,
+            include_path=include_path,
         )
 
     # ========== 原有方法 ==========

@@ -1254,7 +1254,8 @@ class MapVisualizer:
                               landmark_masks: Optional[np.ndarray] = None,
                               show_action_partitions: bool = True,
                               append_bottom_strip: bool = True,
-                              controller=None) -> np.ndarray:
+                              controller=None,
+                              return_visible_entries: bool = False) -> np.ndarray:
         """
         直接在RGB上渲染边界框（只标注Landmark类别，显示距离+水平偏角）
         
@@ -1393,6 +1394,8 @@ class MapVisualizer:
                 controller.latest_visible_landmark_entries = []
             if append_bottom_strip and strip is not None:
                 detection_vis = np.vstack([detection_vis, strip])
+            if return_visible_entries:
+                return detection_vis, [], set(), strip, []
             return detection_vis, [], set(), strip
 
         def _bbox_center_angle_deg(x1: int, x2: int, width: int) -> float:
@@ -1570,6 +1573,8 @@ class MapVisualizer:
             controller.latest_visible_landmark_entries = visible_entries_meta
 
         # 返回检测可视化、检测到的landmark列表、已匹配的类名集合和底部条带
+        if return_visible_entries:
+            return detection_vis, detected_landmarks, matched_in_view, strip, visible_entries_meta
         return detection_vis, detected_landmarks, matched_in_view, strip
     
     # ========== 保存方法 ==========

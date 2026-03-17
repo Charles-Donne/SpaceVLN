@@ -54,6 +54,7 @@ def build_waypoint_summary(
     current_room_area_label: str = "",
     current_room_area_type: str = "",
     include_area_chain: bool = True,
+    include_path: bool = True,
 ) -> str:
     """Summarize visited waypoints relative to the current pose."""
     header_lines: List[str] = []
@@ -115,17 +116,27 @@ def build_waypoint_summary(
         if path_segments
         else f"Path: WP#{first_waypoint_id} -> Current"
     )
+
+    waypoint_area_path_line = None
     if include_area_chain and waypoint_area_labels:
-        area_chain = [label for label in waypoint_area_labels if label]
-        if (
-            current_room_area_label
-            and current_room_area_label != "Unknown"
-            and (not area_chain or area_chain[-1] != current_room_area_label)
-        ):
-            area_chain.append(current_room_area_label)
-        if area_chain:
-            header_lines.append("Waypoint Area Chain: " + " -> ".join(area_chain))
-    lines = header_lines + node_lines + [path_line]
+        area_nodes: List[str] = []
+        for index, wp_id in enumerate(waypoint_ids):
+            area_label = ""
+            if index < len(waypoint_area_labels):
+                area_label = str(waypoint_area_labels[index] or "").strip()
+            if area_label:
+                area_nodes.append(f"WP#{wp_id}({area_label})")
+            else:
+                area_nodes.append(f"WP#{wp_id}(Unknown)")
+        current_area_display = str(current_room_area_label or "Unknown").strip() or "Unknown"
+        area_nodes.append(f"Current({current_area_display})")
+        waypoint_area_path_line = "Waypoint Area Path: " + " -> ".join(area_nodes)
+
+    lines = header_lines + node_lines
+    if waypoint_area_path_line:
+        lines.append(waypoint_area_path_line)
+    elif include_path:
+        lines.append(path_line)
     return "\n".join(lines)
 
 
