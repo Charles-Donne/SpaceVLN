@@ -15,12 +15,17 @@
 
 import os
 import cv2
-import copy
 import numpy as np
 from PIL import Image
 from typing import List, Tuple, Optional, Dict, Any
 
 from vlnce_baselines.visualization import rendering as vu
+from vlnce_baselines.visualization.map_projection import RotatedMapProjector
+from vlnce_baselines.visualization.obstacle_analysis import (
+    build_rotated_obstacle_mask,
+    calculate_obstacle_distances_12_directions as scan_obstacle_distances_12_directions,
+    calculate_obstacle_distances_from_rotated_map as scan_obstacle_distances_from_rotated_map,
+)
 from vlnce_baselines.config_system.constants import (
     color_palette, 
     detection_colors,
@@ -58,6 +63,21 @@ class MapVisualizer:
         self.color_palette = [int(x * 255.) for x in color_palette]
         
         # 注意：不在初始化时创建目录，而是在保存时根据episode_id动态创建
+
+    def _build_map_projector(
+        self,
+        full_map: Optional[np.ndarray],
+        current_pose: Optional[Tuple[float, float, float]],
+        crop_offset: Optional[Tuple[int, int]],
+    ) -> Optional[RotatedMapProjector]:
+        if full_map is None or current_pose is None or crop_offset is None:
+            return None
+        return RotatedMapProjector(
+            map_h=full_map.shape[1],
+            map_w=full_map.shape[2],
+            crop_offset=crop_offset,
+            agent_orientation_deg=float(current_pose[2]),
+        )
     
     def _create_episode_directories(self, episode_id: int):
         """为特定episode创建保存目录"""
@@ -97,44 +117,11 @@ class MapVisualizer:
                 'right_90': ...
             }
         """
-        # 确保是bool mask
-        if obstacle_mask_rotated.dtype != bool:
-            obstacle_mask_rotated = obstacle_mask_rotated > 127
-        
-        # 定义7个方向（在旋转后的地图上，箭头朝上=-90°）
-        # 用于Action模式（前方扇形视野）
-        directions = {
-            'front': -90,
-            'left_30': -120,
-            'left_60': -150,
-            'left_90': -180,
-            'right_30': -60,
-            'right_60': -30,
-            'right_90': 0
-        }
-        
-        distances = {}
-        
-        # 计算5个关键方向
-        for key, angle in directions.items():
-            # 多光线扫描（5条光线，±5°范围）
-            ray_distances = []
-            for offset in [-5, -2.5, 0, 2.5, 5]:
-                test_angle = angle + offset
-                dist_m = self._raycast_on_rotated_map(
-                    obstacle_mask_rotated, center_x, center_y, test_angle
-                )
-                if dist_m is not None:
-                    ray_distances.append(dist_m)
-            
-            # 使用中位数距离
-            if ray_distances:
-                median_dist = np.median(ray_distances)
-                distances[key] = self._format_distance(median_dist)
-            else:
-                distances[key] = "Unknown"
-        
-        return distances
+        return scan_obstacle_distances_from_rotated_map(
+            obstacle_mask_rotated,
+            center_x=center_x,
+            center_y=center_y,
+        )
     
     def calculate_obstacle_distances_12_directions(
         self,
@@ -161,115 +148,11 @@ class MapVisualizer:
                 'angle_330': "X.XXm"   # IMAGE 12: Left (330°)
             }
         """
-        # 确保是bool mask
-        if obstacle_mask_rotated.dtype != bool:
-            obstacle_mask_rotated = obstacle_mask_rotated > 127
-        
-        # 定义12个方向（在旋转后的地图上，箭头朝上=-90°）
-        # 环视是逆时针TURN_LEFT，所以30°是左侧，330°是右侧
-        # agent角度 → 旋转后地图角度的映射
-        directions = {
-            'angle_0':   -90,   # Front (0°)
-            'angle_30':  -120,  # Left 30° (逆时针)
-            'angle_60':  -150,  # Left 60°
-            'angle_90':  -180,  # Left 90°
-            'angle_120': 150,   # Left 120° (=-210°)
-            'angle_150': 120,   # Left 150° (=-240°)
-            'angle_180': 90,    # Back (180°)
-            'angle_210': 60,    # Right 150° (顺时针150°)
-            'angle_240': 30,    # Right 120°
-            'angle_270': 0,     # Right 90°
-            'angle_300': -30,   # Right 60°
-            'angle_330': -60    # Right 30°
-        }
-        
-        distances = {}
-        
-        # 计算12个方向
-        for key, angle in directions.items():
-            # 多光线扫描（5条光线，±5°范围）
-            ray_distances = []
-            for offset in [-5, -2.5, 0, 2.5, 5]:
-                test_angle = angle + offset
-                dist_m = self._raycast_on_rotated_map(
-                    obstacle_mask_rotated, center_x, center_y, test_angle
-                )
-                if dist_m is not None:
-                    ray_distances.append(dist_m)
-            
-            # 使用中位数距离
-            if ray_distances:
-                median_dist = np.median(ray_distances)
-                distances[key] = self._format_distance(median_dist)
-            else:
-                distances[key] = "Unknown"
-        
-        return distances
-    
-    def _raycast_on_rotated_map(
-        self,
-        obstacle_mask: np.ndarray,
-        start_x: int,
-        start_y: int,
-        angle_deg: float
-    ) -> Optional[float]:
-        """
-        在旋转后的地图上进行光线投射
-        
-        图像坐标系：
-        - X向右（列），Y向下（行）
-        - 角度从+X轴逆时针：0°=右，90°=下，180°=左，270°=上
-        
-        Args:
-            obstacle_mask: [H, W] bool数组
-            start_x, start_y: 起始位置（像素）
-            angle_deg: 方向角度（度，图像坐标系）
-            
-        Returns:
-            距离（米），如果超出2.0m返回2.1
-        """
-        h, w = obstacle_mask.shape
-        angle_rad = np.deg2rad(angle_deg)
-        
-        # 方向向量（图像坐标系）
-        dx = np.cos(angle_rad)  # X方向（列）
-        dy = np.sin(angle_rad)  # Y方向（行）
-        
-        max_distance_m = 2.0
-        step_size = 0.5  # 0.5像素 = 2.5cm
-        resolution_cm = 5  # 5cm/pixel
-        
-        # 光线步进
-        distance_px = 0.0
-        max_steps = int(max_distance_m * 100 / resolution_cm / step_size)  # 2m / 0.025m = 80步
-        
-        for _ in range(max_steps):
-            distance_px += step_size
-            current_x = start_x + dx * distance_px
-            current_y = start_y + dy * distance_px
-            
-            # 边界检查
-            ix, iy = int(round(current_x)), int(round(current_y))
-            if not (0 <= ix < w and 0 <= iy < h):
-                return 2.1  # 超出地图
-            
-            # 障碍物检测
-            if obstacle_mask[iy, ix]:
-                distance_m = distance_px * resolution_cm / 100.0
-                return distance_m
-        
-        return 2.1  # 超过最大范围
-    
-    def _format_distance(self, distance_m: Optional[float]) -> str:
-        """格式化距离字符串"""
-        if distance_m is None:
-            return "Unknown"
-        elif distance_m > 2.0:
-            return ">2.0m open"
-        elif distance_m < 0.5:
-            return f"{distance_m:.2f}m WARNING"
-        else:
-            return f"{distance_m:.2f}m"
+        return scan_obstacle_distances_12_directions(
+            obstacle_mask_rotated,
+            center_x=center_x,
+            center_y=center_y,
+        )
     
     @staticmethod
     def get_distance_summary(distances: Dict[str, str]) -> str:
@@ -279,66 +162,6 @@ class MapVisualizer:
                 f"R30={distances.get('right_30', 'Unknown')}, "
                 f"L90={distances.get('left_90', 'Unknown')}, "
                 f"R90={distances.get('right_90', 'Unknown')}")
-    
-    def _calculate_map_usage(self, 
-                            trajectory_points: List[Tuple[int, int]], 
-                            h: int, 
-                            w: int) -> Dict[str, Any]:
-        """
-        计算地图实际使用情况统计
-        
-        Args:
-            trajectory_points: 轨迹点列表 [(x, y), ...]（像素坐标）
-            h, w: 地图尺寸（像素）
-        
-        Returns:
-            统计字典，包括：
-            - x_min, x_max, y_min, y_max: 轨迹在实际世界的范围（米）
-            - used_width, used_height: 实际使用的宽度和高度（米）
-            - usage_percent: 使用百分比
-            - near_boundary: 是否接近边界（距离<10%）
-        """
-        if not trajectory_points:
-            return {
-                'x_min': 0, 'x_max': 0, 'y_min': 0, 'y_max': 0,
-                'used_width': 0, 'used_height': 0,
-                'usage_percent': 0,
-                'near_boundary': False
-            }
-        
-        # 将像素坐标转换为实际世界坐标（米）
-        # trajectory_points 中 (x, y) 是地图坐标系的像素位置
-        x_coords = [y * self.resolution / 100.0 for x, y in trajectory_points]  # y是水平方向
-        y_coords = [(h - 1 - x) * self.resolution / 100.0 for x, y in trajectory_points]  # x是垂直方向
-        
-        x_min, x_max = min(x_coords), max(x_coords)
-        y_min, y_max = min(y_coords), max(y_coords)
-        
-        used_width = x_max - x_min
-        used_height = y_max - y_min
-        
-        map_width_m = w * self.resolution / 100.0
-        map_height_m = h * self.resolution / 100.0
-        
-        usage_percent = (used_width * used_height) / (map_width_m * map_height_m) * 100
-        
-        # 检查是否接近边界（距离<10%）
-        boundary_threshold = 0.1
-        near_boundary = (
-            x_min < map_width_m * boundary_threshold or
-            x_max > map_width_m * (1 - boundary_threshold) or
-            y_min < map_height_m * boundary_threshold or
-            y_max > map_height_m * (1 - boundary_threshold)
-        )
-        
-        return {
-            'x_min': x_min, 'x_max': x_max,
-            'y_min': y_min, 'y_max': y_max,
-            'used_width': used_width,
-            'used_height': used_height,
-            'usage_percent': usage_percent,
-            'near_boundary': near_boundary
-        }
     
     # ========== 渲染方法 ==========
     
@@ -374,9 +197,9 @@ class MapVisualizer:
         Returns:
             (sem_map_vis, global_map_with_trajectory, landmarks, global_map_rotated, last_waypoint_angle)
             - sem_map_vis: 基础渲染地图 (480×480)
-            - global_map_with_trajectory: 带轨迹的旋转地图 (440×440)
+            - global_map_with_trajectory: 带轨迹的旋转地图（默认480×480，裁剪后440×440）
             - landmarks: [(x, y, class_name), ...] 标注列表
-            - global_map_rotated: 旋转地图（无轨迹，440×440）
+            - global_map_rotated: 旋转地图（无轨迹，默认480×480，裁剪后440×440）
             - last_waypoint_angle: 最后一个waypoint相对于正前方的角度（弧度），None表示无waypoint
         
         渲染层次:
@@ -396,9 +219,6 @@ class MapVisualizer:
         h, w = full_map.shape[1], full_map.shape[2]
         obstacle_mask = self._get_channel_mask(full_map, 0)   # channel 0: obstacle
         explored_mask = self._get_channel_mask(full_map, 1)   # channel 1: explored
-
-        # ===== 计算地图使用统计（显示真实探索范围）=====
-        map_usage_stats = self._calculate_map_usage(trajectory_points, h, w)
 
         # ===== 阶段1.1: 创建语义地图 =====
         semantic_map = np.zeros((h, w), dtype=np.uint8)
@@ -450,69 +270,25 @@ class MapVisualizer:
         # - trajectory_points 也已经在旋转后的坐标系中
         # 所以这里不需要再旋转地图，直接使用即可
         
-        global_map_rotated = None
+        projector = self._build_map_projector(full_map, current_pose, crop_offset)
+        global_map_rotated = sem_map_vis.copy()
+        global_map_with_trajectory = global_map_rotated.copy()
+        last_waypoint_angle = None
+
         if current_pose is not None:
-            # 直接使用已旋转的地图
-            global_map_rotated = sem_map_vis.copy()
-            
             # ===== 阶段5: 创建global_map的显示副本（用于绘制trajectory和landmark）=====
-            global_map_with_trajectory = global_map_rotated.copy()
-            
-            # ===== 阶段5.1: 从trajectory_points绘制轨迹线（橙色）=====
-            # trajectory_points 是世界像素坐标
-            # full_map 已经旋转过了，但trajectory_points是世界坐标，需要手动旋转以匹配
-            if trajectory_points is not None and len(trajectory_points) > 1 and crop_offset is not None:
-                import math
-                map_h, map_w = full_map.shape[1], full_map.shape[2]
+            # trajectory_points 是世界像素坐标，统一通过 projector 转到当前旋转显示坐标。
+            if projector is not None and trajectory_points is not None and len(trajectory_points) > 1:
                 trajectory_color = (0, 165, 255)  # 橙色BGR
-                
-                # 获取旋转参数（旋转方向修正：用agent_orientation_deg - 90而不是90 - agent_orientation_deg）
-                agent_orientation_deg = current_pose[2] if current_pose is not None else 0
-                rotation_angle_deg = agent_orientation_deg - 90  # 修改：反向旋转
-                rotation_angle_rad = math.radians(rotation_angle_deg)
-                cos_theta = math.cos(rotation_angle_rad)
-                sin_theta = math.sin(rotation_angle_rad)
-                
-                start_px, start_py = crop_offset
-                
-                # 转换所有轨迹点到旋转后的坐标系
-                display_points = []
-                for world_px, world_py in trajectory_points:
-                    # 1. 转换为相对坐标
-                    rel_px = world_px - start_px
-                    rel_py = world_py - start_py
-                    
-                    # 边界检查
-                    if not (0 <= rel_px < map_h and 0 <= rel_py < map_w):
-                        continue
-                    
-                    # 2. 归一化到[-1, 1]
-                    norm_y = (rel_px / map_h) * 2.0 - 1.0
-                    norm_x = (rel_py / map_w) * 2.0 - 1.0
-                    
-                    # 3. 应用旋转矩阵（与PyTorch相同）
-                    rotated_norm_x = cos_theta * norm_x + sin_theta * norm_y
-                    rotated_norm_y = -sin_theta * norm_x + cos_theta * norm_y
-                    
-                    # 4. 反归一化到像素坐标
-                    rotated_px = (rotated_norm_y + 1.0) * map_h / 2.0
-                    rotated_py = (rotated_norm_x + 1.0) * map_w / 2.0
-                    
-                    # 5. 缩放到480x480显示坐标系
-                    display_x = int(rotated_py * 480.0 / map_w)
-                    display_y = int(rotated_px * 480.0 / map_h)
-                    # flipud变换
-                    display_y = 480 - 1 - display_y
-                    display_points.append((display_x, display_y))
-                
-                # 绘制连线（细线条）
-                for i in range(len(display_points) - 1):
-                    pt1 = display_points[i]
-                    pt2 = display_points[i + 1]
-                    if (0 <= pt1[0] < 480 and 0 <= pt1[1] < 480 and
-                        0 <= pt2[0] < 480 and 0 <= pt2[1] < 480):
-                        cv2.line(global_map_with_trajectory, pt1, pt2, 
-                                trajectory_color, thickness=3)
+                display_points = projector.world_points_to_global_display(trajectory_points)
+                if len(display_points) > 1:
+                    cv2.polylines(
+                        global_map_with_trajectory,
+                        [np.array(display_points, dtype=np.int32)],
+                        isClosed=False,
+                        color=trajectory_color,
+                        thickness=3,
+                    )
             
             # ===== 阶段5.3: 绘制深红色虚线指示正前方（在waypoint和箭头之前）=====
             center_x, center_y = 240, 240
@@ -536,64 +312,33 @@ class MapVisualizer:
             
             # ===== 阶段5.4: 绘制历史waypoint（蓝色圆圈+ID数字，在箭头之前的倒数第二层）=====
             # waypoint_positions 是世界像素坐标，需要转换到旋转后的full_map坐标
-            if waypoint_positions is not None and waypoint_ids is not None and len(waypoint_positions) > 0 and crop_offset is not None and current_pose is not None:
-                import math
-                map_h, map_w = full_map.shape[1], full_map.shape[2]
-                
-                # 获取旋转参数（修改：反向旋转）
-                agent_orientation_deg = current_pose[2]
-                rotation_angle_deg = agent_orientation_deg - 90  # 修改：反向旋转
-                rotation_angle_rad = math.radians(rotation_angle_deg)
-                cos_theta = math.cos(rotation_angle_rad)
-                sin_theta = math.sin(rotation_angle_rad)
-                
-                start_px, start_py = crop_offset
-                
-                rendered_count = 0
-                # 遍历所有waypoint，ID使用列表索引（从1开始，保证连续）
+            if projector is not None and waypoint_positions is not None and waypoint_ids is not None and len(waypoint_positions) > 0:
                 for idx, wp_pos in enumerate(waypoint_positions):
-                    # waypoint_positions 是世界坐标 (world_px, world_py)
-                    world_px, world_py = wp_pos
-                    display_id = idx + 1  # ID从1开始，连续编号
-                    
-                    # 1. 转换为相对坐标
-                    rel_px = world_px - start_px
-                    rel_py = world_py - start_py
-                    
-                    # 边界检查
-                    if not (0 <= rel_px < map_h and 0 <= rel_py < map_w):
+                    projected = projector.world_to_global_display(wp_pos[0], wp_pos[1])
+                    if projected is None:
                         continue
-                    
-                    # 2. 归一化到[-1, 1]
-                    norm_y = (rel_px / map_h) * 2.0 - 1.0
-                    norm_x = (rel_py / map_w) * 2.0 - 1.0
-                    
-                    # 3. 应用旋转矩阵
-                    rotated_norm_x = cos_theta * norm_x + sin_theta * norm_y
-                    rotated_norm_y = -sin_theta * norm_x + cos_theta * norm_y
-                    
-                    # 4. 反归一化到像素坐标
-                    rotated_px = (rotated_norm_y + 1.0) * map_h / 2.0
-                    rotated_py = (rotated_norm_x + 1.0) * map_w / 2.0
-                    
-                    # 5. 缩放到480x480显示尺寸
-                    display_x = int(rotated_py * 480.0 / map_w)
-                    display_y = int(rotated_px * 480.0 / map_h)
-                    # flipud变换
-                    display_y = 480 - 1 - display_y
-                    
-                    # 检查显示坐标是否在范围内
-                    if 0 <= display_x < 480 and 0 <= display_y < 480:
-                        # 绘制实心蓝色圆圈
-                        cv2.circle(global_map_with_trajectory, (display_x, display_y), 
-                                  radius=10, color=(255, 0, 0), thickness=-1)  # 纯蓝色BGR，实心
-                        # 绘制ID数字（白色，居中）- 使用连续编号
-                        text = str(display_id)
-                        (text_w, text_h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)
-                        cv2.putText(global_map_with_trajectory, text, 
-                                   (display_x - text_w // 2, display_y + text_h // 2),
-                                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
-                        rendered_count += 1
+
+                    display_x, display_y = int(projected[0]), int(projected[1])
+                    display_id = idx + 1
+                    cv2.circle(
+                        global_map_with_trajectory,
+                        (display_x, display_y),
+                        radius=10,
+                        color=(255, 0, 0),
+                        thickness=-1,
+                    )
+                    text = str(display_id)
+                    (text_w, text_h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)
+                    cv2.putText(
+                        global_map_with_trajectory,
+                        text,
+                        (display_x - text_w // 2, display_y + text_h // 2),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        (255, 255, 255),
+                        1,
+                        cv2.LINE_AA,
+                    )
             
             # ===== 阶段5.5: 在中心绘制箭头（最后一层，覆盖waypoint）=====
             arrow_angle = np.deg2rad(-90)  # 朝上
@@ -603,13 +348,7 @@ class MapVisualizer:
             
             # ===== 阶段5.6: 叠加黑色障碍物层（覆盖在箭头之上，使障碍物更醒目）=====
             # obstacle_mask 来自 _get_channel_mask(full_map, 0)，与 semantic_map 同源
-            obstacle_mask_display = np.flipud(obstacle_mask)
-            # 缩放到480x480
-            obstacle_mask_display = cv2.resize(
-                obstacle_mask_display.astype(np.uint8) * 255,
-                (480, 480),
-                interpolation=cv2.INTER_NEAREST
-            ) > 127
+            obstacle_mask_display = build_rotated_obstacle_mask(full_map)
             
             # 注意：obstacle_mask 现在已经在 full_map 中旋转过了
             # 所以这里直接使用，不需要再旋转
@@ -620,9 +359,6 @@ class MapVisualizer:
             
             # ===== 阶段6: global map 不绘制自定义 landmark，仅保留内部 landmarks 列表供后续距离/角度计算 =====
 
-            # ===== 阶段7: waypoint 已在上方通过 waypoint_positions 手动绘制 =====
-            last_waypoint_angle = None  # 预留返回值，当前未使用
-            
             # ===== 可选：裁剪到440×440（中心区域）=====
             # 默认关闭裁剪，保持完整的480×480地图
             if self.enable_global_map_crop:
@@ -637,19 +373,6 @@ class MapVisualizer:
         # 添加方位标签到global map
         global_map_with_trajectory = self.add_orientation_labels(global_map_with_trajectory)
         global_map_rotated = self.add_orientation_labels(global_map_rotated)
-        
-        # 初始化obstacle_distances和last_waypoint_angle（如果没有current_pose则无法计算）
-        if 'obstacle_distances' not in locals():
-            obstacle_distances = {
-                'front': 'Unknown',
-                'left_30': 'Unknown',
-                'right_30': 'Unknown',
-                'left_90': 'Unknown',
-                'right_90': 'Unknown'
-            }
-        
-        if 'last_waypoint_angle' not in locals():
-            last_waypoint_angle = None
         
         # 返回：基础地图 + 显示副本（带轨迹和landmark+waypoint） + 无轨迹的旋转地图（供local_map裁剪） + 距离信息 + 最后waypoint角度
         return sem_map_vis, global_map_with_trajectory, landmarks, global_map_rotated, last_waypoint_angle
@@ -686,7 +409,7 @@ class MapVisualizer:
             waypoint_ids: 未使用（保留接口兼容性）
         
         Returns:
-            local_map: 局部地图 (400×400)
+            local_map: 局部地图（最终 440×440）
         """
         if full_map is None:
             return None
@@ -725,9 +448,7 @@ class MapVisualizer:
         sem_map_vis = cv2.resize(sem_map_vis, (480, 480), interpolation=cv2.INTER_NEAREST)
         
         # ===== 阶段3: 准备显示（地图已在提取时旋转）=====
-        # 地图已经旋转好，agent在中心，朝向向上
-        current_x, current_y, current_o = current_pose
-        
+        projector = self._build_map_projector(full_map, current_pose, crop_offset)
         local_map = sem_map_vis.copy()
         
         # Agent在中心 (240, 240)
@@ -748,55 +469,8 @@ class MapVisualizer:
         
         # ===== 阶段5: 先准备轨迹点数据，稍后在FOV之后绘制 =====
         trajectory_display_points = []
-        if trajectory_points is not None and len(trajectory_points) > 1 and crop_offset is not None:
-            import math
-            map_h, map_w = full_map.shape[1], full_map.shape[2]
-            
-            # 获取旋转参数
-            agent_orientation_deg = current_pose[2] if current_pose is not None else 0
-            rotation_angle_deg = agent_orientation_deg - 90
-            rotation_angle_rad = math.radians(rotation_angle_deg)
-            cos_theta = math.cos(rotation_angle_rad)
-            sin_theta = math.sin(rotation_angle_rad)
-            
-            start_px, start_py = crop_offset
-            
-            # 转换所有轨迹点到旋转后的坐标系，然后裁剪到local map
-            for world_px, world_py in trajectory_points:
-                # 1. 转换为相对坐标
-                rel_px = world_px - start_px
-                rel_py = world_py - start_py
-                
-                # 边界检查
-                if not (0 <= rel_px < map_h and 0 <= rel_py < map_w):
-                    continue
-                
-                # 2. 归一化到[-1, 1]
-                norm_y = (rel_px / map_h) * 2.0 - 1.0
-                norm_x = (rel_py / map_w) * 2.0 - 1.0
-                
-                # 3. 应用旋转矩阵
-                rotated_norm_x = cos_theta * norm_x + sin_theta * norm_y
-                rotated_norm_y = -sin_theta * norm_x + cos_theta * norm_y
-                
-                # 4. 反归一化到像素坐标
-                rotated_px = (rotated_norm_y + 1.0) * map_h / 2.0
-                rotated_py = (rotated_norm_x + 1.0) * map_w / 2.0
-                
-                # 5. 转换到裁剪区域（240x240中心区域）
-                # 与global map保持一致：先flipud，再裁剪
-                raw_x = rotated_py * 480.0 / map_w
-                raw_y = rotated_px * 480.0 / map_h
-                # flipud（与base image的np.flipud保持一致）
-                flipped_y = 480 - 1 - raw_y
-                crop_rel_x = raw_x - 120
-                crop_rel_y = flipped_y - 120
-                # 检查是否在裁剪区域内
-                if 0 <= crop_rel_x < 240 and 0 <= crop_rel_y < 240:
-                    # 放大到480x480
-                    display_x = int(crop_rel_x * 2.0)
-                    display_y = int(crop_rel_y * 2.0)
-                    trajectory_display_points.append((display_x, display_y))
+        if projector is not None and trajectory_points is not None and len(trajectory_points) > 1:
+            trajectory_display_points = projector.world_points_to_local_display(trajectory_points)
         
         # ===== 阶段6: 绘制FOV可见区域（考虑障碍物遮挡）=====
         # 480像素 = 12m，所以1像素 = 2.5cm
@@ -813,12 +487,7 @@ class MapVisualizer:
         
         # 先获取旋转后的障碍物掩码（用于raycasting）
         # obstacle_mask 来自 _get_channel_mask(full_map, 0)，已在 full_map 中旋转
-        obstacle_mask_flipped = np.flipud(obstacle_mask)
-        obstacle_mask_resized = cv2.resize(
-            obstacle_mask_flipped.astype(np.uint8) * 255,
-            (480, 480),
-            interpolation=cv2.INTER_NEAREST
-        ) > 127
+        obstacle_mask_resized = build_rotated_obstacle_mask(full_map)
         
         # 裁剪中心240×240区域
         obstacle_crop = obstacle_mask_resized[120:360, 120:360]
@@ -842,7 +511,6 @@ class MapVisualizer:
             
             # 沿射线方向逐步检测
             max_distance = fov_radius
-            hit_obstacle = False
             ray_end_x, ray_end_y = fov_center_x, fov_center_y
             
             # 使用0.5像素步长提高检测精度
@@ -861,7 +529,6 @@ class MapVisualizer:
                 
                 # 检查是否碰到障碍物（使用膨胀后的障碍物掩码）
                 if obstacle_local_dilated[int(test_y), int(test_x)]:
-                    hit_obstacle = True
                     ray_end_x, ray_end_y = test_x, test_y
                     break
                 
@@ -954,16 +621,11 @@ class MapVisualizer:
             )
 
         for marker_x, marker_y, cls_name, _dist_m, _angle_deg in landmarks:
-            # 1. 缩放到 480×480 显示坐标（与 global map 相同）
-            display_x = marker_x * 480.0 / w   # 列坐标 → display_x
-            display_y = (h - 1 - marker_y) * 480.0 / h  # 行坐标 → flipud → display_y
-
-            # 2. 裁剪中心 240×240（rows/cols 120-360）并放大到 480×480
-            local_x = (display_x - 120) * 2
-            local_y = (display_y - 120) * 2
-
-            # 3. 只绘制在 local map 可见范围内的 landmark
-            if 0 <= local_x < 480 and 0 <= local_y < 480:
+            local_display = None
+            if projector is not None:
+                local_display = projector.rotated_to_local_display(marker_y, marker_x)
+            if local_display is not None:
+                local_x, local_y = local_display
                 local_landmark_radius = 10
                 cv2.circle(local_map,
                            (int(local_x), int(local_y)),
@@ -1237,30 +899,17 @@ class MapVisualizer:
         if current_pose is None or crop_offset is None or full_map is None:
             return None
 
-        import math
+        projector = self._build_map_projector(full_map, current_pose, crop_offset)
+        if projector is None:
+            return None
 
-        map_h, map_w = full_map.shape[1], full_map.shape[2]
-        start_px, start_py = crop_offset  # (world_row_px, world_col_px)
         world_row_px = int(inst["world_row_px"])
         world_col_px = int(inst["world_col_px"])
 
-        rel_px = world_row_px - start_px
-        rel_py = world_col_px - start_py
-        if not (0 <= rel_px < map_h and 0 <= rel_py < map_w):
+        rotated = projector.world_to_rotated_pixel(world_row_px, world_col_px)
+        if rotated is None:
             return None
-
-        agent_orientation_deg = float(current_pose[2])
-        rotation_angle_deg = agent_orientation_deg - 90.0
-        rotation_angle_rad = math.radians(rotation_angle_deg)
-        cos_theta = math.cos(rotation_angle_rad)
-        sin_theta = math.sin(rotation_angle_rad)
-
-        norm_y = (rel_px / map_h) * 2.0 - 1.0
-        norm_x = (rel_py / map_w) * 2.0 - 1.0
-        rotated_norm_x = cos_theta * norm_x + sin_theta * norm_y
-        rotated_norm_y = -sin_theta * norm_x + cos_theta * norm_y
-        rotated_row = (rotated_norm_y + 1.0) * map_h / 2.0
-        rotated_col = (rotated_norm_x + 1.0) * map_w / 2.0
+        rotated_row, rotated_col = rotated
 
         if "world_x_m" in inst and "world_y_m" in inst:
             dx_m = float(inst["world_x_m"]) - float(current_pose[0])

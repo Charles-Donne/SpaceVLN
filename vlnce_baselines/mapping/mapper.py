@@ -118,9 +118,8 @@ class SemanticMapper:
         # 3. 提取floor区域
         self.floor = self.extract_floor(self.full_map, detected_classes)
         
-        # 4. 清空单步地图（准备下一步）
-        self.mapping_module.one_step_full_map.fill_(0.)
-        self.mapping_module.one_step_local_map.fill_(0.)
+        # 4. 清空单步地图缓存（包括 one_step_tiles，避免 recentering 时读回旧残留）
+        self.mapping_module.clear_one_step_buffers()
         
         # 5. 获取世界坐标（不旋转！full_map已经旋转过，坐标在visualizer中转换）
         crop_off = self.mapping_module.full_map_crop_offset
@@ -158,15 +157,19 @@ class SemanticMapper:
         Returns:
             floor: [H, W] floor地图（现在主要用于向后兼容，实际floor在semantic layer）
         """
-        # 使用阈值过滤小区域
-        full_map_filtered = remove_small_objects(full_map.astype(bool), min_size=16)
-        
-        # 提取地图通道
-        obstacles = full_map_filtered[0, ...].astype(bool)  # 障碍物
-        explored_area = full_map_filtered[1, ...].astype(bool)  # 已探索区域
-        
+        full_map_bool = full_map.astype(bool)
+
+        # 按通道单独做小区域过滤，避免把 channel 维误当成空间维导致 floor/obstacle 串扰
+        obstacles = remove_small_objects(full_map_bool[0, ...], min_size=16).astype(bool)
+        explored_area = remove_small_objects(full_map_bool[1, ...], min_size=16).astype(bool)
+
         # 提取语义层（从第 map_channels 个通道开始）
-        semantic_layers = full_map_filtered[map_channels:, ...]
+        semantic_layers = full_map_bool[map_channels:, ...]
+        if semantic_layers.shape[0] > 0:
+            semantic_layers = np.stack([
+                remove_small_objects(layer, min_size=16).astype(bool)
+                for layer in semantic_layers
+            ], axis=0)
         num_semantic_channels = semantic_layers.shape[0]
         
         # 如果没有语义通道，直接返回基于explored的简单floor
@@ -342,7 +345,7 @@ class SemanticMapper:
             'waypoint_ids': self.waypoint_ids,
             'map_shape': self.map_shape,
             'resolution': self.resolution,
-            'crop_offset': crop_offset,  # (start_py, start_px) 世界像素偏移
+            'crop_offset': crop_offset,  # (start_px, start_py) = (world_row_px, world_col_px)
             'global_trajectory_points': global_traj,  # 全局轨迹（global map用）
             'subtask_trajectory_points': subtask_traj  # 子任务轨迹（local map用）
         }

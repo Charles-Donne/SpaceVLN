@@ -32,6 +32,11 @@ from vlnce_baselines.vlm import (
     LLMPlanner, ActionExecutor, SaveManager, NavigationVisualizer
 )
 from vlnce_baselines.visualization import PanoramaGenerator
+from vlnce_baselines.visualization.obstacle_analysis import (
+    build_rotated_obstacle_mask,
+    calculate_obstacle_distances_12_directions,
+    calculate_obstacle_distances_from_rotated_map,
+)
 from vlnce_baselines.vlm.navigation_config import (
     DIRECTION_STEPS, DIRECTION_NAMES, DIRECTION_CONFIG, ACTION_MAPPING
 )
@@ -619,155 +624,6 @@ class VLMNavigationController(InteractiveNavigationController):
                     desc_text_y = room_text_y + line_spacing + desc_size[1]
                     cv2.putText(image, description, (desc_text_x, desc_text_y),
                                cv2.FONT_HERSHEY_SIMPLEX, desc_font_scale, (0, 0, 0), desc_thickness)  # 黑色普通
-        
-        return image
-        
-        # 获取当前agent位置和朝向（世界坐标系）
-        agent_x, agent_y, agent_o = self._get_agent_pose()
-        
-        # 计算当前视角的绝对方向（世界坐标系）
-        # view_angle: 相对于agent朝向的角度（度），逆时针为正
-        view_offset_rad = np.deg2rad(view_angle)
-        view_direction = agent_o + view_offset_rad  # 当前视图在世界坐标系中的绝对方向
-        
-        # 实际相机FOV是79度，但只显示±15度内的waypoint（确保唯一性）
-        display_fov_half = np.deg2rad(15)  # 只显示30度范围内的waypoint
-        camera_fov_half = np.deg2rad(79 / 2)  # 79度用于映射坐标
-        
-        h, w = image.shape[:2]
-        
-        # ========== 1. 绘制历史轨迹投影 ==========
-        # TODO: 轨迹现在存储在 Channel 2 中，需要从 full_map[2] 提取轨迹点
-        # 暂时禁用此功能
-        # if hasattr(self, 'mapper') and self.mapper:
-        #     trajectory_points = self.mapper.mapping_module.get_trajectory()  # List[(map_x, map_y)] 地图像素坐标
-        #     if len(trajectory_points) > 1:
-        #         ... (轨迹投影代码)
-        
-        # ========== 2. 绘制last waypoint标记（使用渲染坐标系直接计算） ==========
-        # 显示最后一个waypoint（last waypoint）
-        if len(waypoint_positions) > 0:
-            # 获取最后一个waypoint（列表最后一个元素）
-            last_idx = len(waypoint_positions) - 1
-            wp_map_x, wp_map_y = waypoint_positions[last_idx]  # 地图坐标 (map_x, map_y)
-            wp_id = waypoint_ids[last_idx]
-            wp_desc = waypoint_info[2][last_idx] if len(waypoint_info[2]) > last_idx else ""
-            
-            # 🔑 新方案：直接使用global map渲染坐标计算角度
-            # 原理：在visualizer的render_global_map()中，waypoint已经经过旋转+平移变换
-            # 变换后：图像中心(240, 240) = Agent位置，图像上方 = Agent前方
-            # 直接计算rotated_point相对于图像中心的角度即可
-            
-            if not hasattr(self, 'mapper') or not self.mapper:
-                return image
-            
-            # 1. 地图坐标 → 显示坐标（与visualizer.py完全一致）
-            map_shape = self.mapper.map_shape
-            h_map, w_map = map_shape
-            display_x = wp_map_y * 480 / w_map
-            display_y = (h_map - 1 - wp_map_x) * 480 / h_map
-            
-            # 2. 应用旋转+平移变换（需要从visualizer获取rotation_matrix）
-            # 旋转角度: 90 - current_o（让agent朝向对准正上方）
-            # 旋转中心: agent当前位置
-            # 平移: 将agent移到图像中心(240, 240)
-            current_o = np.rad2deg(agent_o)  # 弧度→度
-            rotation_angle = 90 - current_o
-            
-            # 使用 full_pose 获取 agent 在地图上的位置
-            full_pose = self.mapper.full_pose  # [x, y, o] 地图坐标
-            agent_map_x, agent_map_y = full_pose[0], full_pose[1]
-            
-            # agent在显示坐标系中的位置
-            agent_display_x = agent_map_y * 480 / w_map
-            agent_display_y = (h_map - 1 - agent_map_x) * 480 / h_map
-            
-            # 构造旋转矩阵（与visualizer.py逻辑一致）
-            rotation_center = (agent_display_x, agent_display_y)
-            rotation_matrix = cv2.getRotationMatrix2D(rotation_center, rotation_angle, 1.0)
-            
-            # 添加平移：将旋转后的agent移到(240, 240)
-            target_center = np.array([240, 240, 1])
-            current_center = np.array([agent_display_x, agent_display_y, 1])
-            rotated_center = rotation_matrix @ current_center
-            translation = target_center[:2] - rotated_center[:2]
-            rotation_matrix[0, 2] += translation[0]
-            rotation_matrix[1, 2] += translation[1]
-            
-            # 应用变换到waypoint
-            point = np.array([display_x, display_y, 1])
-            rotated_point = rotation_matrix @ point
-            
-            # 3. 计算相对于图像中心(240, 240)的角度
-            # 图像坐标系：X右，Y下
-            # Agent位置：(240, 240)
-            # Agent前方：图像上方（Y = 0方向）
-            dx = rotated_point[0] - 240  # X方向：右为正
-            dy = rotated_point[1] - 240  # Y方向：下为正
-            
-            # arctan2(dx, -dy) = 相对于正上方（前方）的角度
-            # 解释：
-            # - arctan2(y, x) 返回从+X轴逆时针到(x,y)的角度
-            # - 这里用 arctan2(dx, -dy)，相当于：
-            #   * -dy是向上的分量（图像上方=前方）
-            #   * dx是向右的分量
-            #   * 返回从正上方（前方）顺时针旋转的角度
-            #   * 正值=右侧，负值=左侧
-            angle_from_front = np.arctan2(dx, -dy)  # 相对于前方的角度，范围[-π, π]
-            
-            # 计算相对于当前视图的角度差
-            # view_angle: 当前视图相对于agent朝向的偏移（度），逆时针为正
-            view_offset_rad = np.deg2rad(view_angle)
-            angle_diff = angle_from_front - view_offset_rad
-            angle_diff = np.arctan2(np.sin(angle_diff), np.cos(angle_diff))  # 归一化到[-π, π]
-            
-            # 只显示±15度内的waypoint（确保每个waypoint只出现在一个视图中）
-            if abs(angle_diff) <= display_fov_half:
-                    # X坐标映射：使用79度FOV范围映射到图像宽度
-                    x_ratio = (angle_diff + camera_fov_half) / (2 * camera_fov_half)
-                    x_pos = int(x_ratio * w)
-                    x_pos = max(0, min(w - 1, x_pos))  # 边界检查
-                    
-                    # Y坐标统一在中间位置
-                    y_pos = int(h * 0.5)  # 固定在图像垂直中心
-                    
-                    # 绘制waypoint标记（蓝色外圈 + 白色填充，更小的圆圈）
-                    cv2.circle(image, (x_pos, y_pos), 15, (255, 0, 0), 2)  # 蓝色边框，半径15
-                    cv2.circle(image, (x_pos, y_pos), 13, (255, 255, 255), -1)  # 白色填充
-                    
-                    # 绘制waypoint ID（红色粗体）
-                    text = f"{wp_id}"
-                    font_scale = 0.7
-                    thickness = 2
-                    text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)[0]
-                    text_x = x_pos - text_size[0] // 2
-                    text_y = y_pos + text_size[1] // 2
-                    cv2.putText(image, text, (text_x, text_y), 
-                               cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 255), thickness)
-                    
-                    # 在waypoint上方显示area type（如果有）
-                    if wp_desc:
-                        # 提取waypoint描述中的area type（第一部分，以" - "分隔）
-                        area_type = wp_desc.split(' - ')[0] if ' - ' in wp_desc else wp_desc
-                        area_font_scale = 0.5
-                        area_thickness = 1
-                        area_text_size = cv2.getTextSize(area_type, cv2.FONT_HERSHEY_SIMPLEX, 
-                                                          area_font_scale, area_thickness)[0]
-                        area_x = x_pos - area_text_size[0] // 2
-                        area_y = y_pos - 25  # 圆圈上方25像素（圆圈变小了）
-                        
-                        # Area type背景框（蓝色边框 + 白色填充）
-                        padding = 3
-                        cv2.rectangle(image,
-                                    (area_x - padding, area_y - area_text_size[1] - padding),
-                                    (area_x + area_text_size[0] + padding, area_y + padding),
-                                    (255, 0, 0), 1)  # 蓝色边框
-                        cv2.rectangle(image,
-                                    (area_x - padding + 1, area_y - area_text_size[1] - padding + 1),
-                                    (area_x + area_text_size[0] + padding - 1, area_y + padding - 1),
-                                    (255, 255, 255), -1)  # 白色填充
-                        cv2.putText(image, area_type, (area_x, area_y), 
-                                   cv2.FONT_HERSHEY_SIMPLEX, area_font_scale, (0, 0, 0), area_thickness)  # 黑色文字
         
         return image
     
@@ -2171,67 +2027,6 @@ class VLMNavigationController(InteractiveNavigationController):
         self._record_landmark_detection_step(self.current_step, detected_landmarks_step)
         return True
     
-    def _raycast_on_rotated_map(
-        self,
-        obstacle_mask: np.ndarray,
-        start_x: int,
-        start_y: int,
-        angle_deg: float
-    ) -> Optional[float]:
-        """
-        在旋转后的地图上进行光线投射
-        
-        Args:
-            obstacle_mask: [H, W] bool数组
-            start_x, start_y: 起始位置（像素）
-            angle_deg: 方向角度（度，图像坐标系）
-            
-        Returns:
-            距离（米），如果超出2.0m返回2.1
-        """
-        h, w = obstacle_mask.shape
-        angle_rad = np.deg2rad(angle_deg)
-        
-        # 方向向量（图像坐标系）
-        dx = np.cos(angle_rad)  # X方向（列）
-        dy = np.sin(angle_rad)  # Y方向（行）
-        
-        max_distance_m = 2.0
-        step_size = 0.5  # 0.5像素 = 2.5cm
-        resolution_cm = 5  # 5cm/pixel
-        
-        # 光线步进
-        distance_px = 0.0
-        max_steps = int(max_distance_m * 100 / resolution_cm / step_size)  # 2m / 0.025m = 80步
-        
-        for _ in range(max_steps):
-            distance_px += step_size
-            current_x = start_x + dx * distance_px
-            current_y = start_y + dy * distance_px
-            
-            # 边界检查
-            ix, iy = int(round(current_x)), int(round(current_y))
-            if not (0 <= ix < w and 0 <= iy < h):
-                return 2.1  # 超出地图
-            
-            # 障碍物检测
-            if obstacle_mask[iy, ix]:
-                distance_m = distance_px * resolution_cm / 100.0
-                return distance_m
-        
-        return 2.1  # 超过最大范围
-    
-    def _format_distance(self, distance_m: Optional[float]) -> str:
-        """格式化距离字符串"""
-        if distance_m is None:
-            return "Unknown"
-        elif distance_m > 2.0:
-            return ">2.0m open"
-        elif distance_m < 0.5:
-            return f"{distance_m:.2f}m WARNING"
-        else:
-            return f"{distance_m:.2f}m"
-    
     def _update_obstacle_distances_12_directions(self):
         """更新当前位置的12个方向障碍物距离（用于Thinking模式环视）
         每个方向使用±5°的5条光线取中位数
@@ -2247,62 +2042,13 @@ class VLMNavigationController(InteractiveNavigationController):
             if self.mapper.full_pose is None:
                 raise ValueError("Pose not initialized yet")
             
-            obstacle_map = self.mapper.full_map[0, ...]
-            h, w = obstacle_map.shape
-            
-            # 使用与可视化一致的障碍物掩码（阈值0.5）
-            obstacle_mask_display = obstacle_map > 0.5
-            obstacle_mask_display = np.flipud(obstacle_mask_display)
-            obstacle_mask_display = cv2.resize(
-                obstacle_mask_display.astype(np.uint8) * 255,
-                (480, 480),
-                interpolation=cv2.INTER_NEAREST
-            ) > 127
-            
-            # 注意：full_map 已经旋转过，agent朝向向上，位于(240, 240)
-            # 定义12个方向（agent朝上=-90°）
-            # angle_0 = 正前方 = -90°
-            # angle_30 = 左前方30° = -120°
-            # angle_60 = 左前方60° = -150°
-            # ...
-            directions = {
-                'angle_0':   -90,   # Front (0°)
-                'angle_30':  -120,  # Left 30° (逆时针)
-                'angle_60':  -150,  # Left 60°
-                'angle_90':  -180,  # Left 90°
-                'angle_120': 150,   # Left 120° (=-210°)
-                'angle_150': 120,   # Left 150° (=-240°)
-                'angle_180': 90,    # Back (180°)
-                'angle_210': 60,    # Right 150° (顺时针150°)
-                'angle_240': 30,    # Right 120°
-                'angle_270': 0,     # Right 90°
-                'angle_300': -30,   # Right 60°
-                'angle_330': -60    # Right 30°
-            }
-            
-            distances = {}
-            
-            # 计算12个方向的距离（每个方向用5条光线取中位数）
-            for key, angle in directions.items():
-                ray_distances = []
-                for offset in [-5, -2.5, 0, 2.5, 5]:
-                    test_angle = angle + offset
-                    dist_m = self._raycast_on_rotated_map(
-                        obstacle_mask_display, 240, 240, test_angle
-                    )
-                    if dist_m is not None:
-                        ray_distances.append(dist_m)
-                
-                # 使用中位数距离
-                if ray_distances:
-                    median_dist = np.median(ray_distances)
-                    distances[key] = self._format_distance(median_dist)
-                else:
-                    distances[key] = "Unknown"
-            
-            self.latest_obstacle_distances_12 = distances
-        except Exception as e:
-            import traceback
+            obstacle_mask_display = build_rotated_obstacle_mask(self.mapper.full_map)
+            self.latest_obstacle_distances_12 = calculate_obstacle_distances_12_directions(
+                obstacle_mask_display,
+                center_x=240,
+                center_y=240,
+            )
+        except Exception:
             self.latest_obstacle_distances_12 = {
                 f'angle_{i}': 'Unknown' for i in range(0, 360, 30)
             }
@@ -2320,25 +2066,13 @@ class VLMNavigationController(InteractiveNavigationController):
             if self.mapper.full_pose is None:
                 raise ValueError("Pose not initialized yet")
             
-            obstacle_map = self.mapper.full_map[0, ...]
-            h, w = obstacle_map.shape
-            
-            # 使用与可视化一致的障碍物掩码（阈值0.5）
-            obstacle_mask_display = obstacle_map > 0.5
-            obstacle_mask_display = np.flipud(obstacle_mask_display)
-            obstacle_mask_display = cv2.resize(
-                obstacle_mask_display.astype(np.uint8) * 255,
-                (480, 480),
-                interpolation=cv2.INTER_NEAREST
-            ) > 127
-            
-            # 注意：full_map 已经旋转过，agent朝向向上，位于(240, 240)
-            # 直接计算7个方向距离
-            self.latest_obstacle_distances = self.visualizer.calculate_obstacle_distances_from_rotated_map(
-                obstacle_mask_display, 240, 240
+            obstacle_mask_display = build_rotated_obstacle_mask(self.mapper.full_map)
+            self.latest_obstacle_distances = calculate_obstacle_distances_from_rotated_map(
+                obstacle_mask_display,
+                center_x=240,
+                center_y=240,
             )
-        except Exception as e:
-            import traceback
+        except Exception:
             self.latest_obstacle_distances = {
                 'front': 'Unknown',
                 'left_30': 'Unknown',

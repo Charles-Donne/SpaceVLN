@@ -1,0 +1,306 @@
+"""
+VLM navigation runtime orchestration.
+
+Keep CLI entrypoints thin by moving episode selection, controller bootstrapping,
+batch execution, and summary/report generation into reusable helpers.
+"""
+
+import argparse
+import os
+import random
+import subprocess
+import sys
+import time
+from typing import Any, Dict, List, Tuple
+
+from vlnce_baselines.config.default import get_config
+from vlnce_baselines.config_system import ConfigHelper
+from vlnce_baselines.vlm_navigation_controller import VLMNavigationController
+
+
+MIN_EPISODE_ID = 1
+MAX_EPISODE_ID = 1800
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="VLM自动导航系统")
+
+    parser.add_argument("--exp-config", type=str, required=True, help="Habitat配置文件")
+    parser.add_argument("--episode-id", type=int, default=0, help="起始Episode ID")
+    parser.add_argument(
+        "--episode-ids",
+        type=str,
+        default=None,
+        help="指定episode ID列表，逗号分隔（如 '832,701,231'）",
+    )
+    parser.add_argument("--num-episodes", type=int, default=1, help="运行Episode数量（连续或随机）")
+    parser.add_argument("--random", action="store_true", help="随机选择episodes而非连续运行")
+    parser.add_argument("--results-dir", type=str, default=None, help="结果保存目录")
+
+    parser.add_argument(
+        "--config",
+        type=str,
+        default="vlnce_baselines/vlm/api_config.yaml",
+        help="统一API配置文件路径（推荐）：同时设置LLM和VLM服务商/模型",
+    )
+    parser.add_argument(
+        "--llm-config",
+        type=str,
+        default=None,
+        help="LLM配置文件路径（仅当不使用 --config 时生效）",
+    )
+    parser.add_argument(
+        "--vlm-config",
+        type=str,
+        default=None,
+        help="VLM配置文件路径（仅当不使用 --config 时生效）",
+    )
+
+    parser.add_argument(
+        "--max-subtask-steps",
+        type=int,
+        default=5,
+        help="每个子任务最大步数（达到后强制触发验证，默认5步）",
+    )
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=None,
+        help="Episode最大总步数（覆盖配置文件，默认使用配置文件值）",
+    )
+    parser.add_argument("--auto", action="store_true", help="全自动运行（无需确认）")
+    return parser
+
+
+def load_runtime_config(args: argparse.Namespace):
+    config = get_config(args.exp_config, [])
+    if args.max_steps is not None:
+        config.defrost()
+        config.TASK_CONFIG.ENVIRONMENT.MAX_EPISODE_STEPS = args.max_steps
+        config.freeze()
+        print(f"\n⚙️  覆盖最大步数: {args.max_steps} (命令行参数)")
+    return config
+
+
+def resolve_episode_ids(args: argparse.Namespace) -> List[int]:
+    if args.episode_ids:
+        episode_ids = [int(x.strip()) for x in args.episode_ids.split(",")]
+        invalid_ids = [eid for eid in episode_ids if eid < MIN_EPISODE_ID or eid > MAX_EPISODE_ID]
+        if invalid_ids:
+            print(
+                f"\n❌ 错误: 以下episode ID超出有效范围 "
+                f"[{MIN_EPISODE_ID}, {MAX_EPISODE_ID}]: {invalid_ids}"
+            )
+            return []
+        print(f"\n📝 指定运行 {len(episode_ids)} 个episodes")
+        print(f"📊 Episodes: {episode_ids}")
+        return episode_ids
+
+    if args.random:
+        random_seed = int(time.time() * 1000) % (2**32)
+        random.seed(random_seed)
+        print(f"\n🎲 随机选择模式（从有效范围 [{MIN_EPISODE_ID}, {MAX_EPISODE_ID}] 中选择）")
+        print(f"   🎯 随机种子: {random_seed}")
+        print("   ⚠️  不验证episode是否存在，不存在的会自动跳过")
+
+        valid_range = range(MIN_EPISODE_ID, MAX_EPISODE_ID + 1)
+        num_to_sample = min(args.num_episodes, len(valid_range))
+        if num_to_sample == 0:
+            print("\n❌ 错误: 请求的episode数量为0")
+            return []
+
+        episode_ids = random.sample(list(valid_range), num_to_sample)
+        print(f"📊 随机选择了 {len(episode_ids)} 个episodes: {episode_ids}")
+        return episode_ids
+
+    start_id = args.episode_id
+    end_id = args.episode_id + args.num_episodes - 1
+
+    if start_id < MIN_EPISODE_ID:
+        print(f"\n❌ 错误: 起始episode ID {start_id} 小于最小值 {MIN_EPISODE_ID}")
+        print(f"   建议使用: --episode-id {MIN_EPISODE_ID}")
+        return []
+
+    if end_id > MAX_EPISODE_ID:
+        max_num = MAX_EPISODE_ID - start_id + 1
+        print(f"\n❌ 错误: 结束episode ID {end_id} 超过最大值 {MAX_EPISODE_ID}")
+        print(f"   建议使用: --num-episodes {max_num} (最多可运行到episode {MAX_EPISODE_ID})")
+        return []
+
+    episode_ids = list(range(start_id, end_id + 1))
+    print(f"\n📋 连续运行 episodes {start_id} 到 {end_id}")
+    print(f"📊 Episodes: {episode_ids}")
+    return episode_ids
+
+
+def build_episode_config(base_config, args: argparse.Namespace, episode_id: int):
+    episode_config = base_config.clone()
+    episode_config.defrost()
+    episode_config = ConfigHelper.setup_episode_config(episode_config, [episode_id], num_environments=1)
+    if args.results_dir:
+        episode_config = ConfigHelper.setup_results_dir(episode_config, args.results_dir)
+    episode_config = ConfigHelper.setup_navigation_config(episode_config)
+    episode_config.freeze()
+    return episode_config
+
+
+def create_controller(
+    episode_config,
+    args: argparse.Namespace,
+) -> Tuple[VLMNavigationController, bool, str]:
+    use_unified = os.path.exists(args.config)
+    if use_unified:
+        controller = VLMNavigationController(episode_config, config_path=args.config)
+        config_desc = args.config
+    else:
+        llm_config = args.llm_config or "vlnce_baselines/vlm/llm_config.yaml"
+        vlm_config = args.vlm_config or "vlnce_baselines/vlm/vlm_config.yaml"
+        controller = VLMNavigationController(
+            episode_config,
+            llm_config_path=llm_config,
+            vlm_config_path=vlm_config,
+        )
+        config_desc = f"LLM={llm_config} | VLM={vlm_config}"
+    return controller, use_unified, config_desc
+
+
+def run_single_episode(
+    base_config,
+    args: argparse.Namespace,
+    episode_id: int,
+    index: int,
+    total: int,
+) -> Dict[str, Any]:
+    print(f"\n{'='*80}")
+    print(f"🔄 [{index}/{total}] 开始Episode {episode_id}")
+    print(f"{'='*80}")
+
+    controller = None
+    try:
+        episode_config = build_episode_config(base_config, args, episode_id)
+        controller, use_unified, config_desc = create_controller(episode_config, args)
+        controller.reset_episode(episode_id=episode_id)
+
+        max_steps = episode_config.TASK_CONFIG.ENVIRONMENT.MAX_EPISODE_STEPS
+        print(f"\n📝 指令: {controller.current_instruction}")
+        print(f"⚙️  配置: Episode {episode_id} | 最大步数 {max_steps} (从 Habitat 配置)")
+        if use_unified:
+            print(f"🔧 API config: {config_desc}")
+        else:
+            print(f"🔧 VLM: {config_desc}")
+
+        result = controller.run_vlm_navigation(max_subtask_steps=args.max_subtask_steps)
+        total_steps = result.get("total_steps", result.get("steps", 0))
+
+        print(f"\n{'='*80}")
+        print(f"{'✅' if result['success'] else '❌'} Episode {episode_id} 完成 | 成功: {result['success']} | 步数: {total_steps}")
+        print(f"{'='*80}")
+        return {
+            "episode_id": episode_id,
+            "success": result["success"],
+            "steps": total_steps,
+            "error": None,
+        }
+    except Exception as exc:
+        import traceback
+
+        error_msg = str(exc)
+        print(f"\n❌ Episode {episode_id} 运行失败: {error_msg}")
+        print("\n完整错误堆栈:")
+        traceback.print_exc()
+        return {
+            "episode_id": episode_id,
+            "success": False,
+            "steps": 0,
+            "error": error_msg,
+        }
+    finally:
+        if controller is not None:
+            try:
+                controller.envs.close()
+            except Exception as cleanup_error:
+                print(f"⚠️  清理环境时出错: {cleanup_error}")
+
+
+def maybe_generate_report(args: argparse.Namespace, config) -> None:
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    analyze_script = os.path.join(project_root, "analyze_results.py")
+    results_dir = args.results_dir or config.RESULTS_DIR
+    if not os.path.exists(analyze_script) or not results_dir:
+        return
+
+    print("\n📊 生成详细评估报告...")
+    try:
+        result = subprocess.run(
+            [sys.executable, analyze_script, "--path", results_dir, "--save"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode == 0:
+            print(result.stdout)
+        else:
+            print(f"⚠️  分析脚本执行失败: {result.stderr}")
+    except Exception as exc:
+        print(f"⚠️  无法运行分析脚本: {exc}")
+
+
+def print_batch_summary(results_summary: List[Dict[str, Any]], args: argparse.Namespace, config) -> None:
+    print(f"\n\n{'='*80}")
+    print("📊 批量运行总结")
+    print(f"{'='*80}")
+
+    success_count = sum(1 for result in results_summary if result["success"])
+    total_count = len(results_summary)
+    results_dir = args.results_dir or config.RESULTS_DIR
+
+    if total_count > 0:
+        success_rate = success_count / total_count * 100.0
+        avg_steps = sum(result["steps"] for result in results_summary) / total_count
+        print(f"\n✅ 成功: {success_count}/{total_count} ({success_rate:.1f}%)")
+        print(f"❌ 失败: {total_count - success_count}/{total_count}")
+    else:
+        success_rate = 0.0
+        avg_steps = 0.0
+        print("\n⚠️  没有运行任何episodes")
+
+    print("\n详细结果:")
+    for result in results_summary:
+        status = "✅" if result["success"] else "❌"
+        error_msg = f" (错误: {result['error']})" if result["error"] else ""
+        print(f"  {status} Episode {result['episode_id']}: 步数={result['steps']}{error_msg}")
+
+    print(f"\n{'='*80}")
+    print("\n" + "=" * 60)
+    print("🏁 批量评估完成")
+    print("=" * 60)
+    print(f"✅ 成功率: {success_count}/{total_count} ({success_rate:.1f}%)")
+    print(f"📊 平均步数: {avg_steps:.1f}")
+    print(f"📁 结果目录: {results_dir}")
+    print(f"📄 详细报告: {os.path.join(results_dir, 'summary.txt')}")
+    print("=" * 60)
+
+
+def run_navigation_from_args(args: argparse.Namespace) -> int:
+    config = load_runtime_config(args)
+    episode_ids = resolve_episode_ids(args)
+
+    if not episode_ids:
+        print("\n❌ 错误: 没有可运行的episodes")
+        return 1
+
+    results_summary = []
+    for idx, episode_id in enumerate(episode_ids, 1):
+        results_summary.append(
+            run_single_episode(
+                config,
+                args,
+                episode_id=episode_id,
+                index=idx,
+                total=len(episode_ids),
+            )
+        )
+
+    print_batch_summary(results_summary, args, config)
+    maybe_generate_report(args, config)
+    return 0

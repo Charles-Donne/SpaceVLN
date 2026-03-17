@@ -141,11 +141,6 @@ class Semantic_Mapping(nn.Module):
         self.cat_pred_threshold = args.CAT_PRED_THRESHOLD
         self.exp_pred_threshold = args.EXP_PRED_THRESHOLD
         self.map_pred_threshold = args.MAP_PRED_THRESHOLD
-        self.obstacle_decay_enabled = bool(getattr(args, "OBSTACLE_DECAY_ENABLED", True))
-        self.obstacle_decay_rate = float(getattr(args, "OBSTACLE_DECAY_RATE", 0.99))
-        self.obstacle_decay_clear_threshold = float(
-            getattr(args, "OBSTACLE_DECAY_CLEAR_THRESHOLD", 0.05)
-        )
         
         # 分块地图：{(tile_x, tile_y): tensor[batch, C, 240, 240]}
         self.tiles = defaultdict(lambda: None)
@@ -220,23 +215,6 @@ class Semantic_Mapping(nn.Module):
             self.max_height - self.min_height
         ).float().to(self.device)
 
-    def _apply_obstacle_decay(self, map_tensor: torch.Tensor) -> torch.Tensor:
-        """对历史 obstacle 通道做指数衰减，让陈旧障碍逐步淡出。"""
-        if (
-            map_tensor is None
-            or map_tensor.shape[1] <= 0
-            or not self.obstacle_decay_enabled
-            or self.obstacle_decay_rate >= 0.999999
-        ):
-            return map_tensor
-
-        obstacle_ch = map_tensor[:, 0:1, :, :]
-        obstacle_ch.mul_(self.obstacle_decay_rate)
-        if self.obstacle_decay_clear_threshold > 0.0:
-            weak_mask = obstacle_ch < self.obstacle_decay_clear_threshold
-            obstacle_ch.masked_fill_(weak_mask, 0.0)
-        return map_tensor
-    
     def clear_trajectory(self) -> None:
         """清空子任务轨迹点列表（用于local map，global map的轨迹保留）"""
         self.subtask_trajectory_points.clear()
@@ -260,6 +238,15 @@ class Semantic_Mapping(nn.Module):
             _zero_map_channels(tile)
         for tile in self.one_step_tiles.values():
             _zero_map_channels(tile)
+
+    def clear_one_step_buffers(self) -> None:
+        """清空 one-step 地图缓存，避免 recentering 时读回历史残留。"""
+        if self.one_step_local_map is not None:
+            self.one_step_local_map.zero_()
+        if self.one_step_full_map is not None:
+            self.one_step_full_map.zero_()
+        self.one_step_tiles.clear()
+        self.one_step_full_map_crop_offset = (0, 0)
     
     def _draw_line_on_tile(self, tile_key, x0, y0, x1, y1):
         """
@@ -588,6 +575,13 @@ class Semantic_Mapping(nn.Module):
         tile_y_max = (gx2 - 1) // self.TILE_SIZE
         tile_x_min = gy1 // self.TILE_SIZE
         tile_x_max = (gy2 - 1) // self.TILE_SIZE
+
+        tiles_needed = [
+            (tile_x, tile_y)
+            for tile_y in range(tile_y_min, tile_y_max + 1)
+            for tile_x in range(tile_x_min, tile_x_max + 1)
+        ]
+        self._ensure_tiles_exist(tiles_needed, local_map.shape[0], is_one_step=is_one_step)
         
         # 写回数据到各个块
         for tile_y in range(tile_y_min, tile_y_max + 1):
@@ -1445,11 +1439,8 @@ class Semantic_Mapping(nn.Module):
 
         rotated = F.grid_sample(agent_view, rot_mat, align_corners=True)
         translated = F.grid_sample(rotated, trans_mat, align_corners=True) # shape: [bs, c, 240, 240]
-        # 历史 obstacle 先衰减，再与当前观测做 max 融合；新观测会立即覆盖旧值。
-        decayed_local_map = self._apply_obstacle_decay(self.local_map.clone())
-        decayed_one_step_local_map = self._apply_obstacle_decay(self.one_step_local_map.clone())
-        maps2 = torch.cat((decayed_local_map.unsqueeze(1), translated.unsqueeze(1)), 1)
-        one_step_maps2 = torch.cat((decayed_one_step_local_map.unsqueeze(1), translated.unsqueeze(1)), 1)
+        maps2 = torch.cat((self.local_map.unsqueeze(1), translated.unsqueeze(1)), 1)
+        one_step_maps2 = torch.cat((self.one_step_local_map.unsqueeze(1), translated.unsqueeze(1)), 1)
 
         map_pred, _ = torch.max(maps2, 1)
         one_step_map_pred, _ = torch.max(one_step_maps2, 1)
