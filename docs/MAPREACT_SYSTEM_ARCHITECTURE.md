@@ -91,12 +91,18 @@ Rule: prompts describe policy and output format; they should not contain impleme
   - detection overlay rendering
   - step asset saving
 
+- `vlnce_baselines/visualization/landmark_overlay.py`
+  - action-view partition guides
+  - bbox label ordering and rendering
+  - bottom-strip line building and rendering
+
 - `vlnce_baselines/visualization/map_projection.py`
   - shared world -> rotated map -> display projection
 
 - `vlnce_baselines/visualization/obstacle_analysis.py`
   - shared rotated obstacle mask build
-  - shared raycast-based distance scan for 7-direction / 12-direction outputs
+  - shared depth-sampled action obstacle distance scan
+  - shared panorama distance scan utilities
 
 Rule: all renderers and prompt inputs must reuse the same projection and obstacle analysis utilities.
 
@@ -194,7 +200,7 @@ must live in `map_projection.py`.
 
 Any logic that computes:
 
-- 7-direction action obstacle distances
+- action-view obstacle distances
 - 12-direction panorama obstacle distances
 - rotated obstacle masks
 
@@ -218,6 +224,12 @@ They should not recompute geometry from rendered images unless used only as a fa
 
 - moved batch runtime orchestration out of `vlm_navigation.py`
 - added reusable runner module: `vlnce_baselines/vlm/runner.py`
+
+### 6.2 Slimmed Visualization Responsibilities
+
+- kept `visualizer.py` as the rendering coordinator
+- moved action landmark overlay rendering details into `vlnce_baselines/visualization/landmark_overlay.py`
+- kept geometry in `map_projection.py` and depth-distance sampling in `obstacle_analysis.py`
 
 ### 6.2 Removed Duplicate Geometry / Scan Logic
 

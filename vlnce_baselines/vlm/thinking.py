@@ -9,7 +9,6 @@ from vlnce_baselines.vlm.prompts import (
     get_initial_planning_prompt,
     get_verification_replanning_prompt
 )
-from vlnce_baselines.visualization.visualizer import MapVisualizer
 
 
 class LLMPlanner(BaseAPIClient):

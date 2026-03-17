@@ -103,14 +103,16 @@ def build_action_landmark_map_info(
     step_landmark_entries: Sequence[Dict[str, Any]],
     landmark_dist_map: Optional[Dict[str, Tuple[float, float]]] = None,
     landmark_dist_map_multi: Optional[Dict[str, List[Tuple[float, float]]]] = None,
+    landmark_instances_world: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> Optional[str]:
     """Build the action prompt's visible/off-screen landmark summary."""
     landmark_dist_map = landmark_dist_map or {}
     landmark_dist_map_multi = landmark_dist_map_multi or {}
-    if not (step_landmark_entries or landmark_dist_map or landmark_dist_map_multi):
+    landmark_instances_world = landmark_instances_world or []
+    if not (step_landmark_entries or landmark_dist_map or landmark_dist_map_multi or landmark_instances_world):
         return None
 
-    visible_entries: List[Tuple[str, float, float, Optional[int]]] = []
+    visible_entries: List[Tuple[str, float, float, Optional[int], float]] = []
     for entry in step_landmark_entries:
         name = entry.get("name")
         distance_m = entry.get("distance_m")
@@ -119,7 +121,13 @@ def build_action_landmark_map_info(
             continue
         try:
             visible_entries.append(
-                (str(name), float(distance_m), float(angle_deg), _maybe_int(entry.get("instance_idx")))
+                (
+                    str(name),
+                    float(distance_m),
+                    float(angle_deg),
+                    _maybe_int(entry.get("instance_idx")),
+                    float(entry.get("confidence", 0.0)),
+                )
             )
         except (TypeError, ValueError):
             continue
@@ -128,7 +136,7 @@ def build_action_landmark_map_info(
     visible_instance_indices: Dict[str, set] = {}
     lines: List[str] = []
 
-    for cls_name, dist_m, angle_deg, instance_idx in visible_entries:
+    for cls_name, dist_m, angle_deg, instance_idx, confidence in visible_entries:
         if instance_idx is not None:
             visible_instance_indices.setdefault(cls_name, set()).add(instance_idx)
         same_cls_count = len(landmark_dist_map_multi.get(cls_name, [])) or sum(
@@ -136,12 +144,44 @@ def build_action_landmark_map_info(
         )
         suffix = f" #{instance_idx + 1}" if instance_idx is not None and same_cls_count > 1 else ""
         lines.append(
-            f"  - [Visible] {cls_name}{suffix}: {dist_m:.1f}m, "
-            f"{format_relative_direction(angle_deg)}"
+            f"  - vis {cls_name}{suffix}: {dist_m:.1f}m, "
+            f"{format_relative_direction(angle_deg)}, confidence: {confidence:.3f}"
             f"{build_landmark_turn_hint(angle_deg, is_visible=True)}"
         )
 
-    if landmark_dist_map_multi:
+    if landmark_instances_world:
+        offscreen_items: List[Tuple[str, str, float, float, float]] = []
+        for item in sorted(
+            landmark_instances_world,
+            key=lambda entry: float(entry.get("distance_m", 1e9)),
+        ):
+            cls_name = item.get("name")
+            instance_idx = _maybe_int(item.get("instance_idx"))
+            distance_m = item.get("distance_m")
+            angle_deg = item.get("angle_deg")
+            if cls_name is None or instance_idx is None or distance_m is None or angle_deg is None:
+                continue
+            if instance_idx in visible_instance_indices.get(str(cls_name), set()):
+                continue
+            same_cls_count = sum(1 for inst in landmark_instances_world if inst.get("name") == cls_name)
+            suffix = f" #{instance_idx + 1}" if same_cls_count > 1 else ""
+            offscreen_items.append(
+                (
+                    str(cls_name),
+                    suffix,
+                    float(distance_m),
+                    float(angle_deg),
+                    float(item.get("confidence", 0.0)),
+                )
+            )
+
+        for cls_name, suffix, dist_m, angle_deg, confidence in offscreen_items:
+            lines.append(
+                f"  - off vis {cls_name}{suffix}: {dist_m:.1f}m, "
+                f"{format_relative_direction(angle_deg)}, confidence: {confidence:.3f}"
+                f"{build_landmark_turn_hint(angle_deg)}"
+            )
+    elif landmark_dist_map_multi:
         offscreen_items: List[Tuple[str, str, float, float]] = []
         for cls_name, candidates in sorted(
             landmark_dist_map_multi.items(),
@@ -160,8 +200,8 @@ def build_action_landmark_map_info(
 
         for cls_name, suffix, dist_m, angle_deg in sorted(offscreen_items, key=lambda item: item[2]):
             lines.append(
-                f"  - [Off-screen] {cls_name}{suffix}: {dist_m:.1f}m, "
-                f"{format_relative_direction(angle_deg)}"
+                f"  - off vis {cls_name}{suffix}: {dist_m:.1f}m, "
+                f"{format_relative_direction(angle_deg)}, confidence: 0.000"
                 f"{build_landmark_turn_hint(angle_deg)}"
             )
     else:
@@ -170,8 +210,8 @@ def build_action_landmark_map_info(
             if cls_name in visible_names:
                 continue
             lines.append(
-                f"  - [Off-screen] {cls_name}: {dist_m:.1f}m, "
-                f"{format_relative_direction(angle_deg)}"
+                f"  - off vis {cls_name}: {dist_m:.1f}m, "
+                f"{format_relative_direction(angle_deg)}, confidence: 0.000"
                 f"{build_landmark_turn_hint(angle_deg)}"
             )
 

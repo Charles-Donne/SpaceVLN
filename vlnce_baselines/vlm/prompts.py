@@ -16,7 +16,7 @@ INITIAL_PLANNING_PROMPT = """VLN Planning: Analyze environment + Global Task →
 # Inputs
 **12 Views** (sampled every 30° around 360°; each RGB view HFOV is about 79°): IMAGE1=Front 0°, angles increase CCW
 - **Obstacle distances**: **nearest obstacle in that direction**, not far visible objects. <0.5m=blocked | 0.5-1.0m=caution | >1.0m=passable
-- **Custom landmark detection** (if present): yellow bbox is a view-only custom-landmark cue; the bottom white strip lists only the top-confidence detections kept across all 12 views as `landmark: name (confidence: x.xx)`
+- **Custom landmark detection** (if present): yellow bbox is a view-only custom-landmark cue; for each IMAGE, use the visible landmark name plus any shown distance/angle as room/object evidence only
 - **Auto-rotation**: System rotates to your chosen IMAGE → becomes Front (0°)
 - **Subtask instruction scope**: After auto-rotation, plan only the easiest immediate action from the current front view
 
@@ -29,10 +29,10 @@ INITIAL_PLANNING_PROMPT = """VLN Planning: Analyze environment + Global Task →
 # Reasoning (6 Parts)
 
 **1) 12-View Analysis (MUST analyze EACH IMAGE 1-12)**
-**Format for each IMAGE**: "IMAGE# (Direction Angle°): space/room; NEAR: large/current objects; FAR: small/distant objects; Obs: X.Xm"
+**Format for each IMAGE**: "IMAGE# (Direction Angle°): space/room; NEAR: large/current objects; FAR: small/distant objects; Landmark: name + shown distance/angle if any, else none; Obs: X.Xm"
 
 **REQUIRED - Analyze ALL 12 IMAGEs in order**:
-**Per IMAGE requirement**: state direction, likely space/room, NEAR large objects, FAR small objects, visible custom-landmark cues if any, obstacle distance
+**Per IMAGE requirement**: state direction, likely space/room, NEAR large objects, FAR small objects, visible custom-landmark name plus shown distance/angle if any, obstacle distance
 **Distance classification**: NEAR<1m (large, current) | FAR>1.5m (small, next); connect adjacent views and track landmarks across angles
 **NO hallucination**: Say only what's visible
 
@@ -75,13 +75,13 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (correct room + tar
 # Output (JSON only)
 
 {{
-    "reasoning": "<6 parts REQUIRED: 1)12-Views(MUST analyze IMAGE 1-12 with angle+direction+space/room+NEAR large objects+FAR small objects+obstacle), 2)Maps(local+global), 3)Position+Task chain(✓→Current→unmarked), 4)Direction, 5)Near-term, 6)Long-term>",
+    "reasoning": "<6 parts REQUIRED: 1)12-Views(MUST analyze IMAGE 1-12 with angle+direction+space/room+NEAR large objects+FAR small objects+visible landmark name+shown distance/angle if any+obstacle), 2)Maps(local+global), 3)Position+Task chain(✓→Current→unmarked), 4)Direction, 5)Near-term, 6)Long-term>",
     "current_waypoint": "<Room | Nearby (<1m): obj1, obj2 | Connected (>2m): area1, area2>",
     "waypoint_sequence": "<Current→Next→...→Goal. Mark (✓) passed only>",
     "task_progress": "<Completed✓ current(Current) future unmarked. ONE (Current) only>",
     "next_waypoint_direction": "<IMAGE 1-12>",
     "next_waypoint_destination": "<Room's object>",
-    "subtask_instruction": "<Fixed draft: 'From IMAGE# view, action + path cue + destination'; final text keeps only action + path cue + destination>",
+    "subtask_instruction": "<Exactly one short sentence: 'From [next_waypoint_direction] view, start, [action + optional pass-by/path cue + destination]'>",
     "next_waypoint_landmark": "<Single clear recognizable landmark/object phrase; NEVER use door/doorway/hallway/corridor>",
     "global_task_finish": <true if the final room-object target is reached and the target object is within ~1m. Else false>
 }}
@@ -99,7 +99,7 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (correct room + tar
     "task_progress": "Turn around walk through exercise room(Current) into living room. Wait by Table.",
     "next_waypoint_direction": "IMAGE 5 (Left 120°)",
     "next_waypoint_destination": "Exercise Room's exercise equipment",
-    "subtask_instruction": "Move through the exercise room doorway toward the exercise equipment.",
+    "subtask_instruction": "From IMAGE 5 (Left 120deg) view, start, move toward the exercise room's exercise equipment.",
     "next_waypoint_landmark": "exercise equipment",
     "global_task_finish": false
 }}
@@ -107,11 +107,11 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (correct room + tar
 **Critical Rules**:
 - **Stage order**: Finish the nearest unfinished stage first; in initial planning, complete the first sentence/stage before later ones.
 - **Landmark choice**: Prefer clear, recognizable objects/furniture or phrases; do NOT output generic landmarks such as door, doorway, hallway, corridor as `next_waypoint_landmark`.
-- **Reasoning**: Analyze all 12 IMAGEs; for each, report NEAR large objects and FAR small objects when visible.
+- **Reasoning**: Analyze all 12 IMAGEs; for each, report likely space/room, NEAR large objects, FAR small objects, and visible landmark name plus shown distance/angle when available.
 - **Progress consistency**: Before current=(✓), current=(Current), after current=unmarked.
 - **Arrival order**: Judge arrival in two steps: first confirm the room/space, then confirm the room's target object is within ~1m; do not STOP before both hold.
 - **Destination/relations**: Keep landmark order/relations. "At entrance" = doorway. `next_waypoint_destination` must be in "[room]'s [object]" form—room first, then object; if the current room-object target is already reached, STOP immediately.
-- **Subtask instruction**: `subtask_instruction` must be one short immediate sentence for only the nearest unfinished room/object subtask, drafted as "From [next_waypoint_direction] view, [action + path cue + destination]." Final text must drop the "From ... view" prefix and keep only the action clause.
+- **Subtask instruction**: `subtask_instruction` must be exactly one short immediate sentence for only the nearest unfinished room/object subtask, in the fixed form "From [next_waypoint_direction] view, start, [action + optional pass-by/path cue + destination]." Use direct verbs such as move/go/walk/enter/pass/follow/cross/approach/continue/head/climb/ascend/descend/stop. The action module will automatically drop the "From ... view, start," prefix.
 - **Space choice**: Move toward the most likely task-relevant space and the most likely relevant object in that space, guided by current views plus waypoint history.
 - **Position awareness**: NEAR<1m across multiple IMAGEs = current position; FAR>1.5m in 1-2 views is usually destination, not arrival.
 """
@@ -131,7 +131,7 @@ VERIFICATION_REPLANNING_PROMPT = """VLN Verification: Verify subtask completion 
 # Inputs
 **12 Views** (sampled every 30°; each RGB view HFOV is about 79°): IMAGE1=Front 0°, angles increase CCW
 - **Obstacle distances**: **nearest obstacle in that direction**, not far visible objects. <0.5m=blocked | 0.5-1.0m=caution | >1.0m=passable
-- **Custom landmark detection** (if present): yellow bbox is a view-only custom-landmark cue; the bottom white strip lists only the top-confidence detections kept across all 12 views as `landmark: name (confidence: x.xx)`
+- **Custom landmark detection** (if present): yellow bbox is a view-only custom-landmark cue; for each IMAGE, use the visible landmark name plus any shown distance/angle as room/object evidence only
 - **Auto-rotation**: System rotates to your IMAGE
 - **Custom landmark bbox** (if present): yellow bbox text is a view-only cue for the current custom landmark; use it as visual evidence for room/object judgment, not map memory or path-clearance proof
 - **Subtask instruction scope**: After auto-rotation, plan only the easiest immediate action from the current front view
@@ -145,10 +145,10 @@ Direction labels in waypoint history are snapped like action/detection labels: F
 # Reasoning (6 Parts)
 
 **1) 12-View Analysis (MUST analyze EACH IMAGE 1-12)**
-**Format**: "IMAGE# (Direction Angle°): space/room; NEAR: large/current objects; FAR: smaller/distant objects; Obs: X.Xm"
+**Format**: "IMAGE# (Direction Angle°): space/room; NEAR: large/current objects; FAR: smaller/distant objects; Landmark: name + shown distance/angle if any, else none; Obs: X.Xm"
 
 **REQUIRED - Analyze ALL 12 IMAGEs in order**:
-**Per IMAGE requirement**: state direction, likely space/room, NEAR large objects, FAR small objects, visible custom-landmark cues if any, obstacle distance
+**Per IMAGE requirement**: state direction, likely space/room, NEAR large objects, FAR small objects, visible custom-landmark name plus shown distance/angle if any, obstacle distance
 **Distance**: NEAR<1m (large) | FAR>1.5m (small)
 **NO hallucination**: Say only what's visible
 
@@ -199,13 +199,13 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (correct room + tar
 # Output (JSON only)
 
 {{
-    "reasoning": "<6 parts REQUIRED: 1)12-Views(MUST analyze IMAGE 1-12 with angle+direction+space/room+NEAR large objects+FAR small objects+obstacle), 2)Maps(local+waypoint history+global history/trajectory), 3)Position+Task chain(✓→Current→unmarked)+arrival, 4)Direction, 5)Near-term, 6)Long-term>",
+    "reasoning": "<6 parts REQUIRED: 1)12-Views(MUST analyze IMAGE 1-12 with angle+direction+space/room+NEAR large objects+FAR small objects+visible landmark name+shown distance/angle if any+obstacle), 2)Maps(local+waypoint history+global history/trajectory), 3)Position+Task chain(✓→Current→unmarked)+arrival, 4)Direction, 5)Near-term, 6)Long-term>",
     "current_waypoint": "<Room | Nearby (<1m): obj1, obj2 | Connected (>2m): area1, area2>",
     "waypoint_sequence": "<Completed(✓)→Current→Next→Goal. Mark (✓) passed/at(<0.5m) only>",
     "task_progress": "<Completed✓ current(Current) future unmarked. ONE (Current) only. All✓+NO(Current)=complete>",
     "next_waypoint_direction": "<IMAGE 1-12>",
     "next_waypoint_destination": "<Room's object>",
-    "subtask_instruction": "<Fixed draft: 'From IMAGE# view, action + path cue + destination'; final text keeps only action + path cue + destination>",
+    "subtask_instruction": "<Exactly one short sentence: 'From [next_waypoint_direction] view, start, [action + optional pass-by/path cue + destination]'>",
     "next_waypoint_landmark": "<Single clear recognizable landmark/object phrase; NEVER use door/doorway/hallway/corridor>",
     "global_task_finish": <true if the final room-object target is reached and the target object is within ~1m. Else false>
 }}
@@ -224,7 +224,7 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (correct room + tar
     "task_progress": "Exit bedroom(✓), turn left(✓). Walk passing gray couch(✓), stop at rug(✓).",
     "next_waypoint_direction": "IMAGE 1 (Front 0°)",
     "next_waypoint_destination": "Living Room's Rug",
-    "subtask_instruction": "Stop. At rug <0.5m - goal reached",
+    "subtask_instruction": "From IMAGE 1 (Front 0°) view, start, stop at the living room's rug.",
     "next_waypoint_landmark": "rug",
     "global_task_finish": true
 }}
@@ -241,7 +241,7 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (correct room + tar
     "task_progress": "Walk to kitchen(✓) through hallway(Current), then enter bedroom on left.",
     "next_waypoint_direction": "IMAGE 5 (Left 120°)",
     "next_waypoint_destination": "Bedroom's bed",
-    "subtask_instruction": "Move through the bedroom doorway toward the bed.",
+    "subtask_instruction": "From IMAGE 5 (Left 120°) view, start, move toward the bedroom's bed.",
     "next_waypoint_landmark": "bed",
     "global_task_finish": false
 }}
@@ -251,7 +251,7 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (correct room + tar
 - **Nearest relevant landmark first**: For the current unfinished stage, prefer the nearest landmark that advances it.
 - **Landmark relations**: Preserve directional/relational constraints between landmarks (e.g., near, beside, left/right, through, after).
 - **Landmark choice**: Prefer clear, recognizable objects/furniture or phrases; do NOT output generic landmarks such as door, doorway, hallway, corridor as `next_waypoint_landmark`.
-- **Reasoning thoroughness**: Part 1 MUST analyze ALL 12 IMAGEs (angle+direction+space+NEAR/FAR content+obstacle), and for every IMAGE report NEAR large objects and FAR small objects when visible. Part 3 MUST detail position + task chain (✓→Current→unmarked).
+- **Reasoning thoroughness**: Part 1 MUST analyze ALL 12 IMAGEs (angle+direction+space+NEAR/FAR content+visible landmark name+shown distance/angle if any+obstacle), and for every IMAGE report NEAR large objects and FAR small objects when visible. Part 3 MUST detail position + task chain (✓→Current→unmarked).
 - **Base on actual**: Say only what's visible. Wall=wall, don't guess beyond
 - **Position first**: Determine position → then mark (✓)/Current/unmarked
 - **Arrival order**: Judge arrival in two steps: first confirm the room/space, then confirm the room's target object is within ~1m; far visibility alone is not arrival.
@@ -261,7 +261,7 @@ TURN_LEFT/RIGHT (30-180°) | MOVE_FORWARD (0.25-1.5m) | STOP (correct room + tar
 - **Room-first**: "[room]'s [object]" → go to [room], then [object]; if already at the current/final room-object target and that object is within ~1m, STOP immediately.
 - **Detail instructions**: [room]+[relation]+[object]. "Living room's gray couch" NOT "couch"
 - **Destination format**: `next_waypoint_destination` must be in "[room]'s [object]" form.
-- **Subtask instruction**: `subtask_instruction` must be one short immediate sentence for only the nearest unfinished room/object subtask, drafted as "From [next_waypoint_direction] view, [action + path cue + destination]." Final text must drop the "From ... view" prefix and keep only the action clause.
+- **Subtask instruction**: `subtask_instruction` must be exactly one short immediate sentence for only the nearest unfinished room/object subtask, in the fixed form "From [next_waypoint_direction] view, start, [action + optional pass-by/path cue + destination]." Use direct verbs such as move/go/walk/enter/pass/follow/cross/approach/continue/head/climb/ascend/descend/stop. The action module will automatically drop the "From ... view, start," prefix.
 - **Map Part 2**: NO IMAGE numbers in Part 2, use only map
 """
 

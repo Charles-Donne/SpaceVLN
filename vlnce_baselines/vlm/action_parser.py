@@ -33,8 +33,8 @@ class ActionParser:
     STOP = "STOP"
     
     # 有效动作范围
-    VALID_TURN_DEGREES = [30, 60, 90, 120, 150, 180]
-    VALID_MOVE_METERS = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5]
+    VALID_TURN_DEGREES = [30]
+    VALID_MOVE_METERS = [0.25, 0.5, 0.75, 1.0, 1.25]
     
     def __init__(self):
         """初始化动作解析器"""

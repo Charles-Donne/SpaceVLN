@@ -21,6 +21,14 @@ from typing import List, Tuple, Optional, Dict, Any
 
 from vlnce_baselines.common.spatial_formatter import format_relative_direction
 from vlnce_baselines.visualization import rendering as vu
+from vlnce_baselines.visualization.landmark_overlay import (
+    LandmarkDrawItem,
+    build_landmark_strip_lines,
+    draw_action_partition_lines,
+    draw_landmark_boxes,
+    draw_landmark_labels,
+    render_landmark_strip,
+)
 from vlnce_baselines.visualization.map_projection import RotatedMapProjector
 from vlnce_baselines.visualization.obstacle_analysis import (
     ACTION_VIEW_DIRECTIONS,
@@ -969,6 +977,7 @@ class MapVisualizer:
                               landmark_dist_map: Optional[Dict[str, Tuple[float, float]]] = None,
                               landmark_dist_map_multi: Optional[Dict[str, List[Tuple[float, float]]]] = None,
                               landmark_masks: Optional[np.ndarray] = None,
+                              show_action_partitions: bool = True,
                               append_bottom_strip: bool = True,
                               controller=None) -> np.ndarray:
         """
@@ -989,29 +998,8 @@ class MapVisualizer:
             detection_vis: 检测可视化图像（只显示Landmark边界框）
         """
         detection_vis = rgb.copy()
-
-        def _draw_action_partition_lines(image: np.ndarray) -> None:
-            h_img, w_img = image.shape[:2]
-            center_x = w_img // 2
-            bottom_y = h_img - 1
-            guide_color = (255, 220, 160)
-            for boundary_deg in (-25.0, 25.0):
-                half_fov = float(hfov) / 2.0
-                if half_fov <= 1e-6:
-                    continue
-                ratio = (boundary_deg + half_fov) / float(hfov)
-                x_top = int(round(ratio * (w_img - 1)))
-                x_top = max(0, min(w_img - 1, x_top))
-                cv2.line(
-                    image,
-                    (center_x, bottom_y),
-                    (x_top, 0),
-                    guide_color,
-                    2,
-                    cv2.LINE_AA,
-                )
-
-        _draw_action_partition_lines(detection_vis)
+        if show_action_partitions:
+            draw_action_partition_lines(detection_vis, hfov_deg=float(hfov))
         
         if detections is None or len(detections.xyxy) == 0:
             if controller is not None:
@@ -1020,11 +1008,10 @@ class MapVisualizer:
         
         # 统计检测到的landmark
         detected_landmarks = []
-        visible_entries = []  # [(name, dist_m, angle_deg), ...] using corrected map values when available
         visible_entries_meta = []
         matched_in_view: set = set()  # 当前帧中实际可见的landmark类名
         candidate_entries: List[Dict[str, Any]] = []
-        draw_items: List[Dict[str, Any]] = []
+        draw_items: List[LandmarkDrawItem] = []
 
         def _bbox_center_angle_deg(x1: int, x2: int, width: int) -> float:
             xc = (width - 1) / 2.0
@@ -1131,9 +1118,6 @@ class MapVisualizer:
             display_dist_m = map_dist_m
             display_angle_deg = map_angle_deg
 
-            if display_dist_m is not None and display_angle_deg is not None:
-                visible_entries.append((label_name, display_dist_m, display_angle_deg))
-
             # bbox上方只显示最终用于决策的距离和动作角度
             row1 = ""
             inst_prefix = ""
@@ -1173,60 +1157,57 @@ class MapVisualizer:
                     "angle_deg": float(shown_angle_deg),
                     "instance_idx": map_instance_idx,
                 })
-            draw_items.append({
-                "name": label_name,
-                "bbox": (x1, y1, x2, y2),
-                "row1": row1,
-                "distance_m": float(shown_dist_m) if shown_dist_m is not None else 999.0,
-            })
+            draw_items.append(
+                LandmarkDrawItem(
+                    bbox=(x1, y1, x2, y2),
+                    label_text=row1,
+                    distance_m=float(shown_dist_m) if shown_dist_m is not None else 999.0,
+                )
+            )
 
         # 先渲染bbox框
         color = detection_colors["landmark"]
         thickness = detection_thickness["landmark"]
-        for item in draw_items:
-            x1, y1, x2, y2 = item["bbox"]
-            cv2.rectangle(detection_vis, (x1, y1), (x2, y2), color, thickness)
-
-        # 再按由远到近渲染bbox上方标签，保证近目标标签最终在最上层
-        for item in sorted(draw_items, key=lambda entry: entry["distance_m"], reverse=True):
-            row1 = item["row1"]
-            if not row1:
-                continue
-            x1, y1, x2, _y2 = item["bbox"]
-            font = cv2.FONT_HERSHEY_SIMPLEX
-            font_scale = 0.62
-            font_thickness = 2
-            pad = 5
-
-            (w1, h1), _ = cv2.getTextSize(row1, font, font_scale, font_thickness)
-            bg_w = w1 + pad * 2
-            bg_h = h1 + pad * 2
-
-            cx_bbox = (x1 + x2) // 2
-            bg_x = max(0, min(cx_bbox - bg_w // 2, w_img - bg_w))
-            bg_y = y1 - bg_h - 5
-            if bg_y < 0:
-                bg_y = y1 + 3
-
-            cv2.rectangle(detection_vis, (bg_x, bg_y), (bg_x + bg_w, bg_y + bg_h), color, -1)
-            r1_x = bg_x + (bg_w - w1) // 2
-            cv2.putText(
-                detection_vis,
-                row1,
-                (r1_x, bg_y + pad + h1),
-                font,
-                font_scale,
-                (0, 0, 0),
-                font_thickness,
-                cv2.LINE_AA,
-            )
+        draw_landmark_boxes(detection_vis, draw_items, color, thickness)
+        draw_landmark_labels(detection_vis, draw_items, color)
         
         # ── 底部条带：所有landmark信息（可见+离屏）拼接在图像下方，白底黑字 ──
         # [Visible] = 当前帧检测到，[Off-screen] = 地图中存在但视野外
         # 构建离屏landmark列表：优先保留多实例（同类多个实例分别显示距离/角度）
         # 仅用于渲染展示，不改变任何真实地图坐标。
-        offscreen_items = []  # [(cls_name, inst_idx, dist_m, angle_deg)]
-        if landmark_dist_map_multi:
+        offscreen_items = []  # [{"name", "instance_idx", "distance_m", "angle_deg", "confidence"}]
+        if controller is not None and getattr(controller, "latest_landmark_instances_world", None):
+            visible_instance_indices = {}
+            for entry in visible_entries_meta:
+                if entry.get("instance_idx") is None:
+                    continue
+                visible_instance_indices.setdefault(entry["name"], set()).add(entry["instance_idx"])
+
+            ranked_instances = sorted(
+                (dict(item) for item in controller.latest_landmark_instances_world),
+                key=lambda item: (
+                    float(item.get("distance_m", 1e9)),
+                    str(item.get("name", "")),
+                    int(item.get("instance_idx", 0) or 0),
+                ),
+            )
+            for inst in ranked_instances:
+                cls_name = inst.get("name")
+                inst_idx = inst.get("instance_idx")
+                distance_m = inst.get("distance_m")
+                angle_deg = inst.get("angle_deg")
+                if cls_name is None or inst_idx is None or distance_m is None or angle_deg is None:
+                    continue
+                if int(inst_idx) in visible_instance_indices.get(cls_name, set()):
+                    continue
+                offscreen_items.append({
+                    "name": str(cls_name),
+                    "instance_idx": int(inst_idx),
+                    "distance_m": float(distance_m),
+                    "angle_deg": float(angle_deg),
+                    "confidence": float(inst.get("confidence", 0.0)),
+                })
+        elif landmark_dist_map_multi:
             visible_instance_indices = {}
             for entry in visible_entries_meta:
                 if entry.get("instance_idx") is None:
@@ -1236,80 +1217,36 @@ class MapVisualizer:
             for cls_name, candidates in landmark_dist_map_multi.items():
                 sorted_candidates = sorted(candidates, key=lambda x: x[0])
                 used_set = visible_instance_indices.get(cls_name, set())
-                for inst_idx, (d_m, a_deg) in enumerate(sorted_candidates, 1):
-                    if (inst_idx - 1) in used_set:
+                for inst_idx, (d_m, a_deg) in enumerate(sorted_candidates):
+                    if inst_idx in used_set:
                         continue
-                    offscreen_items.append((cls_name, inst_idx, d_m, a_deg))
+                    offscreen_items.append({
+                        "name": str(cls_name),
+                        "instance_idx": int(inst_idx),
+                        "distance_m": float(d_m),
+                        "angle_deg": float(a_deg),
+                        "confidence": 0.0,
+                    })
         elif landmark_dist_map:
             for cls_name, (d_m, a_deg) in sorted(landmark_dist_map.items(), key=lambda x: x[1][0]):
                 if cls_name in matched_in_view:
                     continue
-                offscreen_items.append((cls_name, 1, d_m, a_deg))
+                offscreen_items.append({
+                    "name": str(cls_name),
+                    "instance_idx": 0,
+                    "distance_m": float(d_m),
+                    "angle_deg": float(a_deg),
+                    "confidence": 0.0,
+                })
 
         strip = None
         if visible_entries_meta or offscreen_items:
-            w_img2 = detection_vis.shape[1]
-            font2 = cv2.FONT_HERSHEY_SIMPLEX
-            fs2, ft2 = 0.5, 1
-
-            item_lines = []  # list of (dist_m, priority, text)
-
-            visible_cls_total = {}
-            for entry in visible_entries_meta:
-                cls_name = entry["name"]
-                total_candidates = len(landmark_dist_map_multi.get(cls_name, [])) if landmark_dist_map_multi else 1
-                visible_cls_total[cls_name] = max(
-                    visible_cls_total.get(cls_name, 0),
-                    total_candidates,
-                    (entry.get("instance_idx") or 0) + 1
-                )
-
-            for entry in visible_entries_meta:
-                lm_name = entry["name"]
-                d_m = entry["distance_m"]
-                a_deg = entry["angle_deg"]
-                sn = lm_name if len(lm_name) <= 40 else lm_name[:38] + ".."
-                inst_idx = entry.get("instance_idx")
-                suffix = ""
-                if inst_idx is not None and visible_cls_total.get(lm_name, 0) > 1:
-                    suffix = f" #{inst_idx + 1}"
-                item_lines.append((
-                    float(d_m),
-                    0,
-                    f"[Vis]{suffix} {sn}  c{float(entry.get('confidence', 0.0)):.2f}  {d_m:.1f}m  {format_relative_direction(a_deg)}",
-                ))
-
-            cls_total = {}
-            for cls_name, _inst_idx, _d_m, _a_deg in offscreen_items:
-                cls_total[cls_name] = cls_total.get(cls_name, 0) + 1
-
-            for cls_name, inst_idx, d_m, a_deg in offscreen_items:
-                sn = cls_name if len(cls_name) <= 40 else cls_name[:38] + ".."
-                suffix = f" #{inst_idx}" if cls_total.get(cls_name, 0) > 1 else ""
-                item_lines.append((
-                    float(d_m),
-                    1,
-                    f"[Off]{suffix} {sn}  {d_m:.1f}m  {format_relative_direction(a_deg)}",
-                ))
-
-            item_lines.sort(key=lambda item: (item[0], item[1], item[2]))
-
-            # 计算行高（增大间距，避免文字显示不全）
-            font2 = cv2.FONT_HERSHEY_SIMPLEX
-            fs2, ft2 = 0.60, 1
-            _sample = cv2.getTextSize("Ag", font2, fs2, ft2)[0]
-            row_h = _sample[1] + 14
-            pad_v = 6
-            total_h = row_h * len(item_lines) + pad_v * 2
-
-            strip = np.full((total_h, w_img2, 3), 255, dtype=np.uint8)
-            cv2.line(strip, (0, 0), (w_img2, 0), (180, 180, 180), 1)
-
-            for i, (_dist_m, _priority, txt) in enumerate(item_lines):
-                (tw, th), _ = cv2.getTextSize(txt, font2, fs2, ft2)
-                x_c = 8  # 左对齐，8px 左边距
-                y_c = pad_v + row_h * i + th
-                cv2.putText(strip, txt, (x_c, y_c), font2, fs2, (0, 0, 200), 1, cv2.LINE_AA)
+            item_lines = build_landmark_strip_lines(
+                visible_entries_meta,
+                offscreen_items,
+                landmark_dist_map_multi=landmark_dist_map_multi,
+            )
+            strip = render_landmark_strip(detection_vis.shape[1], item_lines)
 
             if append_bottom_strip:
                 detection_vis = np.vstack([detection_vis, strip])

@@ -313,22 +313,25 @@ class VLMNavigationController(InteractiveNavigationController):
     def _sanitize_subtask_instruction_text(
         text: Optional[str],
         destination: Optional[str] = None,
+        next_waypoint_direction: Optional[str] = None,
+        keep_view_prefix: bool = True,
     ) -> str:
-        """把 thinking 产出的子指令约束为“动作 + 目的地”，去掉自动转向相关前缀。"""
+        """Normalize planner subtask text to one sentence, optionally keeping the view prefix."""
         text = (text or "").strip()
         destination = (destination or "").strip()
-        if not text:
-            return f"Move toward {destination}." if destination else "Move toward the target."
+        next_waypoint_direction = (next_waypoint_direction or "").strip()
 
-        cleaned = text.replace("\n", " ").strip()
+        cleaned = text.replace("\n", " ").strip() if text else ""
         cleaned = re.sub(r"\s+", " ", cleaned)
 
-        # 去掉显式的自动转向/视角前缀
+        # 去掉显式的自动转向/视角前缀，只保留动作主体。
         prefix_patterns = [
             r"^\s*image\s*\d+\s*(?:\([^)]*\))?\s*[:,-]?\s*",
             r"^\s*from\s+image\s*\d+\s*(?:\([^)]*\))?\s*(?:view)?\s*[:,-]?\s*",
             r"^\s*from\s+[-+]?\d{1,3}\s*(?:deg(?:ree)?s?|°)\s+view\s*[:,-]?\s*",
             r"^\s*from\s+(?:front|left|right|back)\s*[-+]?\d{0,3}\s*(?:deg(?:ree)?s?|°)?\s+view\s*[:,-]?\s*",
+            r"^\s*from\s+image\s*\d+\s*view\s*,?\s*start\s*,?\s*",
+            r"^\s*from\s+[^,.;:]+view\s*,?\s*start\s*,?\s*",
             r"^\s*(?:after|once)\s+(?:auto-)?rotat(?:e|ing)[^,.;:]*[,.;:]\s*",
             r"^\s*(?:after|once)\s+(?:turn(?:ing)?|rotat(?:e|ing)|facing)[^,.;:]*[,.;:]\s*",
             r"^\s*(?:turn|rotate|face|look)\b[^,.;:]*[,.;:]\s*",
@@ -346,7 +349,7 @@ class VLMNavigationController(InteractiveNavigationController):
 
         # 若前面是转向说明，截断到真正的动作动词
         action_match = re.search(
-            r"\b(move|go|walk|enter|pass|follow|cross|approach|continue|stop|head)\b",
+            r"\b(move|go|walk|enter|pass|follow|cross|approach|continue|stop|head|climb|ascend|descend)\b",
             cleaned,
             flags=re.IGNORECASE,
         )
@@ -373,6 +376,11 @@ class VLMNavigationController(InteractiveNavigationController):
         cleaned = re.sub(r"^\s*(?:then|and then)\s+", "", cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,;:-")
 
+        # 保留为一句话；多句时只取第一句，避免 action 侧得到冗长指令。
+        if cleaned:
+            parts = re.split(r"(?<=[.!?])\s+", cleaned, maxsplit=1)
+            cleaned = parts[0].strip()
+
         if not cleaned:
             cleaned = f"Move toward {destination}" if destination else "Move toward the target"
 
@@ -391,25 +399,43 @@ class VLMNavigationController(InteractiveNavigationController):
 
         if destination and not has_destination_ref:
             if re.match(r"^\s*stop\b", cleaned, flags=re.IGNORECASE):
-                pass
-            elif re.search(r"\btoward\b|\bthrough\b|\binto\b|\balong\b|\bpast\b|\baround\b", cleaned, flags=re.IGNORECASE):
+                cleaned = f"Stop at {destination}"
+            elif re.search(
+                r"\btoward\b|\bthrough\b|\binto\b|\balong\b|\bpast\b|\baround\b|"
+                r"\bupstairs\b|\bdownstairs\b|\bascend\b|\bdescend\b|\bclimb\b|"
+                r"\bup stairs\b|\bdown stairs\b",
+                cleaned,
+                flags=re.IGNORECASE,
+            ):
                 cleaned = f"{cleaned.rstrip('.')} toward {destination}"
             else:
-                cleaned = f"{cleaned.rstrip('.')} {destination}"
+                cleaned = f"{cleaned.rstrip('.')} toward {destination}"
 
         cleaned = cleaned[0].upper() + cleaned[1:] if cleaned else cleaned
+        cleaned = cleaned.rstrip(" ,;:-")
         if cleaned and cleaned[-1] not in ".!?":
             cleaned += "."
+
+        if not keep_view_prefix:
+            return cleaned
+
+        if next_waypoint_direction:
+            body = cleaned
+            if body and body[0].isalpha():
+                body = body[0].lower() + body[1:]
+            return f"From {next_waypoint_direction} view, start, {body}"
         return cleaned
 
     def _sanitize_planner_response(self, response: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        """统一收紧 planner 输出里的子任务指令格式。"""
+        """Normalize planner outputs while keeping the full view-prefixed instruction."""
         if not response:
             return response
         response = dict(response)
         response["subtask_instruction"] = self._sanitize_subtask_instruction_text(
             response.get("subtask_instruction"),
             response.get("next_waypoint_destination"),
+            response.get("next_waypoint_direction"),
+            keep_view_prefix=True,
         )
         return response
     
@@ -776,6 +802,7 @@ class VLMNavigationController(InteractiveNavigationController):
                 hfov=self.config.MAP.HFOV,
                 landmark_dist_map=None,
                 landmark_dist_map_multi=None,
+                show_action_partitions=False,
                 append_bottom_strip=False,
                 controller=None,
             )
@@ -1436,12 +1463,20 @@ class VLMNavigationController(InteractiveNavigationController):
             step_landmark_entries=step_landmark_entries,
             landmark_dist_map=landmark_dist_map,
             landmark_dist_map_multi=landmark_dist_map_multi,
+            landmark_instances_world=getattr(self, 'latest_landmark_instances_world', []),
+        )
+
+        action_subtask_instruction = self._sanitize_subtask_instruction_text(
+            self.current_subtask.get('subtask_instruction', ''),
+            self.current_subtask.get('next_waypoint_destination', ''),
+            self.current_subtask.get('next_waypoint_direction', ''),
+            keep_view_prefix=False,
         )
 
         # 调用VLM决策（save_dir使call_api在发送时保存压缩图片+prompt）
         result = self.action_executor.decide_action(
             next_waypoint_destination=self.current_subtask.get('next_waypoint_destination', ''),
-            subtask_instruction=self.current_subtask.get('subtask_instruction', ''),
+            subtask_instruction=action_subtask_instruction,
             first_person_image=fp_image,
             action_mapping=ACTION_MAPPING,
             progress_summary=self.progress_summary,

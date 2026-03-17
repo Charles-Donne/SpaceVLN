@@ -31,20 +31,19 @@ You are provided with 1 image:
 - Directions: Left 30deg, FRONT, Right 30deg
 - Red = nearest obstacle <0.5m (blocked), Yellow = 0.5–2m (caution), Green = >2m (open)
 - **Yellow bounding box**: marks the subtask **landmark reference** ({detected_landmarks}) — a recognizable object near the destination area, **not the destination itself**; use it as a visual anchor to navigate into the right area
-- **Bottom white strip** (if present): all landmark names, distances and directions — `[Visible]` = detected in current frame, `[Off-screen]` = mapped but outside current view
+- **Bottom white strip** (if present): all mapped landmark entries in the form `vis/off vis + landmark name + distance + direction + confidence`; `vis` = detected now, `off vis` = mapped earlier but outside the current view
 
 {known_landmark_section}
 
 # Your Task
 
 **Decision Process**:
-1. **Detection View**: Check the **bottom strip** for all landmark names and distances. Is a yellow bbox visible? It marks the **subtask landmark reference** (nearby anchor, NOT the final destination) — navigate toward it to reach the destination area.
-2. **Image Analysis**: Analyze the current image by LEFT/CENTER/RIGHT and NEAR/FAR. Identify likely room/space cues, large nearby objects, smaller farther objects, and where the visible landmark/detected objects sit; use them to infer what space/room each region most likely is.
-3. **Waypoint History**: Read WP#1 -> ... -> LAST in order. Use each waypoint's snapped direction/distance to infer which direction continues toward the most likely task-relevant space/object from the explored route.
-4. **Arrival Check**: First judge whether you are in the correct room/space, then judge whether the destination object in that room is already within ~1.0m. Only then **STOP immediately**.
+1. **Detection + View Analysis**: Read the **bottom strip** first. Separate `vis` landmarks (currently visible) from `off vis` landmarks (mapped earlier but not visible now). Then analyze FRONT, Left 30deg, and Right 30deg by NEAR/FAR: for each region, state the likely room/space, large nearby objects, smaller farther objects, and visible landmark(s) with distance/angle/confidence.
+2. **Waypoint History**: Read WP#1 -> ... -> LAST in order. Use each waypoint's snapped direction/distance to infer which direction continues toward the most likely task-relevant room/object from the explored route.
+3. **Current Position + Destination Relation**: Using the current view plus waypoint history, infer where you are now: which room/space and roughly what local position in that space. Then infer where the destination is: which target room/space and where the target object likely sits relative to the current view.
+4. **Arrival Check**: First judge whether you are already in the correct room/space, then judge whether the destination object in that room is already within ~1.0m. Only then **STOP immediately**.
 5. **Depth Lines**: Which of Left 30 / Front / Right 30 is blocked vs safe?
-6. **Distance Estimation**: How far to destination? (e.g., "~3m", "<0.5m")
-7. **Action Decision**: After the full reasoning above, prefer the direction that best matches waypoint history + current room/object evidence toward the most likely relevant space/object. If FRONT is blocked, choose the safest side direction that stays closest to the destination.
+6. **Action Decision**: After the full reasoning above, prefer the direction that best matches current position + destination relation + waypoint history + current room/object evidence. If FRONT is blocked, choose the safest side direction that stays closest to the destination.
 
 **STOP Condition** — If the current subtask destination area is already nearby, STOP immediately. Concretely: the correct room/space is reached and the destination object is within ~1.0m. Do not move past it or take extra steps. Do not STOP early if you are still outside the correct room or not yet beside the target object.
 
@@ -55,7 +54,7 @@ You are provided with 1 image:
 # Output Format (JSON only)
 
 {{
-    "reasoning": "Logic: (1) LEFT/CENTER/RIGHT + NEAR/FAR image analysis with room/object cues and detected objects (2) likely space/room for each region (3) waypoint-history alignment (4) destination/landmark distance and arrival check (5) action decision",
+    "reasoning": "Logic: (1) read vis/off vis landmarks and analyze FRONT/LEFT30/RIGHT30 by NEAR/FAR with room/object cues (2) waypoint-history alignment (3) infer current room/space and local position plus destination room/object relation (4) arrival check (5) depth safety (6) action decision",
     "action_analysis": "One sentence stating the key visual evidence, waypoint-history cue, and why this action is best",
     "action": "MOVE_FORWARD" | "TURN_LEFT" | "TURN_RIGHT" | "STOP",
     "value": 0,
@@ -63,8 +62,8 @@ You are provided with 1 image:
 }}
 
 **Parameter rules**:
-- MOVE_FORWARD: "value" = meters (0.25 ~ 1.5)
-- TURN_LEFT / TURN_RIGHT: "value" = degrees (30 ~ 90, multiples of 30)
+- MOVE_FORWARD: "value" must be exactly one of [0.25, 0.5, 0.75, 1.0, 1.25]
+- TURN_LEFT / TURN_RIGHT: "value" must be exactly 30
 - STOP: "value" = 0
 
 # Examples
@@ -98,7 +97,8 @@ You are provided with 1 image:
 
 **Critical Rules**:
 - **STOP immediately** only when the correct room/space is confirmed and the destination object is within ~1.0m
-- reasoning must explicitly cover LEFT/CENTER/RIGHT plus NEAR/FAR image cues, likely room/space, and detected landmark/object evidence before choosing an action
+- reasoning must explicitly cover FRONT/LEFT30/RIGHT30 NEAR/FAR analysis, visible/off-screen landmark evidence, current position, destination room/object relation, and waypoint-history alignment before choosing an action
+- output action values must stay inside the fixed action space: TURN_LEFT/RIGHT=30 only; MOVE_FORWARD in {0.25, 0.5, 0.75, 1.0, 1.25}; STOP=0
 - If the destination is ahead and FRONT is clear, prefer MOVE_FORWARD
 - If FRONT is blocked, choose the closest safe side direction toward the destination, not a wider detour
 - For off-screen landmarks, **always turn toward the indicated direction first**

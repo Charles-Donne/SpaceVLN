@@ -63,7 +63,7 @@ class ThinkingViewRenderer:
     @staticmethod
     def _summarize_detected_landmarks(detected_landmarks: List[Tuple[str, float]]) -> List[Tuple[str, Tuple[int, int, int]]]:
         if not detected_landmarks:
-            return [("landmark: none", (40, 40, 40))]
+            return []
 
         ranked = sorted(
             [(str(name), float(confidence)) for name, confidence in detected_landmarks],
@@ -301,14 +301,18 @@ class ThinkingViewRenderer:
                 font_thickness=1,
                 text_color=(0, 0, 255),
             )
-            bottom_label = self._build_segmented_text_strip(
-                width,
-                self._summarize_detected_landmarks(detected_landmarks_view),
-                height=30,
-                font_scale=0.52,
-                font_thickness=1,
-            )
-            labeled_image = np.vstack([top_label, image, bottom_label])
+            bottom_segments = self._summarize_detected_landmarks(detected_landmarks_view)
+            if bottom_segments:
+                bottom_label = self._build_segmented_text_strip(
+                    width,
+                    bottom_segments,
+                    height=30,
+                    font_scale=0.52,
+                    font_thickness=1,
+                )
+                labeled_image = np.vstack([top_label, image, bottom_label])
+            else:
+                labeled_image = np.vstack([top_label, image])
 
             direction_filename = f"{phase}_direction_{angle:03d}.png"
             direction_path = os.path.join(directions_dir, direction_filename)

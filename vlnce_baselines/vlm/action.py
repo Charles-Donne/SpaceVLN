@@ -14,6 +14,8 @@ class ActionExecutor(BaseAPIClient):
     """VLM动作执行器 - 负责低层动作决策"""
     
     REQUIRED_FIELDS = ['reasoning', 'action_analysis', 'action']  # degrees/meters/progress_summary optional
+    VALID_TURN_VALUES = (30,)
+    VALID_MOVE_VALUES = (0.25, 0.5, 0.75, 1.0, 1.25)
     
     def __init__(self, config_path: str = "vlnce_baselines/vlm/vlm_config.yaml", 
                  turn_angle: float = 30.0, 
@@ -47,8 +49,38 @@ class ActionExecutor(BaseAPIClient):
         )
     
     def validate_response(self, response: Dict) -> bool:
-        """验证VLM响应是否包含所有必需字段"""
-        return self.validate_fields(response, self.REQUIRED_FIELDS)
+        """验证VLM响应是否包含所有必需字段和受限动作空间。"""
+        if not self.validate_fields(response, self.REQUIRED_FIELDS):
+            return False
+
+        action_name = str(response.get('action', '')).upper()
+        value = response.get('value', 0)
+
+        if action_name == 'STOP':
+            try:
+                return float(value) == 0.0
+            except (TypeError, ValueError):
+                return False
+
+        if action_name in ('TURN_LEFT', 'TURN_RIGHT'):
+            return self._normalize_allowed_value(value, self.VALID_TURN_VALUES) is not None
+
+        if action_name == 'MOVE_FORWARD':
+            return self._normalize_allowed_value(value, self.VALID_MOVE_VALUES) is not None
+
+        return False
+
+    @staticmethod
+    def _normalize_allowed_value(value, allowed_values, tol: float = 1e-6):
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return None
+
+        for allowed in allowed_values:
+            if abs(numeric - float(allowed)) <= tol:
+                return float(allowed)
+        return None
     
     def _generate_progress_update(self, current_progress: str, action_name: str, 
                                   degrees: float = 0, meters: float = 0,
@@ -267,8 +299,24 @@ class ActionExecutor(BaseAPIClient):
         
         # 提取value参数（degrees或meters，取决于action类型）
         value = response.get('value', 0)
-        degrees = value if action_name in ['TURN_LEFT', 'TURN_RIGHT'] else 0
-        meters = value if action_name == 'MOVE_FORWARD' else 0
+        degrees = 0
+        meters = 0
+        if action_name in ['TURN_LEFT', 'TURN_RIGHT']:
+            normalized_turn = self._normalize_allowed_value(value, self.VALID_TURN_VALUES)
+            if normalized_turn is None:
+                print(f"✗ Invalid turn value: {value} | allowed: {list(self.VALID_TURN_VALUES)}")
+                return None, None, None, None
+            degrees = int(normalized_turn)
+            response['value'] = degrees
+        elif action_name == 'MOVE_FORWARD':
+            normalized_move = self._normalize_allowed_value(value, self.VALID_MOVE_VALUES)
+            if normalized_move is None:
+                print(f"✗ Invalid move value: {value} | allowed: {list(self.VALID_MOVE_VALUES)}")
+                return None, None, None, None
+            meters = float(normalized_move)
+            response['value'] = meters
+        elif action_name == 'STOP':
+            response['value'] = 0
         
         # 计算实际位姿变化（如果提供了pose信息）
         actual_degrees = None
