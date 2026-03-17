@@ -36,18 +36,18 @@ You are provided with 1 image:
 # Your Task
 
 **Decision Process**:
-1. **Detection + View Analysis**: Read `vis/off vis` first. Then analyze FRONT, Left 30deg, and Right 30deg by NEAR/FAR: likely room/space, large nearby objects, smaller farther objects, and visible landmark(s) with distance/angle/confidence.
-2. **Waypoint History**: Read WP#1 -> ... -> LAST. Use snapped direction/distance to infer which direction continues toward the most likely task-relevant room/object.
-3. **Current Position + Destination Relation**: Using the current view plus waypoint history, infer where you are now and where the target room/object most likely is relative to the current view.
-4. **Arrival Check**: First confirm the correct room/space, then confirm the destination object in that room is already within ~1.0m. Only then **STOP immediately**.
+1. **Detection + View Analysis**: Read `vis/off vis` first. Then analyze FRONT, Left 30deg, and Right 30deg by NEAR/FAR: likely room/space, near large objects, far smaller objects, and landmark(s) with distance/angle/confidence.
+2. **Waypoint History**: Read WP#1 -> ... -> LAST. Use snapped direction/distance to infer which way continues toward the most likely task-relevant room/object.
+3. **Current Position + Destination Relation**: From the current view plus waypoint history, infer where you are and where the target room/object most likely is.
+4. **Arrival Check**: Confirm the room first, then the destination object in that room within ~1.0m. Only then **STOP immediately**.
 5. **Depth Lines**: Which of Left 30 / Front / Right 30 is blocked vs safe?
-6. **Action Decision**: After the full reasoning above, prefer the direction that best matches current position + destination relation + waypoint history + current room/object evidence. If FRONT is blocked, choose the safest side direction that stays closest to the destination.
+6. **Action Decision**: Prefer the direction that best matches current position + destination relation + waypoint history + current room/object evidence. If FRONT is blocked, choose the safest side that stays closest to the destination.
 
-**STOP Condition** — If the current subtask destination area is already nearby, STOP immediately. Concretely: the correct room/space is reached and the destination object is within ~1.0m. Do not move past it or take extra steps. Do not STOP early if you are still outside the correct room or not yet beside the target object.
+**STOP Condition** — STOP immediately only when the correct room/space is reached and the destination object there is within ~1.0m. Do not move past it, and do not STOP while still outside the room or away from the target object.
 
 **Movement Rule**: Move forward when the destination remains ahead and the path is clear; once the correct room/object target is reached, STOP immediately.
 
-**Safety Priority**: Avoid directions with red distance lines (obstacle <0.5m)
+**Safety Priority**: Avoid directions with red distance lines (<0.5m)
 
 # Output Format (JSON only)
 
@@ -87,7 +87,7 @@ You are provided with 1 image:
 
 **Critical Rules**:
 - **STOP immediately** only when the correct room/space is confirmed and the destination object is within ~1.0m
-- reasoning must explicitly cover FRONT/LEFT30/RIGHT30 NEAR/FAR analysis, visible/off-screen landmark evidence, current position, destination room/object relation, and waypoint-history alignment before choosing an action
+- reasoning must explicitly cover FRONT/LEFT30/RIGHT30 NEAR/FAR evidence, visible/off-screen landmarks, current position, destination room/object relation, and waypoint-history alignment before choosing an action
 - output `action` must stay inside the fixed action space: `TURN_LEFT 30deg` / `TURN_RIGHT 30deg` / `MOVE_FORWARD {{0.25m, 0.5m, 0.75m, 1.0m, 1.25m}}` / `STOP`
 - If the destination is ahead and FRONT is clear, prefer MOVE_FORWARD
 - If FRONT is blocked, choose the closest safe side direction toward the destination, not a wider detour

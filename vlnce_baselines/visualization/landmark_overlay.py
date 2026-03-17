@@ -55,7 +55,7 @@ def draw_action_partition_lines(
         )
 
     section_bounds = [0] + sorted(boundary_xs) + [w_img]
-    section_labels = ["LEFT", "CENTER", "RIGHT"]
+    section_labels = ["Left 30deg", "Front 0deg", "Right 30deg"]
     font = cv2.FONT_HERSHEY_SIMPLEX
     font_scale = 0.56
     font_thickness = 1
@@ -70,12 +70,12 @@ def draw_action_partition_lines(
         text_size, baseline = cv2.getTextSize(label, font, font_scale, font_thickness)
         text_w, text_h = text_size
         center_x = (left + right) // 2
-        text_x = max(left + 4, min(center_x - text_w // 2, right - text_w - 4))
-        text_y = max(text_h + 8, 18)
+        text_x = max(left + 3, min(center_x - text_w // 2, right - text_w - 3))
+        text_y = max(text_h + 7, 17)
         cv2.rectangle(
             image,
-            (text_x - 4, text_y - text_h - 4),
-            (text_x + text_w + 4, text_y + baseline + 2),
+            (text_x - 2, text_y - text_h - 2),
+            (text_x + text_w + 2, text_y + baseline + 1),
             bg_color,
             -1,
         )

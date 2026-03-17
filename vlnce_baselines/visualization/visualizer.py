@@ -90,6 +90,64 @@ class MapVisualizer:
             crop_offset=crop_offset,
             agent_orientation_deg=float(current_pose[2]),
         )
+
+    @staticmethod
+    def _bbox_iou(
+        bbox_a: Tuple[int, int, int, int],
+        bbox_b: Tuple[int, int, int, int],
+    ) -> float:
+        ax1, ay1, ax2, ay2 = bbox_a
+        bx1, by1, bx2, by2 = bbox_b
+        inter_x1 = max(ax1, bx1)
+        inter_y1 = max(ay1, by1)
+        inter_x2 = min(ax2, bx2)
+        inter_y2 = min(ay2, by2)
+        inter_w = max(0, inter_x2 - inter_x1)
+        inter_h = max(0, inter_y2 - inter_y1)
+        inter_area = float(inter_w * inter_h)
+        if inter_area <= 0.0:
+            return 0.0
+        area_a = float(max(0, ax2 - ax1) * max(0, ay2 - ay1))
+        area_b = float(max(0, bx2 - bx1) * max(0, by2 - by1))
+        union_area = area_a + area_b - inter_area
+        if union_area <= 1e-6:
+            return 0.0
+        return inter_area / union_area
+
+    @staticmethod
+    def _angle_diff_deg(angle_a: float, angle_b: float) -> float:
+        diff = float(angle_a) - float(angle_b)
+        while diff > 180.0:
+            diff -= 360.0
+        while diff < -180.0:
+            diff += 360.0
+        return abs(diff)
+
+    def _is_duplicate_detection_candidate(
+        self,
+        candidate: Dict[str, Any],
+        kept_candidate: Dict[str, Any],
+    ) -> bool:
+        if candidate.get("name") != kept_candidate.get("name"):
+            return False
+
+        bbox = candidate["bbox"]
+        kept_bbox = kept_candidate["bbox"]
+        iou = self._bbox_iou(bbox, kept_bbox)
+        if iou >= 0.65:
+            return True
+
+        rel_xy = candidate.get("det_rel_xy")
+        kept_rel_xy = kept_candidate.get("det_rel_xy")
+        if rel_xy is None or kept_rel_xy is None:
+            return False
+
+        rel_dist = float(np.hypot(rel_xy[0] - kept_rel_xy[0], rel_xy[1] - kept_rel_xy[1]))
+        angle_a = float(np.degrees(np.arctan2(rel_xy[1], rel_xy[0]))) if np.hypot(rel_xy[0], rel_xy[1]) > 1e-6 else 0.0
+        angle_b = float(np.degrees(np.arctan2(kept_rel_xy[1], kept_rel_xy[0]))) if np.hypot(kept_rel_xy[0], kept_rel_xy[1]) > 1e-6 else 0.0
+        angle_diff = self._angle_diff_deg(angle_a, angle_b)
+
+        return rel_dist <= 0.35 and angle_diff <= 12.0 and iou >= 0.25
     
     def _create_episode_directories(self, episode_id: int):
         """为特定episode创建保存目录"""
@@ -1066,7 +1124,16 @@ class MapVisualizer:
             })
 
         candidate_entries.sort(key=lambda item: (-float(item["confidence"]), int(item["raw_index"])))
-        selected_entries = candidate_entries[:max(1, int(detection_visible_topk))]
+        selected_entries: List[Dict[str, Any]] = []
+        for candidate in candidate_entries:
+            if any(
+                self._is_duplicate_detection_candidate(candidate, kept_candidate)
+                for kept_candidate in selected_entries
+            ):
+                continue
+            selected_entries.append(candidate)
+            if len(selected_entries) >= max(1, int(detection_visible_topk)):
+                break
         used_map_candidates = {}
 
         for candidate in selected_entries:
