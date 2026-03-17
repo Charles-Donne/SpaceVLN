@@ -33,15 +33,13 @@ You are provided with 1 image:
 - **Yellow bounding box**: marks the subtask **landmark reference** ({detected_landmarks}) — a recognizable object near the destination area, **not the destination itself**; use it as a visual anchor to navigate into the right area
 - **Bottom white strip** (if present): all mapped landmark entries in the form `vis/off vis + landmark name + distance + direction + confidence`; `vis` = detected now, `off vis` = mapped earlier but outside the current view
 
-{known_landmark_section}
-
 # Your Task
 
 **Decision Process**:
-1. **Detection + View Analysis**: Read the **bottom strip** first. Separate `vis` landmarks (currently visible) from `off vis` landmarks (mapped earlier but not visible now). Then analyze FRONT, Left 30deg, and Right 30deg by NEAR/FAR: for each region, state the likely room/space, large nearby objects, smaller farther objects, and visible landmark(s) with distance/angle/confidence.
-2. **Waypoint History**: Read WP#1 -> ... -> LAST in order. Use each waypoint's snapped direction/distance to infer which direction continues toward the most likely task-relevant room/object from the explored route.
-3. **Current Position + Destination Relation**: Using the current view plus waypoint history, infer where you are now: which room/space and roughly what local position in that space. Then infer where the destination is: which target room/space and where the target object likely sits relative to the current view.
-4. **Arrival Check**: First judge whether you are already in the correct room/space, then judge whether the destination object in that room is already within ~1.0m. Only then **STOP immediately**.
+1. **Detection + View Analysis**: Read `vis/off vis` first. Then analyze FRONT, Left 30deg, and Right 30deg by NEAR/FAR: likely room/space, large nearby objects, smaller farther objects, and visible landmark(s) with distance/angle/confidence.
+2. **Waypoint History**: Read WP#1 -> ... -> LAST. Use snapped direction/distance to infer which direction continues toward the most likely task-relevant room/object.
+3. **Current Position + Destination Relation**: Using the current view plus waypoint history, infer where you are now and where the target room/object most likely is relative to the current view.
+4. **Arrival Check**: First confirm the correct room/space, then confirm the destination object in that room is already within ~1.0m. Only then **STOP immediately**.
 5. **Depth Lines**: Which of Left 30 / Front / Right 30 is blocked vs safe?
 6. **Action Decision**: After the full reasoning above, prefer the direction that best matches current position + destination relation + waypoint history + current room/object evidence. If FRONT is blocked, choose the safest side direction that stays closest to the destination.
 
@@ -54,17 +52,15 @@ You are provided with 1 image:
 # Output Format (JSON only)
 
 {{
-    "reasoning": "Logic: (1) read vis/off vis landmarks and analyze FRONT/LEFT30/RIGHT30 by NEAR/FAR with room/object cues (2) waypoint-history alignment (3) infer current room/space and local position plus destination room/object relation (4) arrival check (5) depth safety (6) action decision",
-    "action_analysis": "One sentence stating the key visual evidence, waypoint-history cue, and why this action is best",
-    "action": "MOVE_FORWARD" | "TURN_LEFT" | "TURN_RIGHT" | "STOP",
-    "value": 0,
-    "progress_summary": "Updated summary: actions taken, current facing direction, locations entered/bypassed"
+    "reasoning": "Brief chain: view + landmarks, waypoint history, current position vs destination, arrival check, depth safety, final action",
+    "action_analysis": "One short sentence with the key evidence and why this action is best",
+    "action": "<MOVE_FORWARD 0.25m | MOVE_FORWARD 0.5m | MOVE_FORWARD 0.75m | MOVE_FORWARD 1.0m | MOVE_FORWARD 1.25m | TURN_LEFT 30deg | TURN_RIGHT 30deg | STOP>"
 }}
 
-**Parameter rules**:
-- MOVE_FORWARD: "value" must be exactly one of [0.25, 0.5, 0.75, 1.0, 1.25]
-- TURN_LEFT / TURN_RIGHT: "value" must be exactly 30
-- STOP: "value" = 0
+**Action space**:
+- `MOVE_FORWARD {{0.25m, 0.5m, 0.75m, 1.0m, 1.25m}}`
+- `TURN_LEFT 30deg` | `TURN_RIGHT 30deg`
+- `STOP`
 
 # Examples
 
@@ -72,38 +68,31 @@ You are provided with 1 image:
 {{
     "reasoning": "CENTER-NEAR is open, CENTER-FAR shows the target area cue, LEFT/RIGHT do not better match the route. Waypoint history still points forward to the relevant room/object. Front depth line is open, so move forward.",
     "action_analysis": "Forward best matches the visible target cue and waypoint history with a clear front path",
-    "action": "MOVE_FORWARD",
-    "value": 0.75,
-    "progress_summary": "Facing the hallway entrance; moved forward 0.5m toward doorway; no obstacles bypassed yet"
+    "action": "MOVE_FORWARD 0.75m"
 }}
 
 **Ex2 - Obstacle detected**
 {{
     "reasoning": "CENTER-NEAR is blocked, RIGHT-NEAR is open, and RIGHT still aligns better than LEFT with the waypoint route toward the sofa area. Turn right.",
     "action_analysis": "Front is blocked, and right is the safest direction that still stays aligned with the target route",
-    "action": "TURN_RIGHT",
-    "value": 30,
-    "progress_summary": "Bypassed wall on left; now facing right corridor; moved ~1m total"
+    "action": "TURN_RIGHT 30deg"
 }}
 
 **Ex3 - At destination**
 {{
     "reasoning": "The current room is already the target room, and the destination object is already within about 0.5m. STOP immediately.",
     "action_analysis": "Destination area is already reached, so stopping now avoids overshooting",
-    "action": "STOP",
-    "value": 0,
-    "progress_summary": "Entered living room from hallway; bypassed table on right; now facing sofa at ~0.3m"
+    "action": "STOP"
 }}
 
 **Critical Rules**:
 - **STOP immediately** only when the correct room/space is confirmed and the destination object is within ~1.0m
 - reasoning must explicitly cover FRONT/LEFT30/RIGHT30 NEAR/FAR analysis, visible/off-screen landmark evidence, current position, destination room/object relation, and waypoint-history alignment before choosing an action
-- output action values must stay inside the fixed action space: TURN_LEFT/RIGHT=30 only; MOVE_FORWARD in {{0.25, 0.5, 0.75, 1.0, 1.25}}; STOP=0
+- output `action` must stay inside the fixed action space: `TURN_LEFT 30deg` / `TURN_RIGHT 30deg` / `MOVE_FORWARD {{0.25m, 0.5m, 0.75m, 1.0m, 1.25m}}` / `STOP`
 - If the destination is ahead and FRONT is clear, prefer MOVE_FORWARD
 - If FRONT is blocked, choose the closest safe side direction toward the destination, not a wider detour
 - For off-screen landmarks, **always turn toward the indicated direction first**
 - Use waypoint history and current room/object evidence to keep moving toward the most likely relevant space/object
-- progress_summary must describe orientation, locations entered/passed, obstacles bypassed
 """
 
 
@@ -123,12 +112,6 @@ def get_action_execution_prompt(next_waypoint_destination: str,
         progress_summary = "Just started"
     if not waypoint_summary:
         waypoint_summary = "No waypoints visited yet."
-    known_landmark_section = ""
-    if landmark_map_info:
-        known_landmark_section = (
-            "# Known Landmark Map (from semantic map, sorted by distance)\n"
-            f"{landmark_map_info}\n"
-        )
 
     return ACTION_EXECUTION_PROMPT.format(
         subtask_destination=next_waypoint_destination,
@@ -137,7 +120,6 @@ def get_action_execution_prompt(next_waypoint_destination: str,
         waypoint_summary=waypoint_summary,
         previous_action_reason=previous_action_reason or "N/A (first step)",
         detected_landmarks=detected_landmarks or "none",
-        known_landmark_section=known_landmark_section,
         move_distance=move_distance,
         turn_angle=turn_angle,
     )

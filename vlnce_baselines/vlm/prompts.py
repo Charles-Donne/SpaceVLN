@@ -11,7 +11,7 @@ INITIAL_PLANNING_PROMPT = """VLN Planning: Analyze environment + Global Task →
 
 **Task**: {instruction}
 
-**Initial state note**: Initial planning only. Finish stage #1 first via the nearest relevant landmark.
+**Initial state note**: This is the initial state. You are at the task start location. Follow the instruction to reach the first subtask destination and plan the first subtask instruction.
 
 # Inputs
 **12 Views** (sampled every 30° around 360°; each RGB view HFOV is about 79°): IMAGE1=Front 0°, angles increase CCW

@@ -53,22 +53,8 @@ class ActionExecutor(BaseAPIClient):
         if not self.validate_fields(response, self.REQUIRED_FIELDS):
             return False
 
-        action_name = str(response.get('action', '')).upper()
-        value = response.get('value', 0)
-
-        if action_name == 'STOP':
-            try:
-                return float(value) == 0.0
-            except (TypeError, ValueError):
-                return False
-
-        if action_name in ('TURN_LEFT', 'TURN_RIGHT'):
-            return self._normalize_allowed_value(value, self.VALID_TURN_VALUES) is not None
-
-        if action_name == 'MOVE_FORWARD':
-            return self._normalize_allowed_value(value, self.VALID_MOVE_VALUES) is not None
-
-        return False
+        parsed = self._parse_action_command(response)
+        return parsed is not None
 
     @staticmethod
     def _normalize_allowed_value(value, allowed_values, tol: float = 1e-6):
@@ -80,6 +66,49 @@ class ActionExecutor(BaseAPIClient):
         for allowed in allowed_values:
             if abs(numeric - float(allowed)) <= tol:
                 return float(allowed)
+        return None
+
+    def _parse_action_command(self, response: Dict) -> Optional[Tuple[str, float]]:
+        """Parse merged action command strings while keeping backward compatibility."""
+        action_raw = str(response.get('action', '')).strip()
+        if not action_raw:
+            return None
+
+        command = action_raw.upper().replace("DEGREES", "DEG").strip()
+
+        if command == 'STOP':
+            return 'STOP', 0.0
+
+        if command.startswith('TURN_LEFT'):
+            suffix = command[len('TURN_LEFT'):].strip().replace('DEG', '').strip()
+            if not suffix and 'value' in response:
+                normalized = self._normalize_allowed_value(response.get('value'), self.VALID_TURN_VALUES)
+            else:
+                normalized = self._normalize_allowed_value(suffix, self.VALID_TURN_VALUES)
+            if normalized is None:
+                return None
+            return 'TURN_LEFT', float(normalized)
+
+        if command.startswith('TURN_RIGHT'):
+            suffix = command[len('TURN_RIGHT'):].strip().replace('DEG', '').strip()
+            if not suffix and 'value' in response:
+                normalized = self._normalize_allowed_value(response.get('value'), self.VALID_TURN_VALUES)
+            else:
+                normalized = self._normalize_allowed_value(suffix, self.VALID_TURN_VALUES)
+            if normalized is None:
+                return None
+            return 'TURN_RIGHT', float(normalized)
+
+        if command.startswith('MOVE_FORWARD'):
+            suffix = command[len('MOVE_FORWARD'):].strip().replace('M', '').strip()
+            if not suffix and 'value' in response:
+                normalized = self._normalize_allowed_value(response.get('value'), self.VALID_MOVE_VALUES)
+            else:
+                normalized = self._normalize_allowed_value(suffix, self.VALID_MOVE_VALUES)
+            if normalized is None:
+                return None
+            return 'MOVE_FORWARD', float(normalized)
+
         return None
     
     def _generate_progress_update(self, current_progress: str, action_name: str, 
@@ -288,35 +317,29 @@ class ActionExecutor(BaseAPIClient):
         if not self.validate_response(response):
             return None, None, None, None
         
-        # 提取动作
-        action_name = response['action']
+        parsed_action = self._parse_action_command(response)
+        if parsed_action is None:
+            print(f"✗ Invalid action command: {response.get('action')}")
+            return None, None, None, None
+
+        action_name, value = parsed_action
         if action_name not in action_mapping:
             print(f"✗ Invalid action: {action_name}")
             print(f"✗ Valid actions: {list(action_mapping.keys())}")
             return None, None, None, None
-        
+
         action_id = action_mapping[action_name]
-        
-        # 提取value参数（degrees或meters，取决于action类型）
-        value = response.get('value', 0)
+
         degrees = 0
         meters = 0
         if action_name in ['TURN_LEFT', 'TURN_RIGHT']:
-            normalized_turn = self._normalize_allowed_value(value, self.VALID_TURN_VALUES)
-            if normalized_turn is None:
-                print(f"✗ Invalid turn value: {value} | allowed: {list(self.VALID_TURN_VALUES)}")
-                return None, None, None, None
-            degrees = int(normalized_turn)
-            response['value'] = degrees
+            degrees = int(value)
+            response['action'] = f"{action_name} {degrees}deg"
         elif action_name == 'MOVE_FORWARD':
-            normalized_move = self._normalize_allowed_value(value, self.VALID_MOVE_VALUES)
-            if normalized_move is None:
-                print(f"✗ Invalid move value: {value} | allowed: {list(self.VALID_MOVE_VALUES)}")
-                return None, None, None, None
-            meters = float(normalized_move)
-            response['value'] = meters
+            meters = float(value)
+            response['action'] = f"{action_name} {meters:g}m"
         elif action_name == 'STOP':
-            response['value'] = 0
+            response['action'] = 'STOP'
         
         # 计算实际位姿变化（如果提供了pose信息）
         actual_degrees = None
