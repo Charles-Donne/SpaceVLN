@@ -9,7 +9,7 @@ INITIAL_PLANNING_PROMPT = """**Role**: You are a VLN planning module. Analyze th
 
 **Task**: {instruction}
 
-**Initial state**: You are at the task start, which is the first location in the instruction, and no progress has been made yet. Follow the instruction from the beginning, first complete the first part of the first sentence, and reach that first subtask destination.
+**Initial state**: You are at the task start. From your current location, strictly follow the Task from the beginning and complete the first subtask.
 
 # Inputs
 **12 Views** (sampled every 30° around 360°; each RGB view HFOV is about 79°): IMAGE1=Front 0°, angles increase CCW

@@ -213,6 +213,168 @@ class MapVisualizer:
             angle_diff <= float(landmark_duplicate_angle_diff_deg) and
             iou >= float(landmark_duplicate_iou_loose)
         )
+
+    @staticmethod
+    def _rel_xy_to_world_xy(
+        rel_xy: Optional[Tuple[float, float]],
+        current_pose: Optional[Tuple[float, float, float]],
+    ) -> Optional[Tuple[float, float]]:
+        if rel_xy is None or current_pose is None:
+            return None
+        forward_m, right_m = float(rel_xy[0]), float(rel_xy[1])
+        curr_x_m, curr_y_m, curr_ori_deg = (
+            float(current_pose[0]),
+            float(current_pose[1]),
+            float(current_pose[2]),
+        )
+        theta = np.deg2rad(curr_ori_deg)
+        dx = forward_m * np.cos(theta) + right_m * np.sin(theta)
+        dy = forward_m * np.sin(theta) - right_m * np.cos(theta)
+        return curr_x_m + dx, curr_y_m + dy
+
+    @staticmethod
+    def _candidate_distance_m(candidate: Dict[str, Any]) -> float:
+        if candidate.get("det_rel_xy") is not None:
+            rel_xy = candidate["det_rel_xy"]
+            return float(np.hypot(rel_xy[0], rel_xy[1]))
+        if (
+            candidate.get("world_x_m") is not None and
+            candidate.get("world_y_m") is not None and
+            candidate.get("current_pose") is not None
+        ):
+            curr_x_m, curr_y_m, _ = candidate["current_pose"]
+            return float(np.hypot(
+                float(candidate["world_x_m"]) - float(curr_x_m),
+                float(candidate["world_y_m"]) - float(curr_y_m),
+            ))
+        return 1e9
+
+    def _candidate_angle_deg(
+        self,
+        candidate: Dict[str, Any],
+        hfov: float,
+    ) -> float:
+        rel_xy = candidate.get("det_rel_xy")
+        if rel_xy is not None and np.hypot(rel_xy[0], rel_xy[1]) > 1e-6:
+            return float(np.degrees(np.arctan2(rel_xy[1], rel_xy[0])))
+
+        x1, _y1, x2, _y2 = candidate["bbox"]
+        w_img = max(1, int(candidate.get("w_img", 1)))
+        xc = (w_img - 1) / 2.0
+        focal = (w_img / 2.0) / np.tan(np.deg2rad(float(hfov)) / 2.0)
+        if focal <= 1e-6:
+            return 0.0
+        center_x = (float(x1) + float(x2)) / 2.0
+        return float(np.degrees(np.arctan2(center_x - xc, focal)))
+
+    def _should_merge_detection_candidates(
+        self,
+        candidate: Dict[str, Any],
+        kept_candidate: Dict[str, Any],
+        hfov: float,
+    ) -> bool:
+        if candidate.get("name") != kept_candidate.get("name"):
+            return False
+
+        if self._is_duplicate_detection_candidate(candidate, kept_candidate):
+            return True
+
+        rel_xy = candidate.get("det_rel_xy")
+        kept_rel_xy = kept_candidate.get("det_rel_xy")
+        if rel_xy is None or kept_rel_xy is None:
+            return False
+
+        spatial_dist = float(np.hypot(rel_xy[0] - kept_rel_xy[0], rel_xy[1] - kept_rel_xy[1]))
+        angle_diff = self._angle_diff_deg(
+            self._candidate_angle_deg(candidate, hfov),
+            self._candidate_angle_deg(kept_candidate, hfov),
+        )
+        return (
+            spatial_dist <= float(landmark_instance_merge_radius_m) and
+            angle_diff <= float(landmark_duplicate_angle_diff_deg)
+        )
+
+    def _merge_detection_candidate_entries(
+        self,
+        kept_candidate: Dict[str, Any],
+        candidate: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        merged = dict(kept_candidate)
+        kept_conf = max(float(kept_candidate.get("confidence", 0.0)), 1e-3)
+        cand_conf = max(float(candidate.get("confidence", 0.0)), 1e-3)
+        total_conf = kept_conf + cand_conf
+
+        kx1, ky1, kx2, ky2 = kept_candidate["bbox"]
+        cx1, cy1, cx2, cy2 = candidate["bbox"]
+        merged["bbox"] = (
+            min(int(kx1), int(cx1)),
+            min(int(ky1), int(cy1)),
+            max(int(kx2), int(cx2)),
+            max(int(ky2), int(cy2)),
+        )
+        merged["confidence"] = max(float(kept_candidate.get("confidence", 0.0)), float(candidate.get("confidence", 0.0)))
+        merged["raw_index"] = min(int(kept_candidate.get("raw_index", 0)), int(candidate.get("raw_index", 0)))
+
+        kept_rel_xy = kept_candidate.get("det_rel_xy")
+        cand_rel_xy = candidate.get("det_rel_xy")
+        if kept_rel_xy is not None and cand_rel_xy is not None and total_conf > 1e-6:
+            merged["det_rel_xy"] = (
+                float((kept_rel_xy[0] * kept_conf + cand_rel_xy[0] * cand_conf) / total_conf),
+                float((kept_rel_xy[1] * kept_conf + cand_rel_xy[1] * cand_conf) / total_conf),
+            )
+        elif cand_rel_xy is not None:
+            merged["det_rel_xy"] = cand_rel_xy
+
+        if (
+            kept_candidate.get("world_x_m") is not None and
+            kept_candidate.get("world_y_m") is not None and
+            candidate.get("world_x_m") is not None and
+            candidate.get("world_y_m") is not None and
+            total_conf > 1e-6
+        ):
+            merged["world_x_m"] = float(
+                (float(kept_candidate["world_x_m"]) * kept_conf + float(candidate["world_x_m"]) * cand_conf) / total_conf
+            )
+            merged["world_y_m"] = float(
+                (float(kept_candidate["world_y_m"]) * kept_conf + float(candidate["world_y_m"]) * cand_conf) / total_conf
+            )
+        elif candidate.get("world_x_m") is not None and candidate.get("world_y_m") is not None:
+            merged["world_x_m"] = float(candidate["world_x_m"])
+            merged["world_y_m"] = float(candidate["world_y_m"])
+
+        return merged
+
+    def _dedupe_detection_candidates(
+        self,
+        candidate_entries: List[Dict[str, Any]],
+        hfov: float,
+        topk: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        ranked_candidates = sorted(
+            candidate_entries,
+            key=lambda item: (-float(item.get("confidence", 0.0)), self._candidate_distance_m(item), int(item.get("raw_index", 0))),
+        )
+        merged_candidates: List[Dict[str, Any]] = []
+        for candidate in ranked_candidates:
+            merged_idx = None
+            for idx, kept_candidate in enumerate(merged_candidates):
+                if self._should_merge_detection_candidates(candidate, kept_candidate, hfov):
+                    merged_idx = idx
+                    break
+            if merged_idx is None:
+                merged_candidates.append(dict(candidate))
+            else:
+                merged_candidates[merged_idx] = self._merge_detection_candidate_entries(
+                    merged_candidates[merged_idx],
+                    candidate,
+                )
+
+        merged_candidates.sort(
+            key=lambda item: (-float(item.get("confidence", 0.0)), self._candidate_distance_m(item), int(item.get("raw_index", 0))),
+        )
+        if topk is not None and int(topk) > 0:
+            return merged_candidates[:max(1, int(topk))]
+        return merged_candidates
     
     def _create_episode_directories(self, episode_id: int):
         """为特定episode创建保存目录"""
@@ -968,8 +1130,6 @@ class MapVisualizer:
             return []
 
         canonical = {name.strip().lower(): name for name in landmark_classes}
-        curr_x_m, curr_y_m, curr_ori_deg = float(current_pose[0]), float(current_pose[1]), float(current_pose[2])
-        theta = np.deg2rad(curr_ori_deg)
 
         per_class: Dict[str, List[Dict[str, Any]]] = {}
         for i in range(len(detections.xyxy)):
@@ -989,18 +1149,15 @@ class MapVisualizer:
             if rel_xy is None:
                 continue
 
-            forward_m, right_m = rel_xy
-            dx = forward_m * np.cos(theta) + right_m * np.sin(theta)
-            dy = forward_m * np.sin(theta) - right_m * np.cos(theta)
-            world_x_m = curr_x_m + dx
-            world_y_m = curr_y_m + dy
+            world_xy = self._rel_xy_to_world_xy(rel_xy, current_pose)
+            if world_xy is None:
+                continue
+            world_x_m, world_y_m = world_xy
 
             world_row_px = int(round(world_y_m * 100.0 / self.resolution))
             world_col_px = int(round(world_x_m * 100.0 / self.resolution))
-            abs_angle = np.degrees(np.arctan2(dy, dx))
-            rel_bearing = curr_ori_deg - abs_angle
-            rel_bearing = ((rel_bearing + 180.0) % 360.0) - 180.0
-            dist_m = float(np.hypot(dx, dy))
+            dist_m = float(np.hypot(rel_xy[0], rel_xy[1]))
+            rel_bearing = float(np.degrees(np.arctan2(rel_xy[1], rel_xy[0]))) if dist_m > 1e-6 else 0.0
 
             per_class.setdefault(matched_landmark, []).append({
                 "name": matched_landmark,
@@ -1019,14 +1176,7 @@ class MapVisualizer:
 
         projected_instances: List[Dict[str, Any]] = []
         for cls_name, candidates in per_class.items():
-            ranked = sorted(candidates, key=lambda item: (-item["confidence"], item["distance_m"]))
-            selected: List[Dict[str, Any]] = []
-            for item in ranked:
-                if any(self._is_duplicate_detection_candidate(item, kept) for kept in selected):
-                    continue
-                selected.append(item)
-                if topk is not None and int(topk) > 0 and len(selected) >= int(topk):
-                    break
+            selected = self._dedupe_detection_candidates(candidates, hfov=hfov, topk=topk)
 
             for inst_idx, item in enumerate(selected):
                 item = dict(item)
@@ -1405,17 +1555,12 @@ class MapVisualizer:
                 return detection_vis, [], set(), strip, []
             return detection_vis, [], set(), strip
 
-        def _bbox_center_angle_deg(x1: int, x2: int, width: int) -> float:
-            xc = (width - 1) / 2.0
-            focal = (width / 2.0) / np.tan(np.deg2rad(float(hfov)) / 2.0)
-            if focal <= 1e-6:
-                return 0.0
-            center_x = (float(x1) + float(x2)) / 2.0
-            return float(np.degrees(np.arctan2(center_x - xc, focal)))
-
         depth_for_match = depth_meters
         if depth_for_match is None and controller is not None:
             depth_for_match = getattr(controller, "latest_depth_meters", None)
+        current_pose = None
+        if controller is not None and getattr(controller, "mapper", None) is not None:
+            current_pose = controller.mapper.get_current_pose()
 
         for i in range(len(detections.xyxy)):
             bbox = detections.xyxy[i]
@@ -1447,6 +1592,7 @@ class MapVisualizer:
             det_rel_xy = None
             if det_mask is not None and depth_for_match is not None:
                 det_rel_xy = self._estimate_mask_rel_xy(det_mask, depth_for_match, hfov)
+            world_xy = self._rel_xy_to_world_xy(det_rel_xy, current_pose)
 
             candidate_entries.append({
                 "name": label_name,
@@ -1455,19 +1601,16 @@ class MapVisualizer:
                 "det_rel_xy": det_rel_xy,
                 "w_img": w_img,
                 "raw_index": i,
+                "current_pose": current_pose,
+                "world_x_m": float(world_xy[0]) if world_xy is not None else None,
+                "world_y_m": float(world_xy[1]) if world_xy is not None else None,
             })
 
-        candidate_entries.sort(key=lambda item: (-float(item["confidence"]), int(item["raw_index"])))
-        selected_entries: List[Dict[str, Any]] = []
-        for candidate in candidate_entries:
-            if any(
-                self._is_duplicate_detection_candidate(candidate, kept_candidate)
-                for kept_candidate in selected_entries
-            ):
-                continue
-            selected_entries.append(candidate)
-            if len(selected_entries) >= max(1, int(detection_visible_topk)):
-                break
+        selected_entries = self._dedupe_detection_candidates(
+            candidate_entries,
+            hfov=hfov,
+            topk=detection_visible_topk,
+        )
         used_map_candidates = {}
 
         for candidate in selected_entries:
@@ -1543,7 +1686,7 @@ class MapVisualizer:
                     if fallback_dist_m > 0.05:
                         fallback_dist_str = f"{min(fallback_dist_m, 5.0):.1f}m"
                 if fallback_angle_deg is None:
-                    fallback_angle_deg = _bbox_center_angle_deg(x1, x2, w_img)
+                    fallback_angle_deg = self._candidate_angle_deg(candidate, hfov)
                 if fallback_dist_str is None:
                     fallback_dist_str = ">5.0m"
                 shown_dist_m = fallback_dist_m if fallback_dist_m is not None else 5.1
