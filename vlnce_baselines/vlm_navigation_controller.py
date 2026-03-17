@@ -31,15 +31,13 @@ from vlnce_baselines.interactive_navigation_controller import InteractiveNavigat
 from vlnce_baselines.vlm import (
     LLMPlanner, ActionExecutor, SaveManager, NavigationVisualizer
 )
-from vlnce_baselines.visualization import PanoramaGenerator
+from vlnce_baselines.vlm.thinking_view_renderer import ThinkingViewRenderer
 from vlnce_baselines.visualization.obstacle_analysis import (
     build_rotated_obstacle_mask,
     calculate_obstacle_distances_12_directions,
     calculate_obstacle_distances_from_rotated_map,
 )
-from vlnce_baselines.vlm.navigation_config import (
-    DIRECTION_STEPS, DIRECTION_NAMES, DIRECTION_CONFIG, ACTION_MAPPING
-)
+from vlnce_baselines.vlm.navigation_config import ACTION_MAPPING
 from habitat_extensions.pose_utils import get_sim_location
 
 
@@ -112,7 +110,7 @@ class VLMNavigationController(InteractiveNavigationController):
         self.progress_summary = ""
         self.previous_action_reason = ""  # 上一步的action_analysis
         self.subtask_history = []
-        self.current_subtask_file = None
+        self.thinking_view_renderer = ThinkingViewRenderer()
         
         # 初始化管理器
         self.save_manager = None  # 在reset_episode时初始化
@@ -123,10 +121,6 @@ class VLMNavigationController(InteractiveNavigationController):
         self.latest_info = None  # 缓存最新的info（包含top_down_map_vlnce）
         self.pose_before_action = None  # 记录动作前的pose (x, y, orientation)
         
-        # 观察缓存（环视时收集的4方向图像）
-        self.direction_images = {}  # {direction_name: image_path}
-        self.latest_map_image = None
-
         # 当前子任务跟踪的landmark类别（每个子任务重置）
         self.tracked_landmark_classes = set()
         
@@ -148,9 +142,6 @@ class VLMNavigationController(InteractiveNavigationController):
         
         # NavigationVisualizer（用于RGB+俯视图拼接和GIF生成）
         self.nav_visualizer = None
-        
-        # PanoramaGenerator（用于全景图拼接和标注）
-        self.panorama_generator = PanoramaGenerator()
         
         # print("[Init] VLM模块初始化完成\n")
     
@@ -177,9 +168,6 @@ class VLMNavigationController(InteractiveNavigationController):
         self.progress_summary = ""
         self.previous_action_reason = ""  # 重置上一步action reason
         self.subtask_history = []
-        self.current_subtask_file = None
-        self.direction_images = {}
-        self.latest_map_image = None
         self.tracked_landmark_classes = set()
         self.pose_before_action = None  # 重置pose追踪
         self.last_planned_degrees = 0  # 记录计划转向角度
@@ -195,10 +183,6 @@ class VLMNavigationController(InteractiveNavigationController):
         self.nav_visualizer = NavigationVisualizer(visualization_dir)
         self.nav_visualizer.setup_maps_dir(self.episode_dir)
         
-        # 初始化输出记录列表
-        self.thinking_outputs = []  # 记录LLM(thinking)的所有输出
-        self.action_outputs = []    # 记录VLM(action)的所有输出
-    
     @property
     def episode_dir(self) -> str:
         """获取当前episode的输出目录（动态属性，自动根据current_episode_id生成）"""
@@ -431,109 +415,6 @@ class VLMNavigationController(InteractiveNavigationController):
         )
         return response
     
-    def _draw_navigable_area_on_view(self, image: np.ndarray, view_angle: float) -> np.ndarray:
-        """
-        在方向视图上绘制可导航区域（绿色覆盖层）
-        
-        Args:
-            image: 当前方向的图像 (H, W, 3) BGR格式
-            view_angle: 当前视角的角度 (0-330, 30度递增)
-            
-        Returns:
-            绘制了导航区域后的图像
-        """
-        if not hasattr(self, 'mapper') or self.mapper is None:
-            return image
-        
-        # 获取当前agent位置和朝向
-        agent_x, agent_y, agent_o = self._get_agent_pose()
-        
-        # 计算当前视角的绝对方向
-        view_offset_rad = np.deg2rad(view_angle)
-        view_direction = agent_o + view_offset_rad
-        
-        # 相机FOV是79度
-        camera_fov_half = np.deg2rad(79 / 2)
-        
-        h, w = image.shape[:2]
-        
-        # 创建半透明绿色覆盖层
-        overlay = image.copy()
-        
-        # 从地图获取可导航区域信息
-        # 使用mapper的occupancy grid判断可导航性
-        if hasattr(self.mapper, 'occupancy_grid'):
-            # 投影可导航点到图像上
-            max_distance = 5.0  # 最远检测5米
-            num_rays = 40  # 检测射线数量（覆盖79度FOV）
-            
-            # 生成检测射线（在79度FOV内均匀分布）
-            for i in range(num_rays):
-                # 射线角度：从view_direction - fov_half 到 view_direction + fov_half
-                ray_ratio = i / (num_rays - 1) if num_rays > 1 else 0.5
-                ray_angle = view_direction - camera_fov_half + ray_ratio * 2 * camera_fov_half
-                
-                # 沿射线检测可导航区域
-                navigable_points = []
-                for dist in np.linspace(0.5, max_distance, 20):
-                    # 计算世界坐标
-                    world_x = agent_x + dist * np.cos(ray_angle)
-                    world_y = agent_y + dist * np.sin(ray_angle)
-                    
-                    # 转换到地图坐标
-                    resolution = self.mapper.resolution / 100.0
-                    map_shape = self.mapper.map_shape
-                    map_min_x = - (map_shape[1] // 2) * resolution
-                    map_min_y = - (map_shape[0] // 2) * resolution
-                    map_x = int((world_x - map_min_x) / resolution)
-                    map_y = int((world_y - map_min_y) / resolution)
-                    
-                    # 检查是否在地图范围内
-                    if 0 <= map_x < self.mapper.occupancy_grid.shape[1] and \
-                       0 <= map_y < self.mapper.occupancy_grid.shape[0]:
-                        # 0=未知, 1=可导航, 2=障碍物
-                        if self.mapper.occupancy_grid[map_y, map_x] == 1:
-                            navigable_points.append((dist, ray_angle))
-                        elif self.mapper.occupancy_grid[map_y, map_x] == 2:
-                            # 遇到障碍物，停止这条射线
-                            break
-                    else:
-                        break
-                
-                # 在图像上绘制可导航点
-                for dist, ray_angle in navigable_points:
-                    # 计算相对于视角中心的角度差
-                    angle_diff = ray_angle - view_direction
-                    angle_diff = np.arctan2(np.sin(angle_diff), np.cos(angle_diff))
-                    
-                    # X坐标映射
-                    x_ratio = (angle_diff + camera_fov_half) / (2 * camera_fov_half)
-                    x_pos = int(x_ratio * w)
-                    x_pos = max(0, min(w - 1, x_pos))
-                    
-                    # Y坐标映射（距离 → 垂直位置）
-                    if dist < 1.0:
-                        y_pos = int(h * 0.85)  # 近处，下方
-                    elif dist < 2.0:
-                        y_pos = int(h * 0.75)
-                    elif dist < 3.0:
-                        y_pos = int(h * 0.65)
-                    elif dist < 4.0:
-                        y_pos = int(h * 0.55)
-                    else:
-                        y_pos = int(h * 0.45)  # 远处，上方
-                    
-                    y_pos = max(0, min(h - 1, y_pos))
-                    
-                    # 绘制绿色半透明点（表示可导航区域）
-                    cv2.circle(overlay, (x_pos, y_pos), 3, (0, 255, 0), -1)
-        
-        # 混合原图和覆盖层（30%透明度）
-        alpha = 0.3
-        result = cv2.addWeighted(overlay, alpha, image, 1 - alpha, 0)
-        
-        return result
-    
     def _draw_waypoints_on_view(self, image: np.ndarray, view_angle: float, waypoint_info: tuple) -> np.ndarray:
         """
         在环视方向视图上绘制waypoint标记
@@ -627,93 +508,6 @@ class VLMNavigationController(InteractiveNavigationController):
         
         return image
     
-    def _draw_floor_segmentation_on_view(self, image: np.ndarray, view_angle: float) -> np.ndarray:
-        """
-        在图像上绘制地面分割（绿色半透明覆盖）
-        
-        Args:
-            image: 图像 (H, W, 3) BGR格式
-            view_angle: 视角角度（相对于agent朝向，0度=正前方）
-            
-        Returns:
-            绘制了地面分割的图像
-        """
-        if not hasattr(self, 'mapper') or self.mapper is None or self.mapper.floor is None:
-            return image
-        
-        # 获取agent位姿
-        agent_x, agent_y, agent_o = self._get_agent_pose()
-        
-        # 计算当前视角的绝对方向
-        view_offset_rad = np.deg2rad(view_angle)
-        view_direction = agent_o + view_offset_rad
-        
-        # 相机FOV (79度)
-        camera_fov_half = np.deg2rad(79 / 2)
-        
-        h, w = image.shape[:2]
-        overlay = image.copy()
-        
-        # 获取floor地图
-        floor_map = self.mapper.floor  # [H_map, W_map]
-        
-        # 将floor投影到图像上
-        max_distance = 5.0  # 最远检测5米
-        num_rays = 50  # 增加射线密度
-        
-        for i in range(num_rays):
-            # 射线角度分布
-            ray_ratio = i / (num_rays - 1) if num_rays > 1 else 0.5
-            ray_angle = view_direction - camera_fov_half + ray_ratio * 2 * camera_fov_half
-            
-            # 沿射线检测floor
-            for dist in np.linspace(0.3, max_distance, 30):
-                # 世界坐标
-                world_x = agent_x + dist * np.cos(ray_angle)
-                world_y = agent_y + dist * np.sin(ray_angle)
-                
-                # 转换到地图坐标
-                resolution = self.mapper.resolution / 100.0
-                map_shape = self.mapper.map_shape
-                map_min_x = - (map_shape[1] // 2) * resolution
-                map_min_y = - (map_shape[0] // 2) * resolution
-                map_x = int((world_x - map_min_x) / resolution)
-                map_y = int((world_y - map_min_y) / resolution)
-                
-                # 检查是否在地图范围内且是floor
-                if 0 <= map_x < floor_map.shape[1] and 0 <= map_y < floor_map.shape[0]:
-                    if floor_map[map_y, map_x] > 0:  # floor区域
-                        # 计算图像坐标
-                        angle_diff = ray_angle - view_direction
-                        angle_diff = np.arctan2(np.sin(angle_diff), np.cos(angle_diff))
-                        
-                        # X坐标映射
-                        x_ratio = (angle_diff + camera_fov_half) / (2 * camera_fov_half)
-                        x_pos = int(x_ratio * w)
-                        x_pos = max(0, min(w - 1, x_pos))
-                        
-                        # Y坐标映射（距离越近越靠下，使用对数映射提高近处分辨率）
-                        if dist < 1.0:
-                            y_pos = int(h * (0.95 - 0.2 * (1.0 - dist)))
-                        elif dist < 2.0:
-                            y_pos = int(h * (0.75 - 0.15 * (2.0 - dist)))
-                        elif dist < 3.5:
-                            y_pos = int(h * (0.6 - 0.1 * (3.5 - dist) / 1.5))
-                        else:
-                            y_pos = int(h * 0.5)
-                        
-                        y_pos = max(0, min(h - 1, y_pos))
-                        
-                        # 绘制绿色半透明点（地面）
-                        cv2.circle(overlay, (x_pos, y_pos), 2, (0, 200, 0), -1)
-                else:
-                    break  # 超出地图范围，停止这条射线
-        
-        # 混合原图和覆盖层（25%透明度，让绿色更明显）
-        alpha = 0.25
-        result = cv2.addWeighted(overlay, alpha, image, 1 - alpha, 0)
-        
-        return result
     
     def _draw_distance_rays_on_first_person_view(self, image: np.ndarray, distances: Dict[str, str]) -> np.ndarray:
         """
@@ -967,111 +761,40 @@ class VLMNavigationController(InteractiveNavigationController):
                 _, orig_wp_ids, wp_descriptions = self.mapper.get_waypoints()
                 waypoint_info = (wp_positions, wp_ids, wp_descriptions)
         
-        # 保存12张独立图片（不拼接），每张图片添加角度标注 + waypoint标记
-        from .vlm.navigation_config import DIRECTION_CONFIG
-        
-        direction_paths = []
-        direction_names = []
         directions_dir = os.path.join(self.config.RESULTS_DIR, f"episode_{self.current_episode_id}", "directions")
-        os.makedirs(directions_dir, exist_ok=True)
-        
-        for config in DIRECTION_CONFIG:
-            step_idx = config["step"]  # 1-12
-            angle = config["angle"]
-            direction_name = config["name"]  # 如 "IMAGE 1: Front (0°)"
-            
-            # 获取该step的图像（step是1-based，但step 12对应index 11，step 1对应index 0）
-            # lookaround_images[0] = step 1 (30°)
-            # lookaround_images[11] = step 12 (0°)
-            image = lookaround_images[step_idx - 1].copy()
-            depth_meters = lookaround_depths[step_idx - 1] if step_idx - 1 < len(lookaround_depths) else None
+        def _render_thinking_detection(
+            image: np.ndarray,
+            detections,
+            labels: List[str],
+            depth_meters: Optional[np.ndarray],
+        ):
+            return self.visualizer.render_detection_bbox(
+                image,
+                detections,
+                labels,
+                landmark_classes=self.landmark_classes,
+                depth_meters=depth_meters,
+                hfov=self.config.MAP.HFOV,
+                landmark_dist_map=None,
+                landmark_dist_map_multi=None,
+                append_bottom_strip=False,
+                controller=None,
+            )
 
-            # 仅为 12 视角思考图做自定义 landmark 检测与 bbox 可视化，不写入世界地图。
-            if getattr(self, 'landmark_classes', None):
-                dets_view, labels_view, _ = self._detect_landmarks_for_visualization(
-                    image, self.landmark_classes
-                )
-                image, _, _, _ = self.visualizer.render_detection_bbox(
-                    image,
-                    dets_view,
-                    labels_view,
-                    landmark_classes=self.landmark_classes,
-                    depth_meters=depth_meters,
-                    hfov=self.config.MAP.HFOV,
-                    landmark_dist_map=None,
-                    landmark_dist_map_multi=None,
-                    append_bottom_strip=False,
-                    controller=None,
-                )
-            
-            # 不再绘制可导航区域（去掉绿色地面分割，加快速度）
-            # image = self._draw_navigable_area_on_view(image, angle)
-            
-            # 绘制距离信息（使用统一计算的12方向距离数据）
-            dist_key = f'angle_{angle}'  # 'angle_0', 'angle_30', ..., 'angle_330'
-            dist_str = self.latest_obstacle_distances_12.get(dist_key, 'Unknown')
-            image = self.visualizer.draw_distance_on_view(image, dist_str)
-            
-            # 绘制waypoint标记（使用最终角度判断是否在当前视图）
-            if waypoint_info and last_waypoint_angle_deg is not None:
-                # 🔄 坐标系转换：
-                # Waypoint角度系统: 0°=正前方，+90°=右侧，-90°=左侧，±180°=后方
-                # 12视图角度系统: 0°=Front，90°=Left，180°=Back，270°=Right（逆时针）
-                # 转换公式: view_angle = -waypoint_angle (负号表示方向相反)
-                # 例如：waypoint +90°(右侧) → view 270°(Right)
-                #      waypoint -90°(左侧) → view 90°(Left)
-                #      waypoint +138°(右后方) → view -138° → 222° (约210°附近，右后方)
-                
-                waypoint_view_angle = -last_waypoint_angle_deg
-                # 归一化到[0, 360)
-                while waypoint_view_angle < 0:
-                    waypoint_view_angle += 360
-                while waypoint_view_angle >= 360:
-                    waypoint_view_angle -= 360
-                
-                # 计算与当前视图的角度差
-                angle_diff = waypoint_view_angle - angle
-                # 归一化到[-180, 180]
-                while angle_diff > 180:
-                    angle_diff -= 360
-                while angle_diff < -180:
-                    angle_diff += 360
-                
-                # 只在±15度范围内显示waypoint
-                if abs(angle_diff) <= 15:
-                    # print(f"    ✓ Waypoint显示在 {direction_name}")
-                    image = self._draw_waypoints_on_view(image, angle, waypoint_info)
-            
-            # 在图片顶部添加白色背景的角度标注
-            h, w = image.shape[:2]
-            label_height = 35  # 减少白边，刚好够用
-            label_img = np.ones((label_height, w, 3), dtype=np.uint8) * 255  # 白色背景
-            
-            # 添加文字标注（使用OpenCV）
-            label_text = direction_name  # 如 "IMAGE 1: Front (0°)"
-            font = cv2.FONT_HERSHEY_SIMPLEX
-            font_scale = 0.8  # 增大字体
-            font_thickness = 2  # 加粗
-            text_color = (0, 0, 255)  # 红色
-            
-            # 计算文字位置（居中）
-            (text_width, text_height), baseline = cv2.getTextSize(label_text, font, font_scale, font_thickness)
-            text_x = (w - text_width) // 2
-            text_y = (label_height + text_height) // 2
-            
-            # 绘制文字
-            cv2.putText(label_img, label_text, (text_x, text_y), font, font_scale, text_color, font_thickness)
-            
-            # 拼接标注和图像
-            labeled_image = np.vstack([label_img, image])
-            
-            # 保存图像
-            direction_filename = f"{phase}_direction_{angle:03d}.png"  # 如 initial_direction_000.png
-            direction_path = os.path.join(directions_dir, direction_filename)
-            cv2.imwrite(direction_path, labeled_image)
-            
-            direction_paths.append(direction_path)
-            direction_names.append(direction_name)
+        direction_paths, direction_names = self.thinking_view_renderer.save_direction_views(
+            directions_dir=directions_dir,
+            phase=phase,
+            lookaround_images=lookaround_images,
+            lookaround_depths=lookaround_depths,
+            landmark_classes=self.landmark_classes,
+            detect_landmarks_fn=self._detect_landmarks_for_visualization,
+            render_detection_fn=_render_thinking_detection,
+            draw_distance_fn=self.visualizer.draw_distance_on_view,
+            distance_lookup=self.latest_obstacle_distances_12,
+            waypoint_info=waypoint_info,
+            waypoint_angle_deg=last_waypoint_angle_deg,
+            draw_waypoints_fn=self._draw_waypoints_on_view,
+        )
         
         # 保存全局地图和局部地图到对应目录
         # 使用当前step的地图（环视完成后的最新地图）
@@ -1090,19 +813,6 @@ class VLMNavigationController(InteractiveNavigationController):
         
         return direction_paths, direction_names
     
-    def _get_current_map_path(self) -> str:
-        """
-        获取当前语义地图路径（使用global_map/目录中的图像，避免重复保存）
-        
-        Returns:
-            global_map目录中上一步保存的地图路径
-        """
-        # 返回上一步保存的地图（当前步的地图要等step()执行后才会保存）
-        last_step = self.current_step - 1
-        map_path = os.path.join(self.episode_dir, 'global_map', f'step_{last_step:04d}.png')
-        self.latest_map_image = map_path
-        return map_path
-
     def get_observations_and_maps(self, phase: str) -> Tuple[List[str], List[str], str, str]:
         """
         从directions/目录获取12方向独立视图和地图
@@ -1218,9 +928,6 @@ class VLMNavigationController(InteractiveNavigationController):
         # 保存response（API返回后）
         with open(os.path.join(thinking_dir, "response.json"), 'w', encoding='utf-8') as f:
             json.dump(response, f, ensure_ascii=False, indent=2)
-        
-        # 不再保存到内存记录，减少内存开销
-        # self.thinking_outputs.append(thinking_record)
         
         # 保存子任务并初始化计数
         self.current_subtask = response
@@ -1651,9 +1358,6 @@ class VLMNavigationController(InteractiveNavigationController):
         # 为RGB图像不添加距离辅助线（只有detection才显示距离）
         fp_image = self.visualizer.prepare_action_image_with_enhancements(
             fp_image, mask_path, self.latest_obstacle_distances, self.classes, use_floor=False, use_distance=False)
-        
-        # 获取当前地图路径和检测图像
-        self._get_current_map_path()
         
         # 查找detection图像（使用相同的回退逻辑）
         detection_image = None
@@ -2346,14 +2050,6 @@ class VLMNavigationController(InteractiveNavigationController):
             'result_file': final_result
         }
     
-    def _save_thinking_output(self, thinking_record: Dict):
-        """保存LLM思考输出（调用save_manager）"""
-        self.save_manager.save_thinking(thinking_record)
-    
-    def _save_action_output(self, action_record: Dict):
-        """保存VLM动作输出（调用save_manager）"""
-        self.save_manager.save_action(action_record)
-    
     def _save_navigation_result(self, success: bool, total_steps: int, env_metrics: Dict = None) -> str:
         """
         保存导航结果到log/目录
@@ -2419,51 +2115,8 @@ class VLMNavigationController(InteractiveNavigationController):
         
         return self.save_manager.save_result(result)
     
-    def record_action(self, action_name: str, action_id: int, vlm_response: Dict = None):
-        """
-        记录动作到当前子任务文件（与llm_vlm_control兼容的格式）
-        
-        Args:
-            action_name: 动作名称
-            action_id: 动作ID
-            vlm_response: VLM响应字典（可选）
-        """
-        if not self.current_subtask_file or not os.path.exists(self.current_subtask_file):
-            return
-        
-        action_data = {
-            "step": self.current_step,
-            "action_name": action_name,
-            "action_id": action_id,
-        }
-        
-        if self.latest_info:
-            action_data["distance_to_goal"] = self.latest_info.get("distance_to_goal", -1)
-        
-        if vlm_response:
-            action_data["vlm_response"] = {
-                k: vlm_response.get(k, "") 
-                for k in ['observation', 'reasoning', 'action']  # 移除progress_summary（由系统维护）
-            }
-        
-        # 读取并更新文件
-        try:
-            with open(self.current_subtask_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            
-            if "actions" not in data:
-                data["actions"] = []
-            data["actions"].append(action_data)
-            
-            with open(self.current_subtask_file, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-        except Exception as e:
-            print(f"[WARN] Record action failed: {e}")
-    
     def _print_subtask_info(self, response: Dict, is_initial: bool = False):
         """打印子任务信息（JSON格式）"""
-        import json
-        
         # 根据响应类型确定标题
         attempt_letter = chr(ord('a') + self.subtask_attempt)
         if is_initial:
