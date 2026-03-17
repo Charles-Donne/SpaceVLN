@@ -159,3 +159,4 @@ landmark_instance_merge_radius_m = 0.60  # 同类实例世界坐标去重半径�
 # 边界框样式（只显示Landmark类别）
 detection_colors = {"landmark": (0, 255, 255)}     # 黄色(BGR)
 detection_thickness = {"landmark": 3}              # 线宽
+detection_visible_topk = 3                         # 当前帧最多显示/记录的自定义landmark检测数（按置信度）

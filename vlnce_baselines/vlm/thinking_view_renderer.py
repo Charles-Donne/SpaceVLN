@@ -18,7 +18,7 @@ from vlnce_baselines.vlm.navigation_config import DIRECTION_CONFIG
 class ThinkingViewRenderer:
     """Render and save the 12 annotated direction views used by the thinking model."""
 
-    THINKING_DETECTION_TOPK = 4
+    THINKING_DETECTION_TOPK = 3
 
     @staticmethod
     def _build_text_strip(
@@ -61,17 +61,87 @@ class ThinkingViewRenderer:
         return strip
 
     @staticmethod
-    def _summarize_detected_landmarks(detected_landmarks: List[Tuple[str, float]]) -> str:
+    def _summarize_detected_landmarks(detected_landmarks: List[Tuple[str, float]]) -> List[Tuple[str, Tuple[int, int, int]]]:
         if not detected_landmarks:
-            return "Detected landmark: none"
+            return [("landmark: none", (40, 40, 40))]
 
         ranked = sorted(
             [(str(name), float(confidence)) for name, confidence in detected_landmarks],
             key=lambda item: item[1],
             reverse=True,
         )
-        parts = [f"{name} {confidence:.2f}" for name, confidence in ranked]
-        return "Detected landmark: " + ", ".join(parts)
+        blue = (255, 0, 0)
+        dark = (40, 40, 40)
+        segments: List[Tuple[str, Tuple[int, int, int]]] = [("landmark: ", dark)]
+        for idx, (name, confidence) in enumerate(ranked):
+            if idx > 0:
+                segments.append((", ", dark))
+            segments.extend([
+                (name, blue),
+                (" (confidence: ", dark),
+                (f"{confidence:.2f}", blue),
+                (")", dark),
+            ])
+        return segments
+
+    @staticmethod
+    def _measure_segmented_text(
+        segments: List[Tuple[str, Tuple[int, int, int]]],
+        font: int,
+        scale: float,
+        thickness: int,
+    ) -> Tuple[int, int, int]:
+        total_width = 0
+        max_height = 0
+        max_baseline = 0
+        for text, _color in segments:
+            (text_width, text_height), baseline = cv2.getTextSize(text, font, scale, thickness)
+            total_width += text_width
+            max_height = max(max_height, text_height)
+            max_baseline = max(max_baseline, baseline)
+        return total_width, max_height, max_baseline
+
+    def _build_segmented_text_strip(
+        self,
+        width: int,
+        segments: List[Tuple[str, Tuple[int, int, int]]],
+        height: int,
+        font_scale: float,
+        font_thickness: int,
+    ) -> np.ndarray:
+        strip = np.ones((height, width, 3), dtype=np.uint8) * 255
+        if not segments:
+            return strip
+
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        scale = font_scale
+        min_scale = 0.38
+        max_text_width = max(10, width - 16)
+        draw_segments = list(segments)
+
+        while True:
+            total_width, text_height, baseline = self._measure_segmented_text(
+                draw_segments, font, scale, font_thickness
+            )
+            if total_width <= max_text_width or scale <= min_scale:
+                break
+            scale = max(min_scale, scale - 0.04)
+
+        if total_width > max_text_width and len(draw_segments) > 5:
+            while len(draw_segments) > 5 and total_width > max_text_width:
+                draw_segments = draw_segments[:-4] + [(", ...", (40, 40, 40))]
+                total_width, text_height, baseline = self._measure_segmented_text(
+                    draw_segments, font, scale, font_thickness
+                )
+
+        text_x = max(8, (width - total_width) // 2)
+        text_y = max(text_height + 4, (height + text_height) // 2 - max(0, baseline // 2))
+        cursor_x = text_x
+        for text, color in draw_segments:
+            cv2.putText(strip, text, (cursor_x, text_y), font, scale, color, font_thickness, cv2.LINE_AA)
+            text_width = cv2.getTextSize(text, font, scale, font_thickness)[0][0]
+            cursor_x += text_width
+        return strip
 
     @staticmethod
     def _filter_detection_payload(detections, labels: List[str], keep_indices: List[int]):
@@ -231,13 +301,12 @@ class ThinkingViewRenderer:
                 font_thickness=1,
                 text_color=(0, 0, 255),
             )
-            bottom_label = self._build_text_strip(
+            bottom_label = self._build_segmented_text_strip(
                 width,
                 self._summarize_detected_landmarks(detected_landmarks_view),
                 height=30,
                 font_scale=0.52,
                 font_thickness=1,
-                text_color=(40, 40, 40),
             )
             labeled_image = np.vstack([top_label, image, bottom_label])
 

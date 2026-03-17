@@ -956,7 +956,6 @@ class VLMNavigationController(InteractiveNavigationController):
         self._set_current_landmark_tracking(
             next_waypoint_landmark,
             fallback_sources=[
-                response.get('completion_criteria'),
                 response.get('next_waypoint_destination'),
                 response.get('subtask_instruction'),
                 response.get('current_waypoint'),
@@ -1235,7 +1234,6 @@ class VLMNavigationController(InteractiveNavigationController):
             self._set_current_landmark_tracking(
                 next_waypoint_landmark,
                 fallback_sources=[
-                    response.get('completion_criteria'),
                     response.get('next_waypoint_destination'),
                     response.get('subtask_instruction'),
                     response.get('current_waypoint'),
@@ -1583,13 +1581,12 @@ class VLMNavigationController(InteractiveNavigationController):
                 and os.path.exists(local_map_path)):
             return True
 
-        obs = [self.latest_obs]
-        batch_obs = self._batch_obs(obs, save_object_detection=True)
-        poses = torch.from_numpy(np.array([self.latest_obs['sensor_pose']])).float().to(self.device)
-        map_state = self.mapper.update_map(
-            batch_obs, poses, self.current_step,
-            list(self.detected_classes), self.current_episode_id
-        )
+        # Only refresh current-frame detections here.
+        # The latest observation has already been fused into the map during the
+        # real environment step / lookaround step, so replaying sensor_pose would
+        # apply the same delta twice and skew the rendered pose / heading.
+        self._batch_obs([self.latest_obs], save_object_detection=True)
+        map_state = self.mapper.get_map_state()
 
         rgb_bgr = cv2.cvtColor(self.latest_obs['rgb'], cv2.COLOR_RGB2BGR)
         _, detected_landmarks_step, _ = self.visualizer.save_step_visualization(

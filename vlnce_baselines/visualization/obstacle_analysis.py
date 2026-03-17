@@ -131,10 +131,10 @@ def sample_depth_distance_for_angle(
     angle_deg: float,
     hfov_deg: float = 79.0,
     max_distance_m: float = 5.0,
-    row_start_ratio: float = 0.38,
-    row_end_ratio: float = 0.78,
-    column_band_ratio: float = 0.03,
-    sample_percentile: float = 25.0,
+    row_start_ratio: float = 0.30,
+    row_end_ratio: float = 0.90,
+    column_band_ratio: float = 0.04,
+    sample_percentile: float = 20.0,
 ) -> Optional[float]:
     """Estimate obstacle distance directly from the current depth frame."""
     depth = _prepare_depth_array(depth_meters)
@@ -154,7 +154,7 @@ def sample_depth_distance_for_angle(
     col_end = min(width, int(round(center_x)) + half_band + 1)
 
     window = depth[row_start:row_end, col_start:col_end]
-    valid = window[np.isfinite(window) & (window > 0.05)]
+    valid = window[np.isfinite(window) & (window > 0.02)]
     if valid.size == 0:
         return None
 

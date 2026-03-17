@@ -39,23 +39,23 @@ You are provided with 1 image:
 
 **Decision Process**:
 1. **Detection View**: Check the **bottom strip** for all landmark names and distances. Is a yellow bbox visible? It marks the **subtask landmark reference** (nearby anchor, NOT the final destination) — navigate toward it to reach the destination area.
-2. **Image Analysis**: Analyze the current image by LEFT/CENTER/RIGHT and NEAR/FAR. Identify likely room/space cues, large nearby objects, smaller farther objects, and where the visible landmark sits.
+2. **Image Analysis**: Analyze the current image by LEFT/CENTER/RIGHT and NEAR/FAR. Identify likely room/space cues, large nearby objects, smaller farther objects, and where the visible landmark/detected objects sit; use them to infer what space/room each region most likely is.
 3. **Waypoint History**: Read WP#1 -> ... -> LAST in order. Use each waypoint's snapped direction/distance to infer which direction continues toward the most likely task-relevant space/object from the explored route.
-4. **Landmark Map**: Read the Known Landmark Map section above. If distance < 0.5m or the destination area is already reached, **STOP immediately**
+4. **Arrival Check**: First judge whether you are in the correct room/space, then judge whether the destination object in that room is already within ~1.0m. Only then **STOP immediately**.
 5. **Depth Lines**: Which of Left 30 / Front / Right 30 is blocked vs safe?
 6. **Distance Estimation**: How far to destination? (e.g., "~3m", "<0.5m")
-7. **Action Decision**: Prefer the direction that best matches waypoint history + current room/object evidence toward the most likely relevant space/object. If FRONT is blocked, choose the safest side direction that stays closest to the destination.
+7. **Action Decision**: After the full reasoning above, prefer the direction that best matches waypoint history + current room/object evidence toward the most likely relevant space/object. If FRONT is blocked, choose the safest side direction that stays closest to the destination.
 
-**STOP Condition** — As soon as you are near the destination area or the subtask is fulfilled, STOP immediately — do not move past it or take extra steps.
+**STOP Condition** — If the current subtask destination area is already nearby, STOP immediately. Concretely: the correct room/space is reached and the destination object is within ~1.0m. Do not move past it or take extra steps. Do not STOP early if you are still outside the correct room or not yet beside the target object.
 
-**Movement Rule**: Move forward when the destination remains ahead and the path is clear; once near the destination, STOP immediately.
+**Movement Rule**: Move forward when the destination remains ahead and the path is clear; once the correct room/object target is reached, STOP immediately.
 
 **Safety Priority**: Avoid directions with red distance lines (obstacle <0.5m)
 
 # Output Format (JSON only)
 
 {{
-    "reasoning": "Logic: (1) LEFT/CENTER/RIGHT + NEAR/FAR image analysis with room/object cues (2) waypoint-history alignment (3) destination/landmark distance (4) action decision",
+    "reasoning": "Logic: (1) LEFT/CENTER/RIGHT + NEAR/FAR image analysis with room/object cues and detected objects (2) likely space/room for each region (3) waypoint-history alignment (4) destination/landmark distance and arrival check (5) action decision",
     "action_analysis": "One sentence stating the key visual evidence, waypoint-history cue, and why this action is best",
     "action": "MOVE_FORWARD" | "TURN_LEFT" | "TURN_RIGHT" | "STOP",
     "value": 0,
@@ -89,7 +89,7 @@ You are provided with 1 image:
 
 **Ex3 - At destination**
 {{
-    "reasoning": "The destination cue is already within 0.5m and the current view indicates arrival at the target area. STOP immediately.",
+    "reasoning": "The current room is already the target room, and the destination object is already within about 0.5m. STOP immediately.",
     "action_analysis": "Destination area is already reached, so stopping now avoids overshooting",
     "action": "STOP",
     "value": 0,
@@ -97,8 +97,8 @@ You are provided with 1 image:
 }}
 
 **Critical Rules**:
-- **STOP immediately** if destination is < 0.5m or subtask instruction is fulfilled
-- reasoning must explicitly cover LEFT/CENTER/RIGHT plus NEAR/FAR image cues before choosing an action
+- **STOP immediately** only when the correct room/space is confirmed and the destination object is within ~1.0m
+- reasoning must explicitly cover LEFT/CENTER/RIGHT plus NEAR/FAR image cues, likely room/space, and detected landmark/object evidence before choosing an action
 - If the destination is ahead and FRONT is clear, prefer MOVE_FORWARD
 - If FRONT is blocked, choose the closest safe side direction toward the destination, not a wider detour
 - For off-screen landmarks, **always turn toward the indicated direction first**

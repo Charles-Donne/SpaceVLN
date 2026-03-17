@@ -15,8 +15,8 @@ from vlnce_baselines.visualization.visualizer import MapVisualizer
 class LLMPlanner(BaseAPIClient):
     """LLM规划器 - 负责子任务生成和验证"""
     
-    REQUIRED_FIELDS_INITIAL = ['next_waypoint_direction', 'next_waypoint_destination', 'subtask_instruction', 'completion_criteria']
-    REQUIRED_FIELDS_VERIFY = ['next_waypoint_direction', 'next_waypoint_destination', 'subtask_instruction', 'completion_criteria']
+    REQUIRED_FIELDS_INITIAL = ['next_waypoint_direction', 'next_waypoint_destination', 'subtask_instruction']
+    REQUIRED_FIELDS_VERIFY = ['next_waypoint_direction', 'next_waypoint_destination', 'subtask_instruction']
     
     def __init__(self, config_path: str = "vlnce_baselines/vlm/llm_config.yaml", 
                  action_space: str = None):
@@ -45,12 +45,6 @@ class LLMPlanner(BaseAPIClient):
         
         # 验证基础字段
         if not self.validate_fields(response, required):
-            return False
-        
-        # 验证completion_criteria为字符串即可（描述到达后的状态）
-        criteria = response.get('completion_criteria')
-        if not criteria or not isinstance(criteria, str):
-            print(f"[WARN] completion_criteria should be string")
             return False
         
         return True
@@ -160,8 +154,6 @@ class LLMPlanner(BaseAPIClient):
         # 获取当前子任务信息
         subtask_destination = current_subtask.get('next_waypoint_destination', 'Unknown')
         subtask_instruction = current_subtask.get('subtask_instruction', 'Unknown')
-        completion_criteria = current_subtask.get('completion_criteria', 'Unknown')
-        
         # 格式化检测到的landmark信息
         landmarks_str = None
         if detected_landmarks:
@@ -181,7 +173,6 @@ class LLMPlanner(BaseAPIClient):
             instruction,
             subtask_destination,
             subtask_instruction,
-            completion_criteria,
             self.action_space,
             detected_landmarks=landmarks_str,
             waypoint_summary=waypoint_summary

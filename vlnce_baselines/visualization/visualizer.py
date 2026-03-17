@@ -31,6 +31,7 @@ from vlnce_baselines.visualization.obstacle_analysis import (
 )
 from vlnce_baselines.config_system.constants import (
     color_palette, 
+    detection_visible_topk,
     detection_colors,
     detection_thickness,
     landmark_marker_color,
@@ -728,7 +729,7 @@ class MapVisualizer:
                 interpolation=cv2.INTER_NEAREST,
             )
 
-        valid_mask = (mask_2d > 0.5) & np.isfinite(depth_img) & (depth_img > 0.05)
+        valid_mask = (mask_2d > 0.5) & np.isfinite(depth_img) & (depth_img > 0.02)
         if not np.any(valid_mask):
             return None
 
@@ -988,6 +989,29 @@ class MapVisualizer:
             detection_vis: 检测可视化图像（只显示Landmark边界框）
         """
         detection_vis = rgb.copy()
+
+        def _draw_action_partition_lines(image: np.ndarray) -> None:
+            h_img, w_img = image.shape[:2]
+            center_x = w_img // 2
+            bottom_y = h_img - 1
+            guide_color = (255, 220, 160)
+            for boundary_deg in (-25.0, 25.0):
+                half_fov = float(hfov) / 2.0
+                if half_fov <= 1e-6:
+                    continue
+                ratio = (boundary_deg + half_fov) / float(hfov)
+                x_top = int(round(ratio * (w_img - 1)))
+                x_top = max(0, min(w_img - 1, x_top))
+                cv2.line(
+                    image,
+                    (center_x, bottom_y),
+                    (x_top, 0),
+                    guide_color,
+                    2,
+                    cv2.LINE_AA,
+                )
+
+        _draw_action_partition_lines(detection_vis)
         
         if detections is None or len(detections.xyxy) == 0:
             if controller is not None:
@@ -999,7 +1023,8 @@ class MapVisualizer:
         visible_entries = []  # [(name, dist_m, angle_deg), ...] using corrected map values when available
         visible_entries_meta = []
         matched_in_view: set = set()  # 当前帧中实际可见的landmark类名
-        used_map_candidates = {}
+        candidate_entries: List[Dict[str, Any]] = []
+        draw_items: List[Dict[str, Any]] = []
 
         def _bbox_center_angle_deg(x1: int, x2: int, width: int) -> float:
             xc = (width - 1) / 2.0
@@ -1032,27 +1057,42 @@ class MapVisualizer:
             if matched_landmark is None:
                 continue  # 跳过非Landmark类别
             
-            label_name = matched_landmark  # 用完整landmark名称显示
-            detected_landmarks.append((label_name, confidence))
-            matched_in_view.add(label_name)
-
-            # 使用醒目的黄色粗框标注Landmark
-            color = detection_colors["landmark"]
-            thickness = detection_thickness["landmark"]
-
-            # 画边界框
             x1, y1, x2, y2 = map(int, bbox)
-            cv2.rectangle(detection_vis, (x1, y1), (x2, y2), color, thickness)
+            label_name = matched_landmark  # 用完整landmark名称显示
 
             # 仅用 bbox 中心做文字框定位；同类多实例时才做 mask+depth 到地图实例的匹配。
             _, w_img = rgb.shape[:2]
-            same_cls_total = len(landmark_dist_map_multi.get(label_name, [])) if landmark_dist_map_multi else 1
             det_mask = None
             if getattr(detections, "mask", None) is not None and i < len(detections.mask):
                 det_mask = detections.mask[i]
             det_rel_xy = None
             if det_mask is not None and depth_for_match is not None:
                 det_rel_xy = self._estimate_mask_rel_xy(det_mask, depth_for_match, hfov)
+
+            candidate_entries.append({
+                "name": label_name,
+                "confidence": float(confidence),
+                "bbox": (x1, y1, x2, y2),
+                "det_rel_xy": det_rel_xy,
+                "w_img": w_img,
+                "raw_index": i,
+            })
+
+        candidate_entries.sort(key=lambda item: (-float(item["confidence"]), int(item["raw_index"])))
+        selected_entries = candidate_entries[:max(1, int(detection_visible_topk))]
+        used_map_candidates = {}
+
+        for candidate in selected_entries:
+            label_name = candidate["name"]
+            confidence = float(candidate["confidence"])
+            x1, y1, x2, y2 = candidate["bbox"]
+            det_rel_xy = candidate["det_rel_xy"]
+            w_img = candidate["w_img"]
+
+            detected_landmarks.append((label_name, confidence))
+            matched_in_view.add(label_name)
+
+            same_cls_total = len(landmark_dist_map_multi.get(label_name, [])) if landmark_dist_map_multi else 1
 
             # 只使用地图里已经投影/存储的 landmark 相对当前 pose 的距离与角度。
             map_dist_m = None
@@ -1093,26 +1133,24 @@ class MapVisualizer:
 
             if display_dist_m is not None and display_angle_deg is not None:
                 visible_entries.append((label_name, display_dist_m, display_angle_deg))
-                visible_entries_meta.append({
-                    "name": label_name,
-                    "confidence": float(confidence),
-                    "distance_m": float(display_dist_m),
-                    "angle_deg": float(display_angle_deg),
-                    "instance_idx": map_instance_idx,
-                })
 
             # bbox上方只显示最终用于决策的距离和动作角度
             row1 = ""
             inst_prefix = ""
             if map_instance_idx is not None and same_cls_total > 1:
                 inst_prefix = f"#{map_instance_idx + 1} "
+            shown_dist_m = display_dist_m
+            shown_angle_deg = display_angle_deg
             if display_dist_m is not None and display_angle_deg is not None:
-                row1 = f"{inst_prefix}{display_dist_m:.1f}m {format_relative_direction(display_angle_deg)}"
+                row1 = (
+                    f"{inst_prefix}{display_dist_m:.1f}m {format_relative_direction(display_angle_deg)}"
+                )
             elif display_dist_m is not None:
                 row1 = f"{inst_prefix}{display_dist_m:.1f}m"
             else:
                 fallback_angle_deg = None
                 fallback_dist_str = None
+                fallback_dist_m = None
                 if det_rel_xy is not None:
                     forward_m, right_m = det_rel_xy
                     fallback_dist_m = float(np.hypot(forward_m, right_m))
@@ -1123,27 +1161,65 @@ class MapVisualizer:
                     fallback_angle_deg = _bbox_center_angle_deg(x1, x2, w_img)
                 if fallback_dist_str is None:
                     fallback_dist_str = ">5.0m"
-                row1 = f"{fallback_dist_str} {format_relative_direction(fallback_angle_deg)}"
-            if row1:
-                font = cv2.FONT_HERSHEY_SIMPLEX
-                font_scale = 0.5
-                font_thickness = 1
-                pad = 4
+                shown_dist_m = fallback_dist_m if fallback_dist_m is not None else 5.1
+                shown_angle_deg = fallback_angle_deg
+                row1 = f"{inst_prefix}{fallback_dist_str} {format_relative_direction(fallback_angle_deg)}"
 
-                (w1, h1), _ = cv2.getTextSize(row1, font, font_scale, font_thickness)
-                bg_w = w1 + pad * 2
-                bg_h = h1 + pad * 2
+            if shown_dist_m is not None and shown_angle_deg is not None:
+                visible_entries_meta.append({
+                    "name": label_name,
+                    "confidence": float(confidence),
+                    "distance_m": float(shown_dist_m),
+                    "angle_deg": float(shown_angle_deg),
+                    "instance_idx": map_instance_idx,
+                })
+            draw_items.append({
+                "name": label_name,
+                "bbox": (x1, y1, x2, y2),
+                "row1": row1,
+                "distance_m": float(shown_dist_m) if shown_dist_m is not None else 999.0,
+            })
 
-                cx_bbox = (x1 + x2) // 2
-                bg_x = max(0, min(cx_bbox - bg_w // 2, w_img - bg_w))
-                bg_y = y1 - bg_h - 4
-                if bg_y < 0:
-                    bg_y = y1 + 2
+        # 先渲染bbox框
+        color = detection_colors["landmark"]
+        thickness = detection_thickness["landmark"]
+        for item in draw_items:
+            x1, y1, x2, y2 = item["bbox"]
+            cv2.rectangle(detection_vis, (x1, y1), (x2, y2), color, thickness)
 
-                cv2.rectangle(detection_vis, (bg_x, bg_y), (bg_x + bg_w, bg_y + bg_h), color, -1)
-                r1_x = bg_x + (bg_w - w1) // 2
-                cv2.putText(detection_vis, row1, (r1_x, bg_y + pad + h1),
-                            font, font_scale, (0, 0, 0), font_thickness, cv2.LINE_AA)
+        # 再按由远到近渲染bbox上方标签，保证近目标标签最终在最上层
+        for item in sorted(draw_items, key=lambda entry: entry["distance_m"], reverse=True):
+            row1 = item["row1"]
+            if not row1:
+                continue
+            x1, y1, x2, _y2 = item["bbox"]
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = 0.62
+            font_thickness = 2
+            pad = 5
+
+            (w1, h1), _ = cv2.getTextSize(row1, font, font_scale, font_thickness)
+            bg_w = w1 + pad * 2
+            bg_h = h1 + pad * 2
+
+            cx_bbox = (x1 + x2) // 2
+            bg_x = max(0, min(cx_bbox - bg_w // 2, w_img - bg_w))
+            bg_y = y1 - bg_h - 5
+            if bg_y < 0:
+                bg_y = y1 + 3
+
+            cv2.rectangle(detection_vis, (bg_x, bg_y), (bg_x + bg_w, bg_y + bg_h), color, -1)
+            r1_x = bg_x + (bg_w - w1) // 2
+            cv2.putText(
+                detection_vis,
+                row1,
+                (r1_x, bg_y + pad + h1),
+                font,
+                font_scale,
+                (0, 0, 0),
+                font_thickness,
+                cv2.LINE_AA,
+            )
         
         # ── 底部条带：所有landmark信息（可见+离屏）拼接在图像下方，白底黑字 ──
         # [Visible] = 当前帧检测到，[Off-screen] = 地图中存在但视野外
@@ -1171,14 +1247,13 @@ class MapVisualizer:
                 offscreen_items.append((cls_name, 1, d_m, a_deg))
 
         strip = None
-        if visible_entries or offscreen_items:
+        if visible_entries_meta or offscreen_items:
             w_img2 = detection_vis.shape[1]
             font2 = cv2.FONT_HERSHEY_SIMPLEX
             fs2, ft2 = 0.5, 1
 
-            item_lines = []  # list of (text, is_separator)
+            item_lines = []  # list of (dist_m, priority, text)
 
-            # ── 可见landmark（逐实例显示） ──
             visible_cls_total = {}
             for entry in visible_entries_meta:
                 cls_name = entry["name"]
@@ -1199,31 +1274,29 @@ class MapVisualizer:
                 if inst_idx is not None and visible_cls_total.get(lm_name, 0) > 1:
                     suffix = f" #{inst_idx + 1}"
                 item_lines.append((
-                    f"[Vis]{suffix} {sn}  {d_m:.1f}m  {format_relative_direction(a_deg)}",
-                    False
+                    float(d_m),
+                    0,
+                    f"[Vis]{suffix} {sn}  c{float(entry.get('confidence', 0.0)):.2f}  {d_m:.1f}m  {format_relative_direction(a_deg)}",
                 ))
 
-            # 空行分隔（两组都有时）
-            if visible_entries and offscreen_items:
-                item_lines.append(("", True))
-
-            # ── 离屏landmark ──
-            # 同类多实例按 #k 标识
             cls_total = {}
             for cls_name, _inst_idx, _d_m, _a_deg in offscreen_items:
                 cls_total[cls_name] = cls_total.get(cls_name, 0) + 1
 
-            for cls_name, inst_idx, d_m, a_deg in sorted(offscreen_items, key=lambda x: x[2]):
+            for cls_name, inst_idx, d_m, a_deg in offscreen_items:
                 sn = cls_name if len(cls_name) <= 40 else cls_name[:38] + ".."
                 suffix = f" #{inst_idx}" if cls_total.get(cls_name, 0) > 1 else ""
                 item_lines.append((
+                    float(d_m),
+                    1,
                     f"[Off]{suffix} {sn}  {d_m:.1f}m  {format_relative_direction(a_deg)}",
-                    False
                 ))
+
+            item_lines.sort(key=lambda item: (item[0], item[1], item[2]))
 
             # 计算行高（增大间距，避免文字显示不全）
             font2 = cv2.FONT_HERSHEY_SIMPLEX
-            fs2, ft2 = 0.52, 1
+            fs2, ft2 = 0.60, 1
             _sample = cv2.getTextSize("Ag", font2, fs2, ft2)[0]
             row_h = _sample[1] + 14
             pad_v = 6
@@ -1232,11 +1305,7 @@ class MapVisualizer:
             strip = np.full((total_h, w_img2, 3), 255, dtype=np.uint8)
             cv2.line(strip, (0, 0), (w_img2, 0), (180, 180, 180), 1)
 
-            for i, (txt, is_sep) in enumerate(item_lines):
-                if is_sep:
-                    sep_y = pad_v + row_h * i + row_h // 2
-                    cv2.line(strip, (w_img2 // 6, sep_y), (w_img2 * 5 // 6, sep_y), (200, 200, 200), 1)
-                    continue
+            for i, (_dist_m, _priority, txt) in enumerate(item_lines):
                 (tw, th), _ = cv2.getTextSize(txt, font2, fs2, ft2)
                 x_c = 8  # 左对齐，8px 左边距
                 y_c = pad_v + row_h * i + th
@@ -1423,8 +1492,8 @@ class MapVisualizer:
             cv2.line(image, (center_x, bottom_y), (end_x, end_y), color, thickness)
             
             # FRONT用大字号，其他用稍大字号
-            font_scale = 0.6 if config['key'] == 'front' else 0.5
-            font_thickness = 2 if config['key'] == 'front' else 1
+            font_scale = 0.72 if config['key'] == 'front' else 0.62
+            font_thickness = 2 if config['key'] == 'front' else 2
             
             # 合并标签为单行："Left 90 1.3m" 或 "FRONT 0.70m"
             combined_label = f"{config['label']} {dist_str}"

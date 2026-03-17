@@ -61,9 +61,8 @@ llm_input = {
     "detected_objects": ["floor", "wall", "door", "table"]
 }
 llm_output = {
-    "subtask_destination": "doorway",
-    "subtask_landmark": "door",  # → landmark_classes = ["door"]
-    "completion_criteria": {...}
+    "subtask_destination": "kitchen's table",
+    "subtask_landmark": "table"  # → landmark_classes = ["table"]
 }
 
 # ACT Phase  
@@ -79,10 +78,13 @@ vlm_output = {
 # REFLECT Phase
 verify_input = {
     "360_scan": [updated_maps, new_detections],
-    "criteria": ["door detected?", "distance<0.5m?", "correct position?"]
+    "current_subtask": {
+        "destination": "kitchen's table",
+        "landmark": "table"
+    }
 }
 verify_output = {
-    "is_completed": True,
+    "global_task_finish": False,
     "next_subtask": {...}
 }
 ```
