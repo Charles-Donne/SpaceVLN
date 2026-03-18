@@ -1,7 +1,7 @@
 import math
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-CURRENT_AREA_OVERLAP_THRESHOLD_M = 2.0
+CURRENT_AREA_OVERLAP_THRESHOLD_M = 1.0
 
 
 def normalize_relative_bearing(bearing_deg: float) -> float:
@@ -69,14 +69,18 @@ def build_waypoint_summary(
     )
     header_lines.append(f"Your Current Area: {display_area_label}{room_type_note}")
 
-    if not waypoint_ids:
-        return "\n".join(header_lines + ["No waypoints visited yet."])
+    empty_area_path_line = None
+    if include_area_chain:
+        current_area_display = str(current_room_area_label or "Unknown").strip() or "Unknown"
+        empty_area_path_line = f"Waypoint Area Path: Current({current_area_display})"
 
-    current_area_known = bool(
-        display_area_label
-        and str(display_area_label).strip()
-        and str(display_area_label).strip().lower() != "unknown"
-    )
+    if not waypoint_ids:
+        lines = list(header_lines)
+        if empty_area_path_line:
+            lines.append(empty_area_path_line)
+        lines.append("No waypoints visited yet.")
+        return "\n".join(lines)
+
     waypoint_distances_m: List[Optional[float]] = []
     close_last_waypoint = False
     if current_pose is not None:
@@ -91,7 +95,7 @@ def build_waypoint_summary(
         waypoint_distances_m = [None] * len(waypoint_ids)
 
     visible_indices = list(range(len(waypoint_ids)))
-    if (current_area_known or close_last_waypoint) and visible_indices:
+    if close_last_waypoint and visible_indices:
         visible_indices = visible_indices[:-1]
     last_visible_index = visible_indices[-1] if visible_indices else None
 

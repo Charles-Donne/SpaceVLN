@@ -26,7 +26,7 @@ class ThinkingViewRenderer:
     """Render and save the 12 annotated direction views used by the thinking model."""
 
     THINKING_DETECTION_TOPK = 3
-    CURRENT_AREA_OVERLAP_THRESHOLD_M = 2.0
+    CURRENT_AREA_OVERLAP_THRESHOLD_M = 1.0
 
     @staticmethod
     def _build_text_strip(
@@ -124,12 +124,39 @@ class ThinkingViewRenderer:
         resolution_cm: float,
         current_room_area_label: str,
     ) -> List[Dict[str, Any]]:
-        if not waypoint_info or current_pose is None:
+        if current_pose is None:
             return []
+
+        if not waypoint_info:
+            current_area_text = str(current_room_area_label or "Unknown").strip() or "Unknown"
+            return [{
+                "id": 0,
+                "label": cls._short_text(current_area_text, max_len=34),
+                "description": current_area_text,
+                "area_label": current_area_text,
+                "distance_m": 0.0,
+                "relative_bearing_deg": 0.0,
+                "snapped_relative_bearing_deg": 0.0,
+                "view_angle_deg": 0.0,
+                "is_last_visited": False,
+                "is_current_area": True,
+            }]
 
         waypoint_positions, waypoint_ids, waypoint_descriptions = waypoint_info
         if not waypoint_ids:
-            return []
+            current_area_text = str(current_room_area_label or "Unknown").strip() or "Unknown"
+            return [{
+                "id": 0,
+                "label": cls._short_text(current_area_text, max_len=34),
+                "description": current_area_text,
+                "area_label": current_area_text,
+                "distance_m": 0.0,
+                "relative_bearing_deg": 0.0,
+                "snapped_relative_bearing_deg": 0.0,
+                "view_angle_deg": 0.0,
+                "is_last_visited": False,
+                "is_current_area": True,
+            }]
 
         curr_x_m, curr_y_m, curr_orientation_deg = [float(v) for v in current_pose[:3]]
         area_labels = list(waypoint_area_labels or [])
@@ -164,21 +191,30 @@ class ThinkingViewRenderer:
                 "is_last_visited": index == len(waypoint_ids) - 1,
             })
 
-        if entries and float(entries[-1]["distance_m"]) <= cls.CURRENT_AREA_OVERLAP_THRESHOLD_M:
-            last_entry = entries.pop()
-            current_area_text = str(current_room_area_label or "Unknown").strip() or "Unknown"
-            entries.append({
-                "id": 0,
-                "label": cls._short_text(current_area_text, max_len=34),
-                "description": current_area_text,
-                "area_label": current_area_text,
-                "distance_m": 0.0,
-                "relative_bearing_deg": float(last_entry["relative_bearing_deg"]),
-                "snapped_relative_bearing_deg": float(last_entry.get("snapped_relative_bearing_deg", 0.0)),
-                "view_angle_deg": float(last_entry["view_angle_deg"]),
-                "is_last_visited": False,
-                "is_current_area": True,
-            })
+        current_area_text = str(current_room_area_label or "Unknown").strip() or "Unknown"
+        current_area_view_angle = 0.0
+        current_area_relative_bearing = 0.0
+        current_area_snapped_bearing = 0.0
+        if entries:
+            last_entry = entries[-1]
+            current_area_view_angle = float(last_entry["view_angle_deg"])
+            current_area_relative_bearing = float(last_entry["relative_bearing_deg"])
+            current_area_snapped_bearing = float(last_entry.get("snapped_relative_bearing_deg", 0.0))
+            if float(last_entry["distance_m"]) <= cls.CURRENT_AREA_OVERLAP_THRESHOLD_M:
+                entries.pop()
+
+        entries.append({
+            "id": 0,
+            "label": cls._short_text(current_area_text, max_len=34),
+            "description": current_area_text,
+            "area_label": current_area_text,
+            "distance_m": 0.0,
+            "relative_bearing_deg": current_area_relative_bearing,
+            "snapped_relative_bearing_deg": current_area_snapped_bearing,
+            "view_angle_deg": current_area_view_angle,
+            "is_last_visited": False,
+            "is_current_area": True,
+        })
 
         return entries
 

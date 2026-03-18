@@ -207,10 +207,18 @@ class SaveManager:
         self.save_action_input(action_record, subtask_info)
         self.save_action_response(action_record)
     
-    def save_waypoint_memory(self, waypoint_memory: List[Dict], 
+    def save_waypoint_memory(self, waypoint_memory: Dict,
                             instruction: str, current_step: int):
-        """保存路径点记忆到records/ - DISABLED for performance"""
-        pass  # 不再保存waypoint_memory，减少IO开销
+        """保存路径点与房间区域记忆到 records/。"""
+        payload = {
+            "instruction": instruction,
+            "current_step": int(current_step),
+            "waypoint_memory": waypoint_memory,
+            "timestamp": datetime.now().isoformat(),
+        }
+        save_path = os.path.join(self.records_dir, "waypoint_memory.json")
+        with open(save_path, 'w', encoding='utf-8') as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
     
     def save_result(self, result: Dict):
         """

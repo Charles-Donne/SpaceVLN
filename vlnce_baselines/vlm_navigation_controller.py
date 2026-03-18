@@ -62,6 +62,7 @@ class VLMNavigationController(InteractiveNavigationController):
     """
 
     ACTION_SUBTASK_AUTOCOMPLETE_DISTANCE_M = 0.5
+    ACTION_SUBTASK_AUTOCOMPLETE_TOPK = 2
     
     def __init__(self, config: Config,
                  config_path: str = None,
@@ -198,7 +199,7 @@ class VLMNavigationController(InteractiveNavigationController):
             return None
 
         matches: List[Dict[str, Any]] = []
-        for entry in step_landmark_entries or []:
+        for entry in list(step_landmark_entries or [])[: int(self.ACTION_SUBTASK_AUTOCOMPLETE_TOPK)]:
             if self._landmark_matches_current_subtask_destination(
                 entry.get('name'),
                 candidate_names=candidate_names,
@@ -279,8 +280,9 @@ class VLMNavigationController(InteractiveNavigationController):
 
         print(f"[AutoSubtaskCheck] step={step_idx} target_candidates={candidate_names}")
 
-        entries = list(step_landmark_entries or [])[:3]
-        for rank in range(3):
+        max_rank = int(self.ACTION_SUBTASK_AUTOCOMPLETE_TOPK)
+        entries = list(step_landmark_entries or [])[:max_rank]
+        for rank in range(max_rank):
             if rank >= len(entries):
                 print(
                     f"[AutoSubtaskCheck]   top{rank + 1}: landmark=None | "
@@ -320,6 +322,49 @@ class VLMNavigationController(InteractiveNavigationController):
             print(f"[DONE] Task complete ({reason_tag}) | steps={total_steps}")
             return True, new_subtask
         return False, new_subtask
+
+    def _save_waypoint_area_memory_snapshot(self) -> None:
+        """Persist waypoint/room-area state for debugging after each planning update."""
+        if self.save_manager is None or self.mapper is None:
+            return
+
+        map_state = self.mapper.get_map_state()
+        waypoint_positions = [
+            [int(pos[0]), int(pos[1])]
+            for pos in map_state.get('waypoint_positions', []) or []
+        ]
+        waypoint_ids = [int(wp_id) for wp_id in map_state.get('waypoint_ids', []) or []]
+        waypoint_descriptions = [str(desc) for desc in getattr(self.mapper, 'waypoint_descriptions', []) or []]
+        waypoint_area_labels = [
+            str(label or "Unknown")
+            for label in map_state.get('waypoint_area_labels', []) or []
+        ]
+        room_area_records = []
+        for record in map_state.get('room_area_records', []) or []:
+            center_world_px = record.get("center_world_px", (0, 0))
+            room_area_records.append({
+                "id": int(record.get("id", 0) or 0),
+                "label": str(record.get("label", "")),
+                "room_type": str(record.get("room_type", "")),
+                "variant": int(record.get("variant", 0) or 0),
+                "center_world_px": [int(center_world_px[0]), int(center_world_px[1])],
+            })
+
+        waypoint_memory = {
+            "current_room_area_label": str(map_state.get('current_room_area_label', 'Unknown') or 'Unknown'),
+            "current_room_area_type": str(map_state.get('current_room_area_type', 'Unknown') or 'Unknown'),
+            "waypoint_positions": waypoint_positions,
+            "waypoint_ids": waypoint_ids,
+            "waypoint_descriptions": waypoint_descriptions,
+            "waypoint_area_labels": waypoint_area_labels,
+            "room_area_records": room_area_records,
+            "waypoint_summary": self._get_waypoint_summary(include_area_chain=True),
+        }
+        self.save_manager.save_waypoint_memory(
+            waypoint_memory=waypoint_memory,
+            instruction=self.current_instruction,
+            current_step=self.current_step,
+        )
 
     def _execute_auto_retreat(self, retreat_distance_m: float = 1.0) -> Tuple[float, bool]:
         """Turn around, move 1m away, then hand off directly to thinking/lookaround."""
@@ -1089,7 +1134,7 @@ class VLMNavigationController(InteractiveNavigationController):
             draw_waypoints_fn=self._draw_waypoints_on_view,
         )
         
-        # 保存全局地图和局部地图到对应目录
+        # 保存 Global / Local Map 到对应目录
         # 使用当前step的地图（环视完成后的最新地图）
         self.latest_global_map = os.path.join(self.episode_dir, 'global_map', f'step_{self.current_step:04d}_{phase}.png')
         self.latest_local_map = os.path.join(self.episode_dir, 'local_map', f'step_{self.current_step:04d}_{phase}.png')
@@ -1101,7 +1146,7 @@ class VLMNavigationController(InteractiveNavigationController):
         if not os.path.exists(self.latest_local_map):
             print(f"  [WARN] Local Map not found: {self.latest_local_map}")
             self.latest_local_map = None
-        
+
         # print(f"  12方向独立视图已保存")
         
         return direction_paths, direction_names
@@ -1172,7 +1217,7 @@ class VLMNavigationController(InteractiveNavigationController):
             print(f"[ERR] Global map not found: {global_map}")
             return None
         
-        # 地图已包含waypoint标记（在visualizer.save_step_visualization中渲染）
+        # thinking 使用 12 个方向视图 + Global Map + Local Map
         global_map_for_llm = global_map
         
         # 使用最近的障碍物距离（在look_around_and_collect中由visualizer计算）
@@ -1235,10 +1280,12 @@ class VLMNavigationController(InteractiveNavigationController):
         # 在mapper中添加waypoint（自动计算地图坐标）
         waypoint_desc = response.get('current_waypoint', 'Unknown location')
         waypoint_id = self.mapper.add_waypoint(waypoint_desc)
-        
-        # Waypoint记忆不再保存到文件，减少IO开销
-        # waypoint_summary = self._get_waypoint_summary()
-        # self.save_manager.save_waypoint_memory(...)
+        self._refresh_step_visualization_snapshot(
+            phase="initial",
+            enable_landmark_detection=False,
+            force=True,
+        )
+        self._save_waypoint_area_memory_snapshot()
         
         # 初始子任务开始前也显式清空旧自定义 landmark 状态
         self._reset_custom_landmark_state()
@@ -1399,7 +1446,7 @@ class VLMNavigationController(InteractiveNavigationController):
             print(f"[ERR] Global map not found: {global_map}")
             return None, None
         
-        # 地图已包含waypoint标记（在visualizer.save_step_visualization中渲染）
+        # thinking 使用 12 个方向视图 + Global Map + Local Map
         global_map_for_llm = global_map
         
         # 获取已检测到的landmark类别 - 汇总环视12步中检测到的所有landmarks
@@ -1463,7 +1510,7 @@ class VLMNavigationController(InteractiveNavigationController):
             observation_images=image_paths,
             direction_names=direction_names,
             global_map_image=global_map_for_llm,
-            local_map_image=local_map if os.path.exists(local_map) else None,
+            local_map_image=local_map if local_map and os.path.exists(local_map) else None,
             detected_landmarks=detected_landmarks,
             waypoint_summary=waypoint_summary,
             obstacle_distances=obstacle_distances,
@@ -1494,10 +1541,12 @@ class VLMNavigationController(InteractiveNavigationController):
             # 保存waypoint
             waypoint_desc = response.get('current_waypoint', 'Unknown location')
             waypoint_id = self.mapper.add_waypoint(waypoint_desc)
-            
-            # Waypoint记忆不再保存到文件，减少IO开销
-            # waypoint_summary = self._get_waypoint_summary()
-            # self.save_manager.save_waypoint_memory(...)
+            self._refresh_step_visualization_snapshot(
+                phase=phase,
+                enable_landmark_detection=False,
+                force=True,
+            )
+            self._save_waypoint_area_memory_snapshot()
             
             # 清空旧状态（为新子任务准备）
             self.mapper.clear_trajectory()
@@ -1656,16 +1705,6 @@ class VLMNavigationController(InteractiveNavigationController):
             detection_image = self.visualizer.prepare_action_image_with_enhancements(
                 detection_image, mask_path, self.latest_obstacle_distances, self.classes, use_floor=False, use_distance=False)
         
-        # 查找局部地图（使用相同的回退逻辑）
-        local_map = None
-        for phase in possible_phases:
-            candidate = os.path.join(self.episode_dir, 'local_map', f'step_{last_step:04d}_{phase}.png')
-            if os.path.exists(candidate):
-                local_map = candidate
-                break
-        if not local_map:
-            print(f"  [WARN] Local map not found for step {last_step}")
-        
         # 获取detection图像对应的landmark类别
         # 使用找到的detection图像对应的step
         detected_landmarks = None
@@ -1746,7 +1785,7 @@ class VLMNavigationController(InteractiveNavigationController):
             progress_summary=self.progress_summary,
             waypoint_summary=waypoint_summary,
             detection_image=detection_image,
-            local_map_image=local_map,
+            local_map_image=None,
             detected_landmarks=detected_landmarks,
             previous_action_reason=self.previous_action_reason,
             obstacle_distances=obstacle_distances,

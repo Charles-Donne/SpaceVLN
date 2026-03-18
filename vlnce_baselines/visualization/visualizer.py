@@ -664,7 +664,7 @@ class MapVisualizer:
                         wp_x_m = float(wp_pos[1]) * float(self.resolution) / 100.0
                         wp_y_m = float(wp_pos[0]) * float(self.resolution) / 100.0
                         curr_x_m, curr_y_m = float(current_pose[0]), float(current_pose[1])
-                        if float(np.hypot(wp_x_m - curr_x_m, wp_y_m - curr_y_m)) <= 2.0:
+                        if float(np.hypot(wp_x_m - curr_x_m, wp_y_m - curr_y_m)) <= 1.0:
                             continue
 
                     projected = projector.world_to_global_display(wp_pos[0], wp_pos[1])
@@ -2217,14 +2217,16 @@ class MapVisualizer:
         )
         paths['global_map'] = self.save_global_map(step, episode_id, global_map_with_trajectory, phase)
         
-        # 3. 渲染并保存局部地图（使用trajectory_points）
+        # 3. 渲染并保存局部地图（保留给 thinking 和 debug）
         local_map = self.render_local_map(
             full_map, trajectory_points, detected_classes, current_pose,
             floor, landmark_classes, landmark_instances_world, landmark_config, hfov,
             waypoint_positions, waypoint_ids, room_area_layer, room_area_records, crop_offset,
             mapping_classes=mapping_classes
         )
-        paths['local_map'] = self.save_local_map(step, episode_id, local_map, phase)        # 4. 渲染并保存检测结果
+        paths['local_map'] = self.save_local_map(step, episode_id, local_map, phase)
+
+        # 4. 渲染并保存检测结果
         detected_landmarks_step = []
         landmark_dist_map = {}
         landmark_dist_map_multi = {}

@@ -89,13 +89,13 @@ class LLMPlanner(BaseAPIClient):
             self.action_space
         )
         
-        # 组合图像：4方向观察 + 全局地图 + 局部地图（如果有）
+        # 组合图像：12方向观察 + 全局地图 + 局部地图（如果有）
         images = observation_images.copy()
         images.append(global_map_image)
         
         if local_map_image:
             images.append(local_map_image)
-        
+
         # global_map不压缩（需要全分辨率），其余图片压缩
         no_compress = {len(observation_images)}  # global_map的索引
         
@@ -177,13 +177,13 @@ class LLMPlanner(BaseAPIClient):
             waypoint_summary=waypoint_summary
         )
         
-        # 组合图像：当前位置4方向 + 全局地图 + 局部地图（如果有）
+        # 组合图像：当前位置12方向 + 全局地图 + 局部地图（如果有）
         images = observation_images.copy()
         images.append(global_map_image)
         
         if local_map_image:
             images.append(local_map_image)
-        
+
         # global_map不压缩（需要全分辨率），其余图片压缩
         no_compress = {len(observation_images)}  # global_map的索引
         
