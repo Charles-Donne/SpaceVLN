@@ -83,6 +83,7 @@ class InteractiveNavigationController:
         self.latest_landmark_dist_map = {}
         self.latest_landmark_dist_map_multi = {}
         self.latest_visible_landmark_entries = []
+        self.latest_action_landmark_topk_entries = []
 
     def _record_landmark_detection_step(self, step_idx: int, detected_landmarks_step) -> None:
         """记录当前step的landmark检测结果和地图矫正后的距离/角度。"""
@@ -90,10 +91,14 @@ class InteractiveNavigationController:
             self.current_step_landmarks = {}
         if not hasattr(self, 'current_step_landmark_entries'):
             self.current_step_landmark_entries = {}
+        if not hasattr(self, 'current_step_action_landmark_topk_entries'):
+            self.current_step_action_landmark_topk_entries = {}
 
         self.current_step_landmarks[step_idx] = detected_landmarks_step or []
-        entries = getattr(self, 'latest_visible_landmark_entries', []) or []
-        self.current_step_landmark_entries[step_idx] = [dict(item) for item in entries]
+        visible_entries = getattr(self, 'latest_visible_landmark_entries', []) or []
+        topk_entries = getattr(self, 'latest_action_landmark_topk_entries', []) or []
+        self.current_step_landmark_entries[step_idx] = [dict(item) for item in visible_entries]
+        self.current_step_action_landmark_topk_entries[step_idx] = [dict(item) for item in topk_entries]
 
     def _get_detected_custom_landmarks(self) -> set:
         """读取当前帧检测结果中的自定义 landmark 类别。"""
@@ -274,6 +279,7 @@ class InteractiveNavigationController:
         self.mapper.init_map_and_pose(num_detected_classes=0)
         self.current_step_landmarks = {}
         self.current_step_landmark_entries = {}
+        self.current_step_action_landmark_topk_entries = {}
         self._clear_landmark_detection_cache()
         
         current_episodes = self.envs.current_episodes()
@@ -536,6 +542,14 @@ class InteractiveNavigationController:
             if (save_object_detection and hasattr(self, 'landmark_classes'))
             else []
         )
+
+        if not landmark_classes_list:
+            self.mapper.mapping_module.rgb_vis = rgb.copy()
+            self.latest_detections_full = None
+            self.latest_labels_full = []
+            self.latest_masks_full = np.zeros((0, self.height, self.width), dtype=np.float32)
+            self.latest_rgb_original = rgb.copy()
+            return np.zeros((self.height, self.width, len(self.mapping_classes)), dtype=np.float32)
 
         detection_batches = []
         for lm_idx, landmark_query in enumerate(landmark_classes_list):

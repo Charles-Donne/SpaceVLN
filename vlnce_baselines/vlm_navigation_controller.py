@@ -259,6 +259,10 @@ class VLMNavigationController(InteractiveNavigationController):
         )
 
     def _get_current_action_step_landmark_entries(self) -> List[Dict[str, Any]]:
+        if hasattr(self, 'current_step_action_landmark_topk_entries'):
+            entries = self.current_step_action_landmark_topk_entries.get(self.current_step, []) or []
+            if entries:
+                return entries
         if not hasattr(self, 'current_step_landmark_entries'):
             return []
         return self.current_step_landmark_entries.get(self.current_step, []) or []
@@ -280,13 +284,15 @@ class VLMNavigationController(InteractiveNavigationController):
             if rank >= len(entries):
                 print(
                     f"[AutoSubtaskCheck]   top{rank + 1}: landmark=None | "
-                    "match=false | distance=unknown | confidence=0.000"
+                    "source=none | match=false | distance=unknown | angle=unknown | confidence=0.000"
                 )
                 continue
 
             entry = entries[rank]
             name = str(entry.get('name') or '').strip()
+            source = str(entry.get('source') or 'vis').strip() or 'vis'
             distance_m = entry.get('distance_m')
+            angle_deg = entry.get('angle_deg')
             confidence = float(entry.get('confidence', 0.0) or 0.0)
             match = self._landmark_matches_current_subtask_destination(
                 name,
@@ -296,10 +302,15 @@ class VLMNavigationController(InteractiveNavigationController):
                 distance_text = f"{float(distance_m):.2f}m"
             except (TypeError, ValueError):
                 distance_text = "unknown"
+            try:
+                angle_text = f"{float(angle_deg):.1f}deg"
+            except (TypeError, ValueError):
+                angle_text = "unknown"
 
             print(
                 f"[AutoSubtaskCheck]   top{rank + 1}: landmark='{name or 'None'}' | "
-                f"match={'true' if match else 'false'} | distance={distance_text} | "
+                f"source={source} | match={'true' if match else 'false'} | "
+                f"distance={distance_text} | angle={angle_text} | "
                 f"confidence={confidence:.3f}"
             )
 
@@ -536,6 +547,8 @@ class VLMNavigationController(InteractiveNavigationController):
             self.current_step_landmarks.clear()
         if hasattr(self, 'current_step_landmark_entries'):
             self.current_step_landmark_entries.clear()
+        if hasattr(self, 'current_step_action_landmark_topk_entries'):
+            self.current_step_action_landmark_topk_entries.clear()
         if hasattr(self, 'latest_landmark_instances_world'):
             self.latest_landmark_instances_world = []
         self._clear_landmark_detection_cache()

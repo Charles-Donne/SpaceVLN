@@ -573,7 +573,7 @@ class MapVisualizer:
         semantic_map[explored_free_mask] = 2
 
         # Layer 2: Floor（浅绿色）
-        # 使用 mapper.extract_floor() 预计算的形态学 floor（比 full_map[floor_ch] 更完整可靠）
+        # 使用 mapper 预计算的 floor（由 explored/obstacle 直接得到，避免额外语义扫描）
         if floor is not None:
             floor_display_mask = np.logical_and(floor.astype(bool), explored_mask)
             semantic_map[floor_display_mask] = 5  # 浅绿色
@@ -782,7 +782,7 @@ class MapVisualizer:
         semantic_map[explored_free_mask] = 2
 
         # Layer 2: Floor（浅绿色）
-        # 使用 mapper.extract_floor() 预计算的形态学 floor（与 render_global_map 逻辑一致）
+        # 使用 mapper 预计算的 floor（与 render_global_map 逻辑一致）
         if floor is not None:
             floor_display_mask = np.logical_and(floor.astype(bool), explored_mask)
             semantic_map[floor_display_mask] = 5
@@ -1539,14 +1539,23 @@ class MapVisualizer:
                 key=lambda item: (
                     -item[1],
                     item[2],
-                    0 if item[0] == "vis" else 1,
                     str(item[3].get("name", "")),
+                    str(item[0]),
                 )
             )
             keep_n = max(1, int(landmark_strip_topk))
             selected_ranked = combined_ranked[:keep_n]
-            selected_visible_entries = [item[3] for item in selected_ranked if item[0] == "vis"]
-            selected_offscreen_items = [item[3] for item in selected_ranked if item[0] == "off"]
+            selected_entries: List[Dict[str, Any]] = []
+            selected_visible_entries: List[Dict[str, Any]] = []
+            selected_offscreen_items: List[Dict[str, Any]] = []
+            for source, _confidence, _distance_m, item in selected_ranked:
+                normalized = dict(item)
+                normalized["source"] = "vis" if source == "vis" else "off"
+                selected_entries.append(normalized)
+                if source == "vis":
+                    selected_visible_entries.append(normalized)
+                else:
+                    selected_offscreen_items.append(normalized)
 
             strip = None
             if selected_visible_entries or selected_offscreen_items:
@@ -1557,12 +1566,13 @@ class MapVisualizer:
                 )
                 strip = render_landmark_strip(detection_vis.shape[1], item_lines)
 
-            return strip, selected_offscreen_items
+            return strip, selected_entries
 
         if detections is None or len(detections.xyxy) == 0:
-            strip, _ = _build_landmark_strip([], set())
+            strip, selected_topk_entries = _build_landmark_strip([], set())
             if controller is not None:
                 controller.latest_visible_landmark_entries = []
+                controller.latest_action_landmark_topk_entries = selected_topk_entries
             if append_bottom_strip and strip is not None:
                 detection_vis = np.vstack([detection_vis, strip])
             if return_visible_entries:
@@ -1734,12 +1744,13 @@ class MapVisualizer:
         draw_landmark_boxes(detection_vis, draw_items, color, thickness)
         draw_landmark_labels(detection_vis, draw_items, color)
 
-        strip, _ = _build_landmark_strip(visible_entries_meta, matched_in_view)
+        strip, selected_topk_entries = _build_landmark_strip(visible_entries_meta, matched_in_view)
         if append_bottom_strip and strip is not None:
             detection_vis = np.vstack([detection_vis, strip])
 
         if controller is not None:
             controller.latest_visible_landmark_entries = visible_entries_meta
+            controller.latest_action_landmark_topk_entries = selected_topk_entries
 
         # 返回检测可视化、检测到的landmark列表、已匹配的类名集合和底部条带
         if return_visible_entries:
@@ -2226,11 +2237,18 @@ class MapVisualizer:
             controller.latest_landmark_dist_map = landmark_dist_map if landmark_dist_map else {}
             controller.latest_landmark_dist_map_multi = landmark_dist_map_multi if landmark_dist_map_multi else {}
 
-        if detections is not None and labels is not None:
+        should_render_detection = (
+            (detections is not None and labels is not None) or
+            bool(landmark_dist_map) or
+            bool(landmark_dist_map_multi) or
+            bool(landmark_instances_world)
+        )
+
+        if should_render_detection:
             # 先渲染bbox，再叠加当前深度采样的距离线，避免距离线参与实例匹配。
             rgb_for_det = rgb.copy()
             detection_vis, detected_landmarks_step, _visible, landmark_strip = self.render_detection_bbox(
-                rgb_for_det, detections, labels,
+                rgb_for_det, detections, labels or [],
                 landmark_classes, mapping_classes,
                 depth_meters=getattr(controller, 'latest_depth_meters', None) if controller is not None else None,
                 hfov=hfov,
@@ -2265,6 +2283,7 @@ class MapVisualizer:
         else:
             if controller is not None:
                 controller.latest_visible_landmark_entries = []
+                controller.latest_action_landmark_topk_entries = []
 
         # 统计：本步 landmark 配置/检测/地图实例数量
         n_cfg = len(landmark_classes) if landmark_classes else 0
