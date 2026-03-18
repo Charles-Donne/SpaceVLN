@@ -150,9 +150,17 @@ def build_landmark_strip_lines(
     visible_entries_meta: Sequence[Dict[str, object]],
     offscreen_items: Sequence[Dict[str, Any]],
     landmark_dist_map_multi: Optional[Dict[str, List[Tuple[float, float]]]] = None,
+    waypoint_entries: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> List[LandmarkStripLine]:
+    def _short_text(text: str, max_len: int) -> str:
+        text = str(text or "").strip()
+        if len(text) <= max_len:
+            return text
+        return text[: max(0, max_len - 2)].rstrip() + ".."
+
     item_lines: List[LandmarkStripLine] = []
     landmark_dist_map_multi = landmark_dist_map_multi or {}
+    waypoint_entries = waypoint_entries or []
     status_color = (40, 40, 40)
     name_color = (0, 0, 255)
     value_color = (255, 0, 0)
@@ -221,6 +229,40 @@ def build_landmark_strip_lines(
             )
         )
 
+    for entry in waypoint_entries:
+        if bool(entry.get("is_current_area")):
+            continue
+
+        waypoint_label = str(
+            entry.get("label")
+            or entry.get("area_label")
+            or f"WP#{int(entry.get('id', 0) or 0)}"
+        ).strip() or "Unknown"
+        distance_m = float(entry.get("distance_m", 1e9))
+        angle_deg = float(entry.get("relative_bearing_deg", entry.get("angle_deg", 0.0)))
+        note = "  (came from here)" if bool(entry.get("is_last_visited")) else ""
+        item_lines.append(
+            LandmarkStripLine(
+                distance_m=distance_m,
+                confidence=0.0,
+                priority=2,
+                segments=(
+                    LandmarkStripSegment("space waypoint: ", status_color),
+                    LandmarkStripSegment(_short_text(waypoint_label, 34), value_color),
+                    LandmarkStripSegment(f"  {distance_m:.1f}m", value_color),
+                    LandmarkStripSegment(f"  {format_relative_direction(angle_deg)}", value_color),
+                    LandmarkStripSegment(note, status_color),
+                ),
+            )
+        )
+
+    item_lines.sort(
+        key=lambda line: (
+            float(line.distance_m),
+            int(line.priority),
+            -float(line.confidence),
+        )
+    )
     return item_lines
 
 

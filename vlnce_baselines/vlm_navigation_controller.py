@@ -1251,11 +1251,13 @@ class VLMNavigationController(InteractiveNavigationController):
         waypoint_desc = response.get('current_waypoint', 'Unknown location')
         waypoint_id = self.mapper.add_waypoint(waypoint_desc)
 
-        self._refresh_step_visualization_snapshot(
-            phase=phase,
-            enable_landmark_detection=False,
-            force=True,
-        )
+        refreshed_maps = self._refresh_postplanning_map_snapshots(phase=phase)
+        if not refreshed_maps:
+            self._refresh_step_visualization_snapshot(
+                phase=phase,
+                enable_landmark_detection=False,
+                force=True,
+            )
         if refresh_direction_views:
             self._refresh_cached_lookaround_direction_views(phase=phase)
         self._sync_postplanning_thinking_visuals(
@@ -1265,6 +1267,60 @@ class VLMNavigationController(InteractiveNavigationController):
         )
         self._save_waypoint_area_memory_snapshot()
         return waypoint_id
+
+    def _refresh_postplanning_map_snapshots(self, phase: str) -> bool:
+        """Force-refresh global/local map images after planner-created space areas are written."""
+        if self.mapper is None or self.visualizer is None:
+            return False
+
+        rgb_bgr = None
+        if self.latest_obs is not None and 'rgb' in self.latest_obs:
+            rgb_bgr = cv2.cvtColor(self.latest_obs['rgb'], cv2.COLOR_RGB2BGR)
+        elif (
+            self.latest_lookaround_phase == phase and
+            self.latest_lookaround_images and
+            len(self.latest_lookaround_images) > 0
+        ):
+            rgb_bgr = self.latest_lookaround_images[-1].copy()
+
+        if rgb_bgr is None:
+            return False
+
+        map_state = self.mapper.get_map_state()
+        paths, _detected_landmarks_step, _last_waypoint_angle = self.visualizer.save_step_visualization(
+            step=self.current_step,
+            episode_id=self.current_episode_id,
+            rgb=rgb_bgr,
+            full_map=map_state['full_map'],
+            trajectory_points=map_state.get('subtask_trajectory_points', []),
+            detected_classes=list(self.detected_classes),
+            current_pose=map_state['full_pose'],
+            floor=map_state['floor'],
+            hfov=self.config.MAP.HFOV,
+            detections=None,
+            labels=None,
+            masks=None,
+            landmark_classes=list(self.landmark_classes),
+            mapping_classes=self.mapping_classes,
+            landmark_config={
+                'min_total_pixels': self.landmark_min_total_pixels,
+                'min_area_threshold': self.landmark_min_area_threshold,
+            },
+            waypoint_positions=map_state.get('waypoint_positions', []),
+            waypoint_ids=map_state.get('waypoint_ids', []),
+            room_area_layer=map_state.get('room_area_layer'),
+            room_area_records=map_state.get('room_area_records', []),
+            phase=phase,
+            global_trajectory_points=map_state.get('global_trajectory_points', []),
+            crop_offset=map_state.get('crop_offset'),
+            controller=self,
+        )
+
+        if paths.get('global_map'):
+            self.latest_global_map = paths.get('global_map')
+        if paths.get('local_map'):
+            self.latest_local_map = paths.get('local_map')
+        return True
 
     def _refresh_cached_lookaround_direction_views(self, phase: str) -> bool:
         """Re-render cached 12 views after planning updates so current area/waypoint area stay in sync."""
@@ -1991,7 +2047,7 @@ class VLMNavigationController(InteractiveNavigationController):
         labels = self.latest_labels_full if enable_landmark_detection and hasattr(self, 'latest_labels_full') else None
         masks = self.latest_masks_full if enable_landmark_detection and hasattr(self, 'latest_masks_full') else None
 
-        _, detected_landmarks_step, _ = self.visualizer.save_step_visualization(
+        paths, detected_landmarks_step, _ = self.visualizer.save_step_visualization(
             step=self.current_step,
             episode_id=self.current_episode_id,
             rgb=rgb_bgr,
@@ -2019,6 +2075,11 @@ class VLMNavigationController(InteractiveNavigationController):
             crop_offset=map_state.get('crop_offset'),
             controller=self,
         )
+
+        if paths.get('global_map'):
+            self.latest_global_map = paths.get('global_map')
+        if paths.get('local_map'):
+            self.latest_local_map = paths.get('local_map')
 
         if enable_landmark_detection:
             self._record_landmark_detection_step(self.current_step, detected_landmarks_step)

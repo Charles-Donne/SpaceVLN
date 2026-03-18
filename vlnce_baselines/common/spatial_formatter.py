@@ -80,13 +80,13 @@ def build_waypoint_summary(
     empty_area_path_line = None
     if include_area_chain:
         current_area_display = str(current_room_area_label or "Unknown").strip() or "Unknown"
-        empty_area_path_line = f"Waypoint Area Path: Current({current_area_display})"
+        empty_area_path_line = f"Space Waypoint Path: Current({current_area_display})"
 
     if not waypoint_ids:
         lines = list(header_lines)
         if empty_area_path_line:
             lines.append(empty_area_path_line)
-        lines.append("No waypoints visited yet.")
+        lines.append("No space waypoints recorded yet.")
         return "\n".join(lines)
 
     waypoint_distances_m: List[Optional[float]] = []
@@ -152,7 +152,7 @@ def build_waypoint_summary(
         )
         if reachability_note:
             spatial_info = f"{spatial_info} | {reachability_note}"
-        node_lines.append(f"WP#{wp_id} [{wp_desc}{area_note}] -- {spatial_info}{suffix}")
+        node_lines.append(f"Space WP#{wp_id} [{wp_desc}{area_note}] -- {spatial_info}{suffix}")
 
     visible_waypoint_ids = [waypoint_ids[index] for index in visible_indices]
     visible_waypoint_positions = [waypoint_positions[index] for index in visible_indices]
@@ -265,7 +265,7 @@ def _has_clear_path_to_waypoint(
 
 def _format_waypoint_area_ref(waypoint_id: int, area_label: str) -> str:
     clean_area = str(area_label or "Unknown").strip() or "Unknown"
-    return f"WP#{int(waypoint_id)}({clean_area})"
+    return f"Space WP#{int(waypoint_id)}({clean_area})"
 
 
 def _build_waypoint_reachability_note(
@@ -393,9 +393,9 @@ def _build_waypoint_area_path_line(
         node_labels.append(f"Current({current_area_display})")
 
     if not node_labels:
-        return "Waypoint Area Path: Current(Unknown)" if include_area_chain else None
+        return "Space Waypoint Path: Current(Unknown)" if include_area_chain else None
     if len(node_labels) == 1 or len(node_points) < 2:
-        return "Waypoint Area Path: " + " -> ".join(node_labels)
+        return "Space Waypoint Path: " + " -> ".join(node_labels)
 
     parts: List[str] = [node_labels[0]]
     previous_heading_deg: Optional[float] = None
@@ -418,7 +418,7 @@ def _build_waypoint_area_path_line(
         parts.append(f" move {distance_m:.1f}m to {node_labels[index + 1]}")
         previous_heading_deg = current_heading_deg
 
-    return "Waypoint Area Path: " + "".join(parts)
+    return "Space Waypoint Path: " + "".join(parts)
 
 
 def build_action_landmark_map_info(

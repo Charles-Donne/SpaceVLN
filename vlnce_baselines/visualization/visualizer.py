@@ -1503,6 +1503,59 @@ class MapVisualizer:
         matched_in_view: set = set()  # 当前帧中实际可见的landmark类名
         candidate_entries: List[Dict[str, Any]] = []
         draw_items: List[LandmarkDrawItem] = []
+        action_waypoint_entries: List[Dict[str, Any]] = []
+
+        def _build_action_waypoint_entries() -> List[Dict[str, Any]]:
+            if controller is None or getattr(controller, "mapper", None) is None:
+                return []
+
+            try:
+                from vlnce_baselines.vlm.thinking_view_renderer import ThinkingViewRenderer
+
+                map_state = controller.mapper.get_map_state()
+                waypoint_positions, waypoint_ids, waypoint_descriptions = controller.mapper.get_waypoints()
+                waypoint_info = None
+                if waypoint_positions and waypoint_ids:
+                    waypoint_info = (waypoint_positions, waypoint_ids, waypoint_descriptions)
+
+                # Reuse the same waypoint visibility test as the 12-view thinking render.
+                waypoint_entries = ThinkingViewRenderer._build_waypoint_view_entries(
+                    waypoint_info=waypoint_info,
+                    waypoint_area_labels=map_state.get("waypoint_area_labels", []),
+                    current_pose=map_state.get("full_pose"),
+                    resolution_cm=float(getattr(controller.mapper, "resolution", self.resolution)),
+                    current_room_area_label=str(map_state.get("current_room_area_label", "Unknown") or "Unknown"),
+                )
+                waypoint_entries = ThinkingViewRenderer._apply_waypoint_visibility(
+                    waypoint_entries=waypoint_entries,
+                    view_angles_deg=[0.0],
+                    full_map=map_state.get("full_map"),
+                    current_pose=map_state.get("full_pose"),
+                    resolution_cm=float(getattr(controller.mapper, "resolution", self.resolution)),
+                    crop_offset=map_state.get("crop_offset"),
+                )
+            except Exception:
+                return []
+
+            filtered_entries: List[Dict[str, Any]] = []
+            for entry in waypoint_entries:
+                if bool(entry.get("is_current_area")):
+                    continue
+                try:
+                    relative_bearing_deg = float(entry.get("relative_bearing_deg", 999.0))
+                except (TypeError, ValueError):
+                    continue
+                if abs(relative_bearing_deg) > 60.0:
+                    continue
+                filtered_entries.append(dict(entry))
+
+            filtered_entries.sort(
+                key=lambda item: (
+                    float(item.get("distance_m", 1e9)),
+                    int(item.get("id", 0) or 0),
+                )
+            )
+            return filtered_entries
 
         def _build_landmark_strip(
             current_visible_entries: List[Dict[str, Any]],
@@ -1605,15 +1658,18 @@ class MapVisualizer:
                     selected_offscreen_items.append(normalized)
 
             strip = None
-            if selected_visible_entries or selected_offscreen_items:
+            if selected_visible_entries or selected_offscreen_items or action_waypoint_entries:
                 item_lines = build_landmark_strip_lines(
                     selected_visible_entries,
                     selected_offscreen_items,
                     landmark_dist_map_multi=landmark_dist_map_multi,
+                    waypoint_entries=action_waypoint_entries,
                 )
                 strip = render_landmark_strip(detection_vis.shape[1], item_lines)
 
             return strip, selected_entries
+
+        action_waypoint_entries = _build_action_waypoint_entries()
 
         if detections is None or len(detections.xyxy) == 0:
             strip, selected_topk_entries = _build_landmark_strip([], set())
