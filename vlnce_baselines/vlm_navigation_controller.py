@@ -239,6 +239,18 @@ class VLMNavigationController(InteractiveNavigationController):
         )
         return matches[0]
 
+    def _get_current_action_step_landmark_entries(self) -> List[Dict[str, Any]]:
+        if not hasattr(self, 'current_step_landmark_entries'):
+            return []
+        return self.current_step_landmark_entries.get(self.current_step, []) or []
+
+    def _trigger_verify_replan(self, reason_tag: str, total_steps: int) -> Tuple[bool, Optional[Dict[str, Any]]]:
+        new_subtask, _ = self.verify_and_replan()
+        if new_subtask and new_subtask.get('global_task_finish', False):
+            print(f"[DONE] Task complete ({reason_tag}) | steps={total_steps}")
+            return True, new_subtask
+        return False, new_subtask
+
     def _execute_auto_retreat(self, retreat_distance_m: float = 1.0) -> Tuple[float, bool]:
         """Turn around, move 1m away, then hand off directly to thinking/lookaround."""
         turn_steps = max(1, round(180.0 / float(self.turn_angle)))
@@ -2017,16 +2029,16 @@ class VLMNavigationController(InteractiveNavigationController):
                     f"[AutoRetreat] Finished turn-around move ({retreated_m:.2f}m). "
                     f"Skip action VLM and start 12-view thinking/replan."
                 )
-                new_subtask, _ = self.verify_and_replan()
-
-                if new_subtask and new_subtask.get('global_task_finish', False):
-                    print(f"[DONE] Task complete (auto retreat replan) | steps={total_steps}")
-                    navigation_complete = True
+                navigation_complete, _new_subtask = self._trigger_verify_replan(
+                    "auto retreat replan",
+                    total_steps,
+                )
+                if navigation_complete:
                     break
 
                 subtask_steps = 0
                 continue
-            
+
             # VLM决策动作（失败则重试）
             max_retries = 3
             action_id = None
@@ -2058,14 +2070,11 @@ class VLMNavigationController(InteractiveNavigationController):
             # 如果VLM决定停止 → 验证子任务
             if should_stop:
                 print("\n[STOP] -> Verify...")
-                
-                # verify_and_replan会调用thinking模型检查任务是否完成
-                new_subtask, _ = self.verify_and_replan()
-                
-                # 检查模型是否判断全局任务完成
-                if new_subtask and new_subtask.get('global_task_finish', False):
-                    print(f"[DONE] Task complete (verify) | steps={total_steps} | subtasks={self.subtask_count}")
-                    navigation_complete = True
+                navigation_complete, _new_subtask = self._trigger_verify_replan(
+                    "verify",
+                    total_steps,
+                )
+                if navigation_complete:
                     break
                 
                 # 子任务完成或重新规划，重置步数计数
@@ -2114,11 +2123,8 @@ class VLMNavigationController(InteractiveNavigationController):
                     navigation_complete = True
                     break
 
-                step_landmark_entries = []
-                if hasattr(self, 'current_step_landmark_entries'):
-                    step_landmark_entries = self.current_step_landmark_entries.get(self.current_step, []) or []
                 auto_completed_subtask = self._should_autocomplete_subtask_during_action_step(
-                    step_landmark_entries
+                    self._get_current_action_step_landmark_entries()
                 )
                 if auto_completed_subtask is not None:
                     print(
@@ -2185,10 +2191,11 @@ class VLMNavigationController(InteractiveNavigationController):
                     f"Displayed destination landmark {auto_completed_subtask['name']} was within "
                     f"{auto_completed_subtask['distance_m']:.2f}m, so the system ended the current subtask and started thinking"
                 )
-                new_subtask, _ = self.verify_and_replan()
-                if new_subtask and new_subtask.get('global_task_finish', False):
-                    print(f"[DONE] Task complete (action step autocomplete) | steps={total_steps}")
-                    navigation_complete = True
+                navigation_complete, _new_subtask = self._trigger_verify_replan(
+                    "action step autocomplete",
+                    total_steps,
+                )
+                if navigation_complete:
                     break
                 subtask_steps = 0
                 continue
@@ -2196,11 +2203,11 @@ class VLMNavigationController(InteractiveNavigationController):
             # 🔑 强制重规划检查：如果达到最大步数，执行完动作后立即触发verify
             if force_replan_after_action:
                 print(f"\n[Replan] Force replan after {max_subtask_steps} steps")
-                new_subtask, _ = self.verify_and_replan()
-                # 检查是否完成全局任务
-                if new_subtask and new_subtask.get('global_task_finish', False):
-                    print(f"[DONE] Task complete (force replan) | steps={total_steps}")
-                    navigation_complete = True
+                navigation_complete, _new_subtask = self._trigger_verify_replan(
+                    "force replan",
+                    total_steps,
+                )
+                if navigation_complete:
                     break
                 subtask_steps = 0  # 重置步数
                 continue
