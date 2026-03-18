@@ -64,7 +64,7 @@ class LLMPlanner(BaseAPIClient):
             observation_images: 4方向图像路径列表 [前, 左, 后, 右]
             direction_names: 方向名称列表 ['Front (0°)', 'Left (90°)', 'Back (180°)', 'Right (270°)']
             global_map_image: 全局语义地图路径（global_map/step-N.png）- 必需
-            local_map_image: 局部语义地图路径（local_map/step-N.png）- 可选
+            local_map_image: 局部语义地图路径（仅调试保留，不传给thinking模型）
             obstacle_distances: 预计算的障碍物距离字典 {'front': 'X.XXm', 'left_30': ..., ...}
             
         Returns:
@@ -89,12 +89,9 @@ class LLMPlanner(BaseAPIClient):
             self.action_space
         )
         
-        # 组合图像：12方向观察 + 全局地图 + 局部地图（如果有）
+        # 组合图像：12方向观察 + 全局地图
         images = observation_images.copy()
         images.append(global_map_image)
-        
-        if local_map_image:
-            images.append(local_map_image)
 
         # global_map不压缩（需要全分辨率），其余图片压缩
         no_compress = {len(observation_images)}  # global_map的索引
@@ -138,7 +135,7 @@ class LLMPlanner(BaseAPIClient):
             observation_images: 4方向图像路径列表（当前位置重新环视获得）
             direction_names: 方向名称列表
             global_map_image: 更新后的全局语义地图路径 - 必需
-            local_map_image: 更新后的局部语义地图路径 - 可选
+            local_map_image: 更新后的局部语义地图路径（仅调试保留，不传给thinking模型）
             detected_landmarks: 已检测到的landmark类别列表 - 可选
             waypoint_summary: 路径点历史记录 - 可选
             obstacle_distances: 预计算的障碍物距离字典 {'front': 'X.XXm', 'left_30': ..., ...}
@@ -177,12 +174,9 @@ class LLMPlanner(BaseAPIClient):
             waypoint_summary=waypoint_summary
         )
         
-        # 组合图像：当前位置12方向 + 全局地图 + 局部地图（如果有）
+        # 组合图像：当前位置12方向 + 全局地图
         images = observation_images.copy()
         images.append(global_map_image)
-        
-        if local_map_image:
-            images.append(local_map_image)
 
         # global_map不压缩（需要全分辨率），其余图片压缩
         no_compress = {len(observation_images)}  # global_map的索引

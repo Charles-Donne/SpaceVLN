@@ -738,7 +738,7 @@ class MapVisualizer:
                 global_map_with_trajectory,
                 room_area_layer,
                 room_area_records,
-                fill_regions=False,
+                fill_regions=True,
                 show_labels=True,
                 use_display_label=False,
             )
@@ -746,7 +746,7 @@ class MapVisualizer:
                 global_map_rotated,
                 room_area_layer,
                 room_area_records,
-                fill_regions=False,
+                fill_regions=True,
                 show_labels=True,
                 use_display_label=False,
             )

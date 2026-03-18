@@ -19,6 +19,7 @@ class RoomAreaManager:
     MAX_CONNECTION_DISTANCE_M = 3.0
     MAX_CONNECTOR_MERGE_DISTANCE_M = 3.0
     SAMPLE_PIXELS_PER_AREA = 9
+    CURRENT_AREA_CENTER_TOLERANCE_PX = 1.5
 
     def __init__(self, map_shape: Tuple[int, int], resolution: int = 5):
         self.map_shape = map_shape
@@ -398,6 +399,15 @@ class RoomAreaManager:
             self._set_current_area_from_record(containing_record)
             return
 
+        centered_record = self._find_record_near_center(
+            pixel_y=curr_py,
+            pixel_x=curr_px,
+            max_distance_px=float(self.CURRENT_AREA_CENTER_TOLERANCE_PX),
+        )
+        if centered_record is not None:
+            self._set_current_area_from_record(centered_record)
+            return
+
         self._set_unknown_current_area()
 
     def _set_unknown_current_area(self) -> None:
@@ -422,6 +432,15 @@ class RoomAreaManager:
             self._set_current_area_from_record(containing_record)
             return
 
+        centered_record = self._find_record_near_center(
+            pixel_y=curr_py,
+            pixel_x=curr_px,
+            max_distance_px=float(self.CURRENT_AREA_CENTER_TOLERANCE_PX),
+        )
+        if centered_record is not None:
+            self._set_current_area_from_record(centered_record)
+            return
+
         # Do not auto-inherit or auto-expand the previous area during action-time
         # motion. If the live pose is not inside any existing room-area region
         # before the next thinking waypoint update, keep it Unknown.
@@ -437,6 +456,26 @@ class RoomAreaManager:
             if target_pixel in record["pixels"]:
                 return record
         return None
+
+    def _find_record_near_center(
+        self,
+        pixel_y: int,
+        pixel_x: int,
+        max_distance_px: float,
+    ) -> Optional[Dict[str, Any]]:
+        if max_distance_px <= 0:
+            return None
+        best_record = None
+        best_distance = float("inf")
+        for record in reversed(self.room_area_records):
+            center_py, center_px = record.get("center_world_px", (None, None))
+            if center_py is None or center_px is None:
+                continue
+            distance_px = float(np.hypot(float(pixel_y) - float(center_py), float(pixel_x) - float(center_px)))
+            if distance_px <= max_distance_px and distance_px < best_distance:
+                best_distance = distance_px
+                best_record = record
+        return best_record
 
     def _set_current_area_from_record(self, record: Dict[str, Any]) -> None:
         self.current_room_area_label = str(record.get("label", "Unknown") or "Unknown")

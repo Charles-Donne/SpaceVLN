@@ -17,6 +17,8 @@ VLM Navigation Controller
 """
 import os
 import re
+import shutil
+import glob
 import cv2
 import json
 import numpy as np
@@ -126,6 +128,9 @@ class VLMNavigationController(InteractiveNavigationController):
         self.latest_obs = None  # 缓存最新的观察
         self.latest_info = None  # 缓存最新的info（包含top_down_map_vlnce）
         self.pose_before_action = None  # 记录动作前的pose (x, y, orientation)
+        self.latest_lookaround_images: List[np.ndarray] = []
+        self.latest_lookaround_depths: List[np.ndarray] = []
+        self.latest_lookaround_phase: str = ""
         
         # 当前子任务跟踪的landmark类别（每个子任务重置）
         self.tracked_landmark_classes = set()
@@ -267,54 +272,6 @@ class VLMNavigationController(InteractiveNavigationController):
         if not hasattr(self, 'current_step_landmark_entries'):
             return []
         return self.current_step_landmark_entries.get(self.current_step, []) or []
-
-    def _log_action_landmark_autocomplete_status(
-        self,
-        step_landmark_entries: Sequence[Dict[str, Any]],
-        step_idx: int,
-    ) -> None:
-        candidate_names = self._get_current_subtask_landmark_candidates()
-        if not candidate_names:
-            print(f"[AutoSubtaskCheck] step={step_idx} target_candidates=[]")
-            return
-
-        print(f"[AutoSubtaskCheck] step={step_idx} target_candidates={candidate_names}")
-
-        max_rank = int(self.ACTION_SUBTASK_AUTOCOMPLETE_TOPK)
-        entries = list(step_landmark_entries or [])[:max_rank]
-        for rank in range(max_rank):
-            if rank >= len(entries):
-                print(
-                    f"[AutoSubtaskCheck]   top{rank + 1}: landmark=None | "
-                    "source=none | match=false | distance=unknown | angle=unknown | confidence=0.000"
-                )
-                continue
-
-            entry = entries[rank]
-            name = str(entry.get('name') or '').strip()
-            source = str(entry.get('source') or 'vis').strip() or 'vis'
-            distance_m = entry.get('distance_m')
-            angle_deg = entry.get('angle_deg')
-            confidence = float(entry.get('confidence', 0.0) or 0.0)
-            match = self._landmark_matches_current_subtask_destination(
-                name,
-                candidate_names=candidate_names,
-            )
-            try:
-                distance_text = f"{float(distance_m):.2f}m"
-            except (TypeError, ValueError):
-                distance_text = "unknown"
-            try:
-                angle_text = f"{float(angle_deg):.1f}deg"
-            except (TypeError, ValueError):
-                angle_text = "unknown"
-
-            print(
-                f"[AutoSubtaskCheck]   top{rank + 1}: landmark='{name or 'None'}' | "
-                f"source={source} | match={'true' if match else 'false'} | "
-                f"distance={distance_text} | angle={angle_text} | "
-                f"confidence={confidence:.3f}"
-            )
 
     def _trigger_verify_replan(self, reason_tag: str, total_steps: int) -> Tuple[bool, Optional[Dict[str, Any]]]:
         new_subtask, _ = self.verify_and_replan()
@@ -462,6 +419,9 @@ class VLMNavigationController(InteractiveNavigationController):
         self.subtask_history = []
         self.tracked_landmark_classes = set()
         self.pose_before_action = None  # 重置pose追踪
+        self.latest_lookaround_images = []
+        self.latest_lookaround_depths = []
+        self.latest_lookaround_phase = ""
         self.last_planned_degrees = 0  # 记录计划转向角度
         self.last_planned_meters = 0   # 记录计划移动距离
         self.last_action_name = ""      # 记录上次动作名称
@@ -1003,6 +963,12 @@ class VLMNavigationController(InteractiveNavigationController):
             print(f"[WARN] Lookaround incomplete: {len(lookaround_images)}/12 images")
             # 返回空列表，调用方需要处理这种情况
             return [], []
+
+        self.latest_lookaround_images = [img.copy() for img in lookaround_images]
+        self.latest_lookaround_depths = [
+            depth.copy() if depth is not None else None for depth in lookaround_depths
+        ]
+        self.latest_lookaround_phase = str(phase)
         
         # 环视结束后，计算waypoint角度（只计算一次，用于显示在12张view上）
         # 注意：initial时不显示waypoint（还没有历史），replan时显示上一个waypoint
@@ -1183,7 +1149,7 @@ class VLMNavigationController(InteractiveNavigationController):
             print(f"[ERR] Global map not found: {global_map}")
             return None
         
-        # thinking 使用 12 个方向视图 + Global Map + Local Map
+        # thinking 只使用 12 个方向视图 + Global Map；Local Map仍保留为调试输出
         global_map_for_llm = global_map
         
         # 使用最近的障碍物距离（在look_around_and_collect中由visualizer计算）
@@ -1214,7 +1180,7 @@ class VLMNavigationController(InteractiveNavigationController):
             observation_images=image_paths,
             direction_names=direction_names,
             global_map_image=global_map_for_llm,
-            local_map_image=local_map,
+            local_map_image=None,
             obstacle_distances=obstacle_distances,
             save_dir=thinking_dir
         )
@@ -1243,15 +1209,12 @@ class VLMNavigationController(InteractiveNavigationController):
             'step': self.current_step
         }
         
-        # 在mapper中添加waypoint（自动计算地图坐标）
-        waypoint_desc = response.get('current_waypoint', 'Unknown location')
-        waypoint_id = self.mapper.add_waypoint(waypoint_desc)
-        self._refresh_step_visualization_snapshot(
+        self._apply_postplanning_room_area_update(
+            response=response,
             phase="initial",
-            enable_landmark_detection=False,
-            force=True,
+            thinking_dir=thinking_dir,
+            refresh_direction_views=False,
         )
-        self._save_waypoint_area_memory_snapshot()
         
         # 初始子任务开始前也显式清空旧自定义 landmark 状态
         self._reset_custom_landmark_state()
@@ -1273,6 +1236,138 @@ class VLMNavigationController(InteractiveNavigationController):
         self._print_subtask_info(response, is_initial=True)
         
         return response
+
+    def _apply_postplanning_room_area_update(
+        self,
+        response: Dict[str, Any],
+        phase: str,
+        thinking_dir: Optional[str] = None,
+        refresh_direction_views: bool = True,
+    ) -> Optional[int]:
+        """Persist planner room-area output into the world map and refresh debug renders."""
+        if self.mapper is None:
+            return None
+
+        waypoint_desc = response.get('current_waypoint', 'Unknown location')
+        waypoint_id = self.mapper.add_waypoint(waypoint_desc)
+
+        self._refresh_step_visualization_snapshot(
+            phase=phase,
+            enable_landmark_detection=False,
+            force=True,
+        )
+        if refresh_direction_views:
+            self._refresh_cached_lookaround_direction_views(phase=phase)
+        self._sync_postplanning_thinking_visuals(
+            thinking_dir=thinking_dir,
+            phase=phase,
+            copy_directions=refresh_direction_views,
+        )
+        self._save_waypoint_area_memory_snapshot()
+        return waypoint_id
+
+    def _refresh_cached_lookaround_direction_views(self, phase: str) -> bool:
+        """Re-render cached 12 views after planning updates so current area/waypoint area stay in sync."""
+        if (
+            not self.latest_lookaround_images or
+            not self.latest_lookaround_depths or
+            self.latest_lookaround_phase != phase or
+            len(self.latest_lookaround_images) < 12 or
+            len(self.latest_lookaround_depths) < 12
+        ):
+            return False
+
+        if not hasattr(self, 'mapper') or self.mapper is None:
+            return False
+
+        map_state = self.mapper.get_map_state()
+        waypoint_info = None
+        wp_positions, wp_ids, wp_descriptions = self.mapper.get_waypoints()
+        if wp_positions and wp_ids:
+            waypoint_info = (wp_positions, wp_ids, wp_descriptions)
+
+        directions_dir = os.path.join(self.config.RESULTS_DIR, f"episode_{self.current_episode_id}", "directions")
+
+        def _render_thinking_detection(
+            image: np.ndarray,
+            detections,
+            labels: List[str],
+            depth_meters: Optional[np.ndarray],
+        ):
+            return self.visualizer.render_detection_bbox(
+                image,
+                detections,
+                labels,
+                landmark_classes=self.landmark_classes,
+                depth_meters=depth_meters,
+                hfov=self.config.MAP.HFOV,
+                landmark_dist_map=None,
+                landmark_dist_map_multi=None,
+                show_action_partitions=False,
+                append_bottom_strip=False,
+                controller=None,
+                return_visible_entries=True,
+            )
+
+        self.thinking_view_renderer.save_direction_views(
+            directions_dir=directions_dir,
+            phase=phase,
+            lookaround_images=[img.copy() for img in self.latest_lookaround_images],
+            lookaround_depths=[depth.copy() if depth is not None else None for depth in self.latest_lookaround_depths],
+            landmark_classes=self.landmark_classes,
+            detect_landmarks_fn=self._detect_landmarks_for_visualization,
+            render_detection_fn=_render_thinking_detection,
+            draw_distance_fn=self.visualizer.draw_distance_on_view,
+            distance_lookup=self.latest_obstacle_distances_12,
+            waypoint_info=waypoint_info,
+            waypoint_area_labels=map_state.get('waypoint_area_labels', []),
+            current_pose=map_state.get('full_pose'),
+            resolution_cm=float(getattr(self.mapper, 'resolution', 5)),
+            current_room_area_label=str(map_state.get('current_room_area_label', 'Unknown') or 'Unknown'),
+            full_map=map_state.get('full_map'),
+            crop_offset=map_state.get('crop_offset'),
+            waypoint_angle_deg=None,
+            draw_waypoints_fn=self._draw_waypoints_on_view,
+        )
+        return True
+
+    def _sync_postplanning_thinking_visuals(
+        self,
+        thinking_dir: str,
+        phase: str,
+        copy_directions: bool = True,
+    ) -> None:
+        """Keep saved thinking debug images aligned with the post-planning state after waypoint creation."""
+        if not thinking_dir or not os.path.isdir(thinking_dir):
+            return
+
+        snapshot_dir = os.path.join(thinking_dir, "api_input_snapshot")
+        os.makedirs(snapshot_dir, exist_ok=True)
+
+        top_level_patterns = ["global_map.png", "local_map.png", "direction_*.png"]
+        for pattern in top_level_patterns:
+            for src_path in glob.glob(os.path.join(thinking_dir, pattern)):
+                backup_path = os.path.join(snapshot_dir, os.path.basename(src_path))
+                if not os.path.exists(backup_path):
+                    shutil.copy2(src_path, backup_path)
+
+        refreshed_global = os.path.join(self.episode_dir, 'global_map', f'step_{self.current_step:04d}_{phase}.png')
+        refreshed_local = os.path.join(self.episode_dir, 'local_map', f'step_{self.current_step:04d}_{phase}.png')
+        if os.path.exists(refreshed_global):
+            shutil.copy2(refreshed_global, os.path.join(thinking_dir, 'global_map.png'))
+        if os.path.exists(refreshed_local):
+            shutil.copy2(refreshed_local, os.path.join(thinking_dir, 'local_map.png'))
+
+        if copy_directions:
+            directions_dir = os.path.join(self.episode_dir, 'directions')
+            for config in DIRECTION_CONFIG:
+                angle = int(config["angle"])
+                refreshed_direction = os.path.join(directions_dir, f'{phase}_direction_{angle:03d}.png')
+                if os.path.exists(refreshed_direction):
+                    shutil.copy2(
+                        refreshed_direction,
+                        os.path.join(thinking_dir, f'direction_{angle:03d}.png'),
+                    )
     
     def auto_rotate_to_waypoint(self, waypoint_direction: str) -> Tuple[bool, List[Dict]]:
         """
@@ -1412,7 +1507,7 @@ class VLMNavigationController(InteractiveNavigationController):
             print(f"[ERR] Global map not found: {global_map}")
             return None, None
         
-        # thinking 使用 12 个方向视图 + Global Map + Local Map
+        # thinking 只使用 12 个方向视图 + Global Map；Local Map仍保留为调试输出
         global_map_for_llm = global_map
         
         # 获取已检测到的landmark类别 - 汇总环视12步中检测到的所有landmarks
@@ -1476,7 +1571,7 @@ class VLMNavigationController(InteractiveNavigationController):
             observation_images=image_paths,
             direction_names=direction_names,
             global_map_image=global_map_for_llm,
-            local_map_image=local_map if local_map and os.path.exists(local_map) else None,
+            local_map_image=None,
             detected_landmarks=detected_landmarks,
             waypoint_summary=waypoint_summary,
             obstacle_distances=obstacle_distances,
@@ -1504,15 +1599,12 @@ class VLMNavigationController(InteractiveNavigationController):
         else:
             print(f"  Next #{self.subtask_count + 1}a: {response.get('subtask_instruction', 'N/A')[:60]}")
             
-            # 保存waypoint
-            waypoint_desc = response.get('current_waypoint', 'Unknown location')
-            waypoint_id = self.mapper.add_waypoint(waypoint_desc)
-            self._refresh_step_visualization_snapshot(
+            self._apply_postplanning_room_area_update(
+                response=response,
                 phase=phase,
-                enable_landmark_detection=False,
-                force=True,
+                thinking_dir=thinking_dir,
+                refresh_direction_views=True,
             )
-            self._save_waypoint_area_memory_snapshot()
             
             # 清空旧状态（为新子任务准备）
             self.mapper.clear_trajectory()
@@ -2184,10 +2276,6 @@ class VLMNavigationController(InteractiveNavigationController):
                     break
 
                 current_step_landmark_entries = self._get_current_action_step_landmark_entries()
-                self._log_action_landmark_autocomplete_status(
-                    current_step_landmark_entries,
-                    self.current_step,
-                )
                 auto_completed_subtask = self._should_autocomplete_subtask_during_action_step(
                     current_step_landmark_entries
                 )
