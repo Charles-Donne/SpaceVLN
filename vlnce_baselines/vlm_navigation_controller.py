@@ -118,6 +118,7 @@ class VLMNavigationController(InteractiveNavigationController):
         self.progress_summary = ""
         self.previous_action_reason = ""  # 上一步的action_analysis
         self.subtask_history = []
+        self.latest_thinking_cycle_info = {}
         self.thinking_view_renderer = ThinkingViewRenderer()
         
         # 初始化管理器
@@ -417,6 +418,7 @@ class VLMNavigationController(InteractiveNavigationController):
         self.progress_summary = ""
         self.previous_action_reason = ""  # 重置上一步action reason
         self.subtask_history = []
+        self.latest_thinking_cycle_info = {}
         self.tracked_landmark_classes = set()
         self.pose_before_action = None  # 重置pose追踪
         self.latest_lookaround_images = []
@@ -1128,73 +1130,149 @@ class VLMNavigationController(InteractiveNavigationController):
             local_map_path = None
         
         return direction_paths, direction_names, global_map_path, local_map_path
-    
+
+    def _collect_thinking_detected_landmarks(self) -> List[str]:
+        """Collect landmark names seen during the latest lookaround for thinking verification."""
+        if hasattr(self, 'current_step_landmarks') and self.current_step_landmarks:
+            all_landmarks = set()
+            for landmarks_list in self.current_step_landmarks.values():
+                for name, _conf in landmarks_list:
+                    all_landmarks.add(name)
+            return sorted(list(all_landmarks))
+        return sorted(list(self.detected_classes)) if hasattr(self, 'detected_classes') else []
+
+    def _run_thinking_cycle(
+        self,
+        mode: str,
+    ) -> Tuple[Optional[Dict[str, Any]], Optional[str], Optional[Dict[str, Any]]]:
+        """Run the shared lookaround -> planner -> save pipeline for initial and verify."""
+        if not self.planner:
+            print("[ERR] LLM Planner not initialized")
+            self.latest_thinking_cycle_info = {"mode": mode, "reason": "planner_not_initialized"}
+            return None, None, None
+
+        mode_key = str(mode).strip().lower()
+        if mode_key not in {"initial", "verify"}:
+            print(f"[ERR] Unsupported thinking mode: {mode}")
+            self.latest_thinking_cycle_info = {"mode": mode_key, "reason": "unsupported_mode"}
+            return None, None, None
+
+        if mode_key == "initial":
+            phase = "initial"
+            thinking_dir = os.path.join(self.save_manager.episode_dir, "thinking", "subtask_1")
+            print(f"\n[LLM] Planning...")
+        else:
+            if not self.current_subtask:
+                self.latest_thinking_cycle_info = {"mode": mode_key, "reason": "missing_current_subtask"}
+                return None, None, None
+            attempt_letter = chr(ord('a') + self.subtask_attempt)
+            phase = f"verify_{self.subtask_count}{attempt_letter}"
+            thinking_dir = os.path.join(
+                self.save_manager.episode_dir,
+                "thinking",
+                f"subtask_{self.subtask_count + 1}",
+            )
+            print(f"\n[Verify] #{self.subtask_count}{attempt_letter} (lookaround step {self.current_step + 1}-{self.current_step + 12})")
+
+        image_paths, direction_names = self.look_around_and_collect(phase)
+        if not image_paths:
+            self.latest_thinking_cycle_info = {
+                "mode": mode_key,
+                "phase": phase,
+                "thinking_dir": thinking_dir,
+                "reason": "lookaround_failed",
+            }
+            if mode_key == "initial":
+                print("[ERR] Initial lookaround failed, cannot start planning")
+            else:
+                print("[ERR] Lookaround failed, cannot verify")
+            return None, None, dict(self.latest_thinking_cycle_info)
+
+        _, _, global_map, _local_map = self.get_observations_and_maps(phase)
+        if not global_map or not os.path.exists(global_map):
+            print(f"[ERR] Global map not found: {global_map}")
+            self.latest_thinking_cycle_info = {
+                "mode": mode_key,
+                "phase": phase,
+                "thinking_dir": thinking_dir,
+                "reason": "global_map_missing",
+            }
+            return None, None, dict(self.latest_thinking_cycle_info)
+
+        os.makedirs(thinking_dir, exist_ok=True)
+        obstacle_distances = getattr(self, 'latest_obstacle_distances', {
+            'front': 'Unknown',
+            'left_30': 'Unknown',
+            'right_30': 'Unknown',
+        })
+
+        detected_landmarks: List[str] = []
+        waypoint_summary: Optional[str] = None
+        if mode_key == "initial":
+            response, prompt = self.planner.generate_initial_subtask(
+                instruction=self.current_instruction,
+                observation_images=image_paths,
+                direction_names=direction_names,
+                global_map_image=global_map,
+                local_map_image=None,
+                obstacle_distances=obstacle_distances,
+                save_dir=thinking_dir,
+            )
+        else:
+            detected_landmarks = self._collect_thinking_detected_landmarks()
+            waypoint_summary = self._get_waypoint_summary(include_area_chain=True)
+            response, prompt = self.planner.verify_and_replan(
+                instruction=self.current_instruction,
+                current_subtask=self.current_subtask,
+                observation_images=image_paths,
+                direction_names=direction_names,
+                global_map_image=global_map,
+                local_map_image=None,
+                detected_landmarks=detected_landmarks,
+                waypoint_summary=waypoint_summary,
+                obstacle_distances=obstacle_distances,
+                save_dir=thinking_dir,
+            )
+
+        if not response:
+            self.latest_thinking_cycle_info = {
+                "mode": mode_key,
+                "phase": phase,
+                "thinking_dir": thinking_dir,
+                "reason": "planner_failed",
+                "detected_landmarks": detected_landmarks,
+                "waypoint_summary": waypoint_summary,
+            }
+            if mode_key == "initial":
+                print("[ERR] LLM Planning failed")
+            else:
+                print("[ERR] LLM Verify failed")
+            return None, prompt, dict(self.latest_thinking_cycle_info)
+
+        response = self._sanitize_planner_response(response)
+        with open(os.path.join(thinking_dir, "response.json"), 'w', encoding='utf-8') as f:
+            json.dump(response, f, ensure_ascii=False, indent=2)
+
+        cycle_info = {
+            "mode": mode_key,
+            "phase": phase,
+            "thinking_dir": thinking_dir,
+            "detected_landmarks": detected_landmarks,
+            "waypoint_summary": waypoint_summary,
+        }
+        self.latest_thinking_cycle_info = dict(cycle_info)
+        return response, prompt, cycle_info
+
     def generate_initial_subtask(self) -> Optional[Dict]:
         """
         生成初始子任务
         
         使用环视收集的4方向全景图 + 全局地图 + 局部地图调用LLM生成子任务
         """
-        if not self.planner:
-            print("[ERR] LLM Planner not initialized")
-            return None
-        
-        print(f"\n[LLM] Planning...")
-        
-        # 从 vlm/observations/ 获取全景图和地图
-        image_paths, direction_names, global_map, local_map = self.get_observations_and_maps("initial")
-        
-        # 验证地图文件存在
-        if not global_map or not os.path.exists(global_map):
-            print(f"[ERR] Global map not found: {global_map}")
-            return None
-        
-        # thinking 只使用 12 个方向视图 + Global Map；Local Map仍保留为调试输出
-        global_map_for_llm = global_map
-        
-        # 使用最近的障碍物距离（在look_around_and_collect中由visualizer计算）
-        obstacle_distances = getattr(self, 'latest_obstacle_distances', {
-            'front': 'Unknown',
-            'left_30': 'Unknown',
-            'right_30': 'Unknown',
-        })
-        
-        # 先构建thinking_record（不含response）
-        thinking_record = {
-            "step": self.current_step,  # 12
-            "phase": "initial_planning",
-            "subtask_count": 1,  # 初始化总是第1个子任务
-            "subtask_attempt": 0,  # 初始规划总是a
-            "subtask_id": "1a",  # 初始化总是1a
-            "prompt_type": "initial",
-            "timestamp": datetime.now().isoformat(),
-        }
-        
-        # 计算save_dir: API发送时同步保存压缩图片+prompt
-        thinking_dir = os.path.join(self.save_manager.episode_dir, "thinking", "subtask_1")
-        os.makedirs(thinking_dir, exist_ok=True)
-        
-        # 调用LLM生成初始子任务（save_dir使call_api在发送时保存压缩图片+prompt）
-        response, _ = self.planner.generate_initial_subtask(
-            instruction=self.current_instruction,
-            observation_images=image_paths,
-            direction_names=direction_names,
-            global_map_image=global_map_for_llm,
-            local_map_image=None,
-            obstacle_distances=obstacle_distances,
-            save_dir=thinking_dir
-        )
-        
-        if not response:
-            print("[ERR] LLM Planning failed")
+        response, _prompt, cycle_info = self._run_thinking_cycle(mode="initial")
+        if not response or cycle_info is None:
             return None
 
-        response = self._sanitize_planner_response(response)
-        
-        # 保存response（API返回后）
-        with open(os.path.join(thinking_dir, "response.json"), 'w', encoding='utf-8') as f:
-            json.dump(response, f, ensure_ascii=False, indent=2)
-        
         # 保存子任务并初始化计数
         self.current_subtask = response
         self.subtask_count = 1  # 初始化为第1个子任务
@@ -1211,8 +1289,8 @@ class VLMNavigationController(InteractiveNavigationController):
         
         self._apply_postplanning_room_area_update(
             response=response,
-            phase="initial",
-            thinking_dir=thinking_dir,
+            phase=str(cycle_info.get("phase", "initial")),
+            thinking_dir=cycle_info.get("thinking_dir"),
             refresh_direction_views=False,
         )
         
@@ -1539,110 +1617,11 @@ class VLMNavigationController(InteractiveNavigationController):
         Returns:
             (new_subtask_or_finish_response, prompt)
         """
-        if not self.planner or not self.current_subtask:
+        if not self.current_subtask:
             return None, None
-        
-        # 重新执行环视建图并生成全景图（占用12个step）
-        # 注意：如果子任务已完成，会在后面清空轨迹；如果未完成，轨迹继续累积
-        # 使用attempt字母标识（a=0, b=1, c=2...）
-        attempt_letter = chr(ord('a') + self.subtask_attempt)
-        phase = f"verify_{self.subtask_count}{attempt_letter}"
-        print(f"\n[Verify] #{self.subtask_count}{attempt_letter} (lookaround step {self.current_step + 1}-{self.current_step + 12})")
-        image_paths, direction_names = self.look_around_and_collect(phase)
-        
-        if not image_paths:
-            print("[ERR] Lookaround failed, cannot verify")
-            # Episode提前结束，无法继续验证，返回失败
+        response, prompt, cycle_info = self._run_thinking_cycle(mode="verify")
+        if not response or cycle_info is None:
             return None, None
-        
-        # 从 vlm/observations/ 获取地图（已在 look_around_and_collect 中保存）
-        _, _, global_map, local_map = self.get_observations_and_maps(phase)
-        
-        # 验证地图文件存在
-        if not global_map or not os.path.exists(global_map):
-            print(f"[ERR] Global map not found: {global_map}")
-            return None, None
-        
-        # thinking 只使用 12 个方向视图 + Global Map；Local Map仍保留为调试输出
-        global_map_for_llm = global_map
-        
-        # 获取已检测到的landmark类别 - 汇总环视12步中检测到的所有landmarks
-        detected_landmarks = []
-        if hasattr(self, 'current_step_landmarks') and self.current_step_landmarks:
-            # 汇总12步环视中所有检测到的landmarks
-            all_landmarks = set()
-            for step_idx, landmarks_list in self.current_step_landmarks.items():
-                for name, conf in landmarks_list:
-                    all_landmarks.add(name)
-            detected_landmarks = sorted(list(all_landmarks))
-        else:
-            # 退化使用全局detected_classes
-            detected_landmarks = sorted(list(self.detected_classes)) if hasattr(self, 'detected_classes') else []
-        
-        # 获取waypoint摘要
-        waypoint_summary = self._get_waypoint_summary(include_area_chain=True)
-        
-        # 使用最近的障碍物距离（在look_around_and_collect中由visualizer计算）
-        obstacle_distances = getattr(self, 'latest_obstacle_distances', {
-            'front': 'Unknown',
-            'left_30': 'Unknown',
-            'right_30': 'Unknown',
-        })
-        
-        # 先构建thinking_record（不含response）
-        attempt_letter = chr(ord('a') + self.subtask_attempt)
-        subtask_id = f"{self.subtask_count}{attempt_letter}"  # 当前验证的子任务，如 "1a"
-        
-        # 计算下一个subtask_id
-        # 注意：此时还不知道is_completed，所以先按未完成准备
-        next_subtask_count = self.subtask_count
-        next_attempt = self.subtask_attempt + 1
-        next_attempt_letter = chr(ord('a') + next_attempt)
-        
-        # 对于verification，使用下一个subtask_count，因为：
-        # 1. Verification的目的是验证当前subtask并规划下一个subtask
-        # 2. Initial planning保存在subtask_1/，verification应保存在subtask_2/等
-        # 3. 即使verification失败也用下一个编号，表示"尝试规划下一个"
-        verification_subtask_count = self.subtask_count + 1
-        
-        thinking_record = {
-            "step": self.current_step,  # 验证扫描完成后的step
-            "phase": f"verify_{subtask_id}",  # verify_1a, verify_2b, etc.
-            "subtask_count": verification_subtask_count,  # 使用下一个编号
-            "subtask_attempt": self.subtask_attempt,
-            "subtask_id": subtask_id,  # 当前验证的子任务，如 "1a"
-            "prompt_type": "verification",
-            "timestamp": datetime.now().isoformat(),
-            "detected_landmarks": detected_landmarks,
-        }
-        
-        # 计算save_dir: API发送时同步保存压缩图片+prompt
-        thinking_dir = os.path.join(self.save_manager.episode_dir, "thinking", f"subtask_{verification_subtask_count}")
-        os.makedirs(thinking_dir, exist_ok=True)
-        
-        # 调用LLM验证（save_dir使call_api在发送时保存压缩图片+prompt）
-        response, _ = self.planner.verify_and_replan(
-            instruction=self.current_instruction,
-            current_subtask=self.current_subtask,
-            observation_images=image_paths,
-            direction_names=direction_names,
-            global_map_image=global_map_for_llm,
-            local_map_image=None,
-            detected_landmarks=detected_landmarks,
-            waypoint_summary=waypoint_summary,
-            obstacle_distances=obstacle_distances,
-            save_dir=thinking_dir
-        )
-        
-        if not response:
-            print("[ERR] LLM Verify failed")
-            return None, None
-
-        response = self._sanitize_planner_response(response)
-        
-        # 保存response（API返回后）
-        with open(os.path.join(thinking_dir, "response.json"), 'w', encoding='utf-8') as f:
-            json.dump(response, f, ensure_ascii=False, indent=2)
         
         # 打印关键信息（精简）
         task_finished = response.get('global_task_finish', False)
@@ -1657,8 +1636,8 @@ class VLMNavigationController(InteractiveNavigationController):
             
             self._apply_postplanning_room_area_update(
                 response=response,
-                phase=phase,
-                thinking_dir=thinking_dir,
+                phase=str(cycle_info.get("phase", "")),
+                thinking_dir=cycle_info.get("thinking_dir"),
                 refresh_direction_views=True,
             )
             
@@ -1711,7 +1690,7 @@ class VLMNavigationController(InteractiveNavigationController):
                     print()  # newline after rotation steps
 
         # 返回response（prompt已保存到save_dir）
-        return response, None
+            return response, prompt
     
     def execute_action_with_vlm(self) -> Tuple[Optional[int], Optional[str], bool, int, Optional[Dict]]:
         """
@@ -2180,11 +2159,12 @@ class VLMNavigationController(InteractiveNavigationController):
         print(f"Instruction: {self.current_instruction}")
         print(f"{'='*60}")
         
-        # 1. 环视建图 + 收集观察（占用step 1-12）
-        image_paths, direction_names = self.look_around_and_collect()
-        
-        if not image_paths:
-            print("[ERR] Initial lookaround failed, cannot start navigation")
+        # 1. 统一的 initial thinking cycle（lookaround + planning + post-planning update）
+        subtask = self.generate_initial_subtask()
+        if not subtask:
+            cycle_reason = str(getattr(self, 'latest_thinking_cycle_info', {}).get('reason', '') or '')
+            failure_reason = 'initial_lookaround_failed' if cycle_reason == 'lookaround_failed' else 'initial_subtask_failed'
+            print("[ERR] Initial subtask generation failed")
             return {
                 'success': False,
                 'total_steps': self.current_step,
@@ -2192,24 +2172,10 @@ class VLMNavigationController(InteractiveNavigationController):
                 'detected_classes': list(self.detected_classes) if hasattr(self, 'detected_classes') else [],
                 'gif_path': None,
                 'result_file': None,
-                'reason': 'initial_lookaround_failed'
+                'reason': failure_reason,
             }
         
-        # 2. 生成初始子任务（在step 12完成，下一个action从step 13开始）
-        subtask = self.generate_initial_subtask()
-        if not subtask:
-            print("[ERR] Initial subtask generation failed")
-            return {
-                'success': False,
-                'total_steps': self.current_step,  # 12
-                'subtask_count': 0,
-                'detected_classes': list(self.detected_classes) if hasattr(self, 'detected_classes') else [],
-                'gif_path': None,
-                'result_file': None,
-                'reason': 'initial_subtask_failed'
-            }
-        
-        # 2.5 自动旋转到waypoint方向
+        # 2. 自动旋转到waypoint方向
         next_waypoint_direction = subtask.get('next_waypoint_direction', '')
         if next_waypoint_direction and 'Front' not in next_waypoint_direction:
             success, action_sequence = self.auto_rotate_to_waypoint(next_waypoint_direction)
