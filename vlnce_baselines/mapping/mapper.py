@@ -199,8 +199,8 @@ class SemanticMapper:
         """添加 waypoint 到当前位置，并同步更新 room area。"""
         agent_x_m = self.full_pose[0]
         agent_y_m = self.full_pose[1]
-        pixel_y = int(agent_y_m * 100 / self.resolution)
-        pixel_x = int(agent_x_m * 100 / self.resolution)
+        pixel_y = int(round(float(agent_y_m) * 100.0 / float(self.resolution)))
+        pixel_x = int(round(float(agent_x_m) * 100.0 / float(self.resolution)))
         area_label = self.room_area_manager.update_from_waypoint(
             description=description,
             pixel_y=pixel_y,

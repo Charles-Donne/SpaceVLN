@@ -141,6 +141,7 @@ class Semantic_Mapping(nn.Module):
         self.cat_pred_threshold = args.CAT_PRED_THRESHOLD
         self.exp_pred_threshold = args.EXP_PRED_THRESHOLD
         self.map_pred_threshold = args.MAP_PRED_THRESHOLD
+        self.obstacle_clear_explored_threshold = 0.6
         
         # 分块地图：{(tile_x, tile_y): tensor[batch, C, 240, 240]}
         self.tiles = defaultdict(lambda: None)
@@ -1439,11 +1440,20 @@ class Semantic_Mapping(nn.Module):
 
         rotated = F.grid_sample(agent_view, rot_mat, align_corners=True)
         translated = F.grid_sample(rotated, trans_mat, align_corners=True) # shape: [bs, c, 240, 240]
-        maps2 = torch.cat((self.local_map.unsqueeze(1), translated.unsqueeze(1)), 1)
-        one_step_maps2 = torch.cat((self.one_step_local_map.unsqueeze(1), translated.unsqueeze(1)), 1)
+        map_pred = torch.maximum(self.local_map, translated)
+        one_step_map_pred = torch.maximum(self.one_step_local_map, translated)
 
-        map_pred, _ = torch.max(maps2, 1)
-        one_step_map_pred, _ = torch.max(one_step_maps2, 1)
+        new_obstacle = translated[:, 0:1, :, :]
+        new_explored = translated[:, 1:2, :, :]
+        clear_mask = (new_explored - new_obstacle) >= float(self.obstacle_clear_explored_threshold)
+        if torch.any(clear_mask):
+            map_pred[:, 0:1, :, :] = torch.where(clear_mask, new_obstacle, map_pred[:, 0:1, :, :])
+            one_step_map_pred[:, 0:1, :, :] = torch.where(
+                clear_mask,
+                new_obstacle,
+                one_step_map_pred[:, 0:1, :, :],
+            )
+
         self.local_map = map_pred
         self.one_step_local_map = one_step_map_pred
         self.local_pose = current_poses

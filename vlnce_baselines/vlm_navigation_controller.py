@@ -744,97 +744,59 @@ class VLMNavigationController(InteractiveNavigationController):
         )
         return response
     
-    def _draw_waypoints_on_view(self, image: np.ndarray, view_angle: float, waypoint_info: tuple) -> np.ndarray:
+    def _draw_waypoints_on_view(self, image: np.ndarray, waypoint_entry: Dict[str, Any]) -> np.ndarray:
         """
-        在环视方向视图上绘制waypoint标记
-        
-        简化版本：调用此函数时已经确认waypoint在当前视图的±15°内
-        直接在图像中心绘制waypoint标记即可
-        
-        Args:
-            image: 当前方向的图像 (H, W, 3) BGR格式
-            view_angle: 当前视角的角度 (0-330, 30度递增，逆时针)
-            waypoint_info: (waypoint_positions, waypoint_ids, descriptions) from mapper.get_waypoints()
-            
-        Returns:
-            绘制了waypoint标记后的图像
+        在12视角图像上绘制单个 waypoint area 提示。
+
+        这里只显示 area 名称和距离；不再显示 waypoint 编号。
         """
-        if not waypoint_info or len(waypoint_info[0]) == 0:
+        if not waypoint_entry:
             return image
-        
-        waypoint_positions, waypoint_ids, waypoint_descriptions = waypoint_info
-        
-        # 获取最后一个waypoint
-        if len(waypoint_positions) > 0:
-            last_idx = len(waypoint_positions) - 1
-            wp_id = waypoint_ids[last_idx]
-            wp_desc = waypoint_descriptions[last_idx] if len(waypoint_descriptions) > last_idx else ""
-            
-            # 绘制在图像中心位置
-            h, w = image.shape[:2]
-            x_pos = w // 2
-            y_pos = h // 2
-            
-            # 绘制waypoint圆圈标记（白底蓝色边框，减小到刚好覆盖ID）
-            cv2.circle(image, (x_pos, y_pos), 15, (255, 0, 0), 2)  # 蓝色边框，半径15
-            cv2.circle(image, (x_pos, y_pos), 13, (255, 255, 255), -1)  # 白色填充
-            
-            # 在圆形内绘制waypoint ID（黑色字体）
-            text = f"{wp_id}"
-            font_scale = 0.5  # 减小字体
-            thickness = 2
-            text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)[0]
-            text_x = x_pos - text_size[0] // 2
-            text_y = y_pos + text_size[1] // 2
-            cv2.putText(image, text, (text_x, text_y), 
-                       cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), thickness)  # 黑色字体
-            
-            # 在圆形上方绘制房间标签（两行：第1行红色加粗房间类型，第2行描述）
-            if wp_desc:
-                # 分离房间类型和描述（假设格式为 "Hallway - near bedroom exit"）
-                parts = wp_desc.split(' - ', 1) if ' - ' in wp_desc else [wp_desc, '']
-                room_type = parts[0].strip()  # 房间类型（如 "Hallway"）
-                description = parts[1].strip() if len(parts) > 1 else ''  # 描述
-                
-                # 第1行：红色加粗房间类型
-                room_font_scale = 0.6
-                room_thickness = 2
-                room_size = cv2.getTextSize(room_type, cv2.FONT_HERSHEY_SIMPLEX, room_font_scale, room_thickness)[0]
-                
-                # 第2行：黑色描述（如果有）
-                desc_font_scale = 0.45
-                desc_thickness = 1
-                desc_size = cv2.getTextSize(description, cv2.FONT_HERSHEY_SIMPLEX, desc_font_scale, desc_thickness)[0] if description else (0, 0)
-                
-                # 计算标签框尺寸（取两行最宽）
-                padding = 4
-                max_width = max(room_size[0], desc_size[0])
-                box_width = max_width + padding * 2
-                line_spacing = 3
-                box_height = room_size[1] + (desc_size[1] + line_spacing if description else 0) + padding * 2
-                
-                box_x1 = x_pos - box_width // 2
-                box_y1 = y_pos - 25 - box_height  # 距离圆圈25px
-                box_x2 = box_x1 + box_width
-                box_y2 = box_y1 + box_height
-                
-                # 绘制白底蓝边框的标签框
-                cv2.rectangle(image, (box_x1, box_y1), (box_x2, box_y2), (255, 255, 255), -1)  # 白色填充
-                cv2.rectangle(image, (box_x1, box_y1), (box_x2, box_y2), (255, 0, 0), 2)  # 蓝色边框
-                
-                # 绘制第1行：红色加粗房间类型
-                room_text_x = box_x1 + (box_width - room_size[0]) // 2  # 居中
-                room_text_y = box_y1 + padding + room_size[1]
-                cv2.putText(image, room_type, (room_text_x, room_text_y),
-                           cv2.FONT_HERSHEY_SIMPLEX, room_font_scale, (0, 0, 255), room_thickness)  # 红色加粗
-                
-                # 绘制第2行：黑色描述（如果有）
-                if description:
-                    desc_text_x = box_x1 + (box_width - desc_size[0]) // 2  # 居中
-                    desc_text_y = room_text_y + line_spacing + desc_size[1]
-                    cv2.putText(image, description, (desc_text_x, desc_text_y),
-                               cv2.FONT_HERSHEY_SIMPLEX, desc_font_scale, (0, 0, 0), desc_thickness)  # 黑色普通
-        
+
+        label_text = str(
+            waypoint_entry.get("label")
+            or waypoint_entry.get("area_label")
+            or waypoint_entry.get("description")
+            or "Unknown"
+        ).strip()
+        if not label_text:
+            return image
+
+        try:
+            distance_text = f"{float(waypoint_entry.get('distance_m', 0.0)):.1f}m"
+        except (TypeError, ValueError):
+            distance_text = "unknown"
+
+        display_text = f"{label_text} {distance_text}".strip()
+        h, w = image.shape[:2]
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.62
+        thickness = 2
+        padding_x = 8
+        padding_y = 6
+        (text_w, text_h), baseline = cv2.getTextSize(display_text, font, font_scale, thickness)
+
+        box_w = text_w + padding_x * 2
+        box_h = text_h + baseline + padding_y * 2
+        box_x1 = max(8, (w - box_w) // 2)
+        box_y1 = max(12, h // 2 - box_h - 18)
+        box_x2 = min(w - 8, box_x1 + box_w)
+        box_y2 = min(h - 8, box_y1 + box_h)
+
+        cv2.rectangle(image, (box_x1, box_y1), (box_x2, box_y2), (255, 255, 255), -1)
+        cv2.rectangle(image, (box_x1, box_y1), (box_x2, box_y2), (255, 0, 0), 2)
+        text_x = box_x1 + padding_x
+        text_y = box_y2 - baseline - padding_y
+        cv2.putText(
+            image,
+            display_text,
+            (text_x, text_y),
+            font,
+            font_scale,
+            (255, 0, 0),
+            thickness,
+            cv2.LINE_AA,
+        )
         return image
     
     
@@ -2462,6 +2424,8 @@ class VLMNavigationController(InteractiveNavigationController):
             resolution_cm=self.mapper.resolution,
             current_room_area_label=getattr(self.mapper, 'current_room_area_label', ""),
             current_room_area_type=getattr(self.mapper, 'current_room_area_type', ""),
+            full_map=getattr(self.mapper, 'full_map', None),
+            crop_offset=getattr(getattr(self.mapper, 'mapping_module', None), 'full_map_crop_offset', None),
             include_area_chain=include_area_chain,
             include_path=include_path,
         )

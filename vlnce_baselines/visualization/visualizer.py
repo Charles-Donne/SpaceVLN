@@ -133,6 +133,7 @@ class MapVisualizer:
         alpha: float = 0.45,
         fill_regions: bool = True,
         show_labels: bool = False,
+        use_display_label: bool = True,
     ) -> np.ndarray:
         display_layer = self._prepare_room_area_display_layer(room_area_layer, output_size=image.shape[1])
         if display_layer is None or not room_area_records:
@@ -156,7 +157,8 @@ class MapVisualizer:
                 if fill_regions:
                     cv2.drawContours(output, contours, -1, color, 3)
                 if show_labels:
-                    label = str(record.get("display_label", record.get("label", "")) or "")
+                    label_key = "display_label" if use_display_label else "label"
+                    label = str(record.get(label_key, record.get("label", "")) or "")
                     if label:
                         self._draw_room_area_label(output, contours, label, color)
 
@@ -488,7 +490,11 @@ class MapVisualizer:
         """Fallback obstacle distances from the rotated obstacle map."""
         if full_map is None:
             return {}
-        obstacle_mask_rotated = build_rotated_obstacle_mask(full_map)
+        obstacle_mask_rotated = build_rotated_obstacle_mask(
+            full_map,
+            threshold=0.6,
+            open_kernel_size=3,
+        )
         return self.calculate_obstacle_distances_from_rotated_map(
             obstacle_mask_rotated,
             center_x=center_x,
@@ -535,7 +541,11 @@ class MapVisualizer:
         """Fallback 12-view obstacle distances from the rotated obstacle map."""
         if full_map is None:
             return {}
-        obstacle_mask_rotated = build_rotated_obstacle_mask(full_map)
+        obstacle_mask_rotated = build_rotated_obstacle_mask(
+            full_map,
+            threshold=0.6,
+            open_kernel_size=3,
+        )
         return self.calculate_obstacle_distances_12_directions(
             obstacle_mask_rotated,
             center_x=center_x,
@@ -730,6 +740,7 @@ class MapVisualizer:
                 room_area_records,
                 fill_regions=False,
                 show_labels=True,
+                use_display_label=False,
             )
             global_map_rotated = self._overlay_room_areas(
                 global_map_rotated,
@@ -737,6 +748,7 @@ class MapVisualizer:
                 room_area_records,
                 fill_regions=False,
                 show_labels=True,
+                use_display_label=False,
             )
             
             # ===== 阶段6: global map 不绘制自定义 landmark，仅保留内部 landmarks 列表供后续距离/角度计算 =====

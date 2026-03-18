@@ -1,7 +1,13 @@
 import math
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+import numpy as np
+
+from vlnce_baselines.visualization.map_projection import RotatedMapProjector
+
 CURRENT_AREA_OVERLAP_THRESHOLD_M = 1.0
+WAYPOINT_VISIBILITY_RADIUS_M = 1.0
+WAYPOINT_VISIBILITY_SAMPLES = 16
 
 
 def normalize_relative_bearing(bearing_deg: float) -> float:
@@ -55,6 +61,8 @@ def build_waypoint_summary(
     resolution_cm: float,
     current_room_area_label: str = "",
     current_room_area_type: str = "",
+    full_map: Optional[np.ndarray] = None,
+    crop_offset: Optional[Tuple[int, int]] = None,
     include_area_chain: bool = True,
     include_path: bool = True,
 ) -> str:
@@ -99,6 +107,7 @@ def build_waypoint_summary(
         visible_indices = visible_indices[:-1]
     last_visible_index = visible_indices[-1] if visible_indices else None
 
+    all_area_labels = list(waypoint_area_labels or [])
     node_lines: List[str] = []
     for index in visible_indices:
         wp_id = waypoint_ids[index]
@@ -107,6 +116,8 @@ def build_waypoint_summary(
         is_last = last_visible_index is not None and index == last_visible_index
         suffix = "  <- LAST VISITED (came from here)" if is_last else ""
 
+        distance_m = None
+        relative_bearing_deg = None
         if current_pose is None:
             spatial_info = "distance unknown"
         else:
@@ -126,9 +137,23 @@ def build_waypoint_summary(
         if waypoint_area_labels and index < len(waypoint_area_labels):
             area_label = waypoint_area_labels[index]
         area_note = f" | area={area_label}" if area_label else ""
+        reachability_note = _build_waypoint_reachability_note(
+            waypoint_index=index,
+            waypoint_id=wp_id,
+            waypoint_ids=waypoint_ids,
+            waypoint_positions=waypoint_positions,
+            waypoint_area_labels=all_area_labels,
+            current_pose=current_pose,
+            resolution_cm=resolution_cm,
+            full_map=full_map,
+            crop_offset=crop_offset,
+            visible_indices=visible_indices,
+            current_room_area_label=current_room_area_label,
+        )
+        if reachability_note:
+            spatial_info = f"{spatial_info} | {reachability_note}"
         node_lines.append(f"WP#{wp_id} [{wp_desc}{area_note}] -- {spatial_info}{suffix}")
 
-    path_segments: List[str] = []
     visible_waypoint_ids = [waypoint_ids[index] for index in visible_indices]
     visible_waypoint_positions = [waypoint_positions[index] for index in visible_indices]
     visible_waypoint_area_labels = (
@@ -136,47 +161,264 @@ def build_waypoint_summary(
         if waypoint_area_labels else []
     )
 
-    for index in range(len(visible_waypoint_ids) - 1):
-        py1, px1 = visible_waypoint_positions[index]
-        py2, px2 = visible_waypoint_positions[index + 1]
-        segment_distance_m = math.sqrt(
-            ((px2 - px1) * resolution_cm / 100.0) ** 2
-            + ((py2 - py1) * resolution_cm / 100.0) ** 2
-        )
-        path_segments.append(
-            f"WP#{visible_waypoint_ids[index]}->WP#{visible_waypoint_ids[index + 1]}({segment_distance_m:.1f}m)"
-        )
-
-    first_waypoint_id = visible_waypoint_ids[0] if visible_waypoint_ids else None
-    path_line = None
-    if first_waypoint_id is not None:
-        path_line = (
-            "Path: " + " -> ".join(path_segments) + " -> Current"
-            if path_segments
-            else f"Path: WP#{first_waypoint_id} -> Current"
-        )
-
-    waypoint_area_path_line = None
-    if include_area_chain:
-        area_nodes: List[str] = []
-        for index, wp_id in enumerate(visible_waypoint_ids):
-            area_label = ""
-            if index < len(visible_waypoint_area_labels):
-                area_label = str(visible_waypoint_area_labels[index] or "").strip()
-            if area_label:
-                area_nodes.append(f"WP#{wp_id}({area_label})")
-            else:
-                area_nodes.append(f"WP#{wp_id}(Unknown)")
-        current_area_display = str(current_room_area_label or "Unknown").strip() or "Unknown"
-        area_nodes.append(f"Current({current_area_display})")
-        waypoint_area_path_line = "Waypoint Area Path: " + " -> ".join(area_nodes)
+    current_area_display = str(current_room_area_label or "Unknown").strip() or "Unknown"
+    waypoint_area_path_line = _build_waypoint_area_path_line(
+        visible_waypoint_ids=visible_waypoint_ids,
+        visible_waypoint_positions=visible_waypoint_positions,
+        visible_waypoint_area_labels=visible_waypoint_area_labels,
+        current_pose=current_pose,
+        resolution_cm=resolution_cm,
+        current_area_display=current_area_display,
+        include_area_chain=include_area_chain,
+        include_path=include_path,
+    )
 
     lines = header_lines + node_lines
     if waypoint_area_path_line:
         lines.append(waypoint_area_path_line)
-    elif include_path and path_line:
-        lines.append(path_line)
     return "\n".join(lines)
+
+
+def _build_projector(
+    full_map: Optional[np.ndarray],
+    current_pose: Optional[Sequence[float]],
+    crop_offset: Optional[Tuple[int, int]],
+) -> Optional[RotatedMapProjector]:
+    if full_map is None or current_pose is None or crop_offset is None:
+        return None
+    return RotatedMapProjector(
+        map_h=full_map.shape[1],
+        map_w=full_map.shape[2],
+        crop_offset=crop_offset,
+        agent_orientation_deg=float(current_pose[2]),
+    )
+
+
+def _line_is_clear(
+    obstacle_mask: np.ndarray,
+    start_row: float,
+    start_col: float,
+    end_row: float,
+    end_col: float,
+) -> bool:
+    steps = max(int(math.ceil(max(abs(end_row - start_row), abs(end_col - start_col)))), 1)
+    rows = np.linspace(start_row, end_row, steps + 1)
+    cols = np.linspace(start_col, end_col, steps + 1)
+    height, width = obstacle_mask.shape
+    for idx in range(1, steps):
+        row = int(round(rows[idx]))
+        col = int(round(cols[idx]))
+        if not (0 <= row < height and 0 <= col < width):
+            return False
+        if bool(obstacle_mask[row, col]):
+            return False
+    return True
+
+
+def _has_clear_path_to_waypoint(
+    waypoint_py: int,
+    waypoint_px: int,
+    current_pose: Optional[Sequence[float]],
+    resolution_cm: float,
+    full_map: Optional[np.ndarray],
+    crop_offset: Optional[Tuple[int, int]],
+) -> Optional[bool]:
+    if current_pose is None or full_map is None:
+        return None
+    projector = _build_projector(full_map, current_pose, crop_offset)
+    if projector is None:
+        return None
+
+    obstacle_mask = np.asarray(full_map[0] > 0.5, dtype=bool)
+    curr_py = float(current_pose[1]) * 100.0 / float(resolution_cm)
+    curr_px = float(current_pose[0]) * 100.0 / float(resolution_cm)
+    start_rot = projector.world_to_rotated_pixel(curr_py, curr_px)
+    if start_rot is None:
+        return None
+
+    center_py = float(waypoint_py)
+    center_px = float(waypoint_px)
+    radius_px = (WAYPOINT_VISIBILITY_RADIUS_M * 100.0) / float(resolution_cm)
+
+    candidate_points: List[Tuple[float, float]] = [(center_py, center_px)]
+    for sample_idx in range(WAYPOINT_VISIBILITY_SAMPLES):
+        theta = (2.0 * math.pi * float(sample_idx)) / float(WAYPOINT_VISIBILITY_SAMPLES)
+        candidate_points.append((
+            center_py + radius_px * math.sin(theta),
+            center_px + radius_px * math.cos(theta),
+        ))
+
+    for world_py, world_px in candidate_points:
+        end_rot = projector.world_to_rotated_pixel(world_py, world_px)
+        if end_rot is None:
+            continue
+        if _line_is_clear(
+            obstacle_mask=obstacle_mask,
+            start_row=float(start_rot[0]),
+            start_col=float(start_rot[1]),
+            end_row=float(end_rot[0]),
+            end_col=float(end_rot[1]),
+        ):
+            return True
+    return False
+
+
+def _format_waypoint_area_ref(waypoint_id: int, area_label: str) -> str:
+    clean_area = str(area_label or "Unknown").strip() or "Unknown"
+    return f"WP#{int(waypoint_id)}({clean_area})"
+
+
+def _build_waypoint_reachability_note(
+    waypoint_index: int,
+    waypoint_id: int,
+    waypoint_ids: Sequence[int],
+    waypoint_positions: Sequence[Tuple[int, int]],
+    waypoint_area_labels: Sequence[str],
+    current_pose: Optional[Sequence[float]],
+    resolution_cm: float,
+    full_map: Optional[np.ndarray],
+    crop_offset: Optional[Tuple[int, int]],
+    visible_indices: Sequence[int],
+    current_room_area_label: str,
+) -> str:
+    if waypoint_index >= len(waypoint_positions):
+        return ""
+
+    wp_py, wp_px = waypoint_positions[waypoint_index]
+    clear_path = _has_clear_path_to_waypoint(
+        waypoint_py=int(wp_py),
+        waypoint_px=int(wp_px),
+        current_pose=current_pose,
+        resolution_cm=resolution_cm,
+        full_map=full_map,
+        crop_offset=crop_offset,
+    )
+    if clear_path is None:
+        return ""
+    if clear_path:
+        return "connected to current"
+
+    visible_index_set = set(int(idx) for idx in visible_indices)
+    for next_index in range(waypoint_index + 1, len(waypoint_positions)):
+        if next_index not in visible_index_set:
+            continue
+        next_wp_py, next_wp_px = waypoint_positions[next_index]
+        next_clear_path = _has_clear_path_to_waypoint(
+            waypoint_py=int(next_wp_py),
+            waypoint_px=int(next_wp_px),
+            current_pose=current_pose,
+            resolution_cm=resolution_cm,
+            full_map=full_map,
+            crop_offset=crop_offset,
+        )
+        if next_clear_path is False:
+            continue
+        next_waypoint_id = int(waypoint_ids[next_index]) if next_index < len(waypoint_ids) else int(next_index + 1)
+        next_area = (
+            str(waypoint_area_labels[next_index]).strip()
+            if next_index < len(waypoint_area_labels) else "Unknown"
+        ) or "Unknown"
+        return f"blocked from current; reach via {_format_waypoint_area_ref(next_waypoint_id, next_area)}"
+
+    if current_pose is not None:
+        current_area_display = str(current_room_area_label or "Unknown").strip() or "Unknown"
+        return f"blocked from current; reach via Current({current_area_display})"
+    return "blocked from current"
+
+
+def _world_point_to_meters(point: Tuple[int, int], resolution_cm: float) -> Tuple[float, float]:
+    py, px = point
+    return float(px) * float(resolution_cm) / 100.0, float(py) * float(resolution_cm) / 100.0
+
+
+def _segment_heading_deg(
+    start_point: Tuple[int, int],
+    end_point: Tuple[int, int],
+    resolution_cm: float,
+) -> float:
+    start_x_m, start_y_m = _world_point_to_meters(start_point, resolution_cm)
+    end_x_m, end_y_m = _world_point_to_meters(end_point, resolution_cm)
+    return float(math.degrees(math.atan2(end_y_m - start_y_m, end_x_m - start_x_m)))
+
+
+def _segment_distance_m(
+    start_point: Tuple[int, int],
+    end_point: Tuple[int, int],
+    resolution_cm: float,
+) -> float:
+    start_x_m, start_y_m = _world_point_to_meters(start_point, resolution_cm)
+    end_x_m, end_y_m = _world_point_to_meters(end_point, resolution_cm)
+    return float(math.hypot(end_x_m - start_x_m, end_y_m - start_y_m))
+
+
+def _format_turn_step(turn_delta_deg: float) -> str:
+    magnitude = abs(normalize_relative_bearing(turn_delta_deg))
+    if magnitude < 15.0:
+        return ""
+    if magnitude >= 165.0:
+        return " turn 180deg"
+    side = "right" if turn_delta_deg > 0.0 else "left"
+    return f" turn {side} {int(round(magnitude))}deg"
+
+
+def _build_waypoint_area_path_line(
+    visible_waypoint_ids: Sequence[int],
+    visible_waypoint_positions: Sequence[Tuple[int, int]],
+    visible_waypoint_area_labels: Sequence[str],
+    current_pose: Optional[Sequence[float]],
+    resolution_cm: float,
+    current_area_display: str,
+    include_area_chain: bool,
+    include_path: bool,
+) -> Optional[str]:
+    if not include_area_chain and not include_path:
+        return None
+
+    node_labels: List[str] = []
+    node_points: List[Tuple[int, int]] = []
+    for index, wp_id in enumerate(visible_waypoint_ids):
+        area_label = (
+            str(visible_waypoint_area_labels[index]).strip()
+            if index < len(visible_waypoint_area_labels) else "Unknown"
+        ) or "Unknown"
+        node_labels.append(_format_waypoint_area_ref(wp_id, area_label))
+        node_points.append(visible_waypoint_positions[index])
+
+    if current_pose is not None:
+        curr_py = int(round(float(current_pose[1]) * 100.0 / float(resolution_cm)))
+        curr_px = int(round(float(current_pose[0]) * 100.0 / float(resolution_cm)))
+        node_labels.append(f"Current({current_area_display})")
+        node_points.append((curr_py, curr_px))
+    elif node_labels:
+        node_labels.append(f"Current({current_area_display})")
+
+    if not node_labels:
+        return "Waypoint Area Path: Current(Unknown)" if include_area_chain else None
+    if len(node_labels) == 1 or len(node_points) < 2:
+        return "Waypoint Area Path: " + " -> ".join(node_labels)
+
+    parts: List[str] = [node_labels[0]]
+    previous_heading_deg: Optional[float] = None
+    for index in range(len(node_points) - 1):
+        current_heading_deg = _segment_heading_deg(
+            start_point=node_points[index],
+            end_point=node_points[index + 1],
+            resolution_cm=resolution_cm,
+        )
+        if previous_heading_deg is not None:
+            turn_delta_deg = normalize_relative_bearing(previous_heading_deg - current_heading_deg)
+            turn_text = _format_turn_step(turn_delta_deg)
+            if turn_text:
+                parts.append(turn_text)
+        distance_m = _segment_distance_m(
+            start_point=node_points[index],
+            end_point=node_points[index + 1],
+            resolution_cm=resolution_cm,
+        )
+        parts.append(f" move {distance_m:.1f}m to {node_labels[index + 1]}")
+        previous_heading_deg = current_heading_deg
+
+    return "Waypoint Area Path: " + "".join(parts)
 
 
 def build_action_landmark_map_info(

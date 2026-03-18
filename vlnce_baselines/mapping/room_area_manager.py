@@ -17,6 +17,7 @@ class RoomAreaManager:
     CONNECTOR_ROOM_TYPES = {"hallway", "entryway"}
     MAX_CONNECTED_AREAS = 3
     MAX_CONNECTION_DISTANCE_M = 3.0
+    MAX_CONNECTOR_MERGE_DISTANCE_M = 3.0
     SAMPLE_PIXELS_PER_AREA = 9
 
     def __init__(self, map_shape: Tuple[int, int], resolution: int = 5):
@@ -27,6 +28,7 @@ class RoomAreaManager:
     def reset(self) -> None:
         self.room_area_records: List[Dict[str, Any]] = []
         self.room_area_counter = 0
+        self.label_aliases: Dict[str, str] = {}
         self.current_room_area_label = "Unknown"
         self.current_room_area_type = "Unknown"
 
@@ -51,22 +53,43 @@ class RoomAreaManager:
             crop_offset=crop_offset,
         )
 
+        projector = self._build_projector(full_map, full_pose, crop_offset)
+        obstacle_mask = (
+            np.asarray(full_map[0] > 0.5, dtype=bool)
+            if full_map is not None and projector is not None
+            else None
+        )
+
         overlapping_records = [
             record for record in self.room_area_records
             if record["room_key"] == room_key
-            and self._pixel_sets_overlap(record["pixels"], world_pixels)
+            and self._records_match_new_area(
+                existing_record=record,
+                new_pixels=world_pixels,
+                new_center_world_px=(int(pixel_y), int(pixel_x)),
+                projector=projector,
+                obstacle_mask=obstacle_mask,
+            )
         ]
 
         if overlapping_records:
-            merged_record = overlapping_records[0]
+            merged_record = min(
+                overlapping_records,
+                key=lambda record: (int(record["variant"]), int(record["id"])),
+            )
             merged_record["pixels"].update(world_pixels)
             merged_record["center_world_px"] = (int(pixel_y), int(pixel_x))
             merged_record["description"] = description
 
-            if len(overlapping_records) > 1:
-                for extra_record in overlapping_records[1:]:
-                    merged_record["pixels"].update(extra_record["pixels"])
-                    self.room_area_records.remove(extra_record)
+            for extra_record in overlapping_records:
+                if extra_record is merged_record:
+                    continue
+                merged_record["pixels"].update(extra_record["pixels"])
+                self._register_label_alias(
+                    old_label=str(extra_record["label"]),
+                    new_label=str(merged_record["label"]),
+                )
+                self.room_area_records.remove(extra_record)
 
             self.current_room_area_label = str(merged_record["label"])
             self.current_room_area_type = str(merged_record["room_type"])
@@ -177,6 +200,53 @@ class RoomAreaManager:
         if len(pixels_a) > len(pixels_b):
             pixels_a, pixels_b = pixels_b, pixels_a
         return any(pixel in pixels_b for pixel in pixels_a)
+
+    def _records_match_new_area(
+        self,
+        existing_record: Dict[str, Any],
+        new_pixels: Set[Tuple[int, int]],
+        new_center_world_px: Tuple[int, int],
+        projector: Optional[RotatedMapProjector],
+        obstacle_mask: Optional[np.ndarray],
+    ) -> bool:
+        existing_pixels = existing_record.get("pixels", set())
+        if self._pixel_sets_overlap(existing_pixels, new_pixels):
+            return True
+        if self._pixel_sets_are_adjacent(existing_pixels, new_pixels):
+            return True
+        if (
+            str(existing_record.get("room_type", ""))
+            not in self.CONNECTOR_ROOM_TYPES
+            or projector is None
+            or obstacle_mask is None
+        ):
+            return False
+        max_distance_px = (self.MAX_CONNECTOR_MERGE_DISTANCE_M * 100.0) / float(self.resolution)
+        return self._pixel_sets_have_clear_connection(
+            pixels_a=existing_pixels,
+            center_a=tuple(existing_record.get("center_world_px", new_center_world_px)),
+            pixels_b=new_pixels,
+            center_b=new_center_world_px,
+            obstacle_mask=obstacle_mask,
+            projector=projector,
+            max_distance_px=max_distance_px,
+        )
+
+    @staticmethod
+    def _pixel_sets_are_adjacent(
+        pixels_a: Set[Tuple[int, int]],
+        pixels_b: Set[Tuple[int, int]],
+    ) -> bool:
+        if not pixels_a or not pixels_b:
+            return False
+        if len(pixels_a) > len(pixels_b):
+            pixels_a, pixels_b = pixels_b, pixels_a
+        for row, col in pixels_a:
+            for d_row in (-1, 0, 1):
+                for d_col in (-1, 0, 1):
+                    if (int(row + d_row), int(col + d_col)) in pixels_b:
+                        return True
+        return False
 
     def _build_projector(
         self,
@@ -373,7 +443,7 @@ class RoomAreaManager:
         self.current_room_area_type = str(record.get("room_type", "Unknown") or "Unknown")
 
     def get_display_label(self, label: str) -> str:
-        target_label = str(label or "").strip()
+        target_label = self._resolve_label_alias(str(label or "").strip())
         if not target_label:
             return "Unknown"
         if target_label == "Unknown":
@@ -385,6 +455,28 @@ class RoomAreaManager:
         if record is None:
             return target_label
         return str(record.get("display_label", target_label) or target_label)
+
+    def _resolve_label_alias(self, label: str) -> str:
+        target_label = str(label or "").strip()
+        if not target_label or target_label == "Unknown":
+            return "Unknown" if target_label == "Unknown" else target_label
+
+        visited: Set[str] = set()
+        while target_label in self.label_aliases and target_label not in visited:
+            visited.add(target_label)
+            target_label = str(self.label_aliases[target_label])
+        return target_label
+
+    def _register_label_alias(self, old_label: str, new_label: str) -> None:
+        src_label = str(old_label or "").strip()
+        dst_label = self._resolve_label_alias(str(new_label or "").strip())
+        if not src_label or not dst_label or src_label == dst_label:
+            return
+
+        for alias, target in list(self.label_aliases.items()):
+            if self._resolve_label_alias(target) == src_label:
+                self.label_aliases[alias] = dst_label
+        self.label_aliases[src_label] = dst_label
 
     def _refresh_connection_metadata(
         self,
@@ -458,18 +550,10 @@ class RoomAreaManager:
 
     @staticmethod
     def _records_are_adjacent(record_a: Dict[str, Any], record_b: Dict[str, Any]) -> bool:
-        pixels_a = record_a.get("pixels", set())
-        pixels_b = record_b.get("pixels", set())
-        if not pixels_a or not pixels_b:
-            return False
-        if len(pixels_a) > len(pixels_b):
-            pixels_a, pixels_b = pixels_b, pixels_a
-        for row, col in pixels_a:
-            for d_row in (-1, 0, 1):
-                for d_col in (-1, 0, 1):
-                    if (int(row + d_row), int(col + d_col)) in pixels_b:
-                        return True
-        return False
+        return RoomAreaManager._pixel_sets_are_adjacent(
+            record_a.get("pixels", set()),
+            record_b.get("pixels", set()),
+        )
 
     def _records_have_clear_connection(
         self,
@@ -478,37 +562,44 @@ class RoomAreaManager:
         obstacle_mask: np.ndarray,
         projector: RotatedMapProjector,
     ) -> bool:
-        sample_pixels_a = self._sample_record_pixels(record_a)
-        sample_pixels_b = self._sample_record_pixels(record_b)
-        for start_world in sample_pixels_a:
-            for end_world in sample_pixels_b:
-                if self._world_line_is_clear(
-                    obstacle_mask=obstacle_mask,
-                    projector=projector,
-                    start_world=start_world,
-                    end_world=end_world,
-                ):
-                    return True
-        return False
+        max_distance_px = (self.MAX_CONNECTION_DISTANCE_M * 100.0) / float(self.resolution)
+        return self._pixel_sets_have_clear_connection(
+            pixels_a=record_a.get("pixels", set()),
+            center_a=tuple(record_a.get("center_world_px", (0, 0))),
+            pixels_b=record_b.get("pixels", set()),
+            center_b=tuple(record_b.get("center_world_px", (0, 0))),
+            obstacle_mask=obstacle_mask,
+            projector=projector,
+            max_distance_px=max_distance_px,
+        )
 
     def _sample_record_pixels(self, record: Dict[str, Any]) -> List[Tuple[int, int]]:
-        pixels = list(record.get("pixels", set()))
-        if not pixels:
-            center = tuple(record.get("center_world_px", (0, 0)))
-            return [(int(center[0]), int(center[1]))]
+        return self._sample_pixels(
+            pixels=record.get("pixels", set()),
+            center_world_px=tuple(record.get("center_world_px", (0, 0))),
+        )
+
+    def _sample_pixels(
+        self,
+        pixels: Set[Tuple[int, int]],
+        center_world_px: Tuple[int, int],
+    ) -> List[Tuple[int, int]]:
+        pixel_list = list(pixels)
+        if not pixel_list:
+            return [(int(center_world_px[0]), int(center_world_px[1]))]
 
         sampled: List[Tuple[int, int]] = []
-        center = tuple(record.get("center_world_px", pixels[0]))
+        center = tuple(center_world_px if center_world_px else pixel_list[0])
         sampled.append((int(center[0]), int(center[1])))
         anchors = [
-            min(pixels, key=lambda p: (p[0], p[1])),
-            max(pixels, key=lambda p: (p[0], p[1])),
-            min(pixels, key=lambda p: (p[1], p[0])),
-            max(pixels, key=lambda p: (p[1], p[0])),
-            min(pixels, key=lambda p: (p[0] + p[1], p[0])),
-            max(pixels, key=lambda p: (p[0] + p[1], p[0])),
-            min(pixels, key=lambda p: (p[0] - p[1], p[0])),
-            max(pixels, key=lambda p: (p[0] - p[1], p[0])),
+            min(pixel_list, key=lambda p: (p[0], p[1])),
+            max(pixel_list, key=lambda p: (p[0], p[1])),
+            min(pixel_list, key=lambda p: (p[1], p[0])),
+            max(pixel_list, key=lambda p: (p[1], p[0])),
+            min(pixel_list, key=lambda p: (p[0] + p[1], p[0])),
+            max(pixel_list, key=lambda p: (p[0] + p[1], p[0])),
+            min(pixel_list, key=lambda p: (p[0] - p[1], p[0])),
+            max(pixel_list, key=lambda p: (p[0] - p[1], p[0])),
         ]
         for row, col in anchors:
             sampled.append((int(row), int(col)))
@@ -523,6 +614,34 @@ class RoomAreaManager:
             if len(deduped) >= self.SAMPLE_PIXELS_PER_AREA:
                 break
         return deduped
+
+    def _pixel_sets_have_clear_connection(
+        self,
+        pixels_a: Set[Tuple[int, int]],
+        center_a: Tuple[int, int],
+        pixels_b: Set[Tuple[int, int]],
+        center_b: Tuple[int, int],
+        obstacle_mask: np.ndarray,
+        projector: RotatedMapProjector,
+        max_distance_px: float,
+    ) -> bool:
+        sample_pixels_a = self._sample_pixels(pixels_a, center_a)
+        sample_pixels_b = self._sample_pixels(pixels_b, center_b)
+        for start_world in sample_pixels_a:
+            for end_world in sample_pixels_b:
+                if float(np.hypot(
+                    float(start_world[0]) - float(end_world[0]),
+                    float(start_world[1]) - float(end_world[1]),
+                )) > max_distance_px:
+                    continue
+                if self._world_line_is_clear(
+                    obstacle_mask=obstacle_mask,
+                    projector=projector,
+                    start_world=start_world,
+                    end_world=end_world,
+                ):
+                    return True
+        return False
 
     @staticmethod
     def _line_is_clear(

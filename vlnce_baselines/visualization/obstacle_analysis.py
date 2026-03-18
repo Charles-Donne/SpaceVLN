@@ -40,6 +40,7 @@ def build_rotated_obstacle_mask(
     full_map: np.ndarray,
     threshold: float = 0.5,
     display_size: int = 480,
+    open_kernel_size: int = 0,
 ) -> np.ndarray:
     obstacle_mask = full_map[0, ...] > threshold
     obstacle_mask = np.flipud(obstacle_mask)
@@ -48,6 +49,13 @@ def build_rotated_obstacle_mask(
         (display_size, display_size),
         interpolation=cv2.INTER_NEAREST,
     ) > 127
+    if open_kernel_size and open_kernel_size > 1:
+        kernel = np.ones((int(open_kernel_size), int(open_kernel_size)), dtype=np.uint8)
+        obstacle_mask = cv2.morphologyEx(
+            obstacle_mask.astype(np.uint8) * 255,
+            cv2.MORPH_OPEN,
+            kernel,
+        ) > 127
     return obstacle_mask
 
 
@@ -126,6 +134,21 @@ def _prepare_depth_array(depth_meters: np.ndarray) -> Optional[np.ndarray]:
     return depth
 
 
+def _parse_distance_text_m(distance_text: Optional[str]) -> Optional[float]:
+    if not distance_text:
+        return None
+    text = str(distance_text).strip().lower()
+    if not text or text == "unknown":
+        return None
+    try:
+        number = float(text.replace("warning", "").replace("open", "").replace("m", "").replace(">", "").strip())
+    except ValueError:
+        return None
+    if ">" in text:
+        return number + 0.1
+    return number
+
+
 def sample_depth_distance_for_angle(
     depth_meters: np.ndarray,
     angle_deg: float,
@@ -146,37 +169,43 @@ def sample_depth_distance_for_angle(
         return None
 
     height, width = depth.shape
-    row_start = max(0, min(height - 1, int(height * row_start_ratio)))
-    row_end = max(row_start + 1, min(height, int(height * row_end_ratio)))
     band_candidates = []
     for band_deg in (float(angle_band_deg), max(float(angle_band_deg) * 2.0, 10.0)):
         if band_deg > 0:
             band_candidates.append(band_deg)
 
-    for band_deg in band_candidates:
-        left_angle = max(-half_fov, float(angle_deg) - band_deg / 2.0)
-        right_angle = min(half_fov, float(angle_deg) + band_deg / 2.0)
-        left_ratio = (left_angle + half_fov) / hfov_deg
-        right_ratio = (right_angle + half_fov) / hfov_deg
-        col_start = max(0, int(np.floor(left_ratio * (width - 1))))
-        col_end = min(width, int(np.ceil(right_ratio * (width - 1))) + 1)
-        if col_end <= col_start:
-            center_x = ((angle_deg + half_fov) / hfov_deg) * (width - 1)
-            center_col = int(round(center_x))
-            col_start = max(0, center_col - 1)
-            col_end = min(width, center_col + 2)
+    row_bands = [
+        (float(row_start_ratio), float(row_end_ratio)),
+        (max(float(row_start_ratio), 0.55), 0.98),
+    ]
+    best_distance = None
+    for row_start_ratio_i, row_end_ratio_i in row_bands:
+        row_start = max(0, min(height - 1, int(height * row_start_ratio_i)))
+        row_end = max(row_start + 1, min(height, int(height * row_end_ratio_i)))
+        for band_deg in band_candidates:
+            left_angle = max(-half_fov, float(angle_deg) - band_deg / 2.0)
+            right_angle = min(half_fov, float(angle_deg) + band_deg / 2.0)
+            left_ratio = (left_angle + half_fov) / hfov_deg
+            right_ratio = (right_angle + half_fov) / hfov_deg
+            col_start = max(0, int(np.floor(left_ratio * (width - 1))))
+            col_end = min(width, int(np.ceil(right_ratio * (width - 1))) + 1)
+            if col_end <= col_start:
+                center_x = ((angle_deg + half_fov) / hfov_deg) * (width - 1)
+                center_col = int(round(center_x))
+                col_start = max(0, center_col - 1)
+                col_end = min(width, center_col + 2)
 
-        window = depth[row_start:row_end, col_start:col_end]
-        valid = window[np.isfinite(window) & (window > 0.02)]
-        if valid.size == 0:
-            continue
+            window = depth[row_start:row_end, col_start:col_end]
+            valid = window[np.isfinite(window) & (window > 0.02)]
+            if valid.size == 0:
+                continue
 
-        clipped = valid[valid <= max_distance_m]
-        if clipped.size == 0:
-            return max_distance_m + 0.1
-        return float(np.percentile(clipped, sample_percentile))
+            clipped = valid[valid <= max_distance_m]
+            candidate = max_distance_m + 0.1 if clipped.size == 0 else float(np.percentile(clipped, sample_percentile))
+            if best_distance is None or candidate < best_distance:
+                best_distance = candidate
 
-    return None
+    return best_distance
 
 
 def calculate_obstacle_distances_from_depth(
@@ -187,6 +216,7 @@ def calculate_obstacle_distances_from_depth(
     angle_band_deg: float = 5.0,
     fallback_distances: Optional[Dict[str, str]] = None,
     default_distance: str = ">2.0m open",
+    conservative_map_distance_m: float = 1.5,
 ) -> Dict[str, str]:
     """Calculate lightweight action-side obstacle distances from the current depth frame."""
     direction_map = directions or ACTION_VIEW_DIRECTIONS
@@ -199,10 +229,18 @@ def calculate_obstacle_distances_from_depth(
             max_distance_m=max_distance_m,
             angle_band_deg=angle_band_deg,
         )
-        if distance_m is None:
-            distances[key] = (fallback_distances or {}).get(key, default_distance)
-        else:
-            distances[key] = format_distance(distance_m)
+        fallback_text = (fallback_distances or {}).get(key, default_distance)
+        fallback_distance_m = _parse_distance_text_m(fallback_text)
+        chosen_distance_m = distance_m
+        if chosen_distance_m is None:
+            distances[key] = fallback_text
+            continue
+        if (
+            fallback_distance_m is not None and
+            fallback_distance_m <= float(conservative_map_distance_m)
+        ):
+            chosen_distance_m = min(float(chosen_distance_m), float(fallback_distance_m))
+        distances[key] = format_distance(chosen_distance_m)
     return distances
 
 

@@ -8,7 +8,7 @@ controller stays focused on orchestration instead of per-image rendering.
 import os
 import math
 from types import SimpleNamespace
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -311,32 +311,16 @@ class ThinkingViewRenderer:
         return False
 
     @classmethod
-    def _visible_view_angles_for_waypoint(
+    def _assigned_view_angle_for_waypoint(
         cls,
         entry: Dict[str, Any],
         view_angles_deg: List[float],
-    ) -> List[float]:
+    ) -> Optional[float]:
         if not view_angles_deg:
-            return []
-
-        distance_m = float(entry.get("distance_m", 0.0))
-        if distance_m <= 1e-6:
-            return []
-
+            return None
         view_angle_deg = cls._normalize_angle_deg(float(entry.get("view_angle_deg", 0.0)))
-        ratio = min(1.0, cls.WAYPOINT_VISIBILITY_RADIUS_M / max(distance_m, cls.WAYPOINT_VISIBILITY_RADIUS_M))
-        half_span_deg = math.degrees(math.asin(ratio))
-        max_view_delta = (cls.VIEW_HFOV_DEG / 2.0) + half_span_deg
-        visible_angles = [
-            float(angle)
-            for angle in view_angles_deg
-            if abs(cls._angle_delta_deg(float(angle), view_angle_deg)) <= max_view_delta
-        ]
-        if visible_angles:
-            return visible_angles
-
         nearest = cls._nearest_view_angle(view_angle_deg, view_angles_deg)
-        return [float(nearest)] if nearest is not None else []
+        return float(nearest) if nearest is not None else None
 
     @classmethod
     def _apply_waypoint_visibility(
@@ -359,10 +343,13 @@ class ThinkingViewRenderer:
         filtered_entries: List[Dict[str, Any]] = []
         for entry in waypoint_entries:
             if bool(entry.get("is_current_area")):
-                filtered_entries.append(dict(entry))
+                updated_entry = dict(entry)
+                assigned_view_angle = cls._assigned_view_angle_for_waypoint(updated_entry, view_angles_deg)
+                if assigned_view_angle is not None:
+                    updated_entry["assigned_view_angle"] = float(assigned_view_angle)
+                filtered_entries.append(updated_entry)
                 continue
 
-            visible_view_angles: List[float] = []
             if obstacle_mask is not None and projector is not None and current_pose is not None:
                 if cls._has_visible_waypoint_ray(
                     entry=entry,
@@ -371,13 +358,12 @@ class ThinkingViewRenderer:
                     current_pose=current_pose,
                     resolution_cm=resolution_cm,
                 ):
-                    visible_view_angles = cls._visible_view_angles_for_waypoint(entry, view_angles_deg)
-            if not visible_view_angles:
-                continue
-
-            updated_entry = dict(entry)
-            updated_entry["visible_view_angles"] = list(visible_view_angles)
-            filtered_entries.append(updated_entry)
+                    updated_entry = dict(entry)
+                    assigned_view_angle = cls._assigned_view_angle_for_waypoint(updated_entry, view_angles_deg)
+                    if assigned_view_angle is None:
+                        continue
+                    updated_entry["assigned_view_angle"] = float(assigned_view_angle)
+                    filtered_entries.append(updated_entry)
 
         return filtered_entries
 
@@ -412,18 +398,14 @@ class ThinkingViewRenderer:
             return assignments
 
         for entry in waypoint_entries:
-            visible_view_angles = [float(angle) for angle in entry.get("visible_view_angles", [])]
-            if visible_view_angles:
-                for visible_angle in visible_view_angles:
-                    assignments.setdefault(float(visible_angle), []).append(dict(entry))
-                continue
-
-            entry_view_angle = cls._normalize_angle_deg(float(entry.get("view_angle_deg", 0.0)))
-            assigned_angle = (
-                entry_view_angle
-                if any(abs(entry_view_angle - float(angle)) < 1e-3 for angle in view_angles_deg)
-                else cls._nearest_view_angle(entry_view_angle, view_angles_deg)
-            )
+            assigned_angle = entry.get("assigned_view_angle")
+            if assigned_angle is None:
+                entry_view_angle = cls._normalize_angle_deg(float(entry.get("view_angle_deg", 0.0)))
+                assigned_angle = (
+                    entry_view_angle
+                    if any(abs(entry_view_angle - float(angle)) < 1e-3 for angle in view_angles_deg)
+                    else cls._nearest_view_angle(entry_view_angle, view_angles_deg)
+                )
             if assigned_angle is None:
                 continue
             assignments.setdefault(float(assigned_angle), []).append(dict(entry))
@@ -672,7 +654,7 @@ class ThinkingViewRenderer:
         full_map: Optional[np.ndarray],
         crop_offset: Optional[Tuple[int, int]],
         waypoint_angle_deg: Optional[float],
-        draw_waypoints_fn: Callable[[np.ndarray, float, tuple], np.ndarray],
+        draw_waypoints_fn: Callable[[np.ndarray, Dict[str, Any]], np.ndarray],
         detection_topk: int = THINKING_DETECTION_TOPK,
     ) -> Tuple[List[str], List[str]]:
         os.makedirs(directions_dir, exist_ok=True)
@@ -700,12 +682,6 @@ class ThinkingViewRenderer:
             waypoint_entries=waypoint_entries,
             view_angles_deg=view_angles,
         )
-        waypoint_marker_view_angles: Set[float] = set()
-        for entry in waypoint_entries:
-            if bool(entry.get("is_last_visited")):
-                waypoint_marker_view_angles.update(
-                    float(angle) for angle in entry.get("visible_view_angles", [])
-                )
 
         for config in DIRECTION_CONFIG:
             step_idx = config["step"]
@@ -741,9 +717,6 @@ class ThinkingViewRenderer:
             dist_str = distance_lookup.get(dist_key, "Unknown")
             image = draw_distance_fn(image, dist_str)
 
-            if waypoint_info and float(angle) in waypoint_marker_view_angles:
-                image = draw_waypoints_fn(image, angle, waypoint_info)
-
             _h, width = image.shape[:2]
             top_label = self._build_text_strip(
                 width,
@@ -754,6 +727,12 @@ class ThinkingViewRenderer:
                 text_color=(0, 0, 255),
             )
             view_waypoint_entries = list(waypoint_entries_by_view.get(float(angle), []))
+            marker_entry = next(
+                (entry for entry in view_waypoint_entries if bool(entry.get("is_last_visited"))),
+                None,
+            )
+            if marker_entry is not None:
+                image = draw_waypoints_fn(image, marker_entry)
             bottom_lines = self._build_bottom_strip_lines(
                 visible_entries_meta=visible_entries_meta,
                 waypoint_entries=view_waypoint_entries,
