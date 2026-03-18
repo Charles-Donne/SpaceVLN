@@ -291,6 +291,8 @@ class SemanticMapper:
             full_map=self.full_map,
             full_pose=self.full_pose,
             crop_offset=crop_offset,
+            waypoint_positions=self.waypoint_positions,
+            waypoint_area_labels=self.waypoint_manager.area_labels,
         )
 
 

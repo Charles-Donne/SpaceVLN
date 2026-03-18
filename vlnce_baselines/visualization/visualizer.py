@@ -172,9 +172,6 @@ class MapVisualizer:
         color: Tuple[int, int, int],
     ) -> None:
         largest_contour = max(contours, key=cv2.contourArea)
-        if cv2.contourArea(largest_contour) < 120.0:
-            return
-
         moments = cv2.moments(largest_contour)
         if abs(moments["m00"]) < 1e-6:
             return
@@ -1110,47 +1107,15 @@ class MapVisualizer:
                               depth_img: np.ndarray,
                               hfov: float,
                               sample_stride: int = 4,
-                              landmark_name: Optional[str] = None) -> Optional[Tuple[float, float]]:
+                              landmark_name: Optional[str] = None,
+                              return_profile: bool = False):
         """用 mask+depth 估计目标在 agent 坐标系中的前向/右向位置。"""
-        if mask_2d is None or depth_img is None:
+        profile = self._analyze_mask_depth_profile(mask_2d, depth_img, landmark_name=landmark_name)
+        sample_mask = profile.get("sample_mask")
+        if sample_mask is None or not np.any(sample_mask):
+            if return_profile:
+                return None, profile
             return None
-
-        if mask_2d.shape != depth_img.shape:
-            mask_2d = cv2.resize(
-                mask_2d.astype(np.float32),
-                (depth_img.shape[1], depth_img.shape[0]),
-                interpolation=cv2.INTER_NEAREST,
-            )
-
-        mask_bool = mask_2d > 0.5
-        valid_mask = mask_bool & np.isfinite(depth_img) & (depth_img > 0.02)
-        if not np.any(valid_mask):
-            return None
-
-        sample_mask = valid_mask
-        if mask_bool.sum() >= 36:
-            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-            interior_mask = cv2.erode(mask_bool.astype(np.uint8), kernel, iterations=1) > 0
-            interior_valid = interior_mask & valid_mask
-            edge_valid = valid_mask & (~interior_mask)
-
-            if np.count_nonzero(interior_valid) >= 24 and np.count_nonzero(edge_valid) >= 24:
-                edge_depth = depth_img[edge_valid].astype(np.float32)
-                interior_depth = depth_img[interior_valid].astype(np.float32)
-                edge_median = float(np.median(edge_depth))
-                interior_median = float(np.median(interior_depth))
-                opening_gap_m = interior_median - edge_median
-                opening_gap_threshold = max(0.6, 0.35 * max(edge_median, 0.1))
-                landmark_text = str(landmark_name or "").strip().lower()
-                keyword_forced_edge = (
-                    landmark_text and
-                    any(keyword in landmark_text for keyword in landmark_edge_depth_keywords) and
-                    opening_gap_m >= float(landmark_edge_depth_min_gap_m)
-                )
-                if keyword_forced_edge or opening_gap_m >= opening_gap_threshold:
-                    # Opening-like structures (doorways / hallways) are often much deeper
-                    # in the center than at the frame edges, so use edge geometry instead.
-                    sample_mask = edge_valid
 
         ys, xs = np.nonzero(sample_mask)
         if sample_stride > 1 and ys.size > sample_stride:
@@ -1165,11 +1130,91 @@ class MapVisualizer:
         xc = (w_img - 1) / 2.0
         focal = (w_img / 2.0) / np.tan(np.deg2rad(float(hfov)) / 2.0)
         if focal <= 1e-6:
+            if return_profile:
+                return None, profile
             return None
 
         right_vals = ((xs.astype(np.float32) - xc) * depth_vals) / float(focal)
         forward_vals = depth_vals
-        return float(np.median(forward_vals)), float(np.median(right_vals))
+        rel_xy = (float(np.median(forward_vals)), float(np.median(right_vals)))
+        if return_profile:
+            return rel_xy, profile
+        return rel_xy
+
+    def _analyze_mask_depth_profile(
+        self,
+        mask_2d: np.ndarray,
+        depth_img: np.ndarray,
+        landmark_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        profile: Dict[str, Any] = {
+            "sample_mask": None,
+            "is_opening_like": False,
+            "used_edge_geometry": False,
+            "edge_depth_median": None,
+            "interior_depth_median": None,
+            "opening_gap_m": None,
+            "opening_gap_threshold_m": None,
+        }
+        if mask_2d is None or depth_img is None:
+            return profile
+
+        if mask_2d.shape != depth_img.shape:
+            mask_2d = cv2.resize(
+                mask_2d.astype(np.float32),
+                (depth_img.shape[1], depth_img.shape[0]),
+                interpolation=cv2.INTER_NEAREST,
+            )
+
+        mask_bool = mask_2d > 0.5
+        valid_mask = mask_bool & np.isfinite(depth_img) & (depth_img > 0.02)
+        if not np.any(valid_mask):
+            return profile
+
+        sample_mask = valid_mask
+        is_opening_like = False
+        used_edge_geometry = False
+        edge_median = None
+        interior_median = None
+        opening_gap_m = None
+        opening_gap_threshold = None
+
+        if mask_bool.sum() >= 36:
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+            interior_mask = cv2.erode(mask_bool.astype(np.uint8), kernel, iterations=1) > 0
+            interior_valid = interior_mask & valid_mask
+            edge_valid = valid_mask & (~interior_mask)
+
+            if np.count_nonzero(interior_valid) >= 24 and np.count_nonzero(edge_valid) >= 24:
+                edge_depth = depth_img[edge_valid].astype(np.float32)
+                interior_depth = depth_img[interior_valid].astype(np.float32)
+                edge_median = float(np.median(edge_depth))
+                interior_median = float(np.median(interior_depth))
+                opening_gap_m = float(interior_median - edge_median)
+                opening_gap_threshold = float(max(0.6, 0.35 * max(edge_median, 0.1)))
+                landmark_text = str(landmark_name or "").strip().lower()
+                keyword_forced_edge = (
+                    landmark_text and
+                    any(keyword in landmark_text for keyword in landmark_edge_depth_keywords) and
+                    opening_gap_m >= float(landmark_edge_depth_min_gap_m)
+                )
+                is_opening_like = bool(keyword_forced_edge or opening_gap_m >= opening_gap_threshold)
+                if is_opening_like:
+                    # Opening-like structures (doorways / hallways) are often much deeper
+                    # in the center than at the frame edges, so use edge geometry instead.
+                    sample_mask = edge_valid
+                    used_edge_geometry = True
+
+        profile.update({
+            "sample_mask": sample_mask,
+            "is_opening_like": bool(is_opening_like),
+            "used_edge_geometry": bool(used_edge_geometry),
+            "edge_depth_median": edge_median,
+            "interior_depth_median": interior_median,
+            "opening_gap_m": opening_gap_m,
+            "opening_gap_threshold_m": opening_gap_threshold,
+        })
+        return profile
 
     def _project_landmark_instances_from_detections(self,
                                                     detections,
@@ -1201,11 +1246,12 @@ class MapVisualizer:
             det_mask = None
             if getattr(detections, 'mask', None) is not None and i < len(detections.mask):
                 det_mask = detections.mask[i]
-            rel_xy = self._estimate_mask_rel_xy(
+            rel_xy, depth_profile = self._estimate_mask_rel_xy(
                 det_mask,
                 depth_meters,
                 hfov,
                 landmark_name=matched_landmark,
+                return_profile=True,
             )
             if rel_xy is None:
                 continue
@@ -1231,6 +1277,12 @@ class MapVisualizer:
                 "world_y_m": float(world_y_m),
                 "bbox": (x1, y1, x2, y2),
                 "det_rel_xy": (float(rel_xy[0]), float(rel_xy[1])),
+                "is_opening_like": bool(depth_profile.get("is_opening_like", False)),
+                "used_edge_geometry": bool(depth_profile.get("used_edge_geometry", False)),
+                "opening_gap_m": depth_profile.get("opening_gap_m"),
+                "edge_depth_median": depth_profile.get("edge_depth_median"),
+                "interior_depth_median": depth_profile.get("interior_depth_median"),
+                "stop_distance_m": 0.5 if bool(depth_profile.get("is_opening_like", False)) else 1.0,
                 "observation_count": 1,
                 "weight_sum": max(float(confidence), 1e-3),
             })
@@ -1315,6 +1367,24 @@ class MapVisualizer:
                 refreshed["confidence"] = max(
                     float(old.get("confidence", 0.0)),
                     float(inst.get("confidence", 0.0)),
+                )
+                refreshed["is_opening_like"] = bool(
+                    old.get("is_opening_like", False) or inst.get("is_opening_like", False)
+                )
+                refreshed["used_edge_geometry"] = bool(
+                    old.get("used_edge_geometry", False) or inst.get("used_edge_geometry", False)
+                )
+                old_gap = old.get("opening_gap_m")
+                new_gap = inst.get("opening_gap_m")
+                if old_gap is None:
+                    refreshed["opening_gap_m"] = new_gap
+                elif new_gap is None:
+                    refreshed["opening_gap_m"] = old_gap
+                else:
+                    refreshed["opening_gap_m"] = max(float(old_gap), float(new_gap))
+                refreshed["stop_distance_m"] = min(
+                    float(old.get("stop_distance_m", 1.0)),
+                    float(inst.get("stop_distance_m", 1.0)),
                 )
                 refreshed["observation_count"] = int(old.get("observation_count", 1)) + int(inst.get("observation_count", 1))
                 refreshed["weight_sum"] = total_weight
@@ -1592,6 +1662,12 @@ class MapVisualizer:
                         "distance_m": float(distance_m),
                         "angle_deg": float(angle_deg),
                         "confidence": float(inst.get("confidence", 0.0)),
+                        "is_opening_like": bool(inst.get("is_opening_like", False)),
+                        "used_edge_geometry": bool(inst.get("used_edge_geometry", False)),
+                        "opening_gap_m": inst.get("opening_gap_m"),
+                        "edge_depth_median": inst.get("edge_depth_median"),
+                        "interior_depth_median": inst.get("interior_depth_median"),
+                        "stop_distance_m": float(inst.get("stop_distance_m", 1.0)),
                     })
             elif landmark_dist_map_multi:
                 for cls_name, candidates in landmark_dist_map_multi.items():
@@ -1717,12 +1793,14 @@ class MapVisualizer:
             if getattr(detections, "mask", None) is not None and i < len(detections.mask):
                 det_mask = detections.mask[i]
             det_rel_xy = None
+            det_depth_profile: Dict[str, Any] = {}
             if det_mask is not None and depth_for_match is not None:
-                det_rel_xy = self._estimate_mask_rel_xy(
+                det_rel_xy, det_depth_profile = self._estimate_mask_rel_xy(
                     det_mask,
                     depth_for_match,
                     hfov,
                     landmark_name=label_name,
+                    return_profile=True,
                 )
             world_xy = self._rel_xy_to_world_xy(det_rel_xy, current_pose)
 
@@ -1736,6 +1814,12 @@ class MapVisualizer:
                 "current_pose": current_pose,
                 "world_x_m": float(world_xy[0]) if world_xy is not None else None,
                 "world_y_m": float(world_xy[1]) if world_xy is not None else None,
+                "is_opening_like": bool(det_depth_profile.get("is_opening_like", False)),
+                "used_edge_geometry": bool(det_depth_profile.get("used_edge_geometry", False)),
+                "opening_gap_m": det_depth_profile.get("opening_gap_m"),
+                "edge_depth_median": det_depth_profile.get("edge_depth_median"),
+                "interior_depth_median": det_depth_profile.get("interior_depth_median"),
+                "stop_distance_m": 0.5 if bool(det_depth_profile.get("is_opening_like", False)) else 1.0,
             })
 
         selected_entries = self._dedupe_detection_candidates(
@@ -1832,6 +1916,12 @@ class MapVisualizer:
                     "distance_m": float(shown_dist_m),
                     "angle_deg": float(shown_angle_deg),
                     "instance_idx": map_instance_idx,
+                    "is_opening_like": bool(candidate.get("is_opening_like", False)),
+                    "used_edge_geometry": bool(candidate.get("used_edge_geometry", False)),
+                    "opening_gap_m": candidate.get("opening_gap_m"),
+                    "edge_depth_median": candidate.get("edge_depth_median"),
+                    "interior_depth_median": candidate.get("interior_depth_median"),
+                    "stop_distance_m": float(candidate.get("stop_distance_m", 1.0)),
                 })
             draw_items.append(
                 LandmarkDrawItem(

@@ -17,9 +17,9 @@ class RoomAreaManager:
     CONNECTOR_ROOM_TYPES = {"hallway", "entryway"}
     MAX_CONNECTED_AREAS = 3
     MAX_CONNECTION_DISTANCE_M = 3.0
-    MAX_CONNECTOR_MERGE_DISTANCE_M = 3.0
+    MAX_SAME_TYPE_WAYPOINT_MERGE_DISTANCE_M = 5.0
     SAMPLE_PIXELS_PER_AREA = 9
-    CURRENT_AREA_CENTER_TOLERANCE_PX = 1.5
+    CURRENT_AREA_WAYPOINT_MAX_DISTANCE_M = 1.25
 
     def __init__(self, map_shape: Tuple[int, int], resolution: int = 5):
         self.map_shape = map_shape
@@ -79,6 +79,7 @@ class RoomAreaManager:
                 key=lambda record: (int(record["variant"]), int(record["id"])),
             )
             merged_record["pixels"].update(world_pixels)
+            merged_record.setdefault("waypoint_points", set()).add((int(pixel_y), int(pixel_x)))
             merged_record["center_world_px"] = (int(pixel_y), int(pixel_x))
             merged_record["description"] = description
 
@@ -86,6 +87,9 @@ class RoomAreaManager:
                 if extra_record is merged_record:
                     continue
                 merged_record["pixels"].update(extra_record["pixels"])
+                merged_record.setdefault("waypoint_points", set()).update(
+                    set(extra_record.get("waypoint_points", set()) or set())
+                )
                 self._register_label_alias(
                     old_label=str(extra_record["label"]),
                     new_label=str(merged_record["label"]),
@@ -94,7 +98,11 @@ class RoomAreaManager:
 
             self.current_room_area_label = str(merged_record["label"])
             self.current_room_area_type = str(merged_record["room_type"])
-            return str(merged_record["label"])
+            self._consolidate_same_type_records(
+                obstacle_mask=obstacle_mask,
+                projector=projector,
+            )
+            return self._resolve_label_alias(str(merged_record["label"]))
 
         existing_variants = [
             int(record["variant"])
@@ -112,27 +120,41 @@ class RoomAreaManager:
             "variant": variant,
             "center_world_px": (int(pixel_y), int(pixel_x)),
             "pixels": set(world_pixels),
+            "waypoint_points": {(int(pixel_y), int(pixel_x))},
             "description": description,
         }
         self.room_area_records.append(record)
         self.current_room_area_label = label
         self.current_room_area_type = room_type
-        return label
+        self._consolidate_same_type_records(
+            obstacle_mask=obstacle_mask,
+            projector=projector,
+        )
+        return self._resolve_label_alias(label)
 
     def build_layer(
         self,
         full_map: Optional[np.ndarray],
         full_pose: Optional[Sequence[float]],
         crop_offset: Optional[Tuple[int, int]],
+        waypoint_positions: Optional[Sequence[Tuple[int, int]]] = None,
+        waypoint_area_labels: Optional[Sequence[str]] = None,
     ) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
         if full_map is None:
             self._set_unknown_current_area()
             return np.zeros(self.map_shape, dtype=np.int32), []
 
+        obstacle_mask = np.asarray(full_map[0] > 0.5, dtype=bool)
+        self._consolidate_same_type_records(
+            obstacle_mask=obstacle_mask,
+            projector=self._build_projector(full_map, full_pose, crop_offset),
+        )
         self._maintain_current_area_with_pose(
             full_map=full_map,
             full_pose=full_pose,
             crop_offset=crop_offset,
+            waypoint_positions=waypoint_positions,
+            waypoint_area_labels=waypoint_area_labels,
         )
 
         h_map, w_map = full_map.shape[1], full_map.shape[2]
@@ -170,8 +192,96 @@ class RoomAreaManager:
                     best_distance[row, col] = dist
                     layer[row, col] = int(record["id"])
 
-        self._set_current_room_area_from_layer(layer, full_pose, projector)
+        self._set_current_room_area_from_layer(
+            layer=layer,
+            full_pose=full_pose,
+            projector=projector,
+            waypoint_positions=waypoint_positions,
+            waypoint_area_labels=waypoint_area_labels,
+        )
         return layer, area_records
+
+    def _consolidate_same_type_records(
+        self,
+        obstacle_mask: Optional[np.ndarray] = None,
+        projector: Optional[RotatedMapProjector] = None,
+    ) -> None:
+        """Merge any same-type area records that now overlap or touch."""
+        changed = True
+        while changed:
+            changed = False
+            for idx, record in enumerate(list(self.room_area_records)):
+                for other in self.room_area_records[idx + 1:]:
+                    if record.get("room_key") != other.get("room_key"):
+                        continue
+                    should_merge = (
+                        self._pixel_sets_overlap(record.get("pixels", set()), other.get("pixels", set()))
+                        or self._pixel_sets_are_adjacent(record.get("pixels", set()), other.get("pixels", set()))
+                    )
+                    if (
+                        not should_merge
+                        and obstacle_mask is not None
+                        and projector is not None
+                    ):
+                        should_merge = self._records_have_waypoint_connection(
+                            record_a=record,
+                            record_b=other,
+                            obstacle_mask=obstacle_mask,
+                            projector=projector,
+                            max_distance_m=self.MAX_SAME_TYPE_WAYPOINT_MERGE_DISTANCE_M,
+                        )
+                    if not should_merge:
+                        continue
+                    primary, secondary = sorted(
+                        (record, other),
+                        key=lambda item: (int(item.get("variant", 0)), int(item.get("id", 0))),
+                    )
+                    self._merge_room_area_records(primary, secondary)
+                    changed = True
+                    break
+                if changed:
+                    break
+
+        resolved_current = self._resolve_label_alias(self.current_room_area_label)
+        if resolved_current and resolved_current != "Unknown":
+            current_record = next(
+                (
+                    item for item in self.room_area_records
+                    if str(item.get("label", "")) == resolved_current
+                ),
+                None,
+            )
+            if current_record is not None:
+                self._set_current_area_from_record(current_record)
+
+    def _merge_room_area_records(
+        self,
+        primary: Dict[str, Any],
+        secondary: Dict[str, Any],
+    ) -> None:
+        primary["pixels"].update(secondary.get("pixels", set()))
+        primary.setdefault("waypoint_points", set()).update(
+            set(secondary.get("waypoint_points", set()) or set())
+        )
+        primary["description"] = str(primary.get("description") or secondary.get("description") or "")
+        primary["center_world_px"] = self._compute_record_center_from_pixels(primary)
+        self._register_label_alias(
+            old_label=str(secondary.get("label", "")),
+            new_label=str(primary.get("label", "")),
+        )
+        if secondary in self.room_area_records:
+            self.room_area_records.remove(secondary)
+
+    @staticmethod
+    def _compute_record_center_from_pixels(record: Dict[str, Any]) -> Tuple[int, int]:
+        pixels = list(record.get("pixels", set()) or [])
+        if not pixels:
+            center = record.get("center_world_px", (0, 0))
+            return int(center[0]), int(center[1])
+
+        rows = np.asarray([pixel[0] for pixel in pixels], dtype=np.float32)
+        cols = np.asarray([pixel[1] for pixel in pixels], dtype=np.float32)
+        return int(round(float(rows.mean()))), int(round(float(cols.mean())))
 
     @staticmethod
     def _parse_room_type(description: str) -> str:
@@ -215,22 +325,18 @@ class RoomAreaManager:
             return True
         if self._pixel_sets_are_adjacent(existing_pixels, new_pixels):
             return True
-        if (
-            str(existing_record.get("room_type", ""))
-            not in self.CONNECTOR_ROOM_TYPES
-            or projector is None
-            or obstacle_mask is None
-        ):
+        if projector is None or obstacle_mask is None:
             return False
-        max_distance_px = (self.MAX_CONNECTOR_MERGE_DISTANCE_M * 100.0) / float(self.resolution)
-        return self._pixel_sets_have_clear_connection(
-            pixels_a=existing_pixels,
-            center_a=tuple(existing_record.get("center_world_px", new_center_world_px)),
-            pixels_b=new_pixels,
-            center_b=new_center_world_px,
+
+        return self._records_have_waypoint_connection(
+            record_a=existing_record,
+            record_b={
+                "center_world_px": new_center_world_px,
+                "waypoint_points": {tuple(new_center_world_px)},
+            },
             obstacle_mask=obstacle_mask,
             projector=projector,
-            max_distance_px=max_distance_px,
+            max_distance_m=self.MAX_SAME_TYPE_WAYPOINT_MERGE_DISTANCE_M,
         )
 
     @staticmethod
@@ -371,6 +477,8 @@ class RoomAreaManager:
         layer: np.ndarray,
         full_pose: Optional[Sequence[float]],
         projector: RotatedMapProjector,
+        waypoint_positions: Optional[Sequence[Tuple[int, int]]] = None,
+        waypoint_area_labels: Optional[Sequence[str]] = None,
     ) -> None:
         if full_pose is None or not self.room_area_records:
             self._set_unknown_current_area()
@@ -389,23 +497,25 @@ class RoomAreaManager:
                         (record for record in self.room_area_records if int(record["id"]) == area_id),
                         None,
                     )
-                    if current_record is not None:
+                    if current_record is not None and self._record_has_nearby_area_waypoint(
+                        record=current_record,
+                        pixel_y=curr_py,
+                        pixel_x=curr_px,
+                        waypoint_positions=waypoint_positions,
+                        waypoint_area_labels=waypoint_area_labels,
+                    ):
                         self.current_room_area_label = str(current_record["label"])
                         self.current_room_area_type = str(current_record["room_type"])
                         return
 
-        containing_record = self._find_record_containing_pixel(curr_py, curr_px)
-        if containing_record is not None:
-            self._set_current_area_from_record(containing_record)
-            return
-
-        centered_record = self._find_record_near_center(
+        containing_record = self._find_current_record_from_waypoints(
             pixel_y=curr_py,
             pixel_x=curr_px,
-            max_distance_px=float(self.CURRENT_AREA_CENTER_TOLERANCE_PX),
+            waypoint_positions=waypoint_positions,
+            waypoint_area_labels=waypoint_area_labels,
         )
-        if centered_record is not None:
-            self._set_current_area_from_record(centered_record)
+        if containing_record is not None:
+            self._set_current_area_from_record(containing_record)
             return
 
         self._set_unknown_current_area()
@@ -419,6 +529,8 @@ class RoomAreaManager:
         full_map: Optional[np.ndarray],
         full_pose: Optional[Sequence[float]],
         crop_offset: Optional[Tuple[int, int]],
+        waypoint_positions: Optional[Sequence[Tuple[int, int]]] = None,
+        waypoint_area_labels: Optional[Sequence[str]] = None,
     ) -> None:
         if full_map is None or full_pose is None or not self.room_area_records:
             self._set_unknown_current_area()
@@ -427,23 +539,16 @@ class RoomAreaManager:
         curr_py = int(round(float(full_pose[1]) * 100.0 / float(self.resolution)))
         curr_px = int(round(float(full_pose[0]) * 100.0 / float(self.resolution)))
 
-        containing_record = self._find_record_containing_pixel(curr_py, curr_px)
+        containing_record = self._find_current_record_from_waypoints(
+            pixel_y=curr_py,
+            pixel_x=curr_px,
+            waypoint_positions=waypoint_positions,
+            waypoint_area_labels=waypoint_area_labels,
+        )
         if containing_record is not None:
             self._set_current_area_from_record(containing_record)
             return
 
-        centered_record = self._find_record_near_center(
-            pixel_y=curr_py,
-            pixel_x=curr_px,
-            max_distance_px=float(self.CURRENT_AREA_CENTER_TOLERANCE_PX),
-        )
-        if centered_record is not None:
-            self._set_current_area_from_record(centered_record)
-            return
-
-        # Do not auto-inherit or auto-expand the previous area during action-time
-        # motion. If the live pose is not inside any existing room-area region
-        # before the next thinking waypoint update, keep it Unknown.
         self._set_unknown_current_area()
 
     def _find_record_containing_pixel(
@@ -457,25 +562,64 @@ class RoomAreaManager:
                 return record
         return None
 
-    def _find_record_near_center(
+    def _find_current_record_from_waypoints(
         self,
         pixel_y: int,
         pixel_x: int,
-        max_distance_px: float,
+        waypoint_positions: Optional[Sequence[Tuple[int, int]]] = None,
+        waypoint_area_labels: Optional[Sequence[str]] = None,
     ) -> Optional[Dict[str, Any]]:
-        if max_distance_px <= 0:
+        containing_record = self._find_record_containing_pixel(pixel_y, pixel_x)
+        if containing_record is None:
             return None
-        best_record = None
-        best_distance = float("inf")
-        for record in reversed(self.room_area_records):
-            center_py, center_px = record.get("center_world_px", (None, None))
-            if center_py is None or center_px is None:
+        if self._record_has_nearby_area_waypoint(
+            record=containing_record,
+            pixel_y=pixel_y,
+            pixel_x=pixel_x,
+            waypoint_positions=waypoint_positions,
+            waypoint_area_labels=waypoint_area_labels,
+        ):
+            return containing_record
+        return None
+
+    def _record_has_nearby_area_waypoint(
+        self,
+        record: Dict[str, Any],
+        pixel_y: int,
+        pixel_x: int,
+        waypoint_positions: Optional[Sequence[Tuple[int, int]]],
+        waypoint_area_labels: Optional[Sequence[str]],
+    ) -> bool:
+        if not waypoint_positions:
+            return False
+
+        record_label = self._resolve_label_alias(str(record.get("label", "")).strip())
+        if not record_label:
+            return False
+
+        max_distance_px = (
+            self.CURRENT_AREA_WAYPOINT_MAX_DISTANCE_M * 100.0
+        ) / float(self.resolution)
+        area_labels = list(waypoint_area_labels or [])
+        record_pixels = set(record.get("pixels", set()) or [])
+
+        for index, waypoint_pos in enumerate(waypoint_positions):
+            if waypoint_pos is None:
                 continue
-            distance_px = float(np.hypot(float(pixel_y) - float(center_py), float(pixel_x) - float(center_px)))
-            if distance_px <= max_distance_px and distance_px < best_distance:
-                best_distance = distance_px
-                best_record = record
-        return best_record
+            waypoint_label = self._resolve_label_alias(
+                str(area_labels[index]).strip() if index < len(area_labels) else ""
+            )
+            if waypoint_label != record_label:
+                continue
+
+            wp_py, wp_px = int(waypoint_pos[0]), int(waypoint_pos[1])
+            if (wp_py, wp_px) not in record_pixels:
+                continue
+
+            distance_px = float(np.hypot(float(pixel_y) - float(wp_py), float(pixel_x) - float(wp_px)))
+            if distance_px <= max_distance_px + 1e-6:
+                return True
+        return False
 
     def _set_current_area_from_record(self, record: Dict[str, Any]) -> None:
         self.current_room_area_label = str(record.get("label", "Unknown") or "Unknown")
@@ -611,6 +755,44 @@ class RoomAreaManager:
             projector=projector,
             max_distance_px=max_distance_px,
         )
+
+    def _records_have_waypoint_connection(
+        self,
+        record_a: Dict[str, Any],
+        record_b: Dict[str, Any],
+        obstacle_mask: np.ndarray,
+        projector: RotatedMapProjector,
+        max_distance_m: float,
+    ) -> bool:
+        max_distance_px = (float(max_distance_m) * 100.0) / float(self.resolution)
+        waypoint_points_a = self._record_waypoint_points(record_a)
+        waypoint_points_b = self._record_waypoint_points(record_b)
+        for start_world in waypoint_points_a:
+            for end_world in waypoint_points_b:
+                if float(np.hypot(
+                    float(start_world[0]) - float(end_world[0]),
+                    float(start_world[1]) - float(end_world[1]),
+                )) > max_distance_px + 1e-6:
+                    continue
+                if self._world_line_is_clear(
+                    obstacle_mask=obstacle_mask,
+                    projector=projector,
+                    start_world=start_world,
+                    end_world=end_world,
+                ):
+                    return True
+        return False
+
+    @staticmethod
+    def _record_waypoint_points(record: Dict[str, Any]) -> List[Tuple[int, int]]:
+        waypoint_points = list(record.get("waypoint_points", set()) or [])
+        if waypoint_points:
+            return [
+                (int(point[0]), int(point[1]))
+                for point in waypoint_points
+            ]
+        center = record.get("center_world_px", (0, 0))
+        return [(int(center[0]), int(center[1]))]
 
     def _sample_record_pixels(self, record: Dict[str, Any]) -> List[Tuple[int, int]]:
         return self._sample_pixels(

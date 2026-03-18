@@ -374,49 +374,114 @@ def _build_waypoint_area_path_line(
     if not include_area_chain and not include_path:
         return None
 
-    node_labels: List[str] = []
-    node_points: List[Tuple[int, int]] = []
+    node_entries: List[Dict[str, Any]] = []
     for index, wp_id in enumerate(visible_waypoint_ids):
         area_label = (
             str(visible_waypoint_area_labels[index]).strip()
             if index < len(visible_waypoint_area_labels) else "Unknown"
         ) or "Unknown"
-        node_labels.append(_format_waypoint_area_ref(wp_id, area_label))
-        node_points.append(visible_waypoint_positions[index])
+        node_entries.append({
+            "area_label": area_label,
+            "token": f"WP#{int(wp_id)}",
+            "point": visible_waypoint_positions[index],
+            "is_current": False,
+        })
 
     if current_pose is not None:
         curr_py = int(round(float(current_pose[1]) * 100.0 / float(resolution_cm)))
         curr_px = int(round(float(current_pose[0]) * 100.0 / float(resolution_cm)))
-        node_labels.append(f"Current({current_area_display})")
-        node_points.append((curr_py, curr_px))
-    elif node_labels:
-        node_labels.append(f"Current({current_area_display})")
+        node_entries.append({
+            "area_label": current_area_display,
+            "token": "Current",
+            "point": (curr_py, curr_px),
+            "is_current": True,
+        })
+    elif node_entries:
+        node_entries.append({
+            "area_label": current_area_display,
+            "token": "Current",
+            "point": None,
+            "is_current": True,
+        })
 
-    if not node_labels:
+    if not node_entries:
         return "Space Waypoint Path: Current(Unknown)" if include_area_chain else None
-    if len(node_labels) == 1 or len(node_points) < 2:
-        return "Space Waypoint Path: " + " -> ".join(node_labels)
 
-    parts: List[str] = [node_labels[0]]
-    previous_heading_deg: Optional[float] = None
-    for index in range(len(node_points) - 1):
-        current_heading_deg = _segment_heading_deg(
-            start_point=node_points[index],
-            end_point=node_points[index + 1],
-            resolution_cm=resolution_cm,
-        )
-        if previous_heading_deg is not None:
-            turn_delta_deg = normalize_relative_bearing(previous_heading_deg - current_heading_deg)
-            turn_text = _format_turn_step(turn_delta_deg)
-            if turn_text:
-                parts.append(turn_text)
-        distance_m = _segment_distance_m(
-            start_point=node_points[index],
-            end_point=node_points[index + 1],
-            resolution_cm=resolution_cm,
-        )
-        parts.append(f" move {distance_m:.1f}m to {node_labels[index + 1]}")
-        previous_heading_deg = current_heading_deg
+    grouped_entries: List[Dict[str, Any]] = []
+    for node_index, entry in enumerate(node_entries):
+        area_label = str(entry.get("area_label", "Unknown") or "Unknown").strip() or "Unknown"
+        if (
+            grouped_entries
+            and area_label != "Unknown"
+            and area_label == grouped_entries[-1]["area_label"]
+        ):
+            grouped_entries[-1]["tokens"].append(str(entry.get("token", "")))
+            if entry.get("point") is not None:
+                grouped_entries[-1]["last_point"] = entry.get("point")
+            grouped_entries[-1]["has_current"] = (
+                grouped_entries[-1]["has_current"] or bool(entry.get("is_current", False))
+            )
+            continue
+
+        grouped_entries.append({
+            "area_label": area_label,
+            "tokens": [str(entry.get("token", ""))],
+            "first_point": entry.get("point"),
+            "last_point": entry.get("point"),
+            "has_current": bool(entry.get("is_current", False)),
+            "start_node_index": int(node_index),
+        })
+
+    def _format_group(entry: Dict[str, Any]) -> str:
+        area_label = str(entry.get("area_label", "Unknown") or "Unknown").strip() or "Unknown"
+        tokens = [token for token in entry.get("tokens", []) if token]
+        token_chain = "->".join(tokens)
+        if area_label == "Unknown" and tokens == ["Current"]:
+            return "Current(Unknown)"
+        if not token_chain:
+            return area_label
+        return f"{area_label} ({token_chain})"
+
+    if len(grouped_entries) == 1:
+        return "Space Waypoint Path: " + _format_group(grouped_entries[0])
+
+    parts: List[str] = [_format_group(grouped_entries[0])]
+    for index in range(1, len(grouped_entries)):
+        prev_entry = grouped_entries[index - 1]
+        curr_entry = grouped_entries[index]
+        prev_point = prev_entry.get("last_point")
+        curr_point = curr_entry.get("first_point")
+        prev_group_start = int(prev_entry.get("start_node_index", max(index - 1, 0)))
+        prev_group_len = len(prev_entry.get("tokens", []))
+        prev_group_end = prev_group_start + max(prev_group_len - 1, 0)
+
+        if prev_group_end >= 1 and prev_group_end < len(node_entries) and prev_point is not None and curr_point is not None:
+            prior_point = node_entries[prev_group_end - 1].get("point")
+            if prior_point is not None:
+                previous_heading_deg = _segment_heading_deg(
+                    start_point=prior_point,
+                    end_point=prev_point,
+                    resolution_cm=resolution_cm,
+                )
+                current_heading_deg = _segment_heading_deg(
+                    start_point=prev_point,
+                    end_point=curr_point,
+                    resolution_cm=resolution_cm,
+                )
+                turn_delta_deg = normalize_relative_bearing(previous_heading_deg - current_heading_deg)
+                turn_text = _format_turn_step(turn_delta_deg)
+                if turn_text:
+                    parts.append(turn_text)
+        if prev_point is not None and curr_point is not None:
+            distance_m = _segment_distance_m(
+                start_point=prev_point,
+                end_point=curr_point,
+                resolution_cm=resolution_cm,
+            )
+            parts.append(f" move {distance_m:.1f}m to ")
+        else:
+            parts.append(" -> ")
+        parts.append(_format_group(curr_entry))
 
     return "Space Waypoint Path: " + "".join(parts)
 

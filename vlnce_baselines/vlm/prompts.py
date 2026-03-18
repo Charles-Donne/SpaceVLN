@@ -68,7 +68,7 @@ E) Choose: most likely task-relevant space/object > visible target/landmark > pl
 
 {{
     "reasoning": "<6 parts REQUIRED, concise: 1)12-Views(IMAGE 1-12 in order; mention only visible evidence, omit empty items, mention space waypoint markers only if shown), 2)Global Map, 3)Current position + final goal + task chain(✓→Current→unmarked), 4)Subtask destination + arrival, 5)Direction + near-term, 6)Long-term>",
-    "current_waypoint": "<Room | Nearby (<1m): obj1, obj2 | Connected (>2m): area1, area2>",
+    "current_waypoint": "<Room - nearby obj1, obj2>",
     "waypoint_sequence": "<Space waypoint chain: Current→Next→...→Goal. Mark (✓) passed only>",
     "task_progress": "<Completed✓ current(Current) future unmarked. ONE (Current) only>",
     "next_waypoint_direction": "<IMAGE 1-12>",
@@ -178,7 +178,7 @@ F) Choose: most likely task-relevant space/object from the space structure > vis
 
 {{
     "reasoning": "<6 parts REQUIRED, concise: 1)12-Views(IMAGE 1-12 in order; mention only visible evidence, omit empty items, mention space waypoint markers only if shown), 2)Global Map + Space Structure, 3)Current position + final goal + task chain(✓→Current→unmarked), 4)Subtask destination + arrival, 5)Direction + near-term, 6)Long-term>",
-    "current_waypoint": "<Room | Nearby (<1m): obj1, obj2 | Connected (>2m): area1, area2>",
+    "current_waypoint": "<Room - nearby obj1, obj2>",
     "waypoint_sequence": "<Space waypoint chain: Completed(✓)→Current→Next→Goal. Mark (✓) passed/at(<0.5m) only>",
     "task_progress": "<Completed✓ current(Current) future unmarked. ONE (Current) only. All✓+NO(Current)=complete>",
     "next_waypoint_direction": "<IMAGE 1-12>",

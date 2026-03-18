@@ -17,8 +17,6 @@ VLM Navigation Controller
 """
 import os
 import re
-import shutil
-import glob
 import cv2
 import json
 import numpy as np
@@ -39,6 +37,7 @@ from vlnce_baselines.vlm import (
     LLMPlanner, ActionExecutor, SaveManager, NavigationVisualizer
 )
 from vlnce_baselines.vlm.thinking_view_renderer import ThinkingViewRenderer
+from vlnce_baselines.config_system.constants import landmark_edge_depth_keywords
 from vlnce_baselines.visualization.obstacle_analysis import (
     calculate_obstacle_distances_from_depth,
 )
@@ -63,7 +62,8 @@ class VLMNavigationController(InteractiveNavigationController):
     注意：每次验证重规划前都会执行360°环视，以更新语义地图和当前位置的4方向观察
     """
 
-    ACTION_SUBTASK_AUTOCOMPLETE_DISTANCE_M = 0.5
+    ACTION_SUBTASK_AUTOCOMPLETE_OPEN_DISTANCE_M = 0.5
+    ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M = 1.0
     ACTION_SUBTASK_AUTOCOMPLETE_TOPK = 2
     
     def __init__(self, config: Config,
@@ -214,13 +214,17 @@ class VLMNavigationController(InteractiveNavigationController):
                     distance_m = float(entry.get('distance_m'))
                 except (TypeError, ValueError):
                     continue
-                if distance_m > float(self.ACTION_SUBTASK_AUTOCOMPLETE_DISTANCE_M):
+                is_opening_like = self._is_opening_like_landmark_entry(entry)
+                stop_distance_m = self._autocomplete_stop_distance_m(entry, is_opening_like=is_opening_like)
+                if distance_m > stop_distance_m:
                     continue
                 matches.append({
                     "name": str(entry.get('name') or candidate_names[0]),
                     "distance_m": distance_m,
                     "confidence": float(entry.get('confidence', 0.0) or 0.0),
                     "angle_deg": entry.get('angle_deg'),
+                    "is_opening_like": bool(is_opening_like),
+                    "stop_distance_m": float(stop_distance_m),
                 })
 
         if not matches:
@@ -234,6 +238,33 @@ class VLMNavigationController(InteractiveNavigationController):
             )
         )
         return matches[0]
+
+    def _is_opening_like_landmark_entry(self, entry: Optional[Dict[str, Any]]) -> bool:
+        if not entry:
+            return False
+        if bool(entry.get("is_opening_like", False)):
+            return True
+        name_text = str(entry.get("name", "") or "").strip().lower()
+        return bool(name_text and any(keyword in name_text for keyword in landmark_edge_depth_keywords))
+
+    def _autocomplete_stop_distance_m(
+        self,
+        entry: Optional[Dict[str, Any]],
+        is_opening_like: Optional[bool] = None,
+    ) -> float:
+        if entry:
+            raw_threshold = entry.get("stop_distance_m")
+            try:
+                threshold_m = float(raw_threshold)
+                if threshold_m > 0.0:
+                    return threshold_m
+            except (TypeError, ValueError):
+                pass
+
+        opening_like = self._is_opening_like_landmark_entry(entry) if is_opening_like is None else bool(is_opening_like)
+        if opening_like:
+            return float(self.ACTION_SUBTASK_AUTOCOMPLETE_OPEN_DISTANCE_M)
+        return float(self.ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M)
 
     def _get_current_subtask_landmark_candidates(self) -> List[str]:
         _dest_room, dest_object = self._parse_subtask_destination()
@@ -684,6 +715,36 @@ class VLMNavigationController(InteractiveNavigationController):
             return f"From {next_waypoint_direction} view, start, {body}"
         return cleaned
 
+    def _sanitize_current_waypoint_text(self, waypoint_text: Optional[str]) -> Optional[str]:
+        """Keep current_waypoint in compact `Space Type - nearby objects` form."""
+        if waypoint_text is None:
+            return None
+
+        cleaned = strip_space_type_variant_suffixes(str(waypoint_text)).strip()
+        if not cleaned:
+            return cleaned
+
+        parts = [part.strip() for part in cleaned.split("|") if part.strip()]
+        if not parts:
+            return cleaned
+
+        base = parts[0]
+        if " - " in base:
+            return base.strip()
+
+        nearby_part = ""
+        for part in parts[1:]:
+            if re.match(r"(?i)^connected\b", part):
+                continue
+            nearby_match = re.match(r"(?i)^nearby(?:\s*\([^)]*\))?\s*:\s*(.+)$", part)
+            if nearby_match:
+                nearby_part = nearby_match.group(1).strip(" ,;:-")
+                break
+
+        if nearby_part:
+            return f"{base} - {nearby_part}".strip()
+        return base.strip()
+
     def _sanitize_planner_response(self, response: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """Normalize planner outputs while keeping the full view-prefixed instruction."""
         if not response:
@@ -698,6 +759,9 @@ class VLMNavigationController(InteractiveNavigationController):
         ):
             if isinstance(response.get(key), str):
                 response[key] = strip_space_type_variant_suffixes(response.get(key))
+        response["current_waypoint"] = self._sanitize_current_waypoint_text(
+            response.get("current_waypoint")
+        )
         response["subtask_instruction"] = self._sanitize_subtask_instruction_text(
             response.get("subtask_instruction"),
             response.get("next_waypoint_destination"),
@@ -1338,11 +1402,6 @@ class VLMNavigationController(InteractiveNavigationController):
             )
         if refresh_direction_views:
             self._refresh_cached_lookaround_direction_views(phase=phase)
-        self._sync_postplanning_thinking_visuals(
-            thinking_dir=thinking_dir,
-            phase=phase,
-            copy_directions=refresh_direction_views,
-        )
         self._save_waypoint_area_memory_snapshot()
         return waypoint_id
 
@@ -1465,44 +1524,6 @@ class VLMNavigationController(InteractiveNavigationController):
         )
         return True
 
-    def _sync_postplanning_thinking_visuals(
-        self,
-        thinking_dir: str,
-        phase: str,
-        copy_directions: bool = True,
-    ) -> None:
-        """Keep saved thinking debug images aligned with the post-planning state after waypoint creation."""
-        if not thinking_dir or not os.path.isdir(thinking_dir):
-            return
-
-        snapshot_dir = os.path.join(thinking_dir, "api_input_snapshot")
-        os.makedirs(snapshot_dir, exist_ok=True)
-
-        top_level_patterns = ["global_map.png", "local_map.png", "direction_*.png"]
-        for pattern in top_level_patterns:
-            for src_path in glob.glob(os.path.join(thinking_dir, pattern)):
-                backup_path = os.path.join(snapshot_dir, os.path.basename(src_path))
-                if not os.path.exists(backup_path):
-                    shutil.copy2(src_path, backup_path)
-
-        refreshed_global = os.path.join(self.episode_dir, 'global_map', f'step_{self.current_step:04d}_{phase}.png')
-        refreshed_local = os.path.join(self.episode_dir, 'local_map', f'step_{self.current_step:04d}_{phase}.png')
-        if os.path.exists(refreshed_global):
-            shutil.copy2(refreshed_global, os.path.join(thinking_dir, 'global_map.png'))
-        if os.path.exists(refreshed_local):
-            shutil.copy2(refreshed_local, os.path.join(thinking_dir, 'local_map.png'))
-
-        if copy_directions:
-            directions_dir = os.path.join(self.episode_dir, 'directions')
-            for config in DIRECTION_CONFIG:
-                angle = int(config["angle"])
-                refreshed_direction = os.path.join(directions_dir, f'{phase}_direction_{angle:03d}.png')
-                if os.path.exists(refreshed_direction):
-                    shutil.copy2(
-                        refreshed_direction,
-                        os.path.join(thinking_dir, f'direction_{angle:03d}.png'),
-                    )
-    
     def auto_rotate_to_waypoint(self, waypoint_direction: str) -> Tuple[bool, List[Dict]]:
         """
         解析waypoint方向并生成旋转动作序列
@@ -2307,10 +2328,13 @@ class VLMNavigationController(InteractiveNavigationController):
                     current_step_landmark_entries
                 )
                 if auto_completed_subtask is not None:
+                    landmark_kind = "opening-like" if auto_completed_subtask.get("is_opening_like") else "solid"
                     print(
                         "[AutoSubtaskComplete] "
-                        f"{auto_completed_subtask['name']} reached within "
-                        f"{auto_completed_subtask['distance_m']:.2f}m on action step {self.current_step}; "
+                        f"{auto_completed_subtask['name']} ({landmark_kind}) reached within "
+                        f"{auto_completed_subtask['distance_m']:.2f}m "
+                        f"(threshold {float(auto_completed_subtask.get('stop_distance_m', 1.0)):.2f}m) "
+                        f"on action step {self.current_step}; "
                         "skip remaining action repeats and start thinking/replan."
                     )
                     break
@@ -2363,13 +2387,18 @@ class VLMNavigationController(InteractiveNavigationController):
                 self.pose_before_action = pose_after_action_batch
 
             if auto_completed_subtask is not None and not navigation_complete:
+                landmark_kind = "opening-like" if auto_completed_subtask.get("is_opening_like") else "solid"
                 self._append_progress_note(
-                    f"had reached {auto_completed_subtask['name']} within "
-                    f"{auto_completed_subtask['distance_m']:.2f}m, so ended the current subtask and triggered replan"
+                    f"had reached {auto_completed_subtask['name']} ({landmark_kind}) within "
+                    f"{auto_completed_subtask['distance_m']:.2f}m "
+                    f"(auto-stop threshold {float(auto_completed_subtask.get('stop_distance_m', 1.0)):.2f}m), "
+                    "so ended the current subtask and triggered replan"
                 )
                 self.previous_action_reason = (
-                    f"Displayed destination landmark {auto_completed_subtask['name']} was within "
-                    f"{auto_completed_subtask['distance_m']:.2f}m, so the system ended the current subtask and started thinking"
+                    f"Displayed destination landmark {auto_completed_subtask['name']} ({landmark_kind}) was within "
+                    f"{auto_completed_subtask['distance_m']:.2f}m "
+                    f"(threshold {float(auto_completed_subtask.get('stop_distance_m', 1.0)):.2f}m), "
+                    "so the system ended the current subtask and started thinking"
                 )
                 navigation_complete, _new_subtask = self._trigger_verify_replan(
                     "action step autocomplete",
