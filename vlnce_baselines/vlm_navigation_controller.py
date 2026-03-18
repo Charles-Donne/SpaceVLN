@@ -345,9 +345,11 @@ class VLMNavigationController(InteractiveNavigationController):
             room_area_records.append({
                 "id": int(record.get("id", 0) or 0),
                 "label": str(record.get("label", "")),
+                "display_label": str(record.get("display_label", record.get("label", ""))),
                 "room_type": str(record.get("room_type", "")),
                 "variant": int(record.get("variant", 0) or 0),
                 "center_world_px": [int(center_world_px[0]), int(center_world_px[1])],
+                "connected_area_labels": [str(item) for item in record.get("connected_area_labels", []) or []],
             })
 
         waypoint_memory = {
@@ -1130,6 +1132,8 @@ class VLMNavigationController(InteractiveNavigationController):
             current_pose=map_state.get('full_pose'),
             resolution_cm=float(getattr(self.mapper, 'resolution', 5)),
             current_room_area_label=str(map_state.get('current_room_area_label', 'Unknown') or 'Unknown'),
+            full_map=map_state.get('full_map'),
+            crop_offset=map_state.get('crop_offset'),
             waypoint_angle_deg=last_waypoint_angle_deg,
             draw_waypoints_fn=self._draw_waypoints_on_view,
         )

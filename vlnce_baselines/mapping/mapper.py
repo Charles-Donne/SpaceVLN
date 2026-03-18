@@ -69,12 +69,23 @@ class SemanticMapper:
         return self.waypoint_manager.area_labels
 
     @property
+    def waypoint_area_display_labels(self) -> List[str]:
+        return [
+            self.room_area_manager.get_display_label(label)
+            for label in self.waypoint_manager.area_labels
+        ]
+
+    @property
     def room_area_records(self) -> List[Dict[str, Any]]:
         return self.room_area_manager.room_area_records
 
     @property
     def current_room_area_label(self) -> str:
         return self.room_area_manager.current_room_area_label
+
+    @property
+    def current_room_area_display_label(self) -> str:
+        return self.room_area_manager.get_display_label(self.room_area_manager.current_room_area_label)
 
     @property
     def current_room_area_type(self) -> str:
@@ -151,10 +162,10 @@ class SemanticMapper:
             'subtask_trajectory_points': subtask_traj,
             'waypoint_positions': self.waypoint_positions,
             'waypoint_ids': self.waypoint_ids,
-            'waypoint_area_labels': list(self.waypoint_area_labels),
+            'waypoint_area_labels': list(self.waypoint_area_display_labels),
             'room_area_layer': room_area_layer,
             'room_area_records': room_area_metadata,
-            'current_room_area_label': self.current_room_area_label,
+            'current_room_area_label': self.current_room_area_display_label,
             'current_room_area_type': self.current_room_area_type,
         }
 
@@ -212,7 +223,7 @@ class SemanticMapper:
 
     def get_waypoint_area_labels(self) -> List[str]:
         """获取每个 waypoint 对应的房间区域标签。"""
-        return self.waypoint_manager.get_area_labels()
+        return list(self.waypoint_area_display_labels)
 
     def clear_waypoints(self):
         """清空所有 waypoint。"""
@@ -235,7 +246,7 @@ class SemanticMapper:
             'floor': self.floor,
             'waypoint_positions': self.waypoint_positions,
             'waypoint_ids': self.waypoint_ids,
-            'waypoint_area_labels': list(self.waypoint_area_labels),
+            'waypoint_area_labels': list(self.waypoint_area_display_labels),
             'map_shape': self.map_shape,
             'resolution': self.resolution,
             'crop_offset': crop_offset,
@@ -243,7 +254,7 @@ class SemanticMapper:
             'subtask_trajectory_points': subtask_traj,
             'room_area_layer': room_area_layer,
             'room_area_records': room_area_records,
-            'current_room_area_label': self.current_room_area_label,
+            'current_room_area_label': self.current_room_area_display_label,
             'current_room_area_type': self.current_room_area_type,
         }
 

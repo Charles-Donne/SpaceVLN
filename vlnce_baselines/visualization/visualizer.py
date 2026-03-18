@@ -131,6 +131,7 @@ class MapVisualizer:
         room_area_layer: Optional[np.ndarray],
         room_area_records: Optional[List[Dict[str, Any]]],
         alpha: float = 0.45,
+        fill_regions: bool = True,
         show_labels: bool = False,
     ) -> np.ndarray:
         display_layer = self._prepare_room_area_display_layer(room_area_layer, output_size=image.shape[1])
@@ -146,14 +147,16 @@ class MapVisualizer:
             if not np.any(mask):
                 continue
             color = self._room_area_color(area_id, str(record.get("room_type", "")))
-            output[mask] = color
+            if fill_regions:
+                output[mask] = color
 
             mask_uint8 = (mask.astype(np.uint8) * 255)
             contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             if contours:
-                cv2.drawContours(output, contours, -1, color, 3)
+                if fill_regions:
+                    cv2.drawContours(output, contours, -1, color, 3)
                 if show_labels:
-                    label = str(record.get("label", "") or "")
+                    label = str(record.get("display_label", record.get("label", "")) or "")
                     if label:
                         self._draw_room_area_label(output, contours, label, color)
 
@@ -636,7 +639,8 @@ class MapVisualizer:
             sem_map_vis,
             room_area_layer,
             room_area_records,
-            show_labels=True,
+            fill_regions=True,
+            show_labels=False,
         )
         
         # ===== 阶段3: 提取Landmark位置（但不绘制）=====
@@ -719,6 +723,21 @@ class MapVisualizer:
             # 用黑色覆盖障碍物区域（会覆盖箭头，使障碍物更醒目）
             global_map_with_trajectory[obstacle_mask_display] = [0, 0, 0]  # 黑色BGR
             global_map_rotated[obstacle_mask_display] = [0, 0, 0]  # 无轨迹版本也叠加
+
+            global_map_with_trajectory = self._overlay_room_areas(
+                global_map_with_trajectory,
+                room_area_layer,
+                room_area_records,
+                fill_regions=False,
+                show_labels=True,
+            )
+            global_map_rotated = self._overlay_room_areas(
+                global_map_rotated,
+                room_area_layer,
+                room_area_records,
+                fill_regions=False,
+                show_labels=True,
+            )
             
             # ===== 阶段6: global map 不绘制自定义 landmark，仅保留内部 landmarks 列表供后续距离/角度计算 =====
 

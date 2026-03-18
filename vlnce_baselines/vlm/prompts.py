@@ -21,12 +21,12 @@ INITIAL_PLANNING_PROMPT = """**Role**: You are a VLN planning module. Analyze th
 # Reasoning (6 Parts)
 
 **1) 12-View Analysis (MUST analyze EACH IMAGE 1-12)**
-**Format for each IMAGE**: "IMAGE# (Direction Angle°): [space/room] + visible evidence". Mention only what is actually visible and useful, such as NEAR objects, FAR objects, landmark name + shown distance/angle, obstacle distance.
+**Format for each IMAGE**: "IMAGE# (Direction Angle°): [space/room] + visible evidence". Mention only what is actually visible and useful, such as NEAR objects, FAR objects, landmark name + shown distance/angle, obstacle distance, and waypoint area only if that IMAGE explicitly shows a waypoint-area entry.
 
 **REQUIRED - Analyze ALL 12 IMAGEs in order**:
 **Per IMAGE requirement**: direction, likely space/room, and only the visible evidence that exists in that IMAGE
 **Distance classification**: NEAR<1m (large/current) | FAR>1.5m (small/distant); connect adjacent views and track landmarks across angles
-**NO hallucination**: Say only what is visible. If an IMAGE only shows a near wall, say that only. Do not write `none`, do not fill empty slots, and do not invent landmarks / FAR objects / waypoint cues.
+**NO hallucination**: Say only what is visible. If an IMAGE only shows a near wall, say that only. Do not write `none`, do not fill empty slots, and do not invent landmarks / FAR objects / waypoint cues. If an IMAGE does not explicitly show a waypoint area, do not analyze waypoint / waypoint area for that IMAGE.
 
 **Conclusion (after all 12)**:
 - Current position: [room + NEAR objects <1m from multiple IMAGEs]
@@ -122,12 +122,12 @@ VERIFICATION_REPLANNING_PROMPT = """**Role**: You are a VLN verification and rep
 # Reasoning (6 Parts)
 
 **1) 12-View Analysis (MUST analyze EACH IMAGE 1-12)**
-**Format**: "IMAGE# (Direction Angle°): [space/room] + visible evidence". Mention only what is actually visible and useful, such as NEAR objects, FAR objects, landmark name + shown distance/angle, obstacle distance.
+**Format**: "IMAGE# (Direction Angle°): [space/room] + visible evidence". Mention only what is actually visible and useful, such as NEAR objects, FAR objects, landmark name + shown distance/angle, obstacle distance, and waypoint area only if that IMAGE explicitly shows a waypoint-area entry.
 
 **REQUIRED - Analyze ALL 12 IMAGEs in order**:
 **Per IMAGE requirement**: direction, likely space/room, and only the visible evidence that exists in that IMAGE
 **Distance**: NEAR<1m (large/current) | FAR>1.5m (small/distant)
-**NO hallucination**: Say only what is visible. If an IMAGE only shows a near wall, say that only. Do not write `none`, do not fill empty slots, and do not invent landmarks / FAR objects / waypoint cues.
+**NO hallucination**: Say only what is visible. If an IMAGE only shows a near wall, say that only. Do not write `none`, do not fill empty slots, and do not invent landmarks / FAR objects / waypoint cues. If an IMAGE does not explicitly show a waypoint area, do not analyze waypoint / waypoint area for that IMAGE.
 
 **Conclusion (mandatory after all 12)**:
 - Current: [room + NEAR<1m from multiple IMAGEs]
