@@ -193,27 +193,16 @@ class VLMNavigationController(InteractiveNavigationController):
         self,
         step_landmark_entries: Sequence[Dict[str, Any]],
     ) -> Optional[Dict[str, Any]]:
-        _dest_room, dest_object = self._parse_subtask_destination()
-        if not dest_object:
+        candidate_names = self._get_current_subtask_landmark_candidates()
+        if not candidate_names:
             return None
-
-        candidate_names = {dest_object}
-        target_landmark = self._normalize_landmark_candidate(getattr(self, 'target_landmark', None))
-        if target_landmark:
-            candidate_names.add(target_landmark)
-
-        def _matches_target(name: Optional[str]) -> bool:
-            normalized = self._normalize_landmark_candidate(name)
-            if not normalized:
-                return False
-            return any(
-                normalized == candidate or normalized in candidate or candidate in normalized
-                for candidate in candidate_names
-            )
 
         matches: List[Dict[str, Any]] = []
         for entry in step_landmark_entries or []:
-            if _matches_target(entry.get('name')):
+            if self._landmark_matches_current_subtask_destination(
+                entry.get('name'),
+                candidate_names=candidate_names,
+            ):
                 try:
                     distance_m = float(entry.get('distance_m'))
                 except (TypeError, ValueError):
@@ -221,7 +210,7 @@ class VLMNavigationController(InteractiveNavigationController):
                 if distance_m > float(self.ACTION_SUBTASK_AUTOCOMPLETE_DISTANCE_M):
                     continue
                 matches.append({
-                    "name": str(entry.get('name') or dest_object),
+                    "name": str(entry.get('name') or candidate_names[0]),
                     "distance_m": distance_m,
                     "confidence": float(entry.get('confidence', 0.0) or 0.0),
                     "angle_deg": entry.get('angle_deg'),
@@ -239,10 +228,80 @@ class VLMNavigationController(InteractiveNavigationController):
         )
         return matches[0]
 
+    def _get_current_subtask_landmark_candidates(self) -> List[str]:
+        _dest_room, dest_object = self._parse_subtask_destination()
+        candidates: List[str] = []
+        for raw_candidate in (
+            dest_object,
+            getattr(self, 'target_landmark', None),
+        ):
+            normalized = self._normalize_landmark_candidate(raw_candidate)
+            if normalized and normalized not in candidates:
+                candidates.append(normalized)
+        return candidates
+
+    def _landmark_matches_current_subtask_destination(
+        self,
+        name: Optional[str],
+        candidate_names: Optional[Sequence[str]] = None,
+    ) -> bool:
+        normalized = self._normalize_landmark_candidate(name)
+        if not normalized:
+            return False
+
+        candidates = list(candidate_names or self._get_current_subtask_landmark_candidates())
+        if not candidates:
+            return False
+
+        return any(
+            normalized == candidate or normalized in candidate or candidate in normalized
+            for candidate in candidates
+        )
+
     def _get_current_action_step_landmark_entries(self) -> List[Dict[str, Any]]:
         if not hasattr(self, 'current_step_landmark_entries'):
             return []
         return self.current_step_landmark_entries.get(self.current_step, []) or []
+
+    def _log_action_landmark_autocomplete_status(
+        self,
+        step_landmark_entries: Sequence[Dict[str, Any]],
+        step_idx: int,
+    ) -> None:
+        candidate_names = self._get_current_subtask_landmark_candidates()
+        if not candidate_names:
+            print(f"[AutoSubtaskCheck] step={step_idx} target_candidates=[]")
+            return
+
+        print(f"[AutoSubtaskCheck] step={step_idx} target_candidates={candidate_names}")
+
+        entries = list(step_landmark_entries or [])[:3]
+        for rank in range(3):
+            if rank >= len(entries):
+                print(
+                    f"[AutoSubtaskCheck]   top{rank + 1}: landmark=None | "
+                    "match=false | distance=unknown | confidence=0.000"
+                )
+                continue
+
+            entry = entries[rank]
+            name = str(entry.get('name') or '').strip()
+            distance_m = entry.get('distance_m')
+            confidence = float(entry.get('confidence', 0.0) or 0.0)
+            match = self._landmark_matches_current_subtask_destination(
+                name,
+                candidate_names=candidate_names,
+            )
+            try:
+                distance_text = f"{float(distance_m):.2f}m"
+            except (TypeError, ValueError):
+                distance_text = "unknown"
+
+            print(
+                f"[AutoSubtaskCheck]   top{rank + 1}: landmark='{name or 'None'}' | "
+                f"match={'true' if match else 'false'} | distance={distance_text} | "
+                f"confidence={confidence:.3f}"
+            )
 
     def _trigger_verify_replan(self, reason_tag: str, total_steps: int) -> Tuple[bool, Optional[Dict[str, Any]]]:
         new_subtask, _ = self.verify_and_replan()
@@ -1184,15 +1243,6 @@ class VLMNavigationController(InteractiveNavigationController):
             ]
         )
 
-        # 初始规划拿到第一个 waypoint / room-area / target landmark 后，
-        # 重新渲染一次 initial 地图，避免 episode 目录里的 initial map
-        # 仍停留在“规划前、无 area / 无 top-k landmark”的状态。
-        self._refresh_step_visualization_snapshot(
-            phase="initial",
-            enable_landmark_detection=True,
-            force=True,
-        )
-        
         # 打印子任务信息
         self._print_subtask_info(response, is_initial=True)
         
@@ -1484,9 +1534,6 @@ class VLMNavigationController(InteractiveNavigationController):
                     self.execute_rotation_sequence(action_sequence)
                     print()  # newline after rotation steps
 
-            attempt_letter = chr(ord('a') + self.subtask_attempt)
-            self._run_pre_action_detection_snapshot(f"action{self.subtask_count}{attempt_letter}")
-        
         # 返回response（prompt已保存到save_dir）
         return response, None
     
@@ -2000,11 +2047,6 @@ class VLMNavigationController(InteractiveNavigationController):
                 self.execute_rotation_sequence(action_sequence)
                 print()  # newline after rotation steps
 
-        # 新子任务开始前，立刻在当前朝向做一次快照检测，确保地图中的自定义 landmark
-        # 及其距离/角度在 action 前已经初始化完成。
-        attempt_letter = chr(ord('a') + self.subtask_attempt)
-        self._run_pre_action_detection_snapshot(f"action{self.subtask_count}{attempt_letter}")
-        
         # 3. 主导航循环
         total_steps = self.current_step
         subtask_steps = 0
@@ -2123,8 +2165,13 @@ class VLMNavigationController(InteractiveNavigationController):
                     navigation_complete = True
                     break
 
+                current_step_landmark_entries = self._get_current_action_step_landmark_entries()
+                self._log_action_landmark_autocomplete_status(
+                    current_step_landmark_entries,
+                    self.current_step,
+                )
                 auto_completed_subtask = self._should_autocomplete_subtask_during_action_step(
-                    self._get_current_action_step_landmark_entries()
+                    current_step_landmark_entries
                 )
                 if auto_completed_subtask is not None:
                     print(
