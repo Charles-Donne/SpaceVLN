@@ -14,6 +14,8 @@ from vlnce_baselines.visualization.map_projection import RotatedMapProjector
 class RoomAreaManager:
     """Track room-type areas, variants, and the current area label on the world map."""
 
+    STEP_MAINTENANCE_RADIUS_M = 2.0
+
     def __init__(self, map_shape: Tuple[int, int], resolution: int = 5):
         self.map_shape = map_shape
         self.resolution = resolution
@@ -99,6 +101,12 @@ class RoomAreaManager:
         if full_map is None:
             self._set_unknown_current_area()
             return np.zeros(self.map_shape, dtype=np.int32), []
+
+        self._maintain_current_area_with_pose(
+            full_map=full_map,
+            full_pose=full_pose,
+            crop_offset=crop_offset,
+        )
 
         h_map, w_map = full_map.shape[1], full_map.shape[2]
         layer = np.zeros((h_map, w_map), dtype=np.int32)
@@ -297,3 +305,107 @@ class RoomAreaManager:
     def _set_unknown_current_area(self) -> None:
         self.current_room_area_label = "Unknown"
         self.current_room_area_type = "Unknown"
+
+    def _maintain_current_area_with_pose(
+        self,
+        full_map: Optional[np.ndarray],
+        full_pose: Optional[Sequence[float]],
+        crop_offset: Optional[Tuple[int, int]],
+    ) -> None:
+        if full_map is None or full_pose is None or not self.room_area_records:
+            self._set_unknown_current_area()
+            return
+
+        curr_py = int(round(float(full_pose[1]) * 100.0 / float(self.resolution)))
+        curr_px = int(round(float(full_pose[0]) * 100.0 / float(self.resolution)))
+
+        containing_record = self._find_record_containing_pixel(curr_py, curr_px)
+        if containing_record is not None:
+            self._set_current_area_from_record(containing_record)
+            return
+
+        candidate_record = self._select_record_for_step_maintenance(curr_py, curr_px)
+        if candidate_record is None:
+            self._set_unknown_current_area()
+            return
+
+        expanded_pixels = self._compute_room_area_world_pixels(
+            pixel_y=curr_py,
+            pixel_x=curr_px,
+            full_map=full_map,
+            full_pose=full_pose,
+            crop_offset=crop_offset,
+            max_radius_m=self.STEP_MAINTENANCE_RADIUS_M,
+        )
+        candidate_record["pixels"].update(expanded_pixels)
+        self._set_current_area_from_record(candidate_record)
+
+    def _find_record_containing_pixel(
+        self,
+        pixel_y: int,
+        pixel_x: int,
+    ) -> Optional[Dict[str, Any]]:
+        target_pixel = (int(pixel_y), int(pixel_x))
+        for record in reversed(self.room_area_records):
+            if target_pixel in record["pixels"]:
+                return record
+        return None
+
+    def _select_record_for_step_maintenance(
+        self,
+        pixel_y: int,
+        pixel_x: int,
+    ) -> Optional[Dict[str, Any]]:
+        max_distance_px = (self.STEP_MAINTENANCE_RADIUS_M * 100.0) / float(self.resolution)
+        max_distance_sq = max_distance_px ** 2
+
+        preferred_records: List[Dict[str, Any]] = []
+        current_record = self._find_record_by_label(self.current_room_area_label)
+        if current_record is not None:
+            preferred_records.append(current_record)
+        if self.room_area_records:
+            latest_record = self.room_area_records[-1]
+            if latest_record not in preferred_records:
+                preferred_records.append(latest_record)
+
+        for record in preferred_records:
+            if self._record_min_distance_sq(record, pixel_y, pixel_x, max_distance_sq) <= max_distance_sq:
+                return record
+
+        best_record = None
+        best_distance_sq = max_distance_sq
+        for record in reversed(self.room_area_records):
+            distance_sq = self._record_min_distance_sq(record, pixel_y, pixel_x, best_distance_sq)
+            if distance_sq <= best_distance_sq:
+                best_record = record
+                best_distance_sq = distance_sq
+        return best_record
+
+    def _find_record_by_label(self, label: str) -> Optional[Dict[str, Any]]:
+        target_label = str(label or "").strip()
+        if not target_label or target_label == "Unknown":
+            return None
+        for record in reversed(self.room_area_records):
+            if str(record.get("label", "")) == target_label:
+                return record
+        return None
+
+    @staticmethod
+    def _record_min_distance_sq(
+        record: Dict[str, Any],
+        pixel_y: int,
+        pixel_x: int,
+        early_stop_sq: float,
+    ) -> float:
+        best_distance_sq = np.inf
+        for world_py, world_px in record.get("pixels", set()):
+            distance_sq = float((world_py - pixel_y) ** 2 + (world_px - pixel_x) ** 2)
+            if distance_sq < best_distance_sq:
+                best_distance_sq = distance_sq
+                if best_distance_sq <= early_stop_sq:
+                    return best_distance_sq
+        return best_distance_sq
+
+    def _set_current_area_from_record(self, record: Dict[str, Any]) -> None:
+        self.current_room_area_label = str(record.get("label", "Unknown") or "Unknown")
+        self.current_room_area_type = str(record.get("room_type", "Unknown") or "Unknown")

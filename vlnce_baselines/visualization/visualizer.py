@@ -102,12 +102,12 @@ class MapVisualizer:
     @staticmethod
     def _room_area_color(area_id: int, room_type: str) -> Tuple[int, int, int]:
         palette = [
-            (255, 225, 170),  # light blue
-            (220, 185, 255),  # pink
-            (150, 240, 255),  # yellow
-            (235, 205, 255),  # lavender
-            (180, 220, 255),  # peach
-            (255, 235, 200),  # pale cyan
+            (255, 160, 80),   # blue
+            (255, 110, 210),  # pink
+            (80, 220, 255),   # yellow
+            (210, 130, 255),  # violet
+            (255, 210, 90),   # cyan
+            (120, 170, 255),  # orange-peach
         ]
         room_text = str(room_type)
         seed = int(area_id) * 131
@@ -131,6 +131,7 @@ class MapVisualizer:
         room_area_layer: Optional[np.ndarray],
         room_area_records: Optional[List[Dict[str, Any]]],
         alpha: float = 0.45,
+        show_labels: bool = False,
     ) -> np.ndarray:
         display_layer = self._prepare_room_area_display_layer(room_area_layer, output_size=image.shape[1])
         if display_layer is None or not room_area_records:
@@ -151,8 +152,46 @@ class MapVisualizer:
             contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             if contours:
                 cv2.drawContours(output, contours, -1, color, 3)
+                if show_labels:
+                    label = str(record.get("label", "") or "")
+                    if label:
+                        self._draw_room_area_label(output, contours, label, color)
 
         return output
+
+    @staticmethod
+    def _draw_room_area_label(
+        image: np.ndarray,
+        contours: List[np.ndarray],
+        label: str,
+        color: Tuple[int, int, int],
+    ) -> None:
+        largest_contour = max(contours, key=cv2.contourArea)
+        if cv2.contourArea(largest_contour) < 120.0:
+            return
+
+        moments = cv2.moments(largest_contour)
+        if abs(moments["m00"]) < 1e-6:
+            return
+
+        center_x = int(moments["m10"] / moments["m00"])
+        center_y = int(moments["m01"] / moments["m00"])
+        text = str(label)
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.45
+        thickness = 1
+        (text_w, text_h), baseline = cv2.getTextSize(text, font, font_scale, thickness)
+        pad_x = 4
+        pad_y = 3
+        x1 = max(0, center_x - text_w // 2 - pad_x)
+        y1 = max(0, center_y - text_h // 2 - pad_y)
+        x2 = min(image.shape[1] - 1, center_x + text_w // 2 + pad_x)
+        y2 = min(image.shape[0] - 1, center_y + text_h // 2 + pad_y + baseline)
+        cv2.rectangle(image, (x1, y1), (x2, y2), (255, 255, 255), -1)
+        cv2.rectangle(image, (x1, y1), (x2, y2), color, 1)
+        text_x = x1 + pad_x
+        text_y = y2 - baseline - pad_y
+        cv2.putText(image, text, (text_x, text_y), font, font_scale, color, thickness, cv2.LINE_AA)
 
     @staticmethod
     def _bbox_iou(
@@ -592,7 +631,12 @@ class MapVisualizer:
         sem_map_vis = np.array(sem_map_vis)
         sem_map_vis = sem_map_vis[:, :, [2, 1, 0]]  # RGB → BGR
         sem_map_vis = cv2.resize(sem_map_vis, (480, 480), interpolation=cv2.INTER_NEAREST)
-        sem_map_vis = self._overlay_room_areas(sem_map_vis, room_area_layer, room_area_records)
+        sem_map_vis = self._overlay_room_areas(
+            sem_map_vis,
+            room_area_layer,
+            room_area_records,
+            show_labels=True,
+        )
         
         # ===== 阶段3: 提取Landmark位置（但不绘制）=====
         landmarks = []
@@ -801,7 +845,13 @@ class MapVisualizer:
         sem_map_vis = np.array(sem_map_vis)
         sem_map_vis = sem_map_vis[:, :, [2, 1, 0]]  # RGB → BGR
         sem_map_vis = cv2.resize(sem_map_vis, (480, 480), interpolation=cv2.INTER_NEAREST)
-        sem_map_vis = self._overlay_room_areas(sem_map_vis, room_area_layer, room_area_records, alpha=0.40)
+        sem_map_vis = self._overlay_room_areas(
+            sem_map_vis,
+            room_area_layer,
+            room_area_records,
+            alpha=0.40,
+            show_labels=False,
+        )
         
         # ===== 阶段3: 准备显示（地图已在提取时旋转）=====
         projector = self._build_map_projector(full_map, current_pose, crop_offset)
