@@ -187,11 +187,12 @@ class MapVisualizer:
         y1 = max(0, center_y - text_h // 2 - pad_y)
         x2 = min(image.shape[1] - 1, center_x + text_w // 2 + pad_x)
         y2 = min(image.shape[0] - 1, center_y + text_h // 2 + pad_y + baseline)
-        cv2.rectangle(image, (x1, y1), (x2, y2), (255, 255, 255), -1)
-        cv2.rectangle(image, (x1, y1), (x2, y2), color, 1)
+        label_bg_color = (255, 0, 0)
+        label_text_color = (255, 255, 255)
+        cv2.rectangle(image, (x1, y1), (x2, y2), label_bg_color, -1)
         text_x = x1 + pad_x
         text_y = y2 - baseline - pad_y
-        cv2.putText(image, text, (text_x, text_y), font, font_scale, color, thickness, cv2.LINE_AA)
+        cv2.putText(image, text, (text_x, text_y), font, font_scale, label_text_color, thickness, cv2.LINE_AA)
 
     @staticmethod
     def _bbox_iou(
@@ -700,44 +701,9 @@ class MapVisualizer:
                 cv2.line(global_map_with_trajectory, (240, int(dash_start_y)), 
                         (240, int(dash_end_y)), forward_color, forward_thickness)
             
-            # ===== 阶段5.4: 绘制历史waypoint（蓝色圆圈+ID数字，在箭头之前的倒数第二层）=====
-            # waypoint_positions 是世界像素坐标，需要转换到旋转后的full_map坐标
-            if projector is not None and waypoint_positions is not None and waypoint_ids is not None and len(waypoint_positions) > 0:
-                for idx, wp_pos in enumerate(waypoint_positions):
-                    if idx == len(waypoint_positions) - 1:
-                        wp_x_m = float(wp_pos[1]) * float(self.resolution) / 100.0
-                        wp_y_m = float(wp_pos[0]) * float(self.resolution) / 100.0
-                        curr_x_m, curr_y_m = float(current_pose[0]), float(current_pose[1])
-                        if float(np.hypot(wp_x_m - curr_x_m, wp_y_m - curr_y_m)) <= 1.0:
-                            continue
+            # ===== 阶段5.4: 不再单独绘制 waypoint 点；由房间区域标签直接提供历史区域信息 =====
 
-                    projected = projector.world_to_global_display(wp_pos[0], wp_pos[1])
-                    if projected is None:
-                        continue
-
-                    display_x, display_y = int(projected[0]), int(projected[1])
-                    display_id = idx + 1
-                    cv2.circle(
-                        global_map_with_trajectory,
-                        (display_x, display_y),
-                        radius=10,
-                        color=(255, 0, 0),
-                        thickness=-1,
-                    )
-                    text = str(display_id)
-                    (text_w, text_h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)
-                    cv2.putText(
-                        global_map_with_trajectory,
-                        text,
-                        (display_x - text_w // 2, display_y + text_h // 2),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.6,
-                        (255, 255, 255),
-                        1,
-                        cv2.LINE_AA,
-                    )
-            
-            # ===== 阶段5.5: 在中心绘制箭头（最后一层，覆盖waypoint）=====
+            # ===== 阶段5.5: 在中心绘制箭头（最后一层）=====
             arrow_angle = np.deg2rad(-90)  # 朝上
             agent_pos = (center_x, center_y, arrow_angle)
             agent_arrow = vu.get_contour_points(agent_pos, origin=(0, 0), size=12)

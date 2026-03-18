@@ -29,6 +29,10 @@ class ThinkingViewRenderer:
     CURRENT_AREA_OVERLAP_THRESHOLD_M = 1.0
 
     @staticmethod
+    def _is_known_area_label(area_label: str) -> bool:
+        return str(area_label or "").strip().lower() not in {"", "unknown"}
+
+    @staticmethod
     def _build_text_strip(
         width: int,
         text: str,
@@ -129,6 +133,8 @@ class ThinkingViewRenderer:
 
         if not waypoint_info:
             current_area_text = str(current_room_area_label or "Unknown").strip() or "Unknown"
+            if not cls._is_known_area_label(current_area_text):
+                return []
             return [{
                 "id": 0,
                 "label": cls._short_text(current_area_text, max_len=34),
@@ -145,6 +151,8 @@ class ThinkingViewRenderer:
         waypoint_positions, waypoint_ids, waypoint_descriptions = waypoint_info
         if not waypoint_ids:
             current_area_text = str(current_room_area_label or "Unknown").strip() or "Unknown"
+            if not cls._is_known_area_label(current_area_text):
+                return []
             return [{
                 "id": 0,
                 "label": cls._short_text(current_area_text, max_len=34),
@@ -203,18 +211,19 @@ class ThinkingViewRenderer:
             if float(last_entry["distance_m"]) <= cls.CURRENT_AREA_OVERLAP_THRESHOLD_M:
                 entries.pop()
 
-        entries.append({
-            "id": 0,
-            "label": cls._short_text(current_area_text, max_len=34),
-            "description": current_area_text,
-            "area_label": current_area_text,
-            "distance_m": 0.0,
-            "relative_bearing_deg": current_area_relative_bearing,
-            "snapped_relative_bearing_deg": current_area_snapped_bearing,
-            "view_angle_deg": current_area_view_angle,
-            "is_last_visited": False,
-            "is_current_area": True,
-        })
+        if cls._is_known_area_label(current_area_text):
+            entries.append({
+                "id": 0,
+                "label": cls._short_text(current_area_text, max_len=34),
+                "description": current_area_text,
+                "area_label": current_area_text,
+                "distance_m": 0.0,
+                "relative_bearing_deg": current_area_relative_bearing,
+                "snapped_relative_bearing_deg": current_area_snapped_bearing,
+                "view_angle_deg": current_area_view_angle,
+                "is_last_visited": False,
+                "is_current_area": True,
+            })
 
         return entries
 
