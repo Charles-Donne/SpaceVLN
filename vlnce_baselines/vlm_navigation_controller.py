@@ -60,6 +60,8 @@ class VLMNavigationController(InteractiveNavigationController):
     
     注意：每次验证重规划前都会执行360°环视，以更新语义地图和当前位置的4方向观察
     """
+
+    ACTION_SUBTASK_AUTOCOMPLETE_DISTANCE_M = 0.5
     
     def __init__(self, config: Config,
                  config_path: str = None,
@@ -187,18 +189,12 @@ class VLMNavigationController(InteractiveNavigationController):
         object_norm = self._normalize_landmark_candidate(object_text)
         return room_norm or None, object_norm or None
 
-    def _should_force_stop_for_subtask_destination(
+    def _should_autocomplete_subtask_during_action_step(
         self,
         step_landmark_entries: Sequence[Dict[str, Any]],
-    ) -> Optional[float]:
-        dest_room, dest_object = self._parse_subtask_destination()
-        if not dest_room or not dest_object or self.mapper is None:
-            return None
-
-        current_area_type = strip_space_type_variant_suffixes(
-            str(getattr(self.mapper, 'current_room_area_type', 'Unknown') or 'Unknown').strip().lower()
-        )
-        if not current_area_type or current_area_type == 'unknown' or current_area_type != dest_room:
+    ) -> Optional[Dict[str, Any]]:
+        _dest_room, dest_object = self._parse_subtask_destination()
+        if not dest_object:
             return None
 
         candidate_names = {dest_object}
@@ -215,26 +211,33 @@ class VLMNavigationController(InteractiveNavigationController):
                 for candidate in candidate_names
             )
 
-        distances: List[float] = []
+        matches: List[Dict[str, Any]] = []
         for entry in step_landmark_entries or []:
             if _matches_target(entry.get('name')):
                 try:
-                    distances.append(float(entry.get('distance_m')))
+                    distance_m = float(entry.get('distance_m'))
                 except (TypeError, ValueError):
-                    pass
+                    continue
+                if distance_m > float(self.ACTION_SUBTASK_AUTOCOMPLETE_DISTANCE_M):
+                    continue
+                matches.append({
+                    "name": str(entry.get('name') or dest_object),
+                    "distance_m": distance_m,
+                    "confidence": float(entry.get('confidence', 0.0) or 0.0),
+                    "angle_deg": entry.get('angle_deg'),
+                })
 
-        for inst in getattr(self, 'latest_landmark_instances_world', []) or []:
-            if _matches_target(inst.get('name')):
-                try:
-                    distances.append(float(inst.get('distance_m')))
-                except (TypeError, ValueError):
-                    pass
-
-        if not distances:
+        if not matches:
             return None
 
-        nearest = min(distances)
-        return nearest if nearest < 1.0 else None
+        matches.sort(
+            key=lambda item: (
+                float(item.get("distance_m", 1e9)),
+                -float(item.get("confidence", 0.0)),
+                str(item.get("name", "")),
+            )
+        )
+        return matches[0]
 
     def _execute_auto_retreat(self, retreat_distance_m: float = 1.0) -> Tuple[float, bool]:
         """Turn around, move 1m away, then hand off directly to thinking/lookaround."""
@@ -1644,27 +1647,6 @@ class VLMNavigationController(InteractiveNavigationController):
             with open(info_file, 'w', encoding='utf-8') as f:
                 json.dump(subtask_info, f, ensure_ascii=False, indent=2)
 
-        force_stop_distance = self._should_force_stop_for_subtask_destination(step_landmark_entries)
-        if force_stop_distance is not None:
-            response = {
-                "reasoning": (
-                    f"Current area already matches the subtask room, and the subtask destination object "
-                    f"is within {force_stop_distance:.2f}m, so stop immediately."
-                ),
-                "action_analysis": (
-                    f"Subtask destination is already within {force_stop_distance:.2f}m in the correct room, so stopping avoids overshooting"
-                ),
-                "action": "STOP",
-            }
-            with open(os.path.join(action_save_dir, "response.json"), 'w', encoding='utf-8') as f:
-                json.dump(response, f, ensure_ascii=False, indent=2)
-            self.previous_action_reason = response["action_analysis"]
-            self.last_planned_degrees = 0
-            self.last_planned_meters = 0
-            self.last_action_name = "STOP"
-            print(f"[AutoStop] Subtask destination already within {force_stop_distance:.2f}m in the correct room")
-            return ACTION_MAPPING["STOP"], "STOP", True, 1, response
-        
         # 构建 landmark_map_info：可见 + 地图离屏两类（按距离升序）
         # action VLM 只有第一人称图，需要文字告知离屏的已映射 landmark 方向距离
         landmark_dist_map = getattr(self, 'latest_landmark_dist_map', {})
@@ -2105,6 +2087,7 @@ class VLMNavigationController(InteractiveNavigationController):
             if self.pose_before_action is None:
                 self.pose_before_action = self._get_agent_pose()
             pose_before_action_batch = self._get_agent_pose()
+            auto_completed_subtask = None
             
             # 执行动作（可能需要重复多次）
             for i in range(repeat_count):
@@ -2129,6 +2112,21 @@ class VLMNavigationController(InteractiveNavigationController):
                     # 不要尝试调用step(STOP)，因为episode已经done，会触发AssertionError
                     # latest_info已在step_with_vlm中更新，包含最终指标
                     navigation_complete = True
+                    break
+
+                step_landmark_entries = []
+                if hasattr(self, 'current_step_landmark_entries'):
+                    step_landmark_entries = self.current_step_landmark_entries.get(self.current_step, []) or []
+                auto_completed_subtask = self._should_autocomplete_subtask_during_action_step(
+                    step_landmark_entries
+                )
+                if auto_completed_subtask is not None:
+                    print(
+                        "[AutoSubtaskComplete] "
+                        f"{auto_completed_subtask['name']} reached within "
+                        f"{auto_completed_subtask['distance_m']:.2f}m on action step {self.current_step}; "
+                        "skip remaining action repeats and start thinking/replan."
+                    )
                     break
             
             # 所有重复执行完成后，计算总的progress（一次性）
@@ -2177,6 +2175,23 @@ class VLMNavigationController(InteractiveNavigationController):
                 
                 # 更新pose_before为当前pose（供下次计算使用）
                 self.pose_before_action = pose_after_action_batch
+
+            if auto_completed_subtask is not None and not navigation_complete:
+                self._append_progress_note(
+                    f"had reached {auto_completed_subtask['name']} within "
+                    f"{auto_completed_subtask['distance_m']:.2f}m, so ended the current subtask and triggered replan"
+                )
+                self.previous_action_reason = (
+                    f"Displayed destination landmark {auto_completed_subtask['name']} was within "
+                    f"{auto_completed_subtask['distance_m']:.2f}m, so the system ended the current subtask and started thinking"
+                )
+                new_subtask, _ = self.verify_and_replan()
+                if new_subtask and new_subtask.get('global_task_finish', False):
+                    print(f"[DONE] Task complete (action step autocomplete) | steps={total_steps}")
+                    navigation_complete = True
+                    break
+                subtask_steps = 0
+                continue
             
             # 🔑 强制重规划检查：如果达到最大步数，执行完动作后立即触发verify
             if force_replan_after_action:
