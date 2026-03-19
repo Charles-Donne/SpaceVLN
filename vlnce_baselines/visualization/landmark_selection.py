@@ -320,7 +320,7 @@ def _estimate_mask_rel_xy(owner,
                           landmark_name: Optional[str] = None,
                           return_profile: bool = False):
     """用 mask+depth 估计目标在 agent 坐标系中的前向/右向位置。"""
-    profile = self._analyze_mask_depth_profile(mask_2d, depth_img, landmark_name=landmark_name)
+    profile = owner._analyze_mask_depth_profile(mask_2d, depth_img, landmark_name=landmark_name)
     sample_mask = profile.get("sample_mask")
     if sample_mask is None or not np.any(sample_mask):
         if return_profile:
@@ -456,7 +456,7 @@ def _project_landmark_instances_from_detections(owner,
         det_mask = None
         if getattr(detections, 'mask', None) is not None and i < len(detections.mask):
             det_mask = detections.mask[i]
-        rel_xy, depth_profile = self._estimate_mask_rel_xy(
+        rel_xy, depth_profile = owner._estimate_mask_rel_xy(
             det_mask,
             depth_meters,
             hfov,
@@ -466,13 +466,13 @@ def _project_landmark_instances_from_detections(owner,
         if rel_xy is None:
             continue
 
-        world_xy = self._rel_xy_to_world_xy(rel_xy, current_pose)
+        world_xy = owner._rel_xy_to_world_xy(rel_xy, current_pose)
         if world_xy is None:
             continue
         world_x_m, world_y_m = world_xy
 
-        world_row_px = int(round(world_y_m * 100.0 / self.resolution))
-        world_col_px = int(round(world_x_m * 100.0 / self.resolution))
+        world_row_px = int(round(world_y_m * 100.0 / owner.resolution))
+        world_col_px = int(round(world_x_m * 100.0 / owner.resolution))
         dist_m = float(np.hypot(rel_xy[0], rel_xy[1]))
         rel_bearing = float(np.degrees(np.arctan2(rel_xy[1], rel_xy[0]))) if dist_m > 1e-6 else 0.0
 
@@ -499,7 +499,7 @@ def _project_landmark_instances_from_detections(owner,
 
     projected_instances: List[Dict[str, Any]] = []
     for cls_name, candidates in per_class.items():
-        selected = self._dedupe_detection_candidates(candidates, hfov=hfov, topk=topk)
+        selected = owner._dedupe_detection_candidates(candidates, hfov=hfov, topk=topk)
 
         for inst_idx, item in enumerate(selected):
             item = dict(item)
@@ -521,14 +521,14 @@ def _merge_landmark_instances_world(owner,
     merged_by_class: Dict[str, List[Dict[str, Any]]] = {}
     next_instance_uid = (
         max(
-            [self._landmark_instance_uid(inst) or 0 for inst in (existing_instances or []) + (new_instances or [])],
+            [owner._landmark_instance_uid(inst) or 0 for inst in (existing_instances or []) + (new_instances or [])],
             default=0,
         ) + 1
     )
 
     def _ensure_instance_uid(inst: Dict[str, Any]) -> int:
         nonlocal next_instance_uid
-        current_uid = self._landmark_instance_uid(inst)
+        current_uid = owner._landmark_instance_uid(inst)
         if current_uid is not None:
             inst["instance_uid"] = int(current_uid)
             return int(current_uid)
@@ -593,7 +593,7 @@ def _merge_landmark_instances_world(owner,
             total_weight = old_weight + new_weight
 
             refreshed.update(inst)
-            refreshed["instance_uid"] = self._landmark_instance_uid(old) or self._landmark_instance_uid(inst)
+            refreshed["instance_uid"] = owner._landmark_instance_uid(old) or owner._landmark_instance_uid(inst)
             refreshed["confidence"] = max(
                 float(old.get("confidence", 0.0)),
                 float(inst.get("confidence", 0.0)),
@@ -634,8 +634,8 @@ def _merge_landmark_instances_world(owner,
                 ) / total_weight
                 refreshed["world_x_m"] = float(world_x_m)
                 refreshed["world_y_m"] = float(world_y_m)
-                refreshed["world_row_px"] = int(round(world_y_m * 100.0 / self.resolution))
-                refreshed["world_col_px"] = int(round(world_x_m * 100.0 / self.resolution))
+                refreshed["world_row_px"] = int(round(world_y_m * 100.0 / owner.resolution))
+                refreshed["world_col_px"] = int(round(world_x_m * 100.0 / owner.resolution))
             cls_bucket[best_idx] = refreshed
         else:
             normalized = dict(inst)
@@ -680,7 +680,7 @@ def _world_instance_to_rotated_landmark(owner,
     if current_pose is None or crop_offset is None or full_map is None:
         return None
 
-    projector = self._build_map_projector(full_map, current_pose, crop_offset)
+    projector = owner._build_map_projector(full_map, current_pose, crop_offset)
     if projector is None:
         return None
 
@@ -722,7 +722,7 @@ def _build_landmarks_from_instances(owner,
 
     landmarks: List[Tuple[float, float, str, float, float]] = []
     for inst in landmark_instances:
-        converted = self._world_instance_to_rotated_landmark(inst, full_map, current_pose, crop_offset)
+        converted = owner._world_instance_to_rotated_landmark(inst, full_map, current_pose, crop_offset)
         if converted is not None:
             landmarks.append(converted)
     return landmarks
@@ -738,13 +738,13 @@ def _build_local_landmarks_from_instances(owner,
     if not landmark_instances:
         return []
 
-    projector = self._build_map_projector(full_map, current_pose, crop_offset)
+    projector = owner._build_map_projector(full_map, current_pose, crop_offset)
     if projector is None:
         return []
 
     ranked_candidates: List[Tuple[float, float, Tuple[float, float, str, float, float]]] = []
     for inst in landmark_instances:
-        converted = self._world_instance_to_rotated_landmark(inst, full_map, current_pose, crop_offset)
+        converted = owner._world_instance_to_rotated_landmark(inst, full_map, current_pose, crop_offset)
         if converted is None:
             continue
         marker_x, marker_y, _cls_name, dist_m, _angle_deg = converted
@@ -760,4 +760,3 @@ def _build_local_landmarks_from_instances(owner,
     ranked_candidates.sort(key=lambda item: (-item[0], item[1]))
     keep_n = max(1, int(topk))
     return [item[2] for item in ranked_candidates[:keep_n]]
-

@@ -73,6 +73,9 @@ def render_global_map(owner,
     # ===== 阶段1.1: 创建语义地图 =====
     semantic_map = np.zeros((h, w), dtype=np.uint8)
 
+    # Layer 0: 障碍物（黑色）
+    semantic_map[obstacle_mask] = 1
+
     # Layer 1: 已探索自由空间（浅灰色）
     explored_free_mask = np.logical_and(explored_mask, ~obstacle_mask)
     semantic_map[explored_free_mask] = 2
@@ -245,6 +248,9 @@ def render_local_map(owner,
 
     # 创建语义地图
     semantic_map = np.zeros((h, w), dtype=np.uint8)
+
+    # Layer 0: 障碍物（黑色）
+    semantic_map[obstacle_mask] = 1
 
     # Layer 1: 已探索自由空间（浅灰色）
     explored_free_mask = np.logical_and(explored_mask, ~obstacle_mask)
@@ -532,10 +538,10 @@ def save_global_map(owner,
     labeled_map = global_map.copy()
     label_text = "Map"
     font = cv2.FONT_HERSHEY_SIMPLEX
-    font_scale = 0.5
-    font_thickness = 1
+    font_scale = 0.7
+    font_thickness = 2
     text_x = 6
-    text_y = max(14, labeled_map.shape[0] - 8)
+    text_y = max(20, labeled_map.shape[0] - 8)
     cv2.putText(
         labeled_map,
         label_text,

@@ -79,6 +79,15 @@ class MapVisualizer:
             if cached is not None:
                 return cached.copy()
 
+        raw_obstacle_mask = build_rotated_obstacle_mask(
+            full_map,
+            threshold=0.5,
+            open_kernel_size=0,
+            close_kernel_size=0,
+            axis_close_kernel_size=0,
+            min_component_area=0,
+        )
+
         # Render obstacles as cleaner axis-aligned map blocks instead of sparse speckles.
         obstacle_mask = build_rotated_obstacle_mask(
             full_map,
@@ -88,6 +97,12 @@ class MapVisualizer:
             axis_close_kernel_size=9,
             min_component_area=18,
         )
+        raw_pixels = int(np.count_nonzero(raw_obstacle_mask))
+        cleaned_pixels = int(np.count_nonzero(obstacle_mask))
+        # Keep the cleaned rendering when it is stable; otherwise fall back to the raw
+        # obstacle layer so obstacles never disappear entirely on sparse maps.
+        if raw_pixels > 0 and (cleaned_pixels == 0 or cleaned_pixels < max(8, int(raw_pixels * 0.05))):
+            obstacle_mask = raw_obstacle_mask
         if cache_token is not None:
             self._render_cache["obstacle_mask"][cache_token] = obstacle_mask.copy()
         return obstacle_mask
