@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import cv2
 import numpy as np
 
-from vlnce_baselines.common.spatial_formatter import format_relative_direction
+from vlnce_baselines.utils.spatial_formatter import format_relative_direction
 
 
 @dataclass(frozen=True)

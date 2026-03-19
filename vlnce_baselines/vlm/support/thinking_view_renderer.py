@@ -29,8 +29,8 @@ from vlnce_baselines.visualization.landmark_overlay import (
     LandmarkStripSegment,
     render_landmark_strip,
 )
-from vlnce_baselines.common.spatial_formatter import snap_relative_bearing
-from vlnce_baselines.vlm.navigation_config import DIRECTION_CONFIG
+from vlnce_baselines.utils.spatial_formatter import snap_relative_bearing
+from vlnce_baselines.vlm.support.navigation_config import DIRECTION_CONFIG
 from vlnce_baselines.visualization.map_projection import RotatedMapProjector
 
 
@@ -145,13 +145,13 @@ class ThinkingViewRenderer:
         waypoint_area_labels: Optional[List[str]],
         current_pose: Optional[np.ndarray],
         resolution_cm: float,
-        current_room_area_label: str,
+        current_space_area_label: str,
     ) -> List[Dict[str, Any]]:
         if current_pose is None:
             return []
 
         if not waypoint_info:
-            current_area_text = str(current_room_area_label or "Unknown").strip() or "Unknown"
+            current_area_text = str(current_space_area_label or "Unknown").strip() or "Unknown"
             if not cls._is_known_area_label(current_area_text):
                 return []
             return [{
@@ -169,7 +169,7 @@ class ThinkingViewRenderer:
 
         waypoint_positions, waypoint_ids, waypoint_descriptions = waypoint_info
         if not waypoint_ids:
-            current_area_text = str(current_room_area_label or "Unknown").strip() or "Unknown"
+            current_area_text = str(current_space_area_label or "Unknown").strip() or "Unknown"
             if not cls._is_known_area_label(current_area_text):
                 return []
             return [{
@@ -220,7 +220,7 @@ class ThinkingViewRenderer:
                 "is_last_visited": index == len(waypoint_ids) - 1,
             })
 
-        current_area_text = str(current_room_area_label or "Unknown").strip() or "Unknown"
+        current_area_text = str(current_space_area_label or "Unknown").strip() or "Unknown"
         current_area_view_angle = 0.0
         current_area_relative_bearing = 0.0
         current_area_snapped_bearing = 0.0
@@ -854,7 +854,7 @@ class ThinkingViewRenderer:
         waypoint_area_labels: Optional[List[str]],
         current_pose: Optional[np.ndarray],
         resolution_cm: float,
-        current_room_area_label: str,
+        current_space_area_label: str,
         full_map: Optional[np.ndarray],
         crop_offset: Optional[Tuple[int, int]],
         waypoint_angle_deg: Optional[float],
@@ -871,7 +871,7 @@ class ThinkingViewRenderer:
             waypoint_area_labels=waypoint_area_labels,
             current_pose=current_pose,
             resolution_cm=resolution_cm,
-            current_room_area_label=current_room_area_label,
+            current_space_area_label=current_space_area_label,
         )
         view_angles = [float(config["angle"]) for config in DIRECTION_CONFIG]
         waypoint_entries = self._apply_waypoint_visibility(

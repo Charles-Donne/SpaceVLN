@@ -1,11 +1,12 @@
 """
-Interactive Navigation Controller
-实时键盘控制导航系统：建图、检测、可视化
+Base Navigation Controller
+底层导航控制基类：环境交互、建图、检测、可视化
 """
+import os
 import numpy as np
 import cv2
 import torch
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from types import SimpleNamespace
 from torchvision import transforms
 from habitat import Config
@@ -15,13 +16,16 @@ from habitat_baselines.common.environments import get_env_class
 from vlnce_baselines.detection import GroundedSAM
 from vlnce_baselines.mapping import Semantic_Mapping, SemanticMapper, SemanticProcessor
 from vlnce_baselines.visualization import MapVisualizer
+from vlnce_baselines.visualization.obstacle_analysis import (
+    calculate_obstacle_distances_from_depth,
+)
 from vlnce_baselines.config.core import ConfigHelper, create_category_config
-from vlnce_baselines.common.env_utils import construct_envs
-from vlnce_baselines.common.utils import get_device
+from vlnce_baselines.env.env_utils import construct_envs
+from vlnce_baselines.utils.system import get_device
 
 
-class InteractiveNavigationController:
-    """实时键盘控制导航器"""
+class BaseNavigationController:
+    """封装底层环境交互与感知建图能力的基础导航控制器。"""
     
     def __init__(self, config: Config):
         # print("[Init] 配置MAP参数...")
@@ -78,6 +82,27 @@ class InteractiveNavigationController:
         self.current_episode_id = None
         self.current_step = 0
         self.latest_landmark_instances_world = []
+        self._reset_navigation_runtime_state()
+
+    def _reset_navigation_runtime_state(self) -> None:
+        """Reset low-level observation/render caches shared by all controllers."""
+        self.latest_obs = None
+        self.latest_info = None
+        self.latest_done = False
+        self.latest_depth_meters = None
+        self.latest_global_map = None
+        self.latest_local_map = None
+        self.latest_lookaround_images: List[np.ndarray] = []
+        self.latest_lookaround_depths: List[np.ndarray] = []
+        self.latest_lookaround_phase = ""
+        self.latest_obstacle_distances_12 = {
+            f'angle_{i}': 'Unknown' for i in range(0, 360, 30)
+        }
+        self.latest_obstacle_distances = {
+            'front': 'Unknown',
+            'left_30': 'Unknown',
+            'right_30': 'Unknown',
+        }
 
     def _clear_landmark_detection_cache(self) -> None:
         """清空landmark检测缓存；仅在episode/subtask重置时调用。"""
@@ -280,6 +305,7 @@ class InteractiveNavigationController:
         self.envs.reset()
         self.current_step = 0
         self.current_episode_id = episode_id if episode_id is not None else 0
+        self._reset_navigation_runtime_state()
         
         self.category_config.reset_detected()
         self.classes = []
@@ -295,6 +321,191 @@ class InteractiveNavigationController:
         self.current_instruction = current_episodes[0].instruction.instruction_text
         
         print(f"Instruction: {self.current_instruction[:100]}{'...' if len(self.current_instruction) > 100 else ''}")
+
+    def _store_latest_map_paths(self, paths: Optional[Dict[str, Any]]) -> None:
+        if not paths:
+            return
+        if paths.get('global_map'):
+            self.latest_global_map = paths.get('global_map')
+        if paths.get('local_map'):
+            self.latest_local_map = paths.get('local_map')
+
+    def _save_visualization_snapshot(
+        self,
+        *,
+        map_state: Dict[str, Any],
+        rgb_bgr: np.ndarray,
+        phase: str,
+        step: Optional[int] = None,
+        detections=None,
+        labels=None,
+        masks=None,
+        landmark_classes: Optional[List[str]] = None,
+        render_policy: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[Dict[str, Any], List[Any], Optional[float]]:
+        """Shared wrapper around `visualizer.save_step_visualization`."""
+        if self.visualizer is None:
+            return {}, [], None
+
+        paths, detected_landmarks_step, last_waypoint_angle = self.visualizer.save_step_visualization(
+            step=self.current_step if step is None else int(step),
+            episode_id=self.current_episode_id,
+            rgb=rgb_bgr,
+            full_map=map_state['full_map'],
+            trajectory_points=map_state.get('subtask_trajectory_points', []),
+            detected_classes=list(self.detected_classes),
+            current_pose=map_state['full_pose'],
+            floor=map_state['floor'],
+            hfov=self.config.MAP.HFOV,
+            detections=detections,
+            labels=labels,
+            masks=masks,
+            landmark_classes=list(landmark_classes if landmark_classes is not None else getattr(self, 'landmark_classes', [])),
+            mapping_classes=self.mapping_classes,
+            landmark_config={
+                'min_total_pixels': self.landmark_min_total_pixels,
+                'min_area_threshold': self.landmark_min_area_threshold
+            },
+            waypoint_positions=map_state.get('waypoint_positions', []),
+            waypoint_ids=map_state.get('waypoint_ids', []),
+            space_area_layer=map_state.get('space_area_layer'),
+            space_area_records=map_state.get('space_area_records', []),
+            phase=phase,
+            global_trajectory_points=map_state.get('global_trajectory_points', []),
+            crop_offset=map_state.get('crop_offset'),
+            controller=self,
+            render_policy=render_policy,
+        )
+        self._store_latest_map_paths(paths)
+        return paths, detected_landmarks_step, last_waypoint_angle
+
+    def _get_cached_rgb_bgr(self, phase: Optional[str] = None) -> Optional[np.ndarray]:
+        """Return the best cached RGB frame for refresh-only rendering."""
+        if self.latest_obs is not None and 'rgb' in self.latest_obs:
+            return cv2.cvtColor(self.latest_obs['rgb'], cv2.COLOR_RGB2BGR)
+        if (
+            phase is not None and
+            self.latest_lookaround_phase == phase and
+            self.latest_lookaround_images
+        ):
+            return self.latest_lookaround_images[-1].copy()
+        return None
+
+    def _refresh_current_map_snapshots(
+        self,
+        phase: str,
+        landmark_classes: Optional[List[str]] = None,
+    ) -> bool:
+        """Refresh global/local map renders from cached observation and current map state."""
+        if self.mapper is None:
+            return False
+
+        rgb_bgr = self._get_cached_rgb_bgr(phase=phase)
+        if rgb_bgr is None:
+            return False
+
+        map_state = self.mapper.get_map_state()
+        self._save_visualization_snapshot(
+            map_state=map_state,
+            rgb_bgr=rgb_bgr,
+            phase=phase,
+            landmark_classes=landmark_classes,
+        )
+        return True
+
+    def _get_agent_pose(self) -> tuple:
+        """Read the current Habitat agent pose from environment 0."""
+        return self.envs.call_at(0, "get_agent_pose")
+
+    def _draw_waypoints_on_view(self, image: np.ndarray, waypoint_entry: Dict[str, Any]) -> np.ndarray:
+        """Draw the visible space-waypoint label and distance on a thinking view."""
+        if not waypoint_entry:
+            return image
+
+        label_text = str(
+            waypoint_entry.get("label")
+            or waypoint_entry.get("area_label")
+            or waypoint_entry.get("description")
+            or "Unknown"
+        ).strip()
+        if not label_text:
+            return image
+
+        try:
+            distance_text = f"{float(waypoint_entry.get('distance_m', 0.0)):.1f}m"
+        except (TypeError, ValueError):
+            distance_text = "unknown"
+
+        display_text = f"{label_text} {distance_text}".strip()
+        h, w = image.shape[:2]
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.62
+        thickness = 2
+        padding_x = 8
+        padding_y = 6
+        (text_w, text_h), baseline = cv2.getTextSize(display_text, font, font_scale, thickness)
+
+        box_w = text_w + padding_x * 2
+        box_h = text_h + baseline + padding_y * 2
+        box_x1 = max(8, (w - box_w) // 2)
+        box_y1 = max(12, h // 2 - box_h - 18)
+        box_x2 = min(w - 8, box_x1 + box_w)
+        box_y2 = min(h - 8, box_y1 + box_h)
+
+        cv2.rectangle(image, (box_x1, box_y1), (box_x2, box_y2), (255, 255, 255), -1)
+        cv2.rectangle(image, (box_x1, box_y1), (box_x2, box_y2), (255, 0, 0), 2)
+        text_x = box_x1 + padding_x
+        text_y = box_y2 - baseline - padding_y
+        cv2.putText(
+            image,
+            display_text,
+            (text_x, text_y),
+            font,
+            font_scale,
+            (255, 0, 0),
+            thickness,
+            cv2.LINE_AA,
+        )
+        return image
+
+    def _draw_distance_rays_on_first_person_view(self, image: np.ndarray, distances: Dict[str, str]) -> np.ndarray:
+        """Overlay the action-view obstacle rays on the first-person image."""
+        h, w = image.shape[:2]
+        center_x, bottom_y = w // 2, h - 20
+        hfov = float(self.config.MAP.HFOV)
+        fov_half = hfov / 2.0
+        ray_map = {
+            'left_30': -30,
+            'front': 0,
+            'right_30': 30,
+        }
+
+        for key, angle in ray_map.items():
+            if key not in distances or abs(angle) > fov_half:
+                continue
+
+            dist_str = distances[key]
+            if "WARNING" in dist_str or "<0.5" in dist_str:
+                color, y_ratio = (0, 0, 255), 0.7
+            elif ">2.0" in dist_str or "open" in dist_str:
+                color, y_ratio = (0, 255, 0), 0.1
+            else:
+                try:
+                    dist_val = float(dist_str.replace('m', '').split()[0])
+                    color = (0, 255, 255)
+                    y_ratio = 0.7 if dist_val < 1.0 else (0.5 if dist_val < 2.0 else 0.3)
+                except Exception:
+                    color, y_ratio = (0, 255, 255), 0.5
+
+            x_ratio = (angle + fov_half) / (2 * fov_half)
+            end_x, end_y = int(x_ratio * w), int(bottom_y - bottom_y * y_ratio)
+            cv2.line(image, (center_x, bottom_y), (end_x, end_y), color, 2)
+            text_x = end_x - len(dist_str) * 3
+            text_y = end_y - 5
+            cv2.rectangle(image, (text_x - 2, text_y - 12), (text_x + len(dist_str) * 7, text_y + 2), (0, 0, 0), -1)
+            cv2.putText(image, dist_str, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+
+        return image
     
     def look_around(self) -> None:
         """360度环视建图(12步×30°)，步数0-11"""
@@ -326,7 +537,109 @@ class InteractiveNavigationController:
         
         self.current_step = 12
         # print(f" ✅ {len(self.detected_classes)}类")
-    
+
+    def _on_lookaround_step(
+        self,
+        *,
+        phase: str,
+        look_index: int,
+        look_step: int,
+        obs: Dict[str, Any],
+        info: Dict[str, Any],
+    ) -> None:
+        """Subclass hook for per-step side effects during lookaround."""
+        return None
+
+    def _capture_lookaround_scan(
+        self,
+        phase: str,
+        enable_landmark_detection: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        """Run the shared 12-step lookaround scan and cache the resulting map/render state."""
+        from habitat.sims.habitat_simulator.actions import HabitatSimActions
+
+        debug_save_renderings = bool(getattr(self.config.MAP, 'DEBUG_SAVE_RENDERINGS', True))
+        lookaround_images: List[np.ndarray] = []
+        lookaround_depths: List[Optional[np.ndarray]] = []
+        final_map_state = None
+        final_snapshot_paths: Dict[str, Any] = {}
+        final_last_waypoint_angle = None
+        look_step = self.current_step
+
+        for look_index in range(1, 13):
+            self.current_step += 1
+            look_step = self.current_step
+
+            outputs = self.envs.step([{"action": HabitatSimActions.TURN_LEFT}])
+            obs, _, dones, infos = [list(x) for x in zip(*outputs)]
+
+            if dones[0]:
+                print(f"[WARN] Episode ended at lookaround step {look_index}/12")
+                return None
+
+            batch_obs = self._batch_obs(obs, save_object_detection=enable_landmark_detection)
+            poses = torch.from_numpy(np.array([item['sensor_pose'] for item in obs])).float().to(self.device)
+
+            map_state = self.mapper.update_map(
+                batch_obs, poses, look_step,
+                list(self.detected_classes), self.current_episode_id
+            )
+            final_map_state = map_state
+
+            rgb_bgr = cv2.cvtColor(obs[0]['rgb'], cv2.COLOR_RGB2BGR)
+            lookaround_images.append(rgb_bgr.copy())
+            lookaround_depths.append(self._depth_to_meters(obs[0]['depth']))
+
+            if debug_save_renderings:
+                final_snapshot_paths, _detected_landmarks_step, final_last_waypoint_angle = self._save_visualization_snapshot(
+                    map_state=map_state,
+                    rgb_bgr=rgb_bgr,
+                    phase=phase,
+                    step=look_step,
+                    detections=None,
+                    labels=None,
+                    masks=None,
+                    landmark_classes=list(self.landmark_classes) if enable_landmark_detection else [],
+                )
+                self._on_lookaround_step(
+                    phase=phase,
+                    look_index=look_index,
+                    look_step=look_step,
+                    obs=obs[0],
+                    info=infos[0] if infos and len(infos) > 0 else {},
+                )
+
+        self.latest_obs = obs[0]
+        self._update_obstacle_distances_12_directions(lookaround_depths)
+
+        if len(lookaround_images) < 12:
+            print(f"[WARN] Lookaround incomplete: {len(lookaround_images)}/12 images")
+            return None
+
+        self.latest_lookaround_images = [img.copy() for img in lookaround_images]
+        self.latest_lookaround_depths = [
+            depth.copy() if depth is not None else None for depth in lookaround_depths
+        ]
+        self.latest_lookaround_phase = str(phase)
+
+        if final_map_state is not None and not debug_save_renderings:
+            final_snapshot_paths, _detected_landmarks_step, final_last_waypoint_angle = self._save_visualization_snapshot(
+                map_state=final_map_state,
+                rgb_bgr=lookaround_images[-1].copy(),
+                phase=phase,
+                step=look_step,
+                landmark_classes=[],
+            )
+
+        return {
+            "look_step": look_step,
+            "lookaround_images": lookaround_images,
+            "lookaround_depths": lookaround_depths,
+            "final_map_state": final_map_state,
+            "final_snapshot_paths": final_snapshot_paths,
+            "final_last_waypoint_angle": final_last_waypoint_angle,
+        }
+
     def step(self, action: int, save_vis: bool = True, phase: str = "action",
              enable_landmark_detection: bool = True) -> Dict[str, Any]:
         """执行一步动作，更新地图并保存可视化
@@ -387,35 +700,15 @@ class InteractiveNavigationController:
                 vis_detections = None
                 vis_labels = None
                 vis_masks = None
-            # action执行时不传waypoint信息，不计算角度（只在环视后计算）
             rgb_bgr = cv2.cvtColor(obs[0]['rgb'], cv2.COLOR_RGB2BGR)
-            _, detected_landmarks_step, _ = self.visualizer.save_step_visualization(
-                step=self.current_step,
-                episode_id=self.current_episode_id,
-                rgb=rgb_bgr,
-                full_map=map_state['full_map'],
-                trajectory_points=map_state.get('subtask_trajectory_points', []),  # 从map_state获取（local map用子任务轨迹）
-                detected_classes=list(self.detected_classes),
-                current_pose=map_state['full_pose'],
-                floor=map_state['floor'],
-                hfov=self.config.MAP.HFOV,
+            _, detected_landmarks_step, _ = self._save_visualization_snapshot(
+                map_state=map_state,
+                rgb_bgr=rgb_bgr,
+                phase=phase,
                 detections=vis_detections,
                 labels=vis_labels,
                 masks=vis_masks,
                 landmark_classes=vis_landmark_classes,
-                mapping_classes=self.mapping_classes,
-                landmark_config={
-                    'min_total_pixels': self.landmark_min_total_pixels,
-                    'min_area_threshold': self.landmark_min_area_threshold
-                },
-                waypoint_positions=map_state.get('waypoint_positions', []),  # 从map_state获取（已旋转）
-                waypoint_ids=map_state.get('waypoint_ids', []),  # 从map_state获取
-                room_area_layer=map_state.get('room_area_layer'),
-                room_area_records=map_state.get('room_area_records', []),
-                phase=phase,
-                global_trajectory_points=map_state.get('global_trajectory_points', []),  # 从map_state获取（global map用全局轨迹）
-                crop_offset=map_state.get('crop_offset'),  # 从map_state获取
-                controller=self  # 传入controller以获取latest_depth_meters等当前帧信息
             )
             
             # 记录当前step的landmark检测结果（用于action决策与去重）
@@ -445,6 +738,147 @@ class InteractiveNavigationController:
             'detected_classes': list(self.detected_classes),
             'current_pose': map_state['full_pose']
         }
+
+    def _refresh_step_visualization_snapshot(
+        self,
+        phase: str,
+        enable_landmark_detection: bool = False,
+        force: bool = False,
+    ) -> bool:
+        """Re-render the current step visualization from cached obs without re-fusing the map."""
+        if self.latest_obs is None:
+            return False
+
+        render_policy = self.visualizer.get_render_policy(phase)
+        required_paths = []
+        if render_policy.get('save_rgb', False):
+            required_paths.append(
+                os.path.join(self.current_episode_dir, 'rgb', f'step_{self.current_step:04d}_{phase}.png')
+            )
+        if render_policy.get('save_global_map', False):
+            required_paths.append(
+                os.path.join(self.current_episode_dir, 'global_map', f'step_{self.current_step:04d}_{phase}.png')
+            )
+        if render_policy.get('save_local_map', False):
+            required_paths.append(
+                os.path.join(self.current_episode_dir, 'local_map', f'step_{self.current_step:04d}_{phase}.png')
+            )
+        if enable_landmark_detection and render_policy.get('save_detection', False):
+            required_paths.append(
+                os.path.join(self.current_episode_dir, 'detection', f'step_{self.current_step:04d}_{phase}.png')
+            )
+
+        if not force and required_paths and all(os.path.exists(path) for path in required_paths):
+            if not enable_landmark_detection:
+                return True
+            if hasattr(self, 'current_step_landmarks') and self.current_step in self.current_step_landmarks:
+                return True
+
+        self._batch_obs([self.latest_obs], save_object_detection=enable_landmark_detection)
+        map_state = self.mapper.get_map_state()
+
+        rgb_bgr = cv2.cvtColor(self.latest_obs['rgb'], cv2.COLOR_RGB2BGR)
+        landmark_classes = list(self.landmark_classes) if enable_landmark_detection else []
+        detections = self.latest_detections_full if enable_landmark_detection and hasattr(self, 'latest_detections_full') else None
+        labels = self.latest_labels_full if enable_landmark_detection and hasattr(self, 'latest_labels_full') else None
+        masks = self.latest_masks_full if enable_landmark_detection and hasattr(self, 'latest_masks_full') else None
+
+        _, detected_landmarks_step, _ = self._save_visualization_snapshot(
+            map_state=map_state,
+            rgb_bgr=rgb_bgr,
+            phase=phase,
+            detections=detections,
+            labels=labels,
+            masks=masks,
+            landmark_classes=landmark_classes,
+            render_policy=render_policy,
+        )
+
+        if enable_landmark_detection:
+            self._record_landmark_detection_step(self.current_step, detected_landmarks_step)
+        return True
+
+    def _run_pre_action_detection_snapshot(self, action_phase: str) -> bool:
+        """Refresh one action-phase snapshot with landmark detection before movement."""
+        return self._refresh_step_visualization_snapshot(
+            phase=action_phase,
+            enable_landmark_detection=True,
+            force=False,
+        )
+
+    def _update_obstacle_distances_12_directions(self, lookaround_depths: Optional[List[np.ndarray]] = None):
+        """Update 12-view obstacle distances from depth, with map fallback when needed."""
+        try:
+            depth_views = lookaround_depths or []
+            if len(depth_views) < 12:
+                raise ValueError("Lookaround depths incomplete")
+
+            map_fallback = {}
+            if self.mapper is not None and self.visualizer is not None:
+                map_state = self.mapper.get_map_state()
+                map_fallback = self.visualizer.calculate_obstacle_distances_12_directions_from_full_map(
+                    map_state.get('full_map'),
+                )
+
+            distances = {}
+            for step_idx, angle in enumerate(range(0, 360, 30), start=1):
+                depth_meters = depth_views[step_idx - 1]
+                front_distance = calculate_obstacle_distances_from_depth(
+                    depth_meters,
+                    hfov_deg=float(self.config.MAP.HFOV),
+                    directions={"front": 0.0},
+                    angle_band_deg=5.0,
+                    fallback_distances={
+                        "front": map_fallback.get(f'angle_{angle}', ">2.0m open")
+                    },
+                ).get("front", "Unknown")
+                distances[f'angle_{angle}'] = front_distance
+            self.latest_obstacle_distances_12 = distances
+        except Exception:
+            try:
+                map_state = self.mapper.get_map_state() if self.mapper is not None else {}
+                fallback = self.visualizer.calculate_obstacle_distances_12_directions_from_full_map(
+                    map_state.get('full_map'),
+                ) if self.visualizer is not None else {}
+            except Exception:
+                fallback = {}
+            self.latest_obstacle_distances_12 = {
+                f'angle_{i}': fallback.get(f'angle_{i}', '>2.0m open') for i in range(0, 360, 30)
+            }
+
+    def _update_obstacle_distances(self):
+        """Update action-view obstacle distances from current depth, with map fallback."""
+        try:
+            map_fallback = {}
+            if self.mapper is not None and self.visualizer is not None:
+                map_state = self.mapper.get_map_state()
+                map_fallback = self.visualizer.calculate_obstacle_distances_from_full_map(
+                    map_state.get('full_map'),
+                )
+            self.latest_obstacle_distances = calculate_obstacle_distances_from_depth(
+                getattr(self, 'latest_depth_meters', None),
+                hfov_deg=float(self.config.MAP.HFOV),
+                angle_band_deg=5.0,
+                fallback_distances=map_fallback,
+            )
+        except Exception:
+            try:
+                map_state = self.mapper.get_map_state() if self.mapper is not None else {}
+                fallback = self.visualizer.calculate_obstacle_distances_from_full_map(
+                    map_state.get('full_map'),
+                ) if self.visualizer is not None else {}
+            except Exception:
+                fallback = {}
+            self.latest_obstacle_distances = {
+                'front': fallback.get('front', '>2.0m open'),
+                'left_30': fallback.get('left_30', '>2.0m open'),
+                'right_30': fallback.get('right_30', '>2.0m open'),
+            }
+
+    @property
+    def current_episode_dir(self) -> str:
+        """Return the current episode output directory if the subclass uses RESULTS_DIR layout."""
+        return os.path.join(self.config.RESULTS_DIR, f'episode_{self.current_episode_id}')
     
     def finish_episode(self, success: bool = False, stop_action: bool = False) -> dict:
         """

@@ -18,11 +18,23 @@ COMMON_SPACE_TYPE_LIBRARY: List[Tuple[str, Sequence[str]]] = [
     ("stairs", ("stairs", "stair", "stairway", "staircase", "landing")),
     ("hallway", ("hallway", "hall", "corridor", "passage", "passageway")),
     ("closet", ("closet", "wardrobe")),
+    ("pantry", ("pantry",)),
+    ("mudroom", ("mudroom", "mud room")),
     ("garage", ("garage",)),
     ("balcony", ("balcony",)),
     ("patio", ("patio", "terrace", "deck")),
     ("lobby", ("lobby", "reception")),
     ("gym", ("gym", "exercise room", "fitness room")),
+    ("library", ("library", "reading room")),
+    ("playroom", ("playroom", "kids playroom")),
+    ("media room", ("media room", "tv room", "home theater", "theater room", "game room")),
+    ("sunroom", ("sunroom", "sun room", "conservatory")),
+    ("studio", ("studio", "studio apartment")),
+    ("basement", ("basement", "cellar")),
+    ("attic", ("attic",)),
+    ("loft", ("loft",)),
+    ("conference room", ("conference room", "meeting room", "board room")),
+    ("dressing room", ("dressing room", "changing room")),
     ("storage", ("storage", "storage room", "storeroom", "pantry")),
 ]
 
@@ -33,7 +45,7 @@ def canonical_space_types_text() -> str:
 
 
 def strip_space_type_variant_suffixes(text: Optional[str]) -> Optional[str]:
-    """Remove room-area variant numbers such as bedroom1 / hallway2 from free-form text."""
+    """Remove space-area variant numbers such as bedroom1 / hallway2 from free-form text."""
     if text is None:
         return None
 

@@ -21,9 +21,9 @@ The design target is: keep the CLI thin, keep perception/mapping/planning/action
 - `vlm_navigation.py`
   - CLI entry only
   - parses arguments
-  - delegates runtime orchestration to `vlnce_baselines/vlm/runner.py`
+  - delegates runtime orchestration to `vlnce_baselines/runtime/runner.py`
 
-- `vlnce_baselines/vlm/runner.py`
+- `vlnce_baselines/runtime/runner.py`
   - batch episode selection
   - controller construction
   - per-episode execution
@@ -33,19 +33,20 @@ Rule: no mapping, planning, detection, or rendering logic should live in the CLI
 
 ### 2.2 Control Layer
 
-- `vlnce_baselines/interactive_navigation_controller.py`
-  - simulator stepping
-  - observation collection
+- `vlnce_baselines/controllers/base_navigation_controller.py`
+  - simulator stepping and Habitat interaction
+  - observation collection and cache maintenance
   - mapper / detector / visualizer wiring
-  - shared navigation primitives
+  - shared render refresh and obstacle-distance updates
 
-- `vlnce_baselines/vlm_navigation_controller.py`
+- `vlnce_baselines/controllers/vlm_navigation_controller.py`
   - SpaceVLN runtime loop
   - look-around -> think -> auto-rotate -> act -> verify/replan
-  - prompt input assembly
+  - prompt input assembly and planner response sanitization
   - subtask state and retry policy
+  - the only controller exported to the runtime layer
 
-Rule: controller coordinates modules; it should not duplicate geometry or rendering math already owned elsewhere.
+Rule: `BaseNavigationController` owns low-level env/perception plumbing; `VLMNavigationController` should stay focused on planning and action orchestration.
 
 ### 2.3 Perception + Mapping Layer
 
@@ -67,19 +68,19 @@ Rule: world/map state is the source of truth for obstacle distance, landmark dis
 
 ### 2.4 VLM / LLM Layer
 
-- `vlnce_baselines/vlm/thinking.py`
+- `vlnce_baselines/vlm/planning/thinking.py`
   - planning API client
   - initial subtask generation
   - verification / replanning
 
-- `vlnce_baselines/vlm/action.py`
+- `vlnce_baselines/vlm/execution/action.py`
   - action API client
   - low-level action decision
 
-- `vlnce_baselines/vlm/prompts.py`
+- `vlnce_baselines/vlm/prompts/prompts.py`
   - thinking prompt template
 
-- `vlnce_baselines/vlm/action_prompt.py`
+- `vlnce_baselines/vlm/prompts/action_prompt.py`
   - action prompt template
 
 Rule: prompts describe policy and output format; they should not contain implementation-specific geometry that can be computed directly in code.
@@ -108,10 +109,10 @@ Rule: all renderers and prompt inputs must reuse the same projection and obstacl
 
 ### 2.6 Persistence Layer
 
-- `vlnce_baselines/vlm/save_manager.py`
+- `vlnce_baselines/vlm/support/save_manager.py`
   - JSON / image / thinking record saving
 
-- `vlnce_baselines/vlm/navigation_visualizer.py`
+- `vlnce_baselines/vlm/support/navigation_visualizer.py`
   - composite navigation output
   - GIF / final visualization packaging
 

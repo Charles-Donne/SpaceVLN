@@ -10,8 +10,8 @@ from vlnce_baselines.config.core.params.api import (
     ACTION_IMAGE_COMPRESSION_MAX_SIZE,
     ACTION_IMAGE_COMPRESSION_QUALITY,
 )
-from vlnce_baselines.vlm.api_client import APIConfig, BaseAPIClient
-from vlnce_baselines.vlm.action_prompt import get_action_execution_prompt
+from vlnce_baselines.vlm.api.api_client import APIConfig, BaseAPIClient
+from vlnce_baselines.vlm.prompts.action_prompt import get_action_execution_prompt
 from vlnce_baselines.visualization.visualizer import MapVisualizer
 
 

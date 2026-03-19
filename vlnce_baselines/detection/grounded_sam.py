@@ -14,7 +14,7 @@ from groundingdino.util.inference import Model
 from segment_anything import sam_model_registry, SamPredictor
 
 from vlnce_baselines.detection.RepViTSAM.setup_repvit_sam import build_sam_repvit
-from vlnce_baselines.common.utils import get_device
+from vlnce_baselines.utils.system import get_device
 
 
 VisualObservation = Union[torch.Tensor, np.ndarray]

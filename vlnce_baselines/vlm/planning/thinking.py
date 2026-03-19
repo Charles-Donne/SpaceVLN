@@ -4,9 +4,8 @@ LLM规划模块
 高层规划：分析环境生成子任务
 """
 from typing import Dict, List, Tuple, Optional
-from vlnce_baselines.vlm.api_client import APIConfig, BaseAPIClient
-from vlnce_baselines.mapping.space_types import normalize_space_type
-from vlnce_baselines.vlm.prompts import (
+from vlnce_baselines.vlm.api.api_client import APIConfig, BaseAPIClient
+from vlnce_baselines.vlm.prompts.prompts import (
     get_initial_planning_prompt,
     get_verification_replanning_prompt
 )
@@ -51,9 +50,6 @@ class LLMPlanner(BaseAPIClient):
         if not current_waypoint:
             return False
 
-        if normalize_space_type(current_waypoint) == "Unknown":
-            return False
-        
         return True
     
     def generate_initial_subtask(self,

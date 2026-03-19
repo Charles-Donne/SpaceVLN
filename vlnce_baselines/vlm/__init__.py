@@ -1,23 +1,17 @@
-"""
-VLM subsystem.
+"""Role-oriented VLM package.
 
-This package contains model-facing logic:
-- `api_client`: shared API/YAML loading layer
-- `thinking` / `action`: planner and executor
-- `prompts` / `action_prompt`: prompt templates
-- `navigation_visualizer` / `save_manager`: model I/O artifacts
-
-Canonical API YAML files now live under `vlnce_baselines/config/api/`.
-Old `vlnce_baselines/vlm/*.yaml` paths are resolved for backward compatibility
-when users still pass them explicitly.
+Subpackages:
+- `api/`: shared API and YAML loading
+- `planning/`: thinking/planner model integration
+- `execution/`: action executor and parser
+- `prompts/`: prompt templates
+- `support/`: visualization, saving, and view-render support
 """
 
-from vlnce_baselines.vlm.api_client import APIConfig, BaseAPIClient
-from vlnce_baselines.vlm.thinking import LLMPlanner
-from vlnce_baselines.vlm.action import ActionExecutor
-from vlnce_baselines.vlm.navigation_visualizer import NavigationVisualizer
-from vlnce_baselines.vlm.action_parser import ActionParser
-from vlnce_baselines.vlm.save_manager import SaveManager
+from vlnce_baselines.vlm.api import APIConfig, BaseAPIClient
+from vlnce_baselines.vlm.execution import ActionExecutor, ActionParser
+from vlnce_baselines.vlm.planning import LLMPlanner
+from vlnce_baselines.vlm.support import NavigationVisualizer, SaveManager
 
 __all__ = [
     'APIConfig',

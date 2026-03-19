@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from vlnce_baselines.common.spatial_formatter import format_relative_direction
+from vlnce_baselines.utils.spatial_formatter import format_relative_direction
 from vlnce_baselines.visualization.landmark_overlay import (
     LandmarkDrawItem,
     build_landmark_strip_lines,
@@ -74,7 +74,7 @@ def render_detection_bbox(owner,
             return []
 
         try:
-            from vlnce_baselines.vlm.thinking_view_renderer import ThinkingViewRenderer
+            from vlnce_baselines.vlm.support.thinking_view_renderer import ThinkingViewRenderer
 
             map_state = controller.mapper.get_map_state()
             waypoint_positions, waypoint_ids, waypoint_descriptions = controller.mapper.get_waypoints()
@@ -88,7 +88,7 @@ def render_detection_bbox(owner,
                 waypoint_area_labels=map_state.get("waypoint_area_labels", []),
                 current_pose=map_state.get("full_pose"),
                 resolution_cm=float(getattr(controller.mapper, "resolution", owner.resolution)),
-                current_room_area_label=str(map_state.get("current_room_area_label", "Unknown") or "Unknown"),
+                current_space_area_label=str(map_state.get("current_space_area_label", "Unknown") or "Unknown"),
             )
             waypoint_entries = ThinkingViewRenderer._apply_waypoint_visibility(
                 waypoint_entries=waypoint_entries,

@@ -1,5 +1,5 @@
 """
-Persistent room-area manager built on top of the world semantic map.
+Persistent space-area manager built on top of the world semantic map.
 """
 
 from collections import deque
@@ -8,26 +8,26 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 import numpy as np
 
 from vlnce_baselines.config.core.params.spatial import (
-    ROOM_CONNECTOR_TYPES,
-    ROOM_CURRENT_AREA_WAYPOINT_MAX_DISTANCE_M,
-    ROOM_MAX_CONNECTED_AREAS,
-    ROOM_MAX_CONNECTION_DISTANCE_M,
-    ROOM_MAX_SAME_TYPE_WAYPOINT_MERGE_DISTANCE_M,
-    ROOM_SAMPLE_PIXELS_PER_AREA,
+    SPACE_AREA_CONNECTOR_TYPES,
+    SPACE_AREA_CURRENT_WAYPOINT_MAX_DISTANCE_M,
+    SPACE_AREA_MAX_CONNECTED_AREAS,
+    SPACE_AREA_MAX_CONNECTION_DISTANCE_M,
+    SPACE_AREA_MAX_SAME_TYPE_WAYPOINT_MERGE_DISTANCE_M,
+    SPACE_AREA_SAMPLE_PIXELS_PER_AREA,
 )
 from vlnce_baselines.mapping.space_types import normalize_space_type
 from vlnce_baselines.visualization.map_projection import RotatedMapProjector
 
 
-class RoomAreaManager:
-    """Track room-type areas, variants, and the current area label on the world map."""
+class SpaceAreaManager:
+    """Track space-type areas, variants, and the current area label on the world map."""
 
-    CONNECTOR_ROOM_TYPES = ROOM_CONNECTOR_TYPES
-    MAX_CONNECTED_AREAS = ROOM_MAX_CONNECTED_AREAS
-    MAX_CONNECTION_DISTANCE_M = ROOM_MAX_CONNECTION_DISTANCE_M
-    MAX_SAME_TYPE_WAYPOINT_MERGE_DISTANCE_M = ROOM_MAX_SAME_TYPE_WAYPOINT_MERGE_DISTANCE_M
-    SAMPLE_PIXELS_PER_AREA = ROOM_SAMPLE_PIXELS_PER_AREA
-    CURRENT_AREA_WAYPOINT_MAX_DISTANCE_M = ROOM_CURRENT_AREA_WAYPOINT_MAX_DISTANCE_M
+    CONNECTOR_SPACE_TYPES = SPACE_AREA_CONNECTOR_TYPES
+    MAX_CONNECTED_AREAS = SPACE_AREA_MAX_CONNECTED_AREAS
+    MAX_CONNECTION_DISTANCE_M = SPACE_AREA_MAX_CONNECTION_DISTANCE_M
+    MAX_SAME_TYPE_WAYPOINT_MERGE_DISTANCE_M = SPACE_AREA_MAX_SAME_TYPE_WAYPOINT_MERGE_DISTANCE_M
+    SAMPLE_PIXELS_PER_AREA = SPACE_AREA_SAMPLE_PIXELS_PER_AREA
+    CURRENT_AREA_WAYPOINT_MAX_DISTANCE_M = SPACE_AREA_CURRENT_WAYPOINT_MAX_DISTANCE_M
 
     def __init__(self, map_shape: Tuple[int, int], resolution: int = 5):
         self.map_shape = map_shape
@@ -35,11 +35,11 @@ class RoomAreaManager:
         self.reset()
 
     def reset(self) -> None:
-        self.room_area_records: List[Dict[str, Any]] = []
-        self.room_area_counter = 0
+        self.space_area_records: List[Dict[str, Any]] = []
+        self.space_area_counter = 0
         self.label_aliases: Dict[str, str] = {}
-        self.current_room_area_label = "Unknown"
-        self.current_room_area_type = "Unknown"
+        self.current_space_area_label = "Unknown"
+        self.current_space_area_type = "Unknown"
 
     def update_from_waypoint(
         self,
@@ -50,11 +50,11 @@ class RoomAreaManager:
         full_pose: Optional[Sequence[float]],
         crop_offset: Optional[Tuple[int, int]],
     ) -> str:
-        room_type = self._parse_room_type(description)
-        if room_type == "Unknown":
+        space_type = self._parse_space_type(description)
+        if space_type == "Unknown":
             return "Unknown"
-        room_key = self._room_type_key(room_type)
-        world_pixels = self._compute_room_area_world_pixels(
+        space_key = self._space_type_key(space_type)
+        world_pixels = self._compute_space_area_world_pixels(
             pixel_y=pixel_y,
             pixel_x=pixel_x,
             full_map=full_map,
@@ -70,8 +70,8 @@ class RoomAreaManager:
         )
 
         overlapping_records = [
-            record for record in self.room_area_records
-            if record["room_key"] == room_key
+            record for record in self.space_area_records
+            if record["space_key"] == space_key
             and self._records_match_new_area(
                 existing_record=record,
                 new_pixels=world_pixels,
@@ -102,10 +102,10 @@ class RoomAreaManager:
                     old_label=str(extra_record["label"]),
                     new_label=str(merged_record["label"]),
                 )
-                self.room_area_records.remove(extra_record)
+                self.space_area_records.remove(extra_record)
 
-            self.current_room_area_label = str(merged_record["label"])
-            self.current_room_area_type = str(merged_record["room_type"])
+            self.current_space_area_label = str(merged_record["label"])
+            self.current_space_area_type = str(merged_record["space_type"])
             self._consolidate_same_type_records(
                 obstacle_mask=obstacle_mask,
                 projector=projector,
@@ -114,26 +114,26 @@ class RoomAreaManager:
 
         existing_variants = [
             int(record["variant"])
-            for record in self.room_area_records
-            if record["room_key"] == room_key
+            for record in self.space_area_records
+            if record["space_key"] == space_key
         ]
         variant = (max(existing_variants) + 1) if existing_variants else 1
-        self.room_area_counter += 1
-        label = self._room_label(room_type, variant)
+        self.space_area_counter += 1
+        label = self._space_area_label(space_type, variant)
         record = {
-            "id": self.room_area_counter,
+            "id": self.space_area_counter,
             "label": label,
-            "room_type": room_type,
-            "room_key": room_key,
+            "space_type": space_type,
+            "space_key": space_key,
             "variant": variant,
             "center_world_px": (int(pixel_y), int(pixel_x)),
             "pixels": set(world_pixels),
             "waypoint_points": {(int(pixel_y), int(pixel_x))},
             "description": description,
         }
-        self.room_area_records.append(record)
-        self.current_room_area_label = label
-        self.current_room_area_type = room_type
+        self.space_area_records.append(record)
+        self.current_space_area_label = label
+        self.current_space_area_type = space_type
         self._consolidate_same_type_records(
             obstacle_mask=obstacle_mask,
             projector=projector,
@@ -175,13 +175,13 @@ class RoomAreaManager:
 
         area_records: List[Dict[str, Any]] = []
         self._refresh_connection_metadata(full_map, full_pose, crop_offset)
-        for record in self.room_area_records:
+        for record in self.space_area_records:
             center_py, center_px = record["center_world_px"]
             area_records.append({
                 "id": int(record["id"]),
                 "label": str(record["label"]),
                 "display_label": str(record.get("display_label", record["label"])),
-                "room_type": str(record["room_type"]),
+                "space_type": str(record["space_type"]),
                 "variant": int(record["variant"]),
                 "center_world_px": (int(center_py), int(center_px)),
                 "connected_area_labels": list(record.get("connected_area_labels", [])),
@@ -200,7 +200,7 @@ class RoomAreaManager:
                     best_distance[row, col] = dist
                     layer[row, col] = int(record["id"])
 
-        self._set_current_room_area_from_layer(
+        self._set_current_space_area_from_layer(
             layer=layer,
             full_pose=full_pose,
             projector=projector,
@@ -218,9 +218,9 @@ class RoomAreaManager:
         changed = True
         while changed:
             changed = False
-            for idx, record in enumerate(list(self.room_area_records)):
-                for other in self.room_area_records[idx + 1:]:
-                    if record.get("room_key") != other.get("room_key"):
+            for idx, record in enumerate(list(self.space_area_records)):
+                for other in self.space_area_records[idx + 1:]:
+                    if record.get("space_key") != other.get("space_key"):
                         continue
                     should_merge = (
                         self._pixel_sets_overlap(record.get("pixels", set()), other.get("pixels", set()))
@@ -244,17 +244,17 @@ class RoomAreaManager:
                         (record, other),
                         key=lambda item: (int(item.get("variant", 0)), int(item.get("id", 0))),
                     )
-                    self._merge_room_area_records(primary, secondary)
+                    self._merge_space_area_records(primary, secondary)
                     changed = True
                     break
                 if changed:
                     break
 
-        resolved_current = self._resolve_label_alias(self.current_room_area_label)
+        resolved_current = self._resolve_label_alias(self.current_space_area_label)
         if resolved_current and resolved_current != "Unknown":
             current_record = next(
                 (
-                    item for item in self.room_area_records
+                    item for item in self.space_area_records
                     if str(item.get("label", "")) == resolved_current
                 ),
                 None,
@@ -262,7 +262,7 @@ class RoomAreaManager:
             if current_record is not None:
                 self._set_current_area_from_record(current_record)
 
-    def _merge_room_area_records(
+    def _merge_space_area_records(
         self,
         primary: Dict[str, Any],
         secondary: Dict[str, Any],
@@ -277,8 +277,8 @@ class RoomAreaManager:
             old_label=str(secondary.get("label", "")),
             new_label=str(primary.get("label", "")),
         )
-        if secondary in self.room_area_records:
-            self.room_area_records.remove(secondary)
+        if secondary in self.space_area_records:
+            self.space_area_records.remove(secondary)
 
     @staticmethod
     def _compute_record_center_from_pixels(record: Dict[str, Any]) -> Tuple[int, int]:
@@ -292,7 +292,7 @@ class RoomAreaManager:
         return int(round(float(rows.mean()))), int(round(float(cols.mean())))
 
     @staticmethod
-    def _parse_room_type(description: str) -> str:
+    def _parse_space_type(description: str) -> str:
         text = (description or "").strip()
         if not text:
             return "Unknown"
@@ -300,15 +300,19 @@ class RoomAreaManager:
         for sep in ("|", "-", "Nearby", "Connected"):
             if sep in text:
                 text = text.split(sep)[0].strip()
-        return normalize_space_type(" ".join(text.split()))
+        compact_text = " ".join(text.split())
+        canonical = normalize_space_type(compact_text)
+        if canonical != "Unknown":
+            return canonical
+        return compact_text or "Unknown"
 
     @staticmethod
-    def _room_type_key(room_type: str) -> str:
-        return "".join(ch.lower() for ch in room_type if ch.isalnum())
+    def _space_type_key(space_type: str) -> str:
+        return "".join(ch.lower() for ch in space_type if ch.isalnum())
 
     @staticmethod
-    def _room_label(room_type: str, variant: int) -> str:
-        words = [word.capitalize() for word in room_type.split() if word]
+    def _space_area_label(space_type: str, variant: int) -> str:
+        words = [word.capitalize() for word in space_type.split() if word]
         base = "".join(words) if words else "Unknown"
         return f"{base}{variant}"
 
@@ -378,7 +382,7 @@ class RoomAreaManager:
             agent_orientation_deg=float(full_pose[2]),
         )
 
-    def _find_room_area_start(
+    def _find_space_area_start(
         self,
         traversible: np.ndarray,
         center_row: int,
@@ -400,7 +404,7 @@ class RoomAreaManager:
         best_idx = int(indices[np.argmin(d2[within])])
         return int(ys[best_idx]), int(xs[best_idx])
 
-    def _compute_room_area_world_pixels(
+    def _compute_space_area_world_pixels(
         self,
         pixel_y: int,
         pixel_x: int,
@@ -423,7 +427,7 @@ class RoomAreaManager:
 
         center_row = int(round(center_rot[0]))
         center_col = int(round(center_rot[1]))
-        start = self._find_room_area_start(traversible, center_row, center_col)
+        start = self._find_space_area_start(traversible, center_row, center_col)
         if start is None:
             return fallback
 
@@ -480,7 +484,7 @@ class RoomAreaManager:
             return {(int(pixel_y), int(pixel_x))}
         return fallback
 
-    def _set_current_room_area_from_layer(
+    def _set_current_space_area_from_layer(
         self,
         layer: np.ndarray,
         full_pose: Optional[Sequence[float]],
@@ -488,7 +492,7 @@ class RoomAreaManager:
         waypoint_positions: Optional[Sequence[Tuple[int, int]]] = None,
         waypoint_area_labels: Optional[Sequence[str]] = None,
     ) -> None:
-        if full_pose is None or not self.room_area_records:
+        if full_pose is None or not self.space_area_records:
             self._set_unknown_current_area()
             return
 
@@ -502,7 +506,7 @@ class RoomAreaManager:
                 area_id = int(layer[row, col])
                 if area_id > 0:
                     current_record = next(
-                        (record for record in self.room_area_records if int(record["id"]) == area_id),
+                        (record for record in self.space_area_records if int(record["id"]) == area_id),
                         None,
                     )
                     if current_record is not None and self._record_has_nearby_area_waypoint(
@@ -512,8 +516,8 @@ class RoomAreaManager:
                         waypoint_positions=waypoint_positions,
                         waypoint_area_labels=waypoint_area_labels,
                     ):
-                        self.current_room_area_label = str(current_record["label"])
-                        self.current_room_area_type = str(current_record["room_type"])
+                        self.current_space_area_label = str(current_record["label"])
+                        self.current_space_area_type = str(current_record["space_type"])
                         return
 
         containing_record = self._find_current_record_from_waypoints(
@@ -529,8 +533,8 @@ class RoomAreaManager:
         self._set_unknown_current_area()
 
     def _set_unknown_current_area(self) -> None:
-        self.current_room_area_label = "Unknown"
-        self.current_room_area_type = "Unknown"
+        self.current_space_area_label = "Unknown"
+        self.current_space_area_type = "Unknown"
 
     def _maintain_current_area_with_pose(
         self,
@@ -540,7 +544,7 @@ class RoomAreaManager:
         waypoint_positions: Optional[Sequence[Tuple[int, int]]] = None,
         waypoint_area_labels: Optional[Sequence[str]] = None,
     ) -> None:
-        if full_map is None or full_pose is None or not self.room_area_records:
+        if full_map is None or full_pose is None or not self.space_area_records:
             self._set_unknown_current_area()
             return
 
@@ -565,7 +569,7 @@ class RoomAreaManager:
         pixel_x: int,
     ) -> Optional[Dict[str, Any]]:
         target_pixel = (int(pixel_y), int(pixel_x))
-        for record in reversed(self.room_area_records):
+        for record in reversed(self.space_area_records):
             if target_pixel in record["pixels"]:
                 return record
         return None
@@ -630,8 +634,8 @@ class RoomAreaManager:
         return False
 
     def _set_current_area_from_record(self, record: Dict[str, Any]) -> None:
-        self.current_room_area_label = str(record.get("label", "Unknown") or "Unknown")
-        self.current_room_area_type = str(record.get("room_type", "Unknown") or "Unknown")
+        self.current_space_area_label = str(record.get("label", "Unknown") or "Unknown")
+        self.current_space_area_type = str(record.get("space_type", "Unknown") or "Unknown")
 
     def get_display_label(self, label: str) -> str:
         target_label = self._resolve_label_alias(str(label or "").strip())
@@ -640,7 +644,7 @@ class RoomAreaManager:
         if target_label == "Unknown":
             return "Unknown"
         record = next(
-            (item for item in self.room_area_records if str(item.get("label", "")) == target_label),
+            (item for item in self.space_area_records if str(item.get("label", "")) == target_label),
             None,
         )
         if record is None:
@@ -675,7 +679,7 @@ class RoomAreaManager:
         full_pose: Optional[Sequence[float]],
         crop_offset: Optional[Tuple[int, int]],
     ) -> None:
-        for record in self.room_area_records:
+        for record in self.space_area_records:
             record["connected_area_labels"] = []
             record["display_label"] = str(record.get("label", "Unknown") or "Unknown")
 
@@ -687,8 +691,8 @@ class RoomAreaManager:
             return
 
         obstacle_mask = np.asarray(full_map[0] > 0.5, dtype=bool)
-        for record in self.room_area_records:
-            if str(record.get("room_type", "")) not in self.CONNECTOR_ROOM_TYPES:
+        for record in self.space_area_records:
+            if str(record.get("space_type", "")) not in self.CONNECTOR_SPACE_TYPES:
                 continue
 
             connected = self._compute_connected_areas_for_record(
@@ -712,7 +716,7 @@ class RoomAreaManager:
         candidates: List[Tuple[float, Dict[str, Any]]] = []
         max_distance_px = (self.MAX_CONNECTION_DISTANCE_M * 100.0) / float(self.resolution)
 
-        for other in self.room_area_records:
+        for other in self.space_area_records:
             if other is record:
                 continue
             if self._records_are_adjacent(record, other):
@@ -741,7 +745,7 @@ class RoomAreaManager:
 
     @staticmethod
     def _records_are_adjacent(record_a: Dict[str, Any], record_b: Dict[str, Any]) -> bool:
-        return RoomAreaManager._pixel_sets_are_adjacent(
+        return SpaceAreaManager._pixel_sets_are_adjacent(
             record_a.get("pixels", set()),
             record_b.get("pixels", set()),
         )

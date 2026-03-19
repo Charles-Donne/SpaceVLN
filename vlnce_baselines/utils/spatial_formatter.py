@@ -60,8 +60,8 @@ def build_waypoint_summary(
     waypoint_area_labels: Optional[Sequence[str]],
     current_pose: Optional[Sequence[float]],
     resolution_cm: float,
-    current_room_area_label: str = "",
-    current_room_area_type: str = "",
+    current_space_area_label: str = "",
+    current_space_area_type: str = "",
     full_map: Optional[np.ndarray] = None,
     crop_offset: Optional[Tuple[int, int]] = None,
     include_area_chain: bool = True,
@@ -69,18 +69,18 @@ def build_waypoint_summary(
 ) -> str:
     """Summarize visited waypoints relative to the current pose."""
     header_lines: List[str] = []
-    display_area_label = current_room_area_label or "Unknown"
-    display_area_type = current_room_area_type or "Unknown"
-    room_type_note = (
+    display_area_label = current_space_area_label or "Unknown"
+    display_area_type = current_space_area_type or "Unknown"
+    space_type_note = (
         f" ({display_area_type})"
         if display_area_type and display_area_type != "Unknown" and display_area_type != display_area_label
         else ""
     )
-    header_lines.append(f"Your Current Area: {display_area_label}{room_type_note}")
+    header_lines.append(f"Your Current Area: {display_area_label}{space_type_note}")
 
     empty_area_path_line = None
     if include_area_chain:
-        current_area_display = str(current_room_area_label or "Unknown").strip() or "Unknown"
+        current_area_display = str(current_space_area_label or "Unknown").strip() or "Unknown"
         empty_area_path_line = f"Space Waypoint Path: Current({current_area_display})"
 
     if not waypoint_ids:
@@ -149,7 +149,7 @@ def build_waypoint_summary(
             full_map=full_map,
             crop_offset=crop_offset,
             visible_indices=visible_indices,
-            current_room_area_label=current_room_area_label,
+            current_space_area_label=current_space_area_label,
         )
         if reachability_note:
             spatial_info = f"{spatial_info} | {reachability_note}"
@@ -162,7 +162,7 @@ def build_waypoint_summary(
         if waypoint_area_labels else []
     )
 
-    current_area_display = str(current_room_area_label or "Unknown").strip() or "Unknown"
+    current_area_display = str(current_space_area_label or "Unknown").strip() or "Unknown"
     waypoint_area_path_line = _build_waypoint_area_path_line(
         visible_waypoint_ids=visible_waypoint_ids,
         visible_waypoint_positions=visible_waypoint_positions,
@@ -280,7 +280,7 @@ def _build_waypoint_reachability_note(
     full_map: Optional[np.ndarray],
     crop_offset: Optional[Tuple[int, int]],
     visible_indices: Sequence[int],
-    current_room_area_label: str,
+    current_space_area_label: str,
 ) -> str:
     if waypoint_index >= len(waypoint_positions):
         return ""
@@ -322,7 +322,7 @@ def _build_waypoint_reachability_note(
         return f"blocked from current; reach via {_format_waypoint_area_ref(next_waypoint_id, next_area)}"
 
     if current_pose is not None:
-        current_area_display = str(current_room_area_label or "Unknown").strip() or "Unknown"
+        current_area_display = str(current_space_area_label or "Unknown").strip() or "Unknown"
         return f"blocked from current; reach via Current({current_area_display})"
     return "blocked from current"
 

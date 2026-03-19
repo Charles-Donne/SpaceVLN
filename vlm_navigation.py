@@ -4,7 +4,7 @@ VLM Navigation Runner
 Thin CLI entrypoint for SpaceVLN batch navigation.
 """
 
-from vlnce_baselines.vlm.runner import build_arg_parser, run_navigation_from_args
+from vlnce_baselines.runtime.runner import build_arg_parser, run_navigation_from_args
 
 
 def main() -> int:

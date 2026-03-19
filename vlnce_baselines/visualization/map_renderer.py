@@ -24,8 +24,8 @@ def render_global_map(owner,
                      landmark_config: Optional[Dict] = None,
                      waypoint_positions: Optional[List[Tuple[int, int]]] = None,
                      waypoint_ids: Optional[List[int]] = None,
-                     room_area_layer: Optional[np.ndarray] = None,
-                     room_area_records: Optional[List[Dict[str, Any]]] = None,
+                     space_area_layer: Optional[np.ndarray] = None,
+                     space_area_records: Optional[List[Dict[str, Any]]] = None,
                      crop_offset: Optional[Tuple[int, int]] = None,
                      mapping_classes: Optional[List[str]] = None) -> Tuple[np.ndarray, np.ndarray, List, np.ndarray, Optional[float]]:
     """
@@ -73,9 +73,6 @@ def render_global_map(owner,
     # ===== 阶段1.1: 创建语义地图 =====
     semantic_map = np.zeros((h, w), dtype=np.uint8)
 
-    # Layer 0: 障碍物（黑色）
-    semantic_map[obstacle_mask] = 1
-
     # Layer 1: 已探索自由空间（浅灰色）
     explored_free_mask = np.logical_and(explored_mask, ~obstacle_mask)
     semantic_map[explored_free_mask] = 2
@@ -100,10 +97,12 @@ def render_global_map(owner,
     sem_map_vis = np.array(sem_map_vis)
     sem_map_vis = sem_map_vis[:, :, [2, 1, 0]]  # RGB → BGR
     sem_map_vis = cv2.resize(sem_map_vis, (480, 480), interpolation=cv2.INTER_NEAREST)
-    sem_map_vis = owner._overlay_room_areas(
+    obstacle_mask_display = owner._build_display_obstacle_mask(full_map)
+    sem_map_vis[obstacle_mask_display] = [0, 0, 0]
+    sem_map_vis = owner._overlay_space_areas(
         sem_map_vis,
-        room_area_layer,
-        room_area_records,
+        space_area_layer,
+        space_area_records,
         fill_regions=True,
         show_labels=False,
     )
@@ -138,7 +137,6 @@ def render_global_map(owner,
     if current_pose is not None:
         # ===== 阶段5: 创建global_map的显示副本（用于绘制trajectory和landmark）=====
         # trajectory_points 是世界像素坐标，统一通过 projector 转到当前旋转显示坐标。
-        obstacle_mask_display = owner._build_display_obstacle_mask(full_map)
         global_map_with_trajectory[obstacle_mask_display] = [0, 0, 0]
         global_map_rotated[obstacle_mask_display] = [0, 0, 0]
 
@@ -155,18 +153,18 @@ def render_global_map(owner,
                 )
 
         center_x, center_y = 240, 240
-        global_map_with_trajectory = owner._overlay_room_areas(
+        global_map_with_trajectory = owner._overlay_space_areas(
             global_map_with_trajectory,
-            room_area_layer,
-            room_area_records,
+            space_area_layer,
+            space_area_records,
             fill_regions=False,
             show_labels=True,
             use_display_label=False,
         )
-        global_map_rotated = owner._overlay_room_areas(
+        global_map_rotated = owner._overlay_space_areas(
             global_map_rotated,
-            room_area_layer,
-            room_area_records,
+            space_area_layer,
+            space_area_records,
             fill_regions=False,
             show_labels=True,
             use_display_label=False,
@@ -214,8 +212,8 @@ def render_local_map(owner,
                     hfov: float = 90.0,
                     waypoint_positions: Optional[List[Tuple[int, int]]] = None,
                     waypoint_ids: Optional[List[int]] = None,
-                    room_area_layer: Optional[np.ndarray] = None,
-                    room_area_records: Optional[List[Dict[str, Any]]] = None,
+                    space_area_layer: Optional[np.ndarray] = None,
+                    space_area_records: Optional[List[Dict[str, Any]]] = None,
                     crop_offset: Optional[Tuple[int, int]] = None,
                     mapping_classes: Optional[List[str]] = None) -> np.ndarray:
     """
@@ -249,9 +247,6 @@ def render_local_map(owner,
     # 创建语义地图
     semantic_map = np.zeros((h, w), dtype=np.uint8)
 
-    # Layer 0: 障碍物（黑色）
-    semantic_map[obstacle_mask] = 1
-
     # Layer 1: 已探索自由空间（浅灰色）
     explored_free_mask = np.logical_and(explored_mask, ~obstacle_mask)
     semantic_map[explored_free_mask] = 2
@@ -276,10 +271,12 @@ def render_local_map(owner,
     sem_map_vis = np.array(sem_map_vis)
     sem_map_vis = sem_map_vis[:, :, [2, 1, 0]]  # RGB → BGR
     sem_map_vis = cv2.resize(sem_map_vis, (480, 480), interpolation=cv2.INTER_NEAREST)
-    sem_map_vis = owner._overlay_room_areas(
+    obstacle_mask_resized = owner._build_display_obstacle_mask(full_map)
+    sem_map_vis[obstacle_mask_resized] = [0, 0, 0]
+    sem_map_vis = owner._overlay_space_areas(
         sem_map_vis,
-        room_area_layer,
-        room_area_records,
+        space_area_layer,
+        space_area_records,
         alpha=0.40,
         show_labels=False,
     )
@@ -324,8 +321,6 @@ def render_local_map(owner,
 
     # 先获取旋转后的障碍物掩码（用于raycasting）
     # obstacle_mask 来自 _get_channel_mask(full_map, 0)，已在 full_map 中旋转
-    obstacle_mask_resized = owner._build_display_obstacle_mask(full_map)
-
     # 裁剪中心240×240区域
     obstacle_crop = obstacle_mask_resized[120:360, 120:360]
     obstacle_local = cv2.resize(obstacle_crop.astype(np.uint8) * 255, 

@@ -14,8 +14,8 @@ import time
 from typing import Any, Dict, List, Tuple
 
 from vlnce_baselines.config import ConfigHelper, get_config
-from vlnce_baselines.vlm.api_client import resolve_api_config_path
-from vlnce_baselines.vlm_navigation_controller import VLMNavigationController
+from vlnce_baselines.vlm.api.api_client import resolve_api_config_path
+from vlnce_baselines.controllers.vlm_navigation_controller import VLMNavigationController
 
 
 MIN_EPISODE_ID = 1

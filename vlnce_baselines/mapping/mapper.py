@@ -16,7 +16,7 @@ from skimage.morphology import disk, remove_small_objects
 from skimage.morphology import binary_closing as _binary_closing_compat
 
 from vlnce_baselines.config.core.constants import mapping_classes
-from vlnce_baselines.mapping.room_area_manager import RoomAreaManager
+from vlnce_baselines.mapping.space_area_manager import SpaceAreaManager
 from vlnce_baselines.mapping.waypoint_manager import WaypointManager
 
 
@@ -40,17 +40,17 @@ class SemanticMapper:
         # 轨迹开关（轨迹实际存储在mapping_module中）
         self.enable_trajectory = True
 
-        # Waypoint / room area 状态拆到独立模块，mapper 只负责协调 world-map 数据流。
+        # Waypoint / space area 状态拆到独立模块，mapper 只负责协调 world-map 数据流。
         self.waypoint_manager = WaypointManager(resolution=resolution)
-        self.room_area_manager = RoomAreaManager(map_shape=map_shape, resolution=resolution)
+        self.space_area_manager = SpaceAreaManager(map_shape=map_shape, resolution=resolution)
 
         # 地图缓存
         self.floor = np.zeros(map_shape)
         self.full_map = None
         self.full_pose = None
-        self._cached_room_area_crop_offset: Optional[Tuple[int, int]] = None
-        self._cached_room_area_layer = np.zeros(map_shape, dtype=np.int32)
-        self._cached_room_area_records: List[Dict[str, Any]] = []
+        self._cached_space_area_crop_offset: Optional[Tuple[int, int]] = None
+        self._cached_space_area_layer = np.zeros(map_shape, dtype=np.int32)
+        self._cached_space_area_records: List[Dict[str, Any]] = []
 
     @property
     def waypoint_positions(self) -> List[Tuple[int, int]]:
@@ -71,34 +71,34 @@ class SemanticMapper:
     @property
     def waypoint_area_display_labels(self) -> List[str]:
         return [
-            self.room_area_manager.get_display_label(label)
+            self.space_area_manager.get_display_label(label)
             for label in self.waypoint_manager.area_labels
         ]
 
     @property
-    def room_area_records(self) -> List[Dict[str, Any]]:
-        return self.room_area_manager.room_area_records
+    def space_area_records(self) -> List[Dict[str, Any]]:
+        return self.space_area_manager.space_area_records
 
     @property
-    def current_room_area_label(self) -> str:
-        return self.room_area_manager.current_room_area_label
+    def current_space_area_label(self) -> str:
+        return self.space_area_manager.current_space_area_label
 
     @property
-    def current_room_area_display_label(self) -> str:
-        return self.room_area_manager.get_display_label(self.room_area_manager.current_room_area_label)
+    def current_space_area_display_label(self) -> str:
+        return self.space_area_manager.get_display_label(self.space_area_manager.current_space_area_label)
 
     @property
-    def current_room_area_type(self) -> str:
-        return self.room_area_manager.current_room_area_type
+    def current_space_area_type(self) -> str:
+        return self.space_area_manager.current_space_area_type
 
     def reset(self):
         """重置建图器状态"""
         self.waypoint_manager.reset()
-        self.room_area_manager.reset()
+        self.space_area_manager.reset()
         self.floor = np.zeros(self.map_shape)
         self.full_map = None
         self.full_pose = None
-        self._invalidate_room_area_cache()
+        self._invalidate_space_area_cache()
         self.mapping_module.reset()
 
     def init_map_and_pose(self, num_detected_classes: int):
@@ -144,14 +144,14 @@ class SemanticMapper:
         else:
             self.full_pose = full_pose[0]
 
-        self._invalidate_room_area_cache()
+        self._invalidate_space_area_cache()
         self.floor = self._compute_floor_mask(self.full_map)
         self.mapping_module.clear_one_step_buffers()
 
         crop_offset = self.mapping_module.full_map_crop_offset
         global_traj = self.mapping_module.global_trajectory_points
         subtask_traj = self.mapping_module.subtask_trajectory_points
-        room_area_layer, room_area_metadata = self._get_room_area_state(crop_offset)
+        space_area_layer, space_area_metadata = self._get_space_area_state(crop_offset)
 
         return {
             'full_map': self.full_map,
@@ -163,10 +163,10 @@ class SemanticMapper:
             'waypoint_positions': self.waypoint_positions,
             'waypoint_ids': self.waypoint_ids,
             'waypoint_area_labels': list(self.waypoint_area_display_labels),
-            'room_area_layer': room_area_layer,
-            'room_area_records': room_area_metadata,
-            'current_room_area_label': self.current_room_area_display_label,
-            'current_room_area_type': self.current_room_area_type,
+            'space_area_layer': space_area_layer,
+            'space_area_records': space_area_metadata,
+            'current_space_area_label': self.current_space_area_display_label,
+            'current_space_area_type': self.current_space_area_type,
         }
 
     def _compute_floor_mask(self, full_map: np.ndarray) -> np.ndarray:
@@ -196,12 +196,12 @@ class SemanticMapper:
             self.mapping_module.clear_landmark_channels(n_mapping=len(mapping_classes))
 
     def add_waypoint(self, description: str = "") -> int:
-        """添加 waypoint 到当前位置，并同步更新 room area。"""
+        """添加 waypoint 到当前位置，并同步更新 space area。"""
         agent_x_m = self.full_pose[0]
         agent_y_m = self.full_pose[1]
         pixel_y = int(round(float(agent_y_m) * 100.0 / float(self.resolution)))
         pixel_x = int(round(float(agent_x_m) * 100.0 / float(self.resolution)))
-        area_label = self.room_area_manager.update_from_waypoint(
+        area_label = self.space_area_manager.update_from_waypoint(
             description=description,
             pixel_y=pixel_y,
             pixel_x=pixel_x,
@@ -209,7 +209,7 @@ class SemanticMapper:
             full_pose=self.full_pose,
             crop_offset=getattr(self.mapping_module, 'full_map_crop_offset', None),
         )
-        self._invalidate_room_area_cache()
+        self._invalidate_space_area_cache()
         return self.waypoint_manager.add_waypoint(
             pixel_y=pixel_y,
             pixel_x=pixel_x,
@@ -222,13 +222,13 @@ class SemanticMapper:
         return self.waypoint_manager.get_waypoints()
 
     def get_waypoint_area_labels(self) -> List[str]:
-        """获取每个 waypoint 对应的房间区域标签。"""
+        """获取每个 waypoint 对应的空间区域标签。"""
         return list(self.waypoint_area_display_labels)
 
     def clear_waypoints(self):
         """清空所有 waypoint。"""
         self.waypoint_manager.clear()
-        self._invalidate_room_area_cache()
+        self._invalidate_space_area_cache()
 
     def get_waypoint_count(self) -> int:
         """获取 waypoint 总数。"""
@@ -239,7 +239,7 @@ class SemanticMapper:
         crop_offset = self.mapping_module.full_map_crop_offset
         global_traj = self.mapping_module.global_trajectory_points
         subtask_traj = self.mapping_module.subtask_trajectory_points
-        room_area_layer, room_area_records = self._get_room_area_state(crop_offset)
+        space_area_layer, space_area_records = self._get_space_area_state(crop_offset)
         return {
             'full_map': self.full_map,
             'full_pose': self.full_pose,
@@ -252,10 +252,10 @@ class SemanticMapper:
             'crop_offset': crop_offset,
             'global_trajectory_points': global_traj,
             'subtask_trajectory_points': subtask_traj,
-            'room_area_layer': room_area_layer,
-            'room_area_records': room_area_records,
-            'current_room_area_label': self.current_room_area_display_label,
-            'current_room_area_type': self.current_room_area_type,
+            'space_area_layer': space_area_layer,
+            'space_area_records': space_area_records,
+            'current_space_area_label': self.current_space_area_display_label,
+            'current_space_area_type': self.current_space_area_type,
         }
 
     def get_current_pose(self) -> Optional[Tuple[float, float, float]]:
@@ -264,30 +264,30 @@ class SemanticMapper:
             return None
         return tuple(self.full_pose)
 
-    def _invalidate_room_area_cache(self) -> None:
-        self._cached_room_area_crop_offset = None
-        self._cached_room_area_layer = np.zeros(self.map_shape, dtype=np.int32)
-        self._cached_room_area_records = []
+    def _invalidate_space_area_cache(self) -> None:
+        self._cached_space_area_crop_offset = None
+        self._cached_space_area_layer = np.zeros(self.map_shape, dtype=np.int32)
+        self._cached_space_area_records = []
 
-    def _get_room_area_state(self, crop_offset: Optional[Tuple[int, int]]) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
+    def _get_space_area_state(self, crop_offset: Optional[Tuple[int, int]]) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
         if self.full_map is None:
-            self._invalidate_room_area_cache()
-            return self._cached_room_area_layer, self._cached_room_area_records
+            self._invalidate_space_area_cache()
+            return self._cached_space_area_layer, self._cached_space_area_records
 
         if (
-            self._cached_room_area_crop_offset is not None and
-            crop_offset == self._cached_room_area_crop_offset
+            self._cached_space_area_crop_offset is not None and
+            crop_offset == self._cached_space_area_crop_offset
         ):
-            return self._cached_room_area_layer, list(self._cached_room_area_records)
+            return self._cached_space_area_layer, list(self._cached_space_area_records)
 
-        layer, records = self._build_room_area_layer(crop_offset)
-        self._cached_room_area_crop_offset = crop_offset
-        self._cached_room_area_layer = layer
-        self._cached_room_area_records = list(records)
+        layer, records = self._build_space_area_layer(crop_offset)
+        self._cached_space_area_crop_offset = crop_offset
+        self._cached_space_area_layer = layer
+        self._cached_space_area_records = list(records)
         return layer, list(records)
 
-    def _build_room_area_layer(self, crop_offset: Optional[Tuple[int, int]]) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
-        return self.room_area_manager.build_layer(
+    def _build_space_area_layer(self, crop_offset: Optional[Tuple[int, int]]) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
+        return self.space_area_manager.build_layer(
             full_map=self.full_map,
             full_pose=self.full_pose,
             crop_offset=crop_offset,

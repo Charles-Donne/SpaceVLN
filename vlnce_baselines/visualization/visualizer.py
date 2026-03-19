@@ -15,7 +15,14 @@ from vlnce_baselines.visualization.obstacle_analysis import (
     calculate_obstacle_distances_12_directions as scan_obstacle_distances_12_directions,
     calculate_obstacle_distances_from_rotated_map as scan_obstacle_distances_from_rotated_map,
 )
-from vlnce_baselines.config.core.constants import color_palette, local_map_landmark_topk
+from vlnce_baselines.config.core.constants import (
+    color_palette,
+    landmark_duplicate_angle_diff_deg,
+    landmark_duplicate_iou_loose,
+    landmark_duplicate_iou_strict,
+    landmark_duplicate_rel_dist_m,
+    local_map_landmark_topk,
+)
 
 
 class MapVisualizer:
@@ -47,9 +54,11 @@ class MapVisualizer:
         self.debug_save_renderings = bool(debug_save_renderings)
         self.color_palette = [int(x * 255.) for x in color_palette]
         self._render_cache: Dict[str, Dict[Any, Any]] = {
-            "obstacle_mask": {},
-            "room_area_layer": {},
-            "room_area_mask": {},
+            "obstacle_mask_raw": {},
+            "obstacle_mask_logic": {},
+            "obstacle_mask_display": {},
+            "space_area_layer": {},
+            "space_area_mask": {},
         }
         self._active_render_cache_key = None
 
@@ -68,18 +77,36 @@ class MapVisualizer:
             agent_orientation_deg=float(current_pose[2]),
         )
 
-    def _build_display_obstacle_mask(
+    def _prune_render_cache(self, keep_token: Optional[Any]) -> None:
+        if keep_token is None:
+            for bucket in self._render_cache.values():
+                bucket.clear()
+            return
+
+        for name in ("obstacle_mask_raw", "obstacle_mask_logic", "obstacle_mask_display"):
+            bucket = self._render_cache.get(name, {})
+            stale_keys = [key for key in bucket.keys() if key != keep_token]
+            for key in stale_keys:
+                bucket.pop(key, None)
+
+        for name in ("space_area_layer", "space_area_mask"):
+            bucket = self._render_cache.get(name, {})
+            stale_keys = [key for key in bucket.keys() if not isinstance(key, tuple) or not key or key[0] != keep_token]
+            for key in stale_keys:
+                bucket.pop(key, None)
+
+    def _build_raw_obstacle_mask(
         self,
         full_map: np.ndarray,
         cache_key: Optional[Any] = None,
     ) -> np.ndarray:
         cache_token = cache_key if cache_key is not None else self._active_render_cache_key
         if cache_token is not None:
-            cached = self._render_cache["obstacle_mask"].get(cache_token)
+            cached = self._render_cache["obstacle_mask_raw"].get(cache_token)
             if cached is not None:
                 return cached.copy()
 
-        raw_obstacle_mask = build_rotated_obstacle_mask(
+        obstacle_mask = build_rotated_obstacle_mask(
             full_map,
             threshold=0.5,
             open_kernel_size=0,
@@ -87,28 +114,78 @@ class MapVisualizer:
             axis_close_kernel_size=0,
             min_component_area=0,
         )
+        if cache_token is not None:
+            self._render_cache["obstacle_mask_raw"][cache_token] = obstacle_mask.copy()
+        return obstacle_mask
 
-        # Render obstacles as cleaner axis-aligned map blocks instead of sparse speckles.
+    def _build_logic_obstacle_mask(
+        self,
+        full_map: np.ndarray,
+        cache_key: Optional[Any] = None,
+    ) -> np.ndarray:
+        cache_token = cache_key if cache_key is not None else self._active_render_cache_key
+        if cache_token is not None:
+            cached = self._render_cache["obstacle_mask_logic"].get(cache_token)
+            if cached is not None:
+                return cached.copy()
+
+        raw_obstacle_mask = self._build_raw_obstacle_mask(full_map, cache_key=cache_token)
+        obstacle_mask = build_rotated_obstacle_mask(
+            full_map,
+            threshold=0.55,
+            open_kernel_size=2,
+            close_kernel_size=3,
+            axis_close_kernel_size=5,
+            min_component_area=6,
+            hole_fill_area=12,
+        )
+        raw_pixels = int(np.count_nonzero(raw_obstacle_mask))
+        cleaned_pixels = int(np.count_nonzero(obstacle_mask))
+        if raw_pixels > 0 and (cleaned_pixels == 0 or cleaned_pixels < max(6, int(raw_pixels * 0.08))):
+            obstacle_mask = raw_obstacle_mask
+        if cache_token is not None:
+            self._render_cache["obstacle_mask_logic"][cache_token] = obstacle_mask.copy()
+        return obstacle_mask
+
+    def _build_display_obstacle_mask(
+        self,
+        full_map: np.ndarray,
+        cache_key: Optional[Any] = None,
+    ) -> np.ndarray:
+        cache_token = cache_key if cache_key is not None else self._active_render_cache_key
+        if cache_token is not None:
+            cached = self._render_cache["obstacle_mask_display"].get(cache_token)
+            if cached is not None:
+                return cached.copy()
+
+        raw_obstacle_mask = self._build_raw_obstacle_mask(full_map, cache_key=cache_token)
+
+        # Render obstacles as a cleaner expert-style display layer while keeping
+        # logic-side navigation on a separate, lighter-weight mask.
         obstacle_mask = build_rotated_obstacle_mask(
             full_map,
             threshold=0.5,
-            open_kernel_size=3,
+            open_kernel_size=2,
             close_kernel_size=5,
-            axis_close_kernel_size=9,
-            min_component_area=18,
+            axis_close_kernel_size=7,
+            min_component_area=10,
+            hole_fill_area=48,
+            orthogonal_kernel_size=11,
+            orthogonal_min_component_area=72,
+            dilate_kernel_size=3,
         )
         raw_pixels = int(np.count_nonzero(raw_obstacle_mask))
         cleaned_pixels = int(np.count_nonzero(obstacle_mask))
         # Keep the cleaned rendering when it is stable; otherwise fall back to the raw
         # obstacle layer so obstacles never disappear entirely on sparse maps.
-        if raw_pixels > 0 and (cleaned_pixels == 0 or cleaned_pixels < max(8, int(raw_pixels * 0.05))):
+        if raw_pixels > 0 and (cleaned_pixels == 0 or cleaned_pixels < max(8, int(raw_pixels * 0.08))):
             obstacle_mask = raw_obstacle_mask
         if cache_token is not None:
-            self._render_cache["obstacle_mask"][cache_token] = obstacle_mask.copy()
+            self._render_cache["obstacle_mask_display"][cache_token] = obstacle_mask.copy()
         return obstacle_mask
 
     @staticmethod
-    def _room_area_color(area_id: int, room_type: str) -> Tuple[int, int, int]:
+    def _space_area_color(area_id: int, space_type: str) -> Tuple[int, int, int]:
         palette = [
             (255, 160, 80),   # blue
             (255, 110, 210),  # pink
@@ -117,34 +194,34 @@ class MapVisualizer:
             (255, 210, 90),   # cyan
             (120, 170, 255),  # orange-peach
         ]
-        room_text = str(room_type)
+        space_text = str(space_type)
         seed = int(area_id) * 131
-        for index, ch in enumerate(room_text):
+        for index, ch in enumerate(space_text):
             seed += (index + 17) * ord(ch)
         return palette[seed % len(palette)]
 
-    def _prepare_room_area_display_layer(
+    def _prepare_space_area_display_layer(
         self,
-        room_area_layer: Optional[np.ndarray],
+        space_area_layer: Optional[np.ndarray],
         output_size: int = 480,
         cache_key: Optional[Any] = None,
     ) -> Optional[np.ndarray]:
-        if room_area_layer is None or room_area_layer.size == 0:
+        if space_area_layer is None or space_area_layer.size == 0:
             return None
         cache_token = cache_key if cache_key is not None else self._active_render_cache_key
         cache_entry = None
         if cache_token is not None:
-            cache_entry = self._render_cache["room_area_layer"].get((cache_token, int(output_size)))
+            cache_entry = self._render_cache["space_area_layer"].get((cache_token, int(output_size)))
             if cache_entry is not None:
                 return cache_entry.copy()
-        layer = np.flipud(np.asarray(room_area_layer, dtype=np.int32))
+        layer = np.flipud(np.asarray(space_area_layer, dtype=np.int32))
         display_layer = cv2.resize(layer, (output_size, output_size), interpolation=cv2.INTER_NEAREST)
         if cache_token is not None:
-            self._render_cache["room_area_layer"][(cache_token, int(output_size))] = display_layer.copy()
+            self._render_cache["space_area_layer"][(cache_token, int(output_size))] = display_layer.copy()
         return display_layer
 
     @staticmethod
-    def _refine_room_area_mask(mask: np.ndarray) -> np.ndarray:
+    def _refine_space_area_mask(mask: np.ndarray) -> np.ndarray:
         mask_uint8 = mask.astype(np.uint8) * 255
         if mask_uint8.size == 0 or np.count_nonzero(mask_uint8) == 0:
             return mask
@@ -159,11 +236,11 @@ class MapVisualizer:
         cv2.drawContours(filled, contours, -1, 255, thickness=-1)
         return filled > 127
 
-    def _overlay_room_areas(
+    def _overlay_space_areas(
         self,
         image: np.ndarray,
-        room_area_layer: Optional[np.ndarray],
-        room_area_records: Optional[List[Dict[str, Any]]],
+        space_area_layer: Optional[np.ndarray],
+        space_area_records: Optional[List[Dict[str, Any]]],
         alpha: float = 0.45,
         fill_regions: bool = True,
         show_labels: bool = False,
@@ -171,16 +248,16 @@ class MapVisualizer:
         cache_key: Optional[Any] = None,
     ) -> np.ndarray:
         cache_token = cache_key if cache_key is not None else self._active_render_cache_key
-        display_layer = self._prepare_room_area_display_layer(
-            room_area_layer,
+        display_layer = self._prepare_space_area_display_layer(
+            space_area_layer,
             output_size=image.shape[1],
             cache_key=cache_token,
         )
-        if display_layer is None or not room_area_records:
+        if display_layer is None or not space_area_records:
             return image
 
         output = image.copy()
-        for record in room_area_records:
+        for record in space_area_records:
             area_id = int(record.get("id", 0) or 0)
             if area_id <= 0:
                 continue
@@ -193,16 +270,16 @@ class MapVisualizer:
                 )
             mask = None
             if mask_cache_key is not None:
-                cached_mask = self._render_cache["room_area_mask"].get(mask_cache_key)
+                cached_mask = self._render_cache["space_area_mask"].get(mask_cache_key)
                 if cached_mask is not None:
                     mask = cached_mask.copy()
             if mask is None:
-                mask = self._refine_room_area_mask(display_layer == area_id)
+                mask = self._refine_space_area_mask(display_layer == area_id)
                 if mask_cache_key is not None:
-                    self._render_cache["room_area_mask"][mask_cache_key] = mask.copy()
+                    self._render_cache["space_area_mask"][mask_cache_key] = mask.copy()
             if not np.any(mask):
                 continue
-            color = self._room_area_color(area_id, str(record.get("room_type", "")))
+            color = self._space_area_color(area_id, str(record.get("space_type", "")))
             if fill_regions:
                 output[mask] = color
 
@@ -215,7 +292,7 @@ class MapVisualizer:
                     label_key = "display_label" if use_display_label else "label"
                     label = str(record.get(label_key, record.get("label", "")) or "")
                     if label:
-                        self._draw_room_area_label(output, mask_uint8, contours, label, color)
+                        self._draw_space_area_label(output, mask_uint8, contours, label, color)
 
         return output
 
@@ -307,7 +384,7 @@ class MapVisualizer:
         return output_images
 
     @staticmethod
-    def _draw_room_area_label(
+    def _draw_space_area_label(
         image: np.ndarray,
         mask_uint8: np.ndarray,
         contours: List[np.ndarray],
@@ -376,12 +453,12 @@ class MapVisualizer:
     def _make_render_cache_key(
         step: int,
         full_map: Optional[np.ndarray],
-        room_area_layer: Optional[np.ndarray],
+        space_area_layer: Optional[np.ndarray],
     ) -> Tuple[int, int, int]:
         return (
             int(step),
             int(id(full_map)) if full_map is not None else 0,
-            int(id(room_area_layer)) if room_area_layer is not None else 0,
+            int(id(space_area_layer)) if space_area_layer is not None else 0,
         )
 
     @staticmethod
@@ -526,14 +603,10 @@ class MapVisualizer:
         center_x: int = 240,
         center_y: int = 240,
     ) -> Dict[str, str]:
-        """Fallback obstacle distances from the rotated obstacle map."""
+        """Fallback obstacle distances from the logic-side obstacle mask."""
         if full_map is None:
             return {}
-        obstacle_mask_rotated = build_rotated_obstacle_mask(
-            full_map,
-            threshold=0.6,
-            open_kernel_size=3,
-        )
+        obstacle_mask_rotated = self._build_logic_obstacle_mask(full_map)
         return self.calculate_obstacle_distances_from_rotated_map(
             obstacle_mask_rotated,
             center_x=center_x,
@@ -577,14 +650,10 @@ class MapVisualizer:
         center_x: int = 240,
         center_y: int = 240,
     ) -> Dict[str, str]:
-        """Fallback 12-view obstacle distances from the rotated obstacle map."""
+        """Fallback 12-view obstacle distances from the logic-side obstacle mask."""
         if full_map is None:
             return {}
-        obstacle_mask_rotated = build_rotated_obstacle_mask(
-            full_map,
-            threshold=0.6,
-            open_kernel_size=3,
-        )
+        obstacle_mask_rotated = self._build_logic_obstacle_mask(full_map)
         return self.calculate_obstacle_distances_12_directions(
             obstacle_mask_rotated,
             center_x=center_x,
@@ -615,8 +684,8 @@ class MapVisualizer:
                                landmark_config: Optional[Dict] = None,
                                waypoint_positions: Optional[List[Tuple[int, int]]] = None,
                                waypoint_ids: Optional[List[int]] = None,
-                               room_area_layer: Optional[np.ndarray] = None,
-                               room_area_records: Optional[List[Dict[str, Any]]] = None,
+                               space_area_layer: Optional[np.ndarray] = None,
+                               space_area_records: Optional[List[Dict[str, Any]]] = None,
                                masks: Optional[np.ndarray] = None,
                                phase: str = "action",
                                global_trajectory_points: Optional[List[Tuple[int, int]]] = None,
@@ -652,8 +721,10 @@ class MapVisualizer:
         """
         paths = {}
         policy = self.get_render_policy(phase, render_policy)
-        render_cache_key = self._make_render_cache_key(step, full_map, room_area_layer)
+        render_cache_key = self._make_render_cache_key(step, full_map, space_area_layer)
         previous_cache_key = self._active_render_cache_key
+        if render_cache_key != previous_cache_key:
+            self._prune_render_cache(render_cache_key)
         self._active_render_cache_key = render_cache_key
         depth_for_instances = getattr(controller, 'latest_depth_meters', None) if controller is not None else None
         existing_landmark_instances = list(getattr(controller, 'latest_landmark_instances_world', []) or []) \
@@ -693,7 +764,7 @@ class MapVisualizer:
                 _, global_map_with_trajectory, landmarks, _global_map_clean, last_waypoint_angle = self.render_global_map(
                     full_map, global_traj_to_use, detected_classes, floor,
                     current_pose, landmark_classes, landmark_instances_world, landmark_config,
-                    waypoint_positions, waypoint_ids, room_area_layer, room_area_records, crop_offset,
+                    waypoint_positions, waypoint_ids, space_area_layer, space_area_records, crop_offset,
                     mapping_classes=mapping_classes
                 )
             elif landmark_instances_world:
@@ -723,7 +794,7 @@ class MapVisualizer:
                 local_map = self.render_local_map(
                     full_map, trajectory_points, detected_classes, current_pose,
                     floor, landmark_classes, selected_action_landmark_instances, landmark_config, hfov,
-                    waypoint_positions, waypoint_ids, room_area_layer, room_area_records, crop_offset,
+                    waypoint_positions, waypoint_ids, space_area_layer, space_area_records, crop_offset,
                     mapping_classes=mapping_classes
                 )
             paths['local_map'] = (

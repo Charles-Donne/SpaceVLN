@@ -44,6 +44,10 @@ def build_rotated_obstacle_mask(
     close_kernel_size: int = 0,
     axis_close_kernel_size: int = 0,
     min_component_area: int = 0,
+    hole_fill_area: int = 0,
+    orthogonal_kernel_size: int = 0,
+    orthogonal_min_component_area: int = 0,
+    dilate_kernel_size: int = 0,
 ) -> np.ndarray:
     obstacle_mask = full_map[0, ...] > threshold
     obstacle_mask = np.flipud(obstacle_mask)
@@ -90,7 +94,102 @@ def build_rotated_obstacle_mask(
             if area >= int(min_component_area):
                 filtered[labels == component_id] = 1
         obstacle_mask = filtered > 0
+    if hole_fill_area and hole_fill_area > 1:
+        obstacle_mask = _fill_small_holes(obstacle_mask, max_hole_area=int(hole_fill_area))
+    if orthogonal_kernel_size and orthogonal_kernel_size > 1:
+        obstacle_mask = _orthogonalize_obstacle_mask(
+            obstacle_mask,
+            line_kernel_size=int(orthogonal_kernel_size),
+            min_component_area=max(orthogonal_min_component_area, min_component_area, 1),
+        )
+    if dilate_kernel_size and dilate_kernel_size > 1:
+        kernel = np.ones((int(dilate_kernel_size), int(dilate_kernel_size)), dtype=np.uint8)
+        obstacle_mask = cv2.dilate(
+            obstacle_mask.astype(np.uint8) * 255,
+            kernel,
+            iterations=1,
+        ) > 127
     return obstacle_mask
+
+
+def _fill_small_holes(mask: np.ndarray, max_hole_area: int) -> np.ndarray:
+    mask_bool = np.asarray(mask, dtype=bool)
+    if max_hole_area <= 0 or not np.any(mask_bool):
+        return mask_bool
+
+    background = (~mask_bool).astype(np.uint8)
+    num_components, labels, stats, _ = cv2.connectedComponentsWithStats(background, connectivity=8)
+    border_labels = set(np.unique(labels[0, :]).tolist())
+    border_labels.update(np.unique(labels[-1, :]).tolist())
+    border_labels.update(np.unique(labels[:, 0]).tolist())
+    border_labels.update(np.unique(labels[:, -1]).tolist())
+
+    filled = mask_bool.copy()
+    for component_id in range(1, num_components):
+        if component_id in border_labels:
+            continue
+        area = int(stats[component_id, cv2.CC_STAT_AREA])
+        if area <= int(max_hole_area):
+            filled[labels == component_id] = True
+    return filled
+
+
+def _orthogonalize_obstacle_mask(
+    mask: np.ndarray,
+    line_kernel_size: int,
+    min_component_area: int,
+) -> np.ndarray:
+    mask_u8 = np.asarray(mask, dtype=np.uint8) * 255
+    if mask_u8.size == 0 or np.count_nonzero(mask_u8) == 0:
+        return mask_u8 > 127
+
+    horizontal_kernel = np.ones((1, int(line_kernel_size)), dtype=np.uint8)
+    vertical_kernel = np.ones((int(line_kernel_size), 1), dtype=np.uint8)
+    horizontal = cv2.morphologyEx(mask_u8, cv2.MORPH_CLOSE, horizontal_kernel)
+    vertical = cv2.morphologyEx(mask_u8, cv2.MORPH_CLOSE, vertical_kernel)
+    regularized = ((mask_u8 > 127) | (horizontal > 127) | (vertical > 127)).astype(np.uint8) * 255
+
+    contours, _ = cv2.findContours(regularized, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    snapped_fill = np.zeros_like(mask_u8)
+    for contour in contours:
+        area = float(cv2.contourArea(contour))
+        if area < float(max(min_component_area, 1)):
+            cv2.drawContours(snapped_fill, [contour], -1, 255, thickness=-1)
+            continue
+
+        perimeter = cv2.arcLength(contour, True)
+        epsilon = max(1.0, perimeter * 0.015)
+        approx = cv2.approxPolyDP(contour, epsilon, True)
+        pts = approx[:, 0, :]
+        if len(pts) < 3:
+            cv2.drawContours(snapped_fill, [contour], -1, 255, thickness=-1)
+            continue
+
+        snapped_pts = []
+        for idx, point in enumerate(pts):
+            prev_point = pts[idx - 1]
+            curr_point = point.copy()
+            dx = int(curr_point[0]) - int(prev_point[0])
+            dy = int(curr_point[1]) - int(prev_point[1])
+            if max(abs(dx), abs(dy)) >= int(max(4, line_kernel_size // 2)):
+                if abs(dx) >= abs(dy):
+                    curr_point[1] = prev_point[1]
+                else:
+                    curr_point[0] = prev_point[0]
+            snapped_pts.append(curr_point)
+
+        snapped_polygon = np.asarray(snapped_pts, dtype=np.int32)
+        if snapped_polygon.shape[0] >= 3:
+            cv2.fillPoly(snapped_fill, [snapped_polygon], 255)
+        else:
+            cv2.drawContours(snapped_fill, [contour], -1, 255, thickness=-1)
+
+    regularized = cv2.morphologyEx(
+        snapped_fill,
+        cv2.MORPH_CLOSE,
+        np.ones((3, 3), dtype=np.uint8),
+    )
+    return regularized > 127
 
 
 def raycast_on_rotated_map(
