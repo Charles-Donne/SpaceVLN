@@ -499,6 +499,52 @@ def build_action_landmark_map_info(
     if not (step_landmark_entries or landmark_dist_map or landmark_dist_map_multi or landmark_instances_world):
         return None
 
+    if step_landmark_entries and any(entry.get("source") in {"vis", "off"} for entry in step_landmark_entries):
+        cls_totals: Dict[str, int] = {}
+        for item in landmark_instances_world:
+            cls_name = item.get("name")
+            if cls_name is None:
+                continue
+            cls_totals[str(cls_name)] = cls_totals.get(str(cls_name), 0) + 1
+        for entry in step_landmark_entries:
+            cls_name = entry.get("name")
+            if cls_name is None:
+                continue
+            cls_key = str(cls_name)
+            cls_totals[cls_key] = max(
+                cls_totals.get(cls_key, 0),
+                int(entry.get("class_total", 1) or 1),
+                int(_maybe_int(entry.get("instance_idx")) or 0) + 1,
+                sum(1 for other in step_landmark_entries if str(other.get("name")) == cls_key),
+            )
+
+        lines: List[str] = []
+        for entry in step_landmark_entries:
+            name = entry.get("name")
+            distance_m = entry.get("distance_m")
+            angle_deg = entry.get("angle_deg")
+            if name is None or distance_m is None or angle_deg is None:
+                continue
+            try:
+                cls_name = str(name)
+                dist_m = float(distance_m)
+                rel_angle_deg = float(angle_deg)
+                confidence = float(entry.get("confidence", 0.0))
+            except (TypeError, ValueError):
+                continue
+
+            instance_idx = _maybe_int(entry.get("instance_idx"))
+            suffix = ""
+            if instance_idx is not None and cls_totals.get(cls_name, 0) > 1:
+                suffix = f" #{instance_idx + 1}"
+            source = "vis" if str(entry.get("source", "vis")) == "vis" else "off vis"
+            lines.append(
+                f"  - {source} {cls_name}{suffix}: {dist_m:.1f}m, "
+                f"{format_relative_direction(rel_angle_deg)}, confidence: {confidence:.3f}"
+                f"{build_landmark_turn_hint(rel_angle_deg, is_visible=(source == 'vis'))}"
+            )
+        return "\n".join(lines) if lines else None
+
     visible_entries: List[Tuple[str, float, float, Optional[int], float]] = []
     for entry in step_landmark_entries:
         name = entry.get("name")

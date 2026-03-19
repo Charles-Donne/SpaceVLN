@@ -143,7 +143,7 @@ landmark_classes = []
 landmark_marker_color = (128, 0, 128)      # 紫色(BGR)
 landmark_marker_border = (255, 255, 255)   # 白色边框(BGR)
 landmark_marker_radius = 6                 # 圆球半径(像素)
-local_map_landmark_topk = 3               # Local map仅渲染置信度最高的Top-K landmark实例
+local_map_landmark_topk = 2               # Local map仅渲染与action统一后的Top-K landmark实例
 
 # 标注阈值（控制显示条件）
 landmark_min_total_pixels = 1       # 总像素数阈值（1=不过滤）

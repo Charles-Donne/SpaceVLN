@@ -41,6 +41,9 @@ def build_rotated_obstacle_mask(
     threshold: float = 0.5,
     display_size: int = 480,
     open_kernel_size: int = 0,
+    close_kernel_size: int = 0,
+    axis_close_kernel_size: int = 0,
+    min_component_area: int = 0,
 ) -> np.ndarray:
     obstacle_mask = full_map[0, ...] > threshold
     obstacle_mask = np.flipud(obstacle_mask)
@@ -56,6 +59,37 @@ def build_rotated_obstacle_mask(
             cv2.MORPH_OPEN,
             kernel,
         ) > 127
+    if close_kernel_size and close_kernel_size > 1:
+        kernel = np.ones((int(close_kernel_size), int(close_kernel_size)), dtype=np.uint8)
+        obstacle_mask = cv2.morphologyEx(
+            obstacle_mask.astype(np.uint8) * 255,
+            cv2.MORPH_CLOSE,
+            kernel,
+        ) > 127
+    if axis_close_kernel_size and axis_close_kernel_size > 1:
+        obstacle_mask_u8 = obstacle_mask.astype(np.uint8) * 255
+        horizontal_kernel = np.ones((3, int(axis_close_kernel_size)), dtype=np.uint8)
+        vertical_kernel = np.ones((int(axis_close_kernel_size), 3), dtype=np.uint8)
+        horizontal_closed = cv2.morphologyEx(
+            obstacle_mask_u8,
+            cv2.MORPH_CLOSE,
+            horizontal_kernel,
+        ) > 127
+        vertical_closed = cv2.morphologyEx(
+            obstacle_mask_u8,
+            cv2.MORPH_CLOSE,
+            vertical_kernel,
+        ) > 127
+        obstacle_mask = obstacle_mask | horizontal_closed | vertical_closed
+    if min_component_area and min_component_area > 1:
+        mask_u8 = obstacle_mask.astype(np.uint8)
+        num_components, labels, stats, _ = cv2.connectedComponentsWithStats(mask_u8, connectivity=8)
+        filtered = np.zeros_like(mask_u8)
+        for component_id in range(1, num_components):
+            area = int(stats[component_id, cv2.CC_STAT_AREA])
+            if area >= int(min_component_area):
+                filtered[labels == component_id] = 1
+        obstacle_mask = filtered > 0
     return obstacle_mask
 
 

@@ -27,10 +27,14 @@ class ThinkingViewRenderer:
     """Render and save the 12 annotated direction views used by the thinking model."""
 
     THINKING_DETECTION_TOPK = 3
+    THINKING_DETECTION_GROUP_MAX_VIEWS = 3
     CURRENT_AREA_OVERLAP_THRESHOLD_M = 1.0
     VIEW_HFOV_DEG = 79.0
     WAYPOINT_VISIBILITY_RADIUS_M = 1.0
     WAYPOINT_VISIBILITY_SAMPLES = 16
+    SAME_OBJECT_BEARING_THRESHOLD_DEG = 18.0
+    SAME_OBJECT_DISTANCE_THRESHOLD_M = 0.8
+    SAME_OBJECT_DISTANCE_RATIO = 0.35
 
     @staticmethod
     def _is_known_area_label(area_label: str) -> bool:
@@ -592,30 +596,219 @@ class ThinkingViewRenderer:
             [labels[idx] for idx in keep if 0 <= idx < len(labels)],
         )
 
-    def _collect_topk_detection_indices(
-        self,
+    @staticmethod
+    def _parse_detection_label(label: str) -> Tuple[str, float]:
+        parts = str(label or "").split()
+        if not parts:
+            return "unknown", 0.0
+        if len(parts) == 1:
+            return parts[0], 0.0
+        try:
+            confidence = float(parts[-1])
+            name = " ".join(parts[:-1]).strip() or parts[0]
+            return name, confidence
+        except ValueError:
+            return " ".join(parts).strip(), 0.0
+
+    @classmethod
+    def _estimate_detection_distance_m(
+        cls,
+        detections: Any,
+        det_idx: int,
+        depth_meters: Optional[np.ndarray],
+        bbox: Tuple[int, int, int, int],
+    ) -> Optional[float]:
+        if depth_meters is None:
+            return None
+
+        x1, y1, x2, y2 = bbox
+        x1 = max(0, min(int(x1), depth_meters.shape[1] - 1))
+        x2 = max(0, min(int(x2), depth_meters.shape[1]))
+        y1 = max(0, min(int(y1), depth_meters.shape[0] - 1))
+        y2 = max(0, min(int(y2), depth_meters.shape[0]))
+        if x2 <= x1 or y2 <= y1:
+            return None
+
+        depth_region = depth_meters[y1:y2, x1:x2]
+        valid_depths = depth_region[depth_region > 0.05]
+        if getattr(detections, "mask", None) is not None and det_idx < len(detections.mask):
+            det_mask = np.asarray(detections.mask[det_idx]).astype(bool)
+            if det_mask.shape[:2] == depth_meters.shape[:2]:
+                mask_region = det_mask[y1:y2, x1:x2]
+                masked_depths = depth_region[np.logical_and(mask_region, depth_region > 0.05)]
+                if masked_depths.size > 0:
+                    valid_depths = masked_depths
+
+        if valid_depths.size == 0:
+            return None
+        return float(np.median(valid_depths))
+
+    @classmethod
+    def _build_cross_view_detection_candidates(
+        cls,
+        payloads: List[Tuple[Any, List[str], np.ndarray, Optional[np.ndarray], float, str]],
+    ) -> List[Dict[str, Any]]:
+        candidates: List[Dict[str, Any]] = []
+        for view_idx, (detections, _labels, _image, _depth, _angle, _name) in enumerate(payloads):
+            if detections is None or getattr(detections, "xyxy", None) is None:
+                continue
+            labels = _labels or []
+            image_w = max(1, int(_image.shape[1]))
+            for det_idx, bbox_values in enumerate(np.asarray(detections.xyxy, dtype=np.float32)):
+                bbox = tuple(int(round(v)) for v in bbox_values.tolist())
+                label_text = labels[det_idx] if det_idx < len(labels) else f"object_{det_idx}"
+                name, confidence = cls._parse_detection_label(label_text)
+                bbox_center_x = 0.5 * (float(bbox[0]) + float(bbox[2]))
+                rel_angle_deg = (0.5 - (bbox_center_x / float(image_w))) * cls.VIEW_HFOV_DEG
+                global_bearing_deg = cls._normalize_angle_deg(float(_angle) + rel_angle_deg)
+                distance_m = cls._estimate_detection_distance_m(
+                    detections=detections,
+                    det_idx=det_idx,
+                    depth_meters=_depth,
+                    bbox=bbox,
+                )
+                bbox_area = max(0.0, float(bbox[2] - bbox[0])) * max(0.0, float(bbox[3] - bbox[1]))
+                candidates.append({
+                    "view_idx": int(view_idx),
+                    "det_idx": int(det_idx),
+                    "name": str(name or "unknown"),
+                    "confidence": float(confidence),
+                    "bbox": bbox,
+                    "distance_m": float(distance_m) if distance_m is not None else None,
+                    "global_bearing_deg": float(global_bearing_deg),
+                    "bbox_area": float(bbox_area),
+                })
+        return candidates
+
+    @classmethod
+    def _distance_compatible(cls, dist_a: Optional[float], dist_b: Optional[float]) -> bool:
+        if dist_a is None or dist_b is None:
+            return True
+        distance_gap = abs(float(dist_a) - float(dist_b))
+        if distance_gap <= cls.SAME_OBJECT_DISTANCE_THRESHOLD_M:
+            return True
+        max_dist = max(float(dist_a), float(dist_b), 1e-6)
+        return distance_gap <= cls.SAME_OBJECT_DISTANCE_RATIO * max_dist
+
+    @classmethod
+    def _match_cross_view_group(
+        cls,
+        candidate: Dict[str, Any],
+        groups: List[Dict[str, Any]],
+    ) -> Optional[int]:
+        best_group_idx = None
+        best_cost = None
+        for group_idx, group in enumerate(groups):
+            if str(group.get("name")) != str(candidate.get("name")):
+                continue
+            bearing_gap = abs(cls._angle_delta_deg(
+                float(candidate.get("global_bearing_deg", 0.0)),
+                float(group.get("bearing_center_deg", 0.0)),
+            ))
+            if bearing_gap > cls.SAME_OBJECT_BEARING_THRESHOLD_DEG:
+                continue
+            if not cls._distance_compatible(
+                candidate.get("distance_m"),
+                group.get("distance_center_m"),
+            ):
+                continue
+            cost = bearing_gap
+            if candidate.get("distance_m") is not None and group.get("distance_center_m") is not None:
+                cost += abs(float(candidate["distance_m"]) - float(group["distance_center_m"]))
+            if best_cost is None or cost < best_cost:
+                best_cost = cost
+                best_group_idx = group_idx
+        return best_group_idx
+
+    @classmethod
+    def _select_grouped_detection_indices(
+        cls,
         payloads: List[Tuple[Any, List[str], np.ndarray, Optional[np.ndarray], float, str]],
         topk: int,
     ) -> Dict[int, List[int]]:
         if topk <= 0:
             return {}
 
-        ranked: List[Tuple[float, int, int]] = []
-        for view_idx, (detections, _labels, _image, _depth, _angle, _name) in enumerate(payloads):
-            if detections is None or getattr(detections, "xyxy", None) is None:
-                continue
-            confidences = getattr(detections, "confidence", None)
-            if confidences is None:
-                confidences = np.zeros((len(detections.xyxy),), dtype=np.float32)
-            else:
-                confidences = np.asarray(confidences, dtype=np.float32)
-            for det_idx, confidence in enumerate(confidences):
-                ranked.append((float(confidence), view_idx, det_idx))
+        candidates = cls._build_cross_view_detection_candidates(payloads)
+        if not candidates:
+            return {}
 
-        ranked.sort(key=lambda item: item[0], reverse=True)
+        candidates.sort(
+            key=lambda item: (
+                -float(item.get("confidence", 0.0)),
+                float(item.get("distance_m")) if item.get("distance_m") is not None else float("inf"),
+                -float(item.get("bbox_area", 0.0)),
+            )
+        )
+
+        groups: List[Dict[str, Any]] = []
+        for candidate in candidates:
+            match_idx = cls._match_cross_view_group(candidate, groups)
+            if match_idx is None:
+                groups.append({
+                    "name": str(candidate.get("name", "unknown")),
+                    "bearing_center_deg": float(candidate.get("global_bearing_deg", 0.0)),
+                    "distance_center_m": candidate.get("distance_m"),
+                    "best_confidence": float(candidate.get("confidence", 0.0)),
+                    "nearest_distance_m": candidate.get("distance_m"),
+                    "members": [candidate],
+                })
+                continue
+
+            group = groups[match_idx]
+            group["members"].append(candidate)
+            members = group["members"]
+            group["bearing_center_deg"] = float(np.mean([
+                float(item.get("global_bearing_deg", 0.0)) for item in members
+            ]))
+            valid_distances = [
+                float(item["distance_m"]) for item in members if item.get("distance_m") is not None
+            ]
+            group["distance_center_m"] = (
+                float(np.mean(valid_distances)) if valid_distances else None
+            )
+            group["best_confidence"] = max(
+                float(group.get("best_confidence", 0.0)),
+                float(candidate.get("confidence", 0.0)),
+            )
+            if candidate.get("distance_m") is not None:
+                if group.get("nearest_distance_m") is None:
+                    group["nearest_distance_m"] = float(candidate["distance_m"])
+                else:
+                    group["nearest_distance_m"] = min(
+                        float(group["nearest_distance_m"]),
+                        float(candidate["distance_m"]),
+                    )
+
+        groups.sort(
+            key=lambda item: (
+                -float(item.get("best_confidence", 0.0)),
+                float(item.get("nearest_distance_m")) if item.get("nearest_distance_m") is not None else float("inf"),
+            )
+        )
+
         keep_by_view: Dict[int, List[int]] = {}
-        for _confidence, view_idx, det_idx in ranked[:topk]:
-            keep_by_view.setdefault(view_idx, []).append(det_idx)
+        for group in groups[:max(1, int(topk))]:
+            members = sorted(
+                group.get("members", []),
+                key=lambda item: (
+                    float(item.get("distance_m")) if item.get("distance_m") is not None else float("inf"),
+                    -float(item.get("confidence", 0.0)),
+                    float(item.get("bbox_area", 0.0)) * -1.0,
+                ),
+            )
+            used_views = set()
+            kept_count = 0
+            for member in members:
+                view_idx = int(member.get("view_idx", -1))
+                det_idx = int(member.get("det_idx", -1))
+                if view_idx < 0 or det_idx < 0 or view_idx in used_views:
+                    continue
+                keep_by_view.setdefault(view_idx, []).append(det_idx)
+                used_views.add(view_idx)
+                kept_count += 1
+                if kept_count >= cls.THINKING_DETECTION_GROUP_MAX_VIEWS:
+                    break
         return keep_by_view
 
     @classmethod
@@ -695,7 +888,7 @@ class ThinkingViewRenderer:
                 dets_view, labels_view, _ = detect_landmarks_fn(image, landmark_classes)
             view_payloads.append((dets_view, labels_view, image, depth_meters, angle, direction_name))
 
-        keep_by_view = self._collect_topk_detection_indices(view_payloads, topk=detection_topk)
+        keep_by_view = self._select_grouped_detection_indices(view_payloads, topk=detection_topk)
 
         for view_idx, (dets_view, labels_view, image, depth_meters, angle, direction_name) in enumerate(view_payloads):
             detected_landmarks_view: List[Tuple[str, float]] = []

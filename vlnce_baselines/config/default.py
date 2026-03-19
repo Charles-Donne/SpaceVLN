@@ -59,7 +59,7 @@ _C.MAP.REPVITSAM = 0
 
 # 可视化配置
 _C.MAP.ENABLE_GLOBAL_MAP_CROP = False  # 是否裁剪global map到440×440（默认False，保持480×480）
-_C.MAP.ENABLE_ADAPTIVE_ZOOM = False    # 是否启用自适应缩放（未来功能）
+_C.MAP.ENABLE_ADAPTIVE_ZOOM = True     # 是否启用自适应缩放（内容较小时自动放大到接近边缘）
 
 
 

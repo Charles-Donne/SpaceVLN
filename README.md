@@ -7,7 +7,7 @@
 [![Python](https://img.shields.io/badge/Python-3.8-blue.svg)](https://www.python.org/)
 [![Habitat](https://img.shields.io/badge/Habitat-v0.1.7-orange.svg)](https://github.com/facebookresearch/habitat-lab)
 
-[Paper](https://arxiv.org/abs/2412.10137) | [Project](https://chenkehan21.github.io/CA-Nav-project/) | [Docs](docs/)
+[Paper](https://github.com/Charles-Donne/SpaceVLN) | [Web](https://github.com/Charles-Donne/SpaceVLN) | [Docs](docs/)
 
 </div>
 
@@ -262,9 +262,10 @@ look_around_and_collect()  # 12 steps × 30° = 360°
 ## 🙏 Acknowledgments
 
 Built upon:
-- **CA-Nav**: Constraint-aware navigation framework ([Paper](https://arxiv.org/abs/2412.10137))
-- **Habitat**: Simulation platform
-- **GroundedSAM**: Open-vocabulary detection
+- **CA-Nav**: Constraint-aware navigation framework ([Code](https://github.com/Chenkehan21/CA-Nav-code))
+- **NaVid**: Video-based VLM navigation baseline ([Code](https://github.com/jzhzhang/NaVid-VLN-CE))
+- **Habitat**: Simulation platform ([Code](https://github.com/facebookresearch/habitat-lab))
+- **GroundedSAM**: Open-vocabulary detection ([Code](https://github.com/IDEA-Research/Grounded-Segment-Anything))
 
 ---
 
@@ -276,16 +277,7 @@ MIT License - See [LICENSE](LICENSE)
 
 ## 📧 Citation
 
-If you use this code, please cite:
-
-```bibtex
-@article{chen2024constraint,
-  title={Constraint-Aware Zero-Shot Vision-Language Navigation in Continuous Environments},
-  author={Chen, Kehan and An, Dong and Huang, Yan and Xu, Rongtao and Su, Yifei and Ling, Yonggen and Reid, Ian and Wang, Liang},
-  journal={IEEE Transactions on Pattern Analysis and Machine Intelligence},
-  year={2024}
-}
-```
+To be added.
 
 ---
 

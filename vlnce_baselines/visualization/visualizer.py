@@ -17,7 +17,7 @@ import os
 import cv2
 import numpy as np
 from PIL import Image
-from typing import List, Tuple, Optional, Dict, Any
+from typing import List, Tuple, Optional, Dict, Any, Sequence
 
 from vlnce_baselines.common.spatial_formatter import format_relative_direction
 from vlnce_baselines.visualization import rendering as vu
@@ -60,6 +60,9 @@ from vlnce_baselines.config_system.constants import (
 
 class MapVisualizer:
     """地图可视化器 - 统一管理所有可视化和保存逻辑"""
+
+    GLOBAL_TRAJECTORY_COLOR = (0, 0, 170)
+    LOCAL_TRAJECTORY_COLOR = (0, 0, 170)
     
     def __init__(self, 
                  results_dir: str,
@@ -73,7 +76,7 @@ class MapVisualizer:
             resolution: 地图分辨率（cm/pixel）
             map_shape: 地图尺寸
             enable_global_map_crop: 是否裁剪global map到440×440（默认False，保持480×480）
-            enable_adaptive_zoom: 是否启用自适应缩放（根据轨迹范围自动调整显示区域）
+            enable_adaptive_zoom: 是否启用自适应缩放（根据地图内容动态放大显示区域）
         """
         self.results_dir = results_dir
         self.resolution = resolution
@@ -97,6 +100,18 @@ class MapVisualizer:
             map_w=full_map.shape[2],
             crop_offset=crop_offset,
             agent_orientation_deg=float(current_pose[2]),
+        )
+
+    @staticmethod
+    def _build_display_obstacle_mask(full_map: np.ndarray) -> np.ndarray:
+        # Render obstacles as cleaner axis-aligned map blocks instead of sparse speckles.
+        return build_rotated_obstacle_mask(
+            full_map,
+            threshold=0.5,
+            open_kernel_size=3,
+            close_kernel_size=5,
+            axis_close_kernel_size=9,
+            min_component_area=18,
         )
 
     @staticmethod
@@ -125,6 +140,22 @@ class MapVisualizer:
         layer = np.flipud(np.asarray(room_area_layer, dtype=np.int32))
         return cv2.resize(layer, (output_size, output_size), interpolation=cv2.INTER_NEAREST)
 
+    @staticmethod
+    def _refine_room_area_mask(mask: np.ndarray) -> np.ndarray:
+        mask_uint8 = mask.astype(np.uint8) * 255
+        if mask_uint8.size == 0 or np.count_nonzero(mask_uint8) == 0:
+            return mask
+
+        kernel = np.ones((5, 5), dtype=np.uint8)
+        closed = cv2.morphologyEx(mask_uint8, cv2.MORPH_CLOSE, kernel)
+        contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return closed > 127
+
+        filled = np.zeros_like(mask_uint8)
+        cv2.drawContours(filled, contours, -1, 255, thickness=-1)
+        return filled > 127
+
     def _overlay_room_areas(
         self,
         image: np.ndarray,
@@ -144,7 +175,7 @@ class MapVisualizer:
             area_id = int(record.get("id", 0) or 0)
             if area_id <= 0:
                 continue
-            mask = display_layer == area_id
+            mask = self._refine_room_area_mask(display_layer == area_id)
             if not np.any(mask):
                 continue
             color = self._room_area_color(area_id, str(record.get("room_type", "")))
@@ -160,40 +191,138 @@ class MapVisualizer:
                     label_key = "display_label" if use_display_label else "label"
                     label = str(record.get(label_key, record.get("label", "")) or "")
                     if label:
-                        self._draw_room_area_label(output, contours, label, color)
+                        self._draw_room_area_label(output, mask_uint8, contours, label, color)
 
         return output
 
     @staticmethod
+    def _compute_adaptive_zoom_box(
+        images: List[np.ndarray],
+    ) -> Optional[Tuple[int, int, int, int]]:
+        if not images:
+            return None
+
+        reference = images[0]
+        height, width = reference.shape[:2]
+        if height <= 0 or width <= 0:
+            return None
+
+        combined_mask = np.zeros((height, width), dtype=bool)
+        for image in images:
+            if image is None or image.shape[:2] != (height, width):
+                continue
+            combined_mask |= np.any(image != 255, axis=2)
+
+        if not np.any(combined_mask):
+            return None
+
+        ys, xs = np.nonzero(combined_mask)
+        x_min = int(xs.min())
+        x_max = int(xs.max())
+        y_min = int(ys.min())
+        y_max = int(ys.max())
+
+        margin = max(12, int(round(min(height, width) * 0.05)))
+        content_w = x_max - x_min + 1
+        content_h = y_max - y_min + 1
+        crop_side = max(content_w, content_h) + margin * 2
+        max_side = min(height, width)
+        if crop_side >= max_side - 4:
+            return None
+
+        center_x = (x_min + x_max) / 2.0
+        center_y = (y_min + y_max) / 2.0
+        half_side = crop_side / 2.0
+
+        crop_x1 = int(np.floor(center_x - half_side))
+        crop_y1 = int(np.floor(center_y - half_side))
+        crop_x2 = crop_x1 + crop_side
+        crop_y2 = crop_y1 + crop_side
+
+        if crop_x1 < 0:
+            crop_x2 -= crop_x1
+            crop_x1 = 0
+        if crop_y1 < 0:
+            crop_y2 -= crop_y1
+            crop_y1 = 0
+        if crop_x2 > width:
+            shift = crop_x2 - width
+            crop_x1 = max(0, crop_x1 - shift)
+            crop_x2 = width
+        if crop_y2 > height:
+            shift = crop_y2 - height
+            crop_y1 = max(0, crop_y1 - shift)
+            crop_y2 = height
+
+        if crop_x2 - crop_x1 >= width - 2 or crop_y2 - crop_y1 >= height - 2:
+            return None
+
+        return crop_x1, crop_y1, crop_x2, crop_y2
+
+    def _apply_adaptive_zoom(
+        self,
+        images: List[np.ndarray],
+    ) -> List[np.ndarray]:
+        if not self.enable_adaptive_zoom or not images:
+            return images
+
+        crop_box = self._compute_adaptive_zoom_box(images)
+        if crop_box is None:
+            return images
+
+        crop_x1, crop_y1, crop_x2, crop_y2 = crop_box
+        output_images: List[np.ndarray] = []
+        for image in images:
+            if image is None:
+                output_images.append(image)
+                continue
+            height, width = image.shape[:2]
+            cropped = image[crop_y1:crop_y2, crop_x1:crop_x2]
+            resized = cv2.resize(cropped, (width, height), interpolation=cv2.INTER_NEAREST)
+            output_images.append(resized)
+        return output_images
+
+    @staticmethod
     def _draw_room_area_label(
         image: np.ndarray,
+        mask_uint8: np.ndarray,
         contours: List[np.ndarray],
         label: str,
         color: Tuple[int, int, int],
     ) -> None:
-        largest_contour = max(contours, key=cv2.contourArea)
-        moments = cv2.moments(largest_contour)
-        if abs(moments["m00"]) < 1e-6:
-            return
+        center_x = None
+        center_y = None
+        if mask_uint8 is not None and np.count_nonzero(mask_uint8) > 0:
+            distance = cv2.distanceTransform(mask_uint8, cv2.DIST_L2, 5)
+            _min_val, max_val, _min_loc, max_loc = cv2.minMaxLoc(distance)
+            if max_val > 0:
+                center_x, center_y = int(max_loc[0]), int(max_loc[1])
 
-        center_x = int(moments["m10"] / moments["m00"])
-        center_y = int(moments["m01"] / moments["m00"])
+        if center_x is None or center_y is None:
+            largest_contour = max(contours, key=cv2.contourArea)
+            moments = cv2.moments(largest_contour)
+            if abs(moments["m00"]) < 1e-6:
+                return
+            center_x = int(moments["m10"] / moments["m00"])
+            center_y = int(moments["m01"] / moments["m00"])
+
         text = str(label)
         font = cv2.FONT_HERSHEY_SIMPLEX
         font_scale = 0.45
         thickness = 1
         (text_w, text_h), baseline = cv2.getTextSize(text, font, font_scale, thickness)
         pad_x = 4
-        pad_y = 3
+        pad_top = 1
+        pad_bottom = 1
         x1 = max(0, center_x - text_w // 2 - pad_x)
-        y1 = max(0, center_y - text_h // 2 - pad_y)
+        y1 = max(0, center_y - text_h // 2 - pad_top)
         x2 = min(image.shape[1] - 1, center_x + text_w // 2 + pad_x)
-        y2 = min(image.shape[0] - 1, center_y + text_h // 2 + pad_y + baseline)
+        y2 = min(image.shape[0] - 1, center_y + text_h // 2 + pad_bottom + baseline)
         label_bg_color = (255, 0, 0)
         label_text_color = (255, 255, 255)
         cv2.rectangle(image, (x1, y1), (x2, y2), label_bg_color, -1)
         text_x = x1 + pad_x
-        text_y = y2 - baseline - pad_y
+        text_y = y2 - baseline - pad_bottom
         cv2.putText(image, text, (text_x, text_y), font, font_scale, label_text_color, thickness, cv2.LINE_AA)
 
     @staticmethod
@@ -419,6 +548,163 @@ class MapVisualizer:
         if topk is not None and int(topk) > 0:
             return merged_candidates[:max(1, int(topk))]
         return merged_candidates
+
+    @staticmethod
+    def _landmark_instance_uid(inst: Dict[str, Any]) -> Optional[int]:
+        try:
+            value = inst.get("instance_uid")
+            if value is None:
+                return None
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _landmark_instance_rel_xy(inst: Dict[str, Any]) -> Optional[Tuple[float, float]]:
+        try:
+            distance_m = float(inst.get("distance_m"))
+            angle_deg = float(inst.get("angle_deg"))
+        except (TypeError, ValueError):
+            return None
+        angle_rad = np.deg2rad(angle_deg)
+        return (
+            float(distance_m * np.cos(angle_rad)),
+            float(distance_m * np.sin(angle_rad)),
+        )
+
+    @staticmethod
+    def _sort_landmark_instances_for_action(
+        landmark_instances: Sequence[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        return sorted(
+            (dict(inst) for inst in landmark_instances or []),
+            key=lambda item: (
+                -float(item.get("confidence", 0.0)),
+                float(item.get("distance_m", 1e9)),
+                str(item.get("name", "")),
+                int(item.get("instance_uid", 1e9) or 1e9),
+            ),
+        )
+
+    def _select_action_landmark_instances(
+        self,
+        landmark_instances: Sequence[Dict[str, Any]],
+        topk: int = local_map_landmark_topk,
+    ) -> List[Dict[str, Any]]:
+        ranked = self._sort_landmark_instances_for_action(landmark_instances)
+        keep_n = max(1, int(topk))
+        selected = ranked[:keep_n]
+        output: List[Dict[str, Any]] = []
+        for rank, inst in enumerate(selected):
+            normalized = dict(inst)
+            normalized["selection_rank"] = rank
+            output.append(normalized)
+        return output
+
+    def _build_landmark_display_index_lookup(
+        self,
+        landmark_instances: Sequence[Dict[str, Any]],
+    ) -> Dict[int, int]:
+        grouped: Dict[str, List[Dict[str, Any]]] = {}
+        for inst in landmark_instances or []:
+            cls_name = str(inst.get("name", "") or "")
+            uid = self._landmark_instance_uid(inst)
+            if not cls_name or uid is None:
+                continue
+            grouped.setdefault(cls_name, []).append(dict(inst))
+
+        lookup: Dict[int, int] = {}
+        for _cls_name, bucket in grouped.items():
+            ranked = self._sort_landmark_instances_for_action(bucket)
+            for display_idx, inst in enumerate(ranked):
+                uid = self._landmark_instance_uid(inst)
+                if uid is not None:
+                    lookup[uid] = int(display_idx)
+        return lookup
+
+    @staticmethod
+    def _build_landmark_class_totals(
+        landmark_instances: Sequence[Dict[str, Any]],
+    ) -> Dict[str, int]:
+        totals: Dict[str, int] = {}
+        for inst in landmark_instances or []:
+            cls_name = str(inst.get("name", "") or "")
+            if not cls_name:
+                continue
+            totals[cls_name] = totals.get(cls_name, 0) + 1
+        return totals
+
+    def _build_action_landmark_context(
+        self,
+        landmark_instances: Sequence[Dict[str, Any]],
+        topk: int = local_map_landmark_topk,
+    ) -> Dict[str, Any]:
+        all_instances = list(landmark_instances or [])
+        selected_instances = self._select_action_landmark_instances(
+            all_instances,
+            topk=topk,
+        ) if all_instances else []
+        display_lookup_source = all_instances or selected_instances
+        return {
+            "all_instances": all_instances,
+            "selected_instances": selected_instances,
+            "display_index_lookup": self._build_landmark_display_index_lookup(display_lookup_source),
+            "class_totals": self._build_landmark_class_totals(display_lookup_source),
+        }
+
+    def _match_candidate_to_world_instance(
+        self,
+        candidate: Dict[str, Any],
+        landmark_instances: Sequence[Dict[str, Any]],
+        hfov: float,
+    ) -> Optional[Dict[str, Any]]:
+        name = str(candidate.get("name", "") or "")
+        if not name:
+            return None
+
+        det_rel_xy = candidate.get("det_rel_xy")
+        cand_world_x = candidate.get("world_x_m")
+        cand_world_y = candidate.get("world_y_m")
+        ranked: List[Tuple[float, float, float, int, Dict[str, Any]]] = []
+
+        for inst in landmark_instances or []:
+            if str(inst.get("name", "") or "") != name:
+                continue
+
+            inst_uid = self._landmark_instance_uid(inst)
+            if inst_uid is None:
+                continue
+
+            inst_rel_xy = self._landmark_instance_rel_xy(inst)
+            if det_rel_xy is not None and inst_rel_xy is not None:
+                match_cost = float(np.hypot(
+                    float(inst_rel_xy[0]) - float(det_rel_xy[0]),
+                    float(inst_rel_xy[1]) - float(det_rel_xy[1]),
+                ))
+            elif (
+                cand_world_x is not None and cand_world_y is not None and
+                inst.get("world_x_m") is not None and inst.get("world_y_m") is not None
+            ):
+                match_cost = float(np.hypot(
+                    float(inst["world_x_m"]) - float(cand_world_x),
+                    float(inst["world_y_m"]) - float(cand_world_y),
+                ))
+            else:
+                match_cost = self._candidate_distance_m(candidate)
+
+            ranked.append((
+                float(match_cost),
+                float(inst.get("distance_m", 1e9)),
+                -float(inst.get("confidence", 0.0)),
+                int(inst_uid),
+                dict(inst),
+            ))
+
+        if not ranked:
+            return None
+
+        ranked.sort(key=lambda item: (item[0], item[1], item[2], item[3]))
+        return ranked[0][4]
     
     def _create_episode_directories(self, episode_id: int):
         """为特定episode创建保存目录"""
@@ -680,8 +966,12 @@ class MapVisualizer:
         if current_pose is not None:
             # ===== 阶段5: 创建global_map的显示副本（用于绘制trajectory和landmark）=====
             # trajectory_points 是世界像素坐标，统一通过 projector 转到当前旋转显示坐标。
+            obstacle_mask_display = self._build_display_obstacle_mask(full_map)
+            global_map_with_trajectory[obstacle_mask_display] = [0, 0, 0]
+            global_map_rotated[obstacle_mask_display] = [0, 0, 0]
+
             if projector is not None and trajectory_points is not None and len(trajectory_points) > 1:
-                trajectory_color = (0, 165, 255)  # 橙色BGR
+                trajectory_color = self.GLOBAL_TRAJECTORY_COLOR
                 display_points = projector.world_points_to_global_display(trajectory_points)
                 if len(display_points) > 1:
                     cv2.polylines(
@@ -692,50 +982,12 @@ class MapVisualizer:
                         thickness=3,
                     )
             
-            # ===== 阶段5.3: 绘制深红色虚线指示正前方（在waypoint和箭头之前）=====
             center_x, center_y = 240, 240
-            forward_line_length = 120  # 延伸120像素（约3米）
-            forward_color = (0, 0, 180)  # 深红色 BGR
-            forward_thickness = 2
-            
-            # 绘制从agent中心向正上方延伸的虚线
-            # 虚线：每段10像素，间隙5像素
-            dash_length = 10
-            gap_length = 5
-            num_dashes = int(forward_line_length / (dash_length + gap_length))
-            
-            for i in range(num_dashes):
-                dash_start_y = 240 - i * (dash_length + gap_length)
-                dash_end_y = dash_start_y - dash_length
-                if dash_end_y < 240 - forward_line_length:
-                    dash_end_y = 240 - forward_line_length
-                cv2.line(global_map_with_trajectory, (240, int(dash_start_y)), 
-                        (240, int(dash_end_y)), forward_color, forward_thickness)
-            
-            # ===== 阶段5.4: 不再单独绘制 waypoint 点；由房间区域标签直接提供历史区域信息 =====
-
-            # ===== 阶段5.5: 在中心绘制箭头（最后一层）=====
-            arrow_angle = np.deg2rad(-90)  # 朝上
-            agent_pos = (center_x, center_y, arrow_angle)
-            agent_arrow = vu.get_contour_points(agent_pos, origin=(0, 0), size=12)
-            cv2.drawContours(global_map_with_trajectory, [agent_arrow], 0, (0, 0, 255), -1)
-            
-            # ===== 阶段5.6: 叠加黑色障碍物层（覆盖在箭头之上，使障碍物更醒目）=====
-            # obstacle_mask 来自 _get_channel_mask(full_map, 0)，与 semantic_map 同源
-            obstacle_mask_display = build_rotated_obstacle_mask(full_map)
-            
-            # 注意：obstacle_mask 现在已经在 full_map 中旋转过了
-            # 所以这里直接使用，不需要再旋转
-            
-            # 用黑色覆盖障碍物区域（会覆盖箭头，使障碍物更醒目）
-            global_map_with_trajectory[obstacle_mask_display] = [0, 0, 0]  # 黑色BGR
-            global_map_rotated[obstacle_mask_display] = [0, 0, 0]  # 无轨迹版本也叠加
-
             global_map_with_trajectory = self._overlay_room_areas(
                 global_map_with_trajectory,
                 room_area_layer,
                 room_area_records,
-                fill_regions=True,
+                fill_regions=False,
                 show_labels=True,
                 use_display_label=False,
             )
@@ -743,10 +995,16 @@ class MapVisualizer:
                 global_map_rotated,
                 room_area_layer,
                 room_area_records,
-                fill_regions=True,
+                fill_regions=False,
                 show_labels=True,
                 use_display_label=False,
             )
+
+            arrow_angle = np.deg2rad(-90)
+            agent_pos = (center_x, center_y, arrow_angle)
+            agent_arrow = vu.get_contour_points(agent_pos, origin=(0, 0), size=15)
+            cv2.drawContours(global_map_rotated, [agent_arrow], 0, (0, 0, 255), -1)
+            cv2.drawContours(global_map_with_trajectory, [agent_arrow], 0, (0, 0, 255), -1)
             
             # ===== 阶段6: global map 不绘制自定义 landmark，仅保留内部 landmarks 列表供后续距离/角度计算 =====
 
@@ -760,6 +1018,10 @@ class MapVisualizer:
                 # print(f"✂️  Global Map 裁剪: 480×480 → 440×440")
             # else:
                 # print(f"📐 Global Map 尺寸: 480×480 (未裁剪，显示完整地图)")
+
+            global_map_with_trajectory, global_map_rotated = self._apply_adaptive_zoom(
+                [global_map_with_trajectory, global_map_rotated]
+            )
         
         # 添加方位标签到global map
         global_map_with_trajectory = self.add_orientation_labels(global_map_with_trajectory)
@@ -887,7 +1149,7 @@ class MapVisualizer:
         
         # 先获取旋转后的障碍物掩码（用于raycasting）
         # obstacle_mask 来自 _get_channel_mask(full_map, 0)，已在 full_map 中旋转
-        obstacle_mask_resized = build_rotated_obstacle_mask(full_map)
+        obstacle_mask_resized = self._build_display_obstacle_mask(full_map)
         
         # 裁剪中心240×240区域
         obstacle_crop = obstacle_mask_resized[120:360, 120:360]
@@ -953,36 +1215,13 @@ class MapVisualizer:
         
         # ===== 阶段6.5: 绘制轨迹线（在FOV之后，确保轨迹可见）=====
         if len(trajectory_display_points) > 1:
-            trajectory_color = (0, 165, 255)  # 橙色BGR
+            trajectory_color = self.LOCAL_TRAJECTORY_COLOR
             for i in range(len(trajectory_display_points) - 1):
                 pt1 = trajectory_display_points[i]
                 pt2 = trajectory_display_points[i + 1]
                 if (0 <= pt1[0] < 480 and 0 <= pt1[1] < 480 and
                     0 <= pt2[0] < 480 and 0 <= pt2[1] < 480):
                     cv2.line(local_map, pt1, pt2, trajectory_color, thickness=3)
-        
-        # ===== 绘制深红色虚线指示正前方（在箭头下层）=====
-        forward_line_length = 120  # 延伸120像素（约3米）
-        forward_color = (0, 0, 180)  # 深红色 BGR
-        forward_thickness = 2
-        
-        # 绘制从agent中心向正上方延伸的虚线
-        start_point = (fov_center_x, fov_center_y)
-        end_point = (fov_center_x, fov_center_y - forward_line_length)  # 朝上是Y减小
-        
-        # 虚线：每段10像素，间隙5像素
-        dash_length = 10
-        gap_length = 5
-        total_length = forward_line_length
-        num_dashes = int(total_length / (dash_length + gap_length))
-        
-        for i in range(num_dashes):
-            dash_start_y = fov_center_y - i * (dash_length + gap_length)
-            dash_end_y = dash_start_y - dash_length
-            if dash_end_y < fov_center_y - forward_line_length:
-                dash_end_y = fov_center_y - forward_line_length
-            cv2.line(local_map, (fov_center_x, int(dash_start_y)), 
-                    (fov_center_x, int(dash_end_y)), forward_color, forward_thickness)
         
         # ===== 绘制0.5m半径圆圈（深绿色，标识当前位置附近区域）=====
         # 480像素 = 12m，所以1m = 40像素，0.5m = 20像素
@@ -991,18 +1230,10 @@ class MapVisualizer:
         nearby_thickness = 2  # 2像素线宽
         cv2.circle(local_map, (fov_center_x, fov_center_y), nearby_radius, nearby_color, nearby_thickness)
         
-        # ===== 阶段7: 绘制朝上的大箭头（在轨迹和虚线之上）=====
-        arrow_color = (0, 0, 255)  # 亮红色BGR
-        arrow_angle = np.deg2rad(-90)  # 朝上
-        agent_pos = (fov_center_x, fov_center_y, arrow_angle)
-        agent_arrow = vu.get_contour_points(agent_pos, origin=(0, 0), size=24)
-        cv2.drawContours(local_map, [agent_arrow], 0, arrow_color, -1)
-        
-        # ===== 阶段8: 叠加黑色障碍物层（覆盖在箭头之上，使障碍物更醒目）=====
-        # 用黑色覆盖障碍物区域（obstacle_local已在阶段6计算）
+        # ===== 阶段7: 叠加黑色障碍物层 =====
         local_map[obstacle_local] = [0, 0, 0]  # 黑色BGR
         
-        # ===== 阶段9: 绘制Landmark标记（紫色圆球，最上层，不被遮挡）=====
+        # ===== 阶段8: 绘制Landmark标记 =====
         landmarks = []
         if landmark_instances:
             landmarks = self._build_local_landmarks_from_instances(
@@ -1037,6 +1268,13 @@ class MapVisualizer:
                            local_landmark_radius,
                            landmark_marker_border, 1)
         
+        # ===== 阶段9: 绘制朝上的箭头（最上层）=====
+        arrow_color = (0, 0, 255)
+        arrow_angle = np.deg2rad(-90)
+        agent_pos = (fov_center_x, fov_center_y, arrow_angle)
+        agent_arrow = vu.get_contour_points(agent_pos, origin=(0, 0), size=26)
+        cv2.drawContours(local_map, [agent_arrow], 0, arrow_color, -1)
+
         # ===== 阶段10: 最终裁剪到440×440（中心区域）=====
         # 从480x480裁剪中心440x440区域
         crop_offset = (480 - 440) // 2  # = 20
@@ -1309,6 +1547,22 @@ class MapVisualizer:
                                         ) -> List[Dict[str, Any]]:
         """在同一子任务内累计 landmark 实例，并按世界坐标去重融合。"""
         merged_by_class: Dict[str, List[Dict[str, Any]]] = {}
+        next_instance_uid = (
+            max(
+                [self._landmark_instance_uid(inst) or 0 for inst in (existing_instances or []) + (new_instances or [])],
+                default=0,
+            ) + 1
+        )
+
+        def _ensure_instance_uid(inst: Dict[str, Any]) -> int:
+            nonlocal next_instance_uid
+            current_uid = self._landmark_instance_uid(inst)
+            if current_uid is not None:
+                inst["instance_uid"] = int(current_uid)
+                return int(current_uid)
+            inst["instance_uid"] = int(next_instance_uid)
+            next_instance_uid += 1
+            return int(inst["instance_uid"])
 
         def _inst_weight(inst: Dict[str, Any]) -> float:
             stored = inst.get("weight_sum")
@@ -1341,6 +1595,8 @@ class MapVisualizer:
             cls_name = inst.get("name")
             if not cls_name:
                 return
+            inst = dict(inst)
+            _ensure_instance_uid(inst)
             cls_bucket = merged_by_class.setdefault(cls_name, [])
             best_idx = None
             best_dist = None
@@ -1359,11 +1615,13 @@ class MapVisualizer:
             if best_idx is not None and best_dist is not None and best_dist <= merge_radius_m:
                 old = cls_bucket[best_idx]
                 refreshed = dict(old)
+                _ensure_instance_uid(refreshed)
                 old_weight = _inst_weight(old)
                 new_weight = _inst_weight(inst)
                 total_weight = old_weight + new_weight
 
                 refreshed.update(inst)
+                refreshed["instance_uid"] = self._landmark_instance_uid(old) or self._landmark_instance_uid(inst)
                 refreshed["confidence"] = max(
                     float(old.get("confidence", 0.0)),
                     float(inst.get("confidence", 0.0)),
@@ -1409,6 +1667,7 @@ class MapVisualizer:
                 cls_bucket[best_idx] = refreshed
             else:
                 normalized = dict(inst)
+                _ensure_instance_uid(normalized)
                 normalized["observation_count"] = int(normalized.get("observation_count", 1))
                 normalized["weight_sum"] = _inst_weight(normalized)
                 cls_bucket.append(normalized)
@@ -1432,6 +1691,7 @@ class MapVisualizer:
             for inst_idx, item in enumerate(kept):
                 dist_m, angle_deg = _curr_metrics(item)
                 normalized = dict(item)
+                _ensure_instance_uid(normalized)
                 normalized["distance_m"] = float(dist_m)
                 normalized["angle_deg"] = float(angle_deg)
                 normalized["instance_idx"] = inst_idx
@@ -1543,6 +1803,8 @@ class MapVisualizer:
                               show_action_partitions: bool = True,
                               append_bottom_strip: bool = True,
                               controller=None,
+                              selected_landmark_instances: Optional[Sequence[Dict[str, Any]]] = None,
+                              action_landmark_context: Optional[Dict[str, Any]] = None,
                               return_visible_entries: bool = False) -> np.ndarray:
         """
         直接在RGB上渲染边界框（只标注Landmark类别，显示距离+水平偏角）
@@ -1627,114 +1889,104 @@ class MapVisualizer:
             )
             return filtered_entries
 
-        def _build_landmark_strip(
-            current_visible_entries: List[Dict[str, Any]],
-            current_matched_in_view: set,
-        ) -> Tuple[Optional[np.ndarray], List[Dict[str, Any]]]:
-            offscreen_items: List[Dict[str, Any]] = []
-            visible_instance_indices: Dict[str, set] = {}
-            for entry in current_visible_entries:
-                if entry.get("instance_idx") is None:
-                    continue
-                visible_instance_indices.setdefault(entry["name"], set()).add(entry["instance_idx"])
-
-            if controller is not None and getattr(controller, "latest_landmark_instances_world", None):
-                ranked_instances = sorted(
-                    (dict(item) for item in controller.latest_landmark_instances_world),
-                    key=lambda item: (
-                        float(item.get("distance_m", 1e9)),
-                        str(item.get("name", "")),
-                        int(item.get("instance_idx", 0) or 0),
-                    ),
+        if action_landmark_context is None:
+            if selected_landmark_instances is not None:
+                selected_world_landmark_instances = [dict(item) for item in (selected_landmark_instances or [])]
+                all_world_landmark_instances: List[Dict[str, Any]] = []
+                if controller is not None and getattr(controller, "latest_landmark_instances_world", None):
+                    all_world_landmark_instances = list(controller.latest_landmark_instances_world or [])
+                display_lookup_source = all_world_landmark_instances or selected_world_landmark_instances
+                action_landmark_context = {
+                    "all_instances": all_world_landmark_instances,
+                    "selected_instances": selected_world_landmark_instances,
+                    "display_index_lookup": self._build_landmark_display_index_lookup(display_lookup_source),
+                    "class_totals": self._build_landmark_class_totals(display_lookup_source),
+                }
+            else:
+                all_world_landmark_instances: List[Dict[str, Any]] = []
+                if controller is not None and getattr(controller, "latest_landmark_instances_world", None):
+                    all_world_landmark_instances = list(controller.latest_landmark_instances_world or [])
+                action_landmark_context = self._build_action_landmark_context(
+                    all_world_landmark_instances,
+                    topk=local_map_landmark_topk,
                 )
-                for inst in ranked_instances:
-                    cls_name = inst.get("name")
-                    inst_idx = inst.get("instance_idx")
-                    distance_m = inst.get("distance_m")
-                    angle_deg = inst.get("angle_deg")
-                    if cls_name is None or inst_idx is None or distance_m is None or angle_deg is None:
-                        continue
-                    if int(inst_idx) in visible_instance_indices.get(str(cls_name), set()):
-                        continue
-                    offscreen_items.append({
-                        "name": str(cls_name),
-                        "instance_idx": int(inst_idx),
-                        "distance_m": float(distance_m),
-                        "angle_deg": float(angle_deg),
-                        "confidence": float(inst.get("confidence", 0.0)),
-                        "is_opening_like": bool(inst.get("is_opening_like", False)),
-                        "used_edge_geometry": bool(inst.get("used_edge_geometry", False)),
-                        "opening_gap_m": inst.get("opening_gap_m"),
-                        "edge_depth_median": inst.get("edge_depth_median"),
-                        "interior_depth_median": inst.get("interior_depth_median"),
-                        "stop_distance_m": float(inst.get("stop_distance_m", 1.0)),
-                    })
-            elif landmark_dist_map_multi:
-                for cls_name, candidates in landmark_dist_map_multi.items():
-                    sorted_candidates = sorted(candidates, key=lambda x: x[0])
-                    used_set = visible_instance_indices.get(cls_name, set())
-                    for inst_idx, (d_m, a_deg) in enumerate(sorted_candidates):
-                        if inst_idx in used_set:
-                            continue
-                        offscreen_items.append({
-                            "name": str(cls_name),
-                            "instance_idx": int(inst_idx),
-                            "distance_m": float(d_m),
-                            "angle_deg": float(a_deg),
-                            "confidence": 0.0,
-                        })
-            elif landmark_dist_map:
-                for cls_name, (d_m, a_deg) in sorted(landmark_dist_map.items(), key=lambda x: x[1][0]):
-                    if cls_name in current_matched_in_view:
-                        continue
-                    offscreen_items.append({
-                        "name": str(cls_name),
-                        "instance_idx": 0,
-                        "distance_m": float(d_m),
-                        "angle_deg": float(a_deg),
-                        "confidence": 0.0,
-                    })
 
-            combined_ranked: List[Tuple[str, float, float, Dict[str, Any]]] = []
-            for entry in current_visible_entries:
-                combined_ranked.append((
-                    "vis",
-                    float(entry.get("confidence", 0.0)),
-                    float(entry.get("distance_m", 1e9)),
-                    dict(entry),
-                ))
-            for item in offscreen_items:
-                combined_ranked.append((
-                    "off",
-                    float(item.get("confidence", 0.0)),
-                    float(item.get("distance_m", 1e9)),
-                    dict(item),
-                ))
+        all_world_landmark_instances = list(action_landmark_context.get("all_instances", []) or [])
+        selected_world_landmark_instances = [
+            dict(item) for item in (action_landmark_context.get("selected_instances", []) or [])
+        ]
+        landmark_display_index_lookup = dict(action_landmark_context.get("display_index_lookup", {}) or {})
+        world_class_totals: Dict[str, int] = dict(action_landmark_context.get("class_totals", {}) or {})
 
-            combined_ranked.sort(
-                key=lambda item: (
-                    -item[1],
-                    item[2],
-                    str(item[3].get("name", "")),
-                    str(item[0]),
+        def _float_or_none(value: Any) -> Optional[float]:
+            try:
+                if value is None:
+                    return None
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+
+        def _normalize_selected_world_entry(
+            inst: Dict[str, Any],
+            source: str,
+            candidate: Optional[Dict[str, Any]] = None,
+        ) -> Dict[str, Any]:
+            normalized = dict(inst)
+            uid = self._landmark_instance_uid(normalized)
+            if uid is not None:
+                normalized["instance_uid"] = int(uid)
+                if uid in landmark_display_index_lookup:
+                    normalized["instance_idx"] = int(landmark_display_index_lookup[uid])
+
+            cls_name = str(normalized.get("name", "") or "")
+            normalized["source"] = "vis" if source == "vis" else "off"
+            normalized["selection_rank"] = int(normalized.get("selection_rank", 0) or 0)
+            normalized["class_total"] = int(world_class_totals.get(cls_name, max(int(normalized.get("instance_idx", 0) or 0) + 1, 1)))
+            confidence_value = _float_or_none(normalized.get("confidence"))
+            if confidence_value is None and candidate is not None:
+                confidence_value = _float_or_none(candidate.get("confidence"))
+            normalized["confidence"] = float(confidence_value if confidence_value is not None else 0.0)
+
+            distance_m = _float_or_none(normalized.get("distance_m"))
+            angle_deg = _float_or_none(normalized.get("angle_deg"))
+            if distance_m is not None:
+                normalized["distance_m"] = float(distance_m)
+            if angle_deg is not None:
+                normalized["angle_deg"] = float(angle_deg)
+
+            if candidate is not None:
+                normalized["bbox"] = tuple(candidate.get("bbox", ()))
+                normalized["visible_confidence"] = float(candidate.get("confidence", 0.0))
+                normalized["is_opening_like"] = bool(
+                    normalized.get("is_opening_like", False) or candidate.get("is_opening_like", False)
                 )
-            )
-            keep_n = max(1, int(landmark_strip_topk))
-            selected_ranked = combined_ranked[:keep_n]
-            selected_entries: List[Dict[str, Any]] = []
-            selected_visible_entries: List[Dict[str, Any]] = []
-            selected_offscreen_items: List[Dict[str, Any]] = []
-            for source, _confidence, _distance_m, item in selected_ranked:
-                normalized = dict(item)
-                normalized["source"] = "vis" if source == "vis" else "off"
-                selected_entries.append(normalized)
-                if source == "vis":
-                    selected_visible_entries.append(normalized)
+                normalized["used_edge_geometry"] = bool(
+                    normalized.get("used_edge_geometry", False) or candidate.get("used_edge_geometry", False)
+                )
+                old_gap = normalized.get("opening_gap_m")
+                new_gap = candidate.get("opening_gap_m")
+                if old_gap is None:
+                    normalized["opening_gap_m"] = new_gap
+                elif new_gap is None:
+                    normalized["opening_gap_m"] = old_gap
                 else:
-                    selected_offscreen_items.append(normalized)
+                    normalized["opening_gap_m"] = max(float(old_gap), float(new_gap))
+                normalized["edge_depth_median"] = candidate.get("edge_depth_median", normalized.get("edge_depth_median"))
+                normalized["interior_depth_median"] = candidate.get("interior_depth_median", normalized.get("interior_depth_median"))
+                normalized["stop_distance_m"] = min(
+                    float(_float_or_none(normalized.get("stop_distance_m")) or 1.0),
+                    float(_float_or_none(candidate.get("stop_distance_m")) or 1.0),
+                )
+            else:
+                normalized["stop_distance_m"] = float(_float_or_none(normalized.get("stop_distance_m")) or 1.0)
+            return normalized
 
+        def _build_landmark_strip(selected_entries: List[Dict[str, Any]]) -> Tuple[Optional[np.ndarray], List[Dict[str, Any]]]:
+            ordered_entries = [dict(item) for item in selected_entries]
             strip = None
-            if selected_visible_entries or selected_offscreen_items or action_waypoint_entries:
+            if ordered_entries or action_waypoint_entries:
+                selected_visible_entries = [entry for entry in ordered_entries if str(entry.get("source", "off")) == "vis"]
+                selected_offscreen_items = [entry for entry in ordered_entries if str(entry.get("source", "off")) != "vis"]
                 item_lines = build_landmark_strip_lines(
                     selected_visible_entries,
                     selected_offscreen_items,
@@ -1742,13 +1994,16 @@ class MapVisualizer:
                     waypoint_entries=action_waypoint_entries,
                 )
                 strip = render_landmark_strip(detection_vis.shape[1], item_lines)
-
-            return strip, selected_entries
+            return strip, ordered_entries
 
         action_waypoint_entries = _build_action_waypoint_entries()
 
         if detections is None or len(detections.xyxy) == 0:
-            strip, selected_topk_entries = _build_landmark_strip([], set())
+            selected_topk_entries = [
+                _normalize_selected_world_entry(inst, source="off")
+                for inst in selected_world_landmark_instances
+            ]
+            strip, selected_topk_entries = _build_landmark_strip(selected_topk_entries)
             if controller is not None:
                 controller.latest_visible_landmark_entries = []
                 controller.latest_action_landmark_topk_entries = selected_topk_entries
@@ -1822,114 +2077,219 @@ class MapVisualizer:
                 "stop_distance_m": 0.5 if bool(det_depth_profile.get("is_opening_like", False)) else 1.0,
             })
 
-        selected_entries = self._dedupe_detection_candidates(
+        deduped_candidates = self._dedupe_detection_candidates(
             candidate_entries,
             hfov=hfov,
-            topk=detection_visible_topk,
+            topk=None if selected_world_landmark_instances else detection_visible_topk,
         )
-        used_map_candidates = {}
 
-        for candidate in selected_entries:
-            label_name = candidate["name"]
-            confidence = float(candidate["confidence"])
-            x1, y1, x2, y2 = candidate["bbox"]
-            det_rel_xy = candidate["det_rel_xy"]
-            w_img = candidate["w_img"]
-
-            detected_landmarks.append((label_name, confidence))
-            matched_in_view.add(label_name)
-
-            same_cls_total = len(landmark_dist_map_multi.get(label_name, [])) if landmark_dist_map_multi else 1
-
-            # 只使用地图里已经投影/存储的 landmark 相对当前 pose 的距离与角度。
-            map_dist_m = None
-            map_angle_deg = None
-            map_instance_idx = None
-            if landmark_dist_map_multi and label_name in landmark_dist_map_multi:
-                used_set = used_map_candidates.setdefault(label_name, set())
-                candidates = sorted(landmark_dist_map_multi[label_name], key=lambda x: x[0])
-                ranked_candidates = []
-                for idx_c, (dist_m_c, angle_deg_c) in enumerate(candidates):
-                    if idx_c in used_set:
-                        continue
-                    angle_rad_c = np.deg2rad(angle_deg_c)
-                    cand_rel_xy = (
-                        float(dist_m_c * np.cos(angle_rad_c)),
-                        float(dist_m_c * np.sin(angle_rad_c)),
-                    )
-                    if det_rel_xy is not None:
-                        match_cost = float(np.hypot(
-                            cand_rel_xy[0] - det_rel_xy[0],
-                            cand_rel_xy[1] - det_rel_xy[1],
-                        ))
-                    else:
-                        match_cost = float(dist_m_c)
-                    ranked_candidates.append(
-                        (idx_c, dist_m_c, angle_deg_c, match_cost)
-                    )
-                if ranked_candidates:
-                    ranked_candidates.sort(key=lambda item: (item[3], item[1]))
-                    map_instance_idx, map_dist_m, map_angle_deg, _ = ranked_candidates[0]
-                    used_set.add(map_instance_idx)
-            elif landmark_dist_map and label_name in landmark_dist_map:
-                map_dist_m, map_angle_deg = landmark_dist_map[label_name]
-                map_instance_idx = 0
-
-            display_dist_m = map_dist_m
-            display_angle_deg = map_angle_deg
-
-            # bbox上方只显示最终用于决策的距离和动作角度
-            row1 = ""
-            inst_prefix = ""
-            if map_instance_idx is not None and same_cls_total > 1:
-                inst_prefix = f"#{map_instance_idx + 1} "
-            shown_dist_m = display_dist_m
-            shown_angle_deg = display_angle_deg
-            if display_dist_m is not None and display_angle_deg is not None:
-                row1 = (
-                    f"{inst_prefix}{display_dist_m:.1f}m {format_relative_direction(display_angle_deg)}"
+        selected_topk_entries: List[Dict[str, Any]] = []
+        if selected_world_landmark_instances:
+            visible_candidates_by_uid: Dict[int, Tuple[Dict[str, Any], Dict[str, Any]]] = {}
+            for candidate in deduped_candidates:
+                matched_inst = self._match_candidate_to_world_instance(
+                    candidate,
+                    selected_world_landmark_instances,
+                    hfov,
                 )
-            elif display_dist_m is not None:
-                row1 = f"{inst_prefix}{display_dist_m:.1f}m"
-            else:
-                fallback_angle_deg = None
-                fallback_dist_str = None
-                fallback_dist_m = None
-                if det_rel_xy is not None:
-                    forward_m, right_m = det_rel_xy
-                    fallback_dist_m = float(np.hypot(forward_m, right_m))
-                    fallback_angle_deg = float(np.degrees(np.arctan2(right_m, forward_m)))
-                    if fallback_dist_m > 0.05:
-                        fallback_dist_str = f"{min(fallback_dist_m, 5.0):.1f}m"
-                if fallback_angle_deg is None:
-                    fallback_angle_deg = self._candidate_angle_deg(candidate, hfov)
-                if fallback_dist_str is None:
-                    fallback_dist_str = ">5.0m"
-                shown_dist_m = fallback_dist_m if fallback_dist_m is not None else 5.1
-                shown_angle_deg = fallback_angle_deg
-                row1 = f"{inst_prefix}{fallback_dist_str} {format_relative_direction(fallback_angle_deg)}"
+                matched_uid = self._landmark_instance_uid(matched_inst or {})
+                if matched_uid is None:
+                    continue
+                previous = visible_candidates_by_uid.get(matched_uid)
+                candidate_key = (
+                    -float(candidate.get("confidence", 0.0)),
+                    self._candidate_distance_m(candidate),
+                    int(candidate.get("raw_index", 0)),
+                )
+                if previous is None:
+                    visible_candidates_by_uid[matched_uid] = (dict(candidate), dict(matched_inst))
+                    continue
+                previous_key = (
+                    -float(previous[0].get("confidence", 0.0)),
+                    self._candidate_distance_m(previous[0]),
+                    int(previous[0].get("raw_index", 0)),
+                )
+                if candidate_key < previous_key:
+                    visible_candidates_by_uid[matched_uid] = (dict(candidate), dict(matched_inst))
 
-            if shown_dist_m is not None and shown_angle_deg is not None:
-                visible_entries_meta.append({
+            for selected_inst in selected_world_landmark_instances:
+                matched_uid = self._landmark_instance_uid(selected_inst)
+                matched_pair = visible_candidates_by_uid.get(matched_uid) if matched_uid is not None else None
+                if matched_pair is None:
+                    selected_topk_entries.append(
+                        _normalize_selected_world_entry(selected_inst, source="off")
+                    )
+                    continue
+
+                candidate, matched_inst = matched_pair
+                label_name = str(matched_inst.get("name", selected_inst.get("name", "")) or "")
+                confidence = float(candidate.get("confidence", 0.0))
+                x1, y1, x2, y2 = candidate["bbox"]
+                det_rel_xy = candidate.get("det_rel_xy")
+                matched_uid = self._landmark_instance_uid(matched_inst)
+                display_idx = None
+                if matched_uid is not None:
+                    display_idx = landmark_display_index_lookup.get(matched_uid)
+                if display_idx is None:
+                    try:
+                        display_idx = int(matched_inst.get("instance_idx", selected_inst.get("instance_idx", 0)) or 0)
+                    except (TypeError, ValueError):
+                        display_idx = None
+
+                shown_dist_m = _float_or_none(matched_inst.get("distance_m"))
+                shown_angle_deg = _float_or_none(matched_inst.get("angle_deg"))
+                if shown_dist_m is None:
+                    shown_dist_m = _float_or_none(selected_inst.get("distance_m"))
+                if shown_angle_deg is None:
+                    shown_angle_deg = _float_or_none(selected_inst.get("angle_deg"))
+
+                inst_prefix = ""
+                same_cls_total = int(world_class_totals.get(label_name, len(landmark_dist_map_multi.get(label_name, [])) or 1))
+                if display_idx is not None and same_cls_total > 1:
+                    inst_prefix = f"#{display_idx + 1} "
+
+                if shown_dist_m is not None and shown_angle_deg is not None:
+                    row1 = f"{inst_prefix}{shown_dist_m:.1f}m {format_relative_direction(shown_angle_deg)}"
+                elif shown_dist_m is not None:
+                    row1 = f"{inst_prefix}{shown_dist_m:.1f}m"
+                else:
+                    fallback_angle_deg = None
+                    fallback_dist_str = None
+                    fallback_dist_m = None
+                    if det_rel_xy is not None:
+                        forward_m, right_m = det_rel_xy
+                        fallback_dist_m = float(np.hypot(forward_m, right_m))
+                        fallback_angle_deg = float(np.degrees(np.arctan2(right_m, forward_m)))
+                        if fallback_dist_m > 0.05:
+                            fallback_dist_str = f"{min(fallback_dist_m, 5.0):.1f}m"
+                    if fallback_angle_deg is None:
+                        fallback_angle_deg = self._candidate_angle_deg(candidate, hfov)
+                    if fallback_dist_str is None:
+                        fallback_dist_str = ">5.0m"
+                    shown_dist_m = fallback_dist_m if fallback_dist_m is not None else 5.1
+                    shown_angle_deg = fallback_angle_deg
+                    row1 = f"{inst_prefix}{fallback_dist_str} {format_relative_direction(fallback_angle_deg)}"
+
+                detected_landmarks.append((label_name, confidence))
+                matched_in_view.add(label_name)
+
+                visible_entry = _normalize_selected_world_entry(
+                    matched_inst,
+                    source="vis",
+                    candidate=candidate,
+                )
+                if display_idx is not None:
+                    visible_entry["instance_idx"] = int(display_idx)
+                visible_entry["distance_m"] = float(shown_dist_m) if shown_dist_m is not None else float(visible_entry.get("distance_m", 1e9))
+                visible_entry["angle_deg"] = float(shown_angle_deg) if shown_angle_deg is not None else float(visible_entry.get("angle_deg", 0.0))
+                visible_entry["class_total"] = same_cls_total
+                visible_entries_meta.append(visible_entry)
+                selected_topk_entries.append(visible_entry)
+                draw_items.append(
+                    LandmarkDrawItem(
+                        bbox=(x1, y1, x2, y2),
+                        label_text=row1,
+                        distance_m=float(shown_dist_m) if shown_dist_m is not None else 999.0,
+                    )
+                )
+        else:
+            used_map_candidates = {}
+            selected_entries = deduped_candidates[:max(1, int(detection_visible_topk))]
+            for selection_rank, candidate in enumerate(selected_entries):
+                label_name = candidate["name"]
+                confidence = float(candidate["confidence"])
+                x1, y1, x2, y2 = candidate["bbox"]
+                det_rel_xy = candidate["det_rel_xy"]
+
+                detected_landmarks.append((label_name, confidence))
+                matched_in_view.add(label_name)
+
+                same_cls_total = len(landmark_dist_map_multi.get(label_name, [])) if landmark_dist_map_multi else 1
+
+                map_dist_m = None
+                map_angle_deg = None
+                map_instance_idx = None
+                if landmark_dist_map_multi and label_name in landmark_dist_map_multi:
+                    used_set = used_map_candidates.setdefault(label_name, set())
+                    candidates = sorted(landmark_dist_map_multi[label_name], key=lambda x: x[0])
+                    ranked_candidates = []
+                    for idx_c, (dist_m_c, angle_deg_c) in enumerate(candidates):
+                        if idx_c in used_set:
+                            continue
+                        angle_rad_c = np.deg2rad(angle_deg_c)
+                        cand_rel_xy = (
+                            float(dist_m_c * np.cos(angle_rad_c)),
+                            float(dist_m_c * np.sin(angle_rad_c)),
+                        )
+                        if det_rel_xy is not None:
+                            match_cost = float(np.hypot(
+                                cand_rel_xy[0] - det_rel_xy[0],
+                                cand_rel_xy[1] - det_rel_xy[1],
+                            ))
+                        else:
+                            match_cost = float(dist_m_c)
+                        ranked_candidates.append((idx_c, dist_m_c, angle_deg_c, match_cost))
+                    if ranked_candidates:
+                        ranked_candidates.sort(key=lambda item: (item[3], item[1]))
+                        map_instance_idx, map_dist_m, map_angle_deg, _ = ranked_candidates[0]
+                        used_set.add(map_instance_idx)
+                elif landmark_dist_map and label_name in landmark_dist_map:
+                    map_dist_m, map_angle_deg = landmark_dist_map[label_name]
+                    map_instance_idx = 0
+
+                row1 = ""
+                inst_prefix = ""
+                if map_instance_idx is not None and same_cls_total > 1:
+                    inst_prefix = f"#{map_instance_idx + 1} "
+                shown_dist_m = map_dist_m
+                shown_angle_deg = map_angle_deg
+                if shown_dist_m is not None and shown_angle_deg is not None:
+                    row1 = f"{inst_prefix}{shown_dist_m:.1f}m {format_relative_direction(shown_angle_deg)}"
+                elif shown_dist_m is not None:
+                    row1 = f"{inst_prefix}{shown_dist_m:.1f}m"
+                else:
+                    fallback_angle_deg = None
+                    fallback_dist_str = None
+                    fallback_dist_m = None
+                    if det_rel_xy is not None:
+                        forward_m, right_m = det_rel_xy
+                        fallback_dist_m = float(np.hypot(forward_m, right_m))
+                        fallback_angle_deg = float(np.degrees(np.arctan2(right_m, forward_m)))
+                        if fallback_dist_m > 0.05:
+                            fallback_dist_str = f"{min(fallback_dist_m, 5.0):.1f}m"
+                    if fallback_angle_deg is None:
+                        fallback_angle_deg = self._candidate_angle_deg(candidate, hfov)
+                    if fallback_dist_str is None:
+                        fallback_dist_str = ">5.0m"
+                    shown_dist_m = fallback_dist_m if fallback_dist_m is not None else 5.1
+                    shown_angle_deg = fallback_angle_deg
+                    row1 = f"{inst_prefix}{fallback_dist_str} {format_relative_direction(fallback_angle_deg)}"
+
+                visible_entry = {
                     "name": label_name,
                     "confidence": float(confidence),
                     "distance_m": float(shown_dist_m),
                     "angle_deg": float(shown_angle_deg),
                     "instance_idx": map_instance_idx,
+                    "selection_rank": int(selection_rank),
+                    "source": "vis",
+                    "class_total": int(max(same_cls_total, (map_instance_idx or 0) + 1)),
                     "is_opening_like": bool(candidate.get("is_opening_like", False)),
                     "used_edge_geometry": bool(candidate.get("used_edge_geometry", False)),
                     "opening_gap_m": candidate.get("opening_gap_m"),
                     "edge_depth_median": candidate.get("edge_depth_median"),
                     "interior_depth_median": candidate.get("interior_depth_median"),
                     "stop_distance_m": float(candidate.get("stop_distance_m", 1.0)),
-                })
-            draw_items.append(
-                LandmarkDrawItem(
-                    bbox=(x1, y1, x2, y2),
-                    label_text=row1,
-                    distance_m=float(shown_dist_m) if shown_dist_m is not None else 999.0,
+                }
+                visible_entries_meta.append(visible_entry)
+                selected_topk_entries.append(dict(visible_entry))
+                draw_items.append(
+                    LandmarkDrawItem(
+                        bbox=(x1, y1, x2, y2),
+                        label_text=row1,
+                        distance_m=float(shown_dist_m) if shown_dist_m is not None else 999.0,
+                    )
                 )
-            )
 
         # 先渲染bbox框
         color = detection_colors["landmark"]
@@ -1937,7 +2297,7 @@ class MapVisualizer:
         draw_landmark_boxes(detection_vis, draw_items, color, thickness)
         draw_landmark_labels(detection_vis, draw_items, color)
 
-        strip, selected_topk_entries = _build_landmark_strip(visible_entries_meta, matched_in_view)
+        strip, selected_topk_entries = _build_landmark_strip(selected_topk_entries)
         if append_bottom_strip and strip is not None:
             detection_vis = np.vstack([detection_vis, strip])
 
@@ -2212,32 +2572,35 @@ class MapVisualizer:
         """
         if global_map is None:
             return None
-        
-        # 添加Global Map标签（不显示IMAGE编号）
-        label_text = "Global Map"
-        
-        # 创建白色标签背景（高度40像素）
-        label_height = 40
-        label_bg = np.ones((label_height, global_map.shape[1], 3), dtype=np.uint8) * 255
-        
-        # 绘制红色文字
+
+        labeled_map = global_map.copy()
+        label_text = "Map"
         font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 1.0  # 增大字体
-        font_thickness = 2  # 保持加粗
-        text_color = (0, 0, 255)  # BGR: 红色
-        
-        # 计算文字位置（居中）
-        text_size = cv2.getTextSize(label_text, font, font_scale, font_thickness)[0]
-        text_x = (label_bg.shape[1] - text_size[0]) // 2
-        text_y = (label_height + text_size[1]) // 2
-        
-        # 在标签背景上绘制文字
-        cv2.putText(label_bg, label_text, (text_x, text_y), font, font_scale, text_color, font_thickness)
-        
-        # 垂直拼接：地图在上，标签在下
-        labeled_map = np.vstack([global_map, label_bg])
-        
-        # 保存带标签的地图（无压缩，保持高清）
+        font_scale = 0.5
+        font_thickness = 1
+        text_x = 6
+        text_y = max(14, labeled_map.shape[0] - 8)
+        cv2.putText(
+            labeled_map,
+            label_text,
+            (text_x, text_y),
+            font,
+            font_scale,
+            (255, 255, 255),
+            3,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            labeled_map,
+            label_text,
+            (text_x, text_y),
+            font,
+            font_scale,
+            (0, 0, 180),
+            font_thickness,
+            cv2.LINE_AA,
+        )
+
         episode_dir = self._create_episode_directories(episode_id)
         save_path = os.path.join(episode_dir, 'global_map', f'step_{step:04d}_{phase}.png')
         cv2.imwrite(save_path, labeled_map)
@@ -2394,6 +2757,12 @@ class MapVisualizer:
 
         if controller is not None:
             controller.latest_landmark_instances_world = [dict(inst) for inst in landmark_instances_world]
+
+        action_landmark_context = self._build_action_landmark_context(
+            landmark_instances_world,
+            topk=local_map_landmark_topk,
+        )
+        selected_action_landmark_instances = list(action_landmark_context.get("selected_instances", []) or [])
         
         # 1. 保存RGB（传入controller用于绘制距离线）
         paths['rgb'] = self.save_rgb(step, episode_id, rgb, phase, controller)
@@ -2413,7 +2782,7 @@ class MapVisualizer:
         # 3. 渲染并保存局部地图（保留给 thinking 和 debug）
         local_map = self.render_local_map(
             full_map, trajectory_points, detected_classes, current_pose,
-            floor, landmark_classes, landmark_instances_world, landmark_config, hfov,
+            floor, landmark_classes, selected_action_landmark_instances, landmark_config, hfov,
             waypoint_positions, waypoint_ids, room_area_layer, room_area_records, crop_offset,
             mapping_classes=mapping_classes
         )
@@ -2450,7 +2819,9 @@ class MapVisualizer:
                 landmark_dist_map=landmark_dist_map if landmark_dist_map else None,
                 landmark_dist_map_multi=landmark_dist_map_multi if landmark_dist_map_multi else None,
                 append_bottom_strip=False,
-                controller=controller
+                controller=controller,
+                selected_landmark_instances=selected_action_landmark_instances,
+                action_landmark_context=action_landmark_context,
             )
 
             map_obstacle_distances = self.calculate_obstacle_distances_from_full_map(full_map)

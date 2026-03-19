@@ -85,8 +85,8 @@ class InteractiveNavigationController:
         self.latest_visible_landmark_entries = []
         self.latest_action_landmark_topk_entries = []
 
-    def _record_landmark_detection_step(self, step_idx: int, detected_landmarks_step) -> None:
-        """记录当前step的landmark检测结果和地图矫正后的距离/角度。"""
+    def _ensure_landmark_detection_state(self) -> None:
+        """Lazily initialize per-step landmark caches."""
         if not hasattr(self, 'current_step_landmarks'):
             self.current_step_landmarks = {}
         if not hasattr(self, 'current_step_landmark_entries'):
@@ -94,11 +94,19 @@ class InteractiveNavigationController:
         if not hasattr(self, 'current_step_action_landmark_topk_entries'):
             self.current_step_action_landmark_topk_entries = {}
 
+    @staticmethod
+    def _clone_landmark_entries(entries: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+        return [dict(item) for item in (entries or [])]
+
+    def _record_landmark_detection_step(self, step_idx: int, detected_landmarks_step) -> None:
+        """记录当前step的landmark检测结果和地图矫正后的距离/角度。"""
+        self._ensure_landmark_detection_state()
+
         self.current_step_landmarks[step_idx] = detected_landmarks_step or []
         visible_entries = getattr(self, 'latest_visible_landmark_entries', []) or []
         topk_entries = getattr(self, 'latest_action_landmark_topk_entries', []) or []
-        self.current_step_landmark_entries[step_idx] = [dict(item) for item in visible_entries]
-        self.current_step_action_landmark_topk_entries[step_idx] = [dict(item) for item in topk_entries]
+        self.current_step_landmark_entries[step_idx] = self._clone_landmark_entries(visible_entries)
+        self.current_step_action_landmark_topk_entries[step_idx] = self._clone_landmark_entries(topk_entries)
 
     def _get_detected_custom_landmarks(self) -> set:
         """读取当前帧检测结果中的自定义 landmark 类别。"""

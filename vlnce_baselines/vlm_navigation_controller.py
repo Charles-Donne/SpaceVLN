@@ -1823,8 +1823,8 @@ class VLMNavigationController(InteractiveNavigationController):
         # 使用找到的detection图像对应的step
         detected_landmarks = None
         step_landmark_entries = []
-        if detection_step is not None and hasattr(self, 'current_step_landmark_entries'):
-            step_landmark_entries = self.current_step_landmark_entries.get(detection_step, []) or []
+        if detection_step is not None and hasattr(self, 'current_step_action_landmark_topk_entries'):
+            step_landmark_entries = self.current_step_action_landmark_topk_entries.get(detection_step, []) or []
 
         if detection_step is not None and hasattr(self, 'current_step_landmarks') and detection_step in self.current_step_landmarks:
             # 当前step检测到的landmarks: [(name, confidence), ...]

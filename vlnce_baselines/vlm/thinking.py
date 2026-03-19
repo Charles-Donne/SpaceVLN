@@ -5,6 +5,7 @@ LLM规划模块
 """
 from typing import Dict, List, Tuple, Optional
 from vlnce_baselines.vlm.api_client import APIConfig, BaseAPIClient
+from vlnce_baselines.mapping.space_types import normalize_space_type
 from vlnce_baselines.vlm.prompts import (
     get_initial_planning_prompt,
     get_verification_replanning_prompt
@@ -14,8 +15,8 @@ from vlnce_baselines.vlm.prompts import (
 class LLMPlanner(BaseAPIClient):
     """LLM规划器 - 负责子任务生成和验证"""
     
-    REQUIRED_FIELDS_INITIAL = ['next_waypoint_direction', 'next_waypoint_destination', 'subtask_instruction']
-    REQUIRED_FIELDS_VERIFY = ['next_waypoint_direction', 'next_waypoint_destination', 'subtask_instruction']
+    REQUIRED_FIELDS_INITIAL = ['current_waypoint', 'next_waypoint_direction', 'next_waypoint_destination', 'subtask_instruction']
+    REQUIRED_FIELDS_VERIFY = ['current_waypoint', 'next_waypoint_direction', 'next_waypoint_destination', 'subtask_instruction']
     
     def __init__(self, config_path: str = "vlnce_baselines/vlm/llm_config.yaml", 
                  action_space: str = None):
@@ -44,6 +45,13 @@ class LLMPlanner(BaseAPIClient):
         
         # 验证基础字段
         if not self.validate_fields(response, required):
+            return False
+
+        current_waypoint = str(response.get('current_waypoint', '') or '').strip()
+        if not current_waypoint:
+            return False
+
+        if normalize_space_type(current_waypoint) == "Unknown":
             return False
         
         return True
