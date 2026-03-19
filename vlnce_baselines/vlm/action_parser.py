@@ -18,13 +18,19 @@
 from typing import List, Dict, Any, Optional
 import json
 
+from vlnce_baselines.config.core.params.actions import (
+    BASE_MOVE_DISTANCE_M,
+    BASE_TURN_ANGLE_DEG,
+    VALID_MOVE_METERS,
+    VALID_TURN_DEGREES,
+)
 
 class ActionParser:
     """动作解析器 - 将VLM复合动作转换为基本动作序列"""
     
     # 基本动作常量
-    BASE_TURN_ANGLE = 30  # 度
-    BASE_MOVE_DISTANCE = 0.25  # 米
+    BASE_TURN_ANGLE = BASE_TURN_ANGLE_DEG
+    BASE_MOVE_DISTANCE = BASE_MOVE_DISTANCE_M
     
     # 动作类型
     TURN_LEFT = "TURN_LEFT"
@@ -33,8 +39,8 @@ class ActionParser:
     STOP = "STOP"
     
     # 有效动作范围
-    VALID_TURN_DEGREES = [30]
-    VALID_MOVE_METERS = [0.25, 0.5, 0.75, 1.0, 1.25]
+    VALID_TURN_DEGREES = list(VALID_TURN_DEGREES)
+    VALID_MOVE_METERS = list(VALID_MOVE_METERS)
     
     def __init__(self):
         """初始化动作解析器"""

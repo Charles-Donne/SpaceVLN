@@ -13,7 +13,7 @@ from vlnce_baselines.visualization.landmark_overlay import (
     draw_landmark_labels,
     render_landmark_strip,
 )
-from vlnce_baselines.config_system.constants import (
+from vlnce_baselines.config.core.constants import (
     detection_colors,
     detection_thickness,
     detection_visible_topk,

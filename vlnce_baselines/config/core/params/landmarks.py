@@ -1,0 +1,31 @@
+"""Landmark selection, merge, and display parameters."""
+
+LOCAL_MAP_LANDMARK_TOPK = 2
+LANDMARK_MIN_TOTAL_PIXELS = 1
+LANDMARK_MIN_AREA_THRESHOLD = 1
+LANDMARK_MERGE_DISTANCE = 0
+LANDMARK_INSTANCE_TOPK = 0
+LANDMARK_INSTANCE_MERGE_RADIUS_M = 0.60
+
+DETECTION_VISIBLE_TOPK = 2
+LANDMARK_STRIP_TOPK = 2
+
+LANDMARK_DUPLICATE_IOU_STRICT = 0.65
+LANDMARK_DUPLICATE_IOU_LOOSE = 0.25
+LANDMARK_DUPLICATE_REL_DIST_M = 0.35
+LANDMARK_DUPLICATE_ANGLE_DIFF_DEG = 12.0
+
+LANDMARK_EDGE_DEPTH_KEYWORDS = (
+    "door",
+    "doorway",
+    "hallway",
+    "corridor",
+    "entry",
+    "entrance",
+    "arch",
+    "archway",
+    "passage",
+    "opening",
+    "walkway",
+)
+LANDMARK_EDGE_DEPTH_MIN_GAP_M = 0.08

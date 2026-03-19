@@ -3,7 +3,7 @@
 # ======================================================
 #
 # 使用方法：
-#   1. 复制此文件为 api_config.yaml
+#   1. 复制此文件为 vlnce_baselines/config/api/vlm_api_config.yaml
 #   2. 修改下方 provider 字段选择服务商
 #   3. 填入对应服务商的 api_key
 #

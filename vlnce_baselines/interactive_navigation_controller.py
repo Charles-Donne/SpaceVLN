@@ -15,7 +15,7 @@ from habitat_baselines.common.environments import get_env_class
 from vlnce_baselines.detection import GroundedSAM
 from vlnce_baselines.mapping import Semantic_Mapping, SemanticMapper, SemanticProcessor
 from vlnce_baselines.visualization import MapVisualizer
-from vlnce_baselines.config_system import ConfigHelper, create_category_config
+from vlnce_baselines.config.core import ConfigHelper, create_category_config
 from vlnce_baselines.common.env_utils import construct_envs
 from vlnce_baselines.common.utils import get_device
 
@@ -71,7 +71,7 @@ class InteractiveNavigationController:
         self.detection_classes = self.category_config.detection_classes
         self.classes = []
         
-        from vlnce_baselines.config_system.constants import landmark_min_area_threshold, landmark_min_total_pixels
+        from vlnce_baselines.config.core.constants import landmark_min_area_threshold, landmark_min_total_pixels
         self.landmark_min_area_threshold = landmark_min_area_threshold
         self.landmark_min_total_pixels = landmark_min_total_pixels
         

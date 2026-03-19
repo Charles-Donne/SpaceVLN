@@ -15,7 +15,7 @@ from vlnce_baselines.visualization.obstacle_analysis import (
     calculate_obstacle_distances_12_directions as scan_obstacle_distances_12_directions,
     calculate_obstacle_distances_from_rotated_map as scan_obstacle_distances_from_rotated_map,
 )
-from vlnce_baselines.config_system.constants import color_palette, local_map_landmark_topk
+from vlnce_baselines.config.core.constants import color_palette, local_map_landmark_topk
 
 
 class MapVisualizer:
@@ -898,7 +898,7 @@ class MapVisualizer:
         if not landmark_classes:
             return []
 
-        from vlnce_baselines.config_system.constants import landmark_merge_distance
+        from vlnce_baselines.config.core.constants import landmark_merge_distance
         import math as _math
 
         MAP_CH = 3

@@ -5,6 +5,11 @@ VLM动作执行模块
 """
 import os
 from typing import Dict, Tuple, Optional
+from vlnce_baselines.config.core.params.actions import VALID_MOVE_METERS, VALID_TURN_DEGREES
+from vlnce_baselines.config.core.params.api import (
+    ACTION_IMAGE_COMPRESSION_MAX_SIZE,
+    ACTION_IMAGE_COMPRESSION_QUALITY,
+)
 from vlnce_baselines.vlm.api_client import APIConfig, BaseAPIClient
 from vlnce_baselines.vlm.action_prompt import get_action_execution_prompt
 from vlnce_baselines.visualization.visualizer import MapVisualizer
@@ -14,10 +19,10 @@ class ActionExecutor(BaseAPIClient):
     """VLM动作执行器 - 负责低层动作决策"""
     
     REQUIRED_FIELDS = ['reasoning', 'action_analysis', 'action']  # degrees/meters/progress_summary optional
-    VALID_TURN_VALUES = (30,)
-    VALID_MOVE_VALUES = (0.25, 0.5, 0.75, 1.0, 1.25)
+    VALID_TURN_VALUES = VALID_TURN_DEGREES
+    VALID_MOVE_VALUES = VALID_MOVE_METERS
     
-    def __init__(self, config_path: str = "vlnce_baselines/vlm/vlm_config.yaml", 
+    def __init__(self, config_path: str = "vlnce_baselines/config/api/vlm_api_config.yaml", 
                  turn_angle: float = 30.0, 
                  move_distance: float = 0.25):
         """
@@ -36,8 +41,8 @@ class ActionExecutor(BaseAPIClient):
         
         # 图片压缩配置（节省token）
         self.enable_compression = True
-        self.compression_resolution = 512  # 降低到512px
-        self.compression_quality = 75      # JPEG质量75
+        self.compression_resolution = ACTION_IMAGE_COMPRESSION_MAX_SIZE
+        self.compression_quality = ACTION_IMAGE_COMPRESSION_QUALITY
         
         print(f"  ActionVLM: {self.config.model} | {self.compression_resolution}px Q{self.compression_quality}")
         

@@ -6,6 +6,8 @@ from typing import List, Tuple
 
 import numpy as np
 
+from vlnce_baselines.config.core.params.spatial import WAYPOINT_REPLACE_DISTANCE_M
+
 
 class WaypointManager:
     """Maintain the ordered waypoint chain in world-map pixels."""
@@ -29,7 +31,7 @@ class WaypointManager:
         area_label: str = "",
     ) -> int:
         """Append a waypoint, replacing only the immediately previous one if <2m away."""
-        distance_threshold_pixels = 200.0 / float(self.resolution)
+        distance_threshold_pixels = (WAYPOINT_REPLACE_DISTANCE_M * 100.0) / float(self.resolution)
         if self.positions:
             prev_y, prev_x = self.positions[-1]
             distance = float(np.hypot(pixel_y - prev_y, pixel_x - prev_x))

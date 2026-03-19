@@ -1,11 +1,13 @@
 """Auto-extracted helper module from MapVisualizer for clearer separation of concerns."""
+import os
+
 import cv2
 import numpy as np
 from PIL import Image
 from typing import Any, Dict, List, Optional, Tuple
 
 from vlnce_baselines.visualization import rendering as vu
-from vlnce_baselines.config_system.constants import (
+from vlnce_baselines.config.core.constants import (
     landmark_marker_border,
     landmark_marker_color,
     local_map_landmark_topk,
@@ -609,4 +611,3 @@ def save_local_map(owner,
     save_path = os.path.join(episode_dir, 'local_map', f'step_{step:04d}_{phase}.png')
     cv2.imwrite(save_path, labeled_map)
     return save_path
-

@@ -7,7 +7,7 @@ from collections import Sequence
 from scipy.spatial.distance import cdist
 from skimage.morphology import remove_small_objects, closing, disk, dilation
 
-from vlnce_baselines.config_system.constants import *
+from vlnce_baselines.config.core.constants import *
 from vlnce_baselines.mapping.pose import get_agent_position, threshold_poses
 import time
 

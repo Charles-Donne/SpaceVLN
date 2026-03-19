@@ -102,20 +102,17 @@ cd CA-Nav-code
 
 ### 1. Configure API Keys
 ```bash
-cd vlnce_baselines/vlm/
+cd vlnce_baselines/config/api/
 
-# Create LLM config
-cp llm_config.yaml.template llm_config.yaml
-# Edit: add your OpenAI/Anthropic API key
-
-# Create VLM config  
-cp vlm_config.yaml.template vlm_config.yaml
-# Edit: add your API key
+# Create one unified API config for both thinking/action models
+cp vlm_api_config.yaml.template vlm_api_config.yaml
+# Edit: add your provider, API key, and model names
 
 # Example:
-# api_type: "openai"
-# api_key: "sk-..."
-# model: "gpt-4o"
+# provider: "dashscope"
+# dashscope.api_key: "sk-..."
+# dashscope.llm_model: "qwen-vl-max-latest"
+# dashscope.vlm_model: "qwen-vl-plus-latest"
 ```
 
 ### 2. Run Navigation

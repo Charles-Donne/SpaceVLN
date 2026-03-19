@@ -13,8 +13,8 @@ import sys
 import time
 from typing import Any, Dict, List, Tuple
 
-from vlnce_baselines.config.default import get_config
-from vlnce_baselines.config_system import ConfigHelper
+from vlnce_baselines.config import ConfigHelper, get_config
+from vlnce_baselines.vlm.api_client import resolve_api_config_path
 from vlnce_baselines.vlm_navigation_controller import VLMNavigationController
 
 
@@ -38,22 +38,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--results-dir", type=str, default=None, help="结果保存目录")
 
     parser.add_argument(
+        "--vlm-api-config",
         "--config",
         type=str,
-        default="vlnce_baselines/vlm/api_config.yaml",
-        help="统一API配置文件路径（推荐）：同时设置LLM和VLM服务商/模型",
-    )
-    parser.add_argument(
-        "--llm-config",
-        type=str,
-        default=None,
-        help="LLM配置文件路径（仅当不使用 --config 时生效）",
-    )
-    parser.add_argument(
-        "--vlm-config",
-        type=str,
-        default=None,
-        help="VLM配置文件路径（仅当不使用 --config 时生效）",
+        dest="vlm_api_config",
+        default="vlnce_baselines/config/api/vlm_api_config.yaml",
+        help="统一 API 配置文件路径（LLM/VLM 共用，推荐）",
     )
 
     parser.add_argument(
@@ -147,21 +137,10 @@ def build_episode_config(base_config, args: argparse.Namespace, episode_id: int)
 def create_controller(
     episode_config,
     args: argparse.Namespace,
-) -> Tuple[VLMNavigationController, bool, str]:
-    use_unified = os.path.exists(args.config)
-    if use_unified:
-        controller = VLMNavigationController(episode_config, config_path=args.config)
-        config_desc = args.config
-    else:
-        llm_config = args.llm_config or "vlnce_baselines/vlm/llm_config.yaml"
-        vlm_config = args.vlm_config or "vlnce_baselines/vlm/vlm_config.yaml"
-        controller = VLMNavigationController(
-            episode_config,
-            llm_config_path=llm_config,
-            vlm_config_path=vlm_config,
-        )
-        config_desc = f"LLM={llm_config} | VLM={vlm_config}"
-    return controller, use_unified, config_desc
+) -> Tuple[VLMNavigationController, str]:
+    unified_config = resolve_api_config_path(args.vlm_api_config)
+    controller = VLMNavigationController(episode_config, config_path=unified_config)
+    return controller, unified_config
 
 
 def run_single_episode(
@@ -178,16 +157,13 @@ def run_single_episode(
     controller = None
     try:
         episode_config = build_episode_config(base_config, args, episode_id)
-        controller, use_unified, config_desc = create_controller(episode_config, args)
+        controller, config_desc = create_controller(episode_config, args)
         controller.reset_episode(episode_id=episode_id)
 
         max_steps = episode_config.TASK_CONFIG.ENVIRONMENT.MAX_EPISODE_STEPS
         print(f"\n📝 指令: {controller.current_instruction}")
         print(f"⚙️  配置: Episode {episode_id} | 最大步数 {max_steps} (从 Habitat 配置)")
-        if use_unified:
-            print(f"🔧 API config: {config_desc}")
-        else:
-            print(f"🔧 VLM: {config_desc}")
+        print(f"🔧 API config: {config_desc}")
 
         result = controller.run_vlm_navigation(max_subtask_steps=args.max_subtask_steps)
         total_steps = result.get("total_steps", result.get("steps", 0))

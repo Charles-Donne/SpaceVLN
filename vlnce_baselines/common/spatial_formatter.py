@@ -3,11 +3,12 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
+from vlnce_baselines.config.core.params.spatial import (
+    CURRENT_AREA_OVERLAP_THRESHOLD_M,
+    WAYPOINT_VISIBILITY_RADIUS_M,
+    WAYPOINT_VISIBILITY_SAMPLES,
+)
 from vlnce_baselines.visualization.map_projection import RotatedMapProjector
-
-CURRENT_AREA_OVERLAP_THRESHOLD_M = 1.0
-WAYPOINT_VISIBILITY_RADIUS_M = 1.0
-WAYPOINT_VISIBILITY_SAMPLES = 16
 
 
 def normalize_relative_bearing(bearing_deg: float) -> float:

@@ -13,6 +13,38 @@ import requests
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional
 
+from vlnce_baselines.config.core.params.api import (
+    DEFAULT_IMAGE_COMPRESSION_ENABLED,
+    DEFAULT_IMAGE_COMPRESSION_MAX_SIZE,
+    DEFAULT_IMAGE_COMPRESSION_QUALITY,
+    DEFAULT_MAX_TOKENS,
+    DEFAULT_TEMPERATURE,
+    DEFAULT_TIMEOUT_S,
+)
+
+
+def resolve_api_config_path(config_path: str) -> str:
+    """Resolve canonical and legacy API config locations."""
+    path = str(config_path or "").strip()
+    if not path:
+        return path
+    if os.path.exists(path):
+        return path
+
+    fallback_map = {
+        "vlnce_baselines/config/api/vlm_api_config.yaml": "vlnce_baselines/config/api_config.yaml",
+        "vlnce_baselines/config/llm_config.yaml": "vlnce_baselines/config/api/vlm_api_config.yaml",
+        "vlnce_baselines/config/vlm_config.yaml": "vlnce_baselines/config/api/vlm_api_config.yaml",
+        "vlnce_baselines/config/api_config.yaml": "vlnce_baselines/config/api/vlm_api_config.yaml",
+        "vlnce_baselines/vlm/api_config.yaml": "vlnce_baselines/config/api/vlm_api_config.yaml",
+        "vlnce_baselines/vlm/llm_config.yaml": "vlnce_baselines/config/api/vlm_api_config.yaml",
+        "vlnce_baselines/vlm/vlm_config.yaml": "vlnce_baselines/config/api/vlm_api_config.yaml",
+    }
+    fallback = fallback_map.get(path)
+    if fallback and os.path.exists(fallback):
+        return fallback
+    return path
+
 
 class APIConfig:
     """统一API配置类
@@ -30,10 +62,16 @@ class APIConfig:
                   统一格式中用于选择 {role}_model / {role}_max_tokens / {role}_timeout
                   Legacy 格式中忽略此参数
         """
-        if not os.path.exists(config_path):
-            raise FileNotFoundError(f"配置文件不存在: {config_path}")
+        resolved_path = resolve_api_config_path(config_path)
+        if not os.path.exists(resolved_path):
+            raise FileNotFoundError(
+                f"配置文件不存在: {config_path}. "
+                f"请在 `vlnce_baselines/config/` 下创建对应 yaml，或显式传入旧路径。"
+            )
         
-        with open(config_path, 'r', encoding='utf-8') as f:
+        self.path = resolved_path
+
+        with open(resolved_path, 'r', encoding='utf-8') as f:
             raw = yaml.safe_load(f)
         
         self.config = raw
@@ -50,9 +88,9 @@ class APIConfig:
             self._api_key      = pc.get('api_key', '')
             self._base_url     = pc.get('base_url', '')
             self._model        = pc.get(f'{r}_model') or pc.get('model', '')
-            self._temperature  = raw.get('temperature', 0.1)
-            self._max_tokens   = raw.get(f'{r}_max_tokens', 2000)
-            self._timeout      = raw.get(f'{r}_timeout', 60)
+            self._temperature  = raw.get('temperature', DEFAULT_TEMPERATURE)
+            self._max_tokens   = raw.get(f'{r}_max_tokens', DEFAULT_MAX_TOKENS)
+            self._timeout      = raw.get(f'{r}_timeout', DEFAULT_TIMEOUT_S)
             self._provider_name = provider
             
             missing = [f for f in ['api_key', 'base_url'] if not pc.get(f)]
@@ -70,9 +108,9 @@ class APIConfig:
             self._api_key      = raw['api_key']
             self._base_url     = raw['base_url']
             self._model        = raw['model']
-            self._temperature  = raw.get('temperature', 0.1)
-            self._max_tokens   = raw.get('max_tokens', 2000)
-            self._timeout      = raw.get('timeout', 60)
+            self._temperature  = raw.get('temperature', DEFAULT_TEMPERATURE)
+            self._max_tokens   = raw.get('max_tokens', DEFAULT_MAX_TOKENS)
+            self._timeout      = raw.get('timeout', DEFAULT_TIMEOUT_S)
             self._provider_name = None
     
     @property
@@ -117,9 +155,9 @@ class BaseAPIClient(ABC):
     def __init__(self, config: APIConfig):
         self.config = config
         # 压缩配置（默认启用）
-        self.compress_images = True
-        self.compression_max_size = 384  # 最大边长（像素）
-        self.compression_quality = 80    # JPEG质量
+        self.compress_images = DEFAULT_IMAGE_COMPRESSION_ENABLED
+        self.compression_max_size = DEFAULT_IMAGE_COMPRESSION_MAX_SIZE
+        self.compression_quality = DEFAULT_IMAGE_COMPRESSION_QUALITY
     
     def set_compression_config(self, enabled: bool = True, max_size: int = 384, quality: int = 80):
         """

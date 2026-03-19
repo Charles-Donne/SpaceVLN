@@ -22,7 +22,7 @@ from torch.nn import functional as F
 
 import habitat_extensions.pose_utils as pu
 
-from vlnce_baselines.config_system.constants import *
+from vlnce_baselines.config.core.constants import *
 from vlnce_baselines.mapping.map_utils import *
 import vlnce_baselines.mapping.depth_utils as du
 import vlnce_baselines.visualization.rendering as vu

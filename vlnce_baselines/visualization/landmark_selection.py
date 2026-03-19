@@ -3,7 +3,7 @@ import cv2
 import numpy as np
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from vlnce_baselines.config_system.constants import (
+from vlnce_baselines.config.core.constants import (
     detection_visible_topk,
     landmark_duplicate_angle_diff_deg,
     landmark_duplicate_iou_loose,

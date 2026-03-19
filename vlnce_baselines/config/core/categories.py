@@ -196,7 +196,7 @@ def create_category_config() -> CategoryConfig:
     Returns:
         CategoryConfig实例
     """
-    from vlnce_baselines.config_system.constants import mapping_classes, landmark_classes
+    from vlnce_baselines.config.core.constants import mapping_classes, landmark_classes
     return CategoryConfig(mapping_classes, landmark_classes)
 
 

@@ -37,7 +37,12 @@ from vlnce_baselines.vlm import (
     LLMPlanner, ActionExecutor, SaveManager, NavigationVisualizer
 )
 from vlnce_baselines.vlm.thinking_view_renderer import ThinkingViewRenderer
-from vlnce_baselines.config_system.constants import landmark_edge_depth_keywords
+from vlnce_baselines.config.core.constants import landmark_edge_depth_keywords
+from vlnce_baselines.config.core.params.actions import (
+    ACTION_SUBTASK_AUTOCOMPLETE_OPEN_DISTANCE_M as CFG_AUTOCOMPLETE_OPEN_DISTANCE_M,
+    ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M as CFG_AUTOCOMPLETE_SOLID_DISTANCE_M,
+    ACTION_SUBTASK_AUTOCOMPLETE_TOPK as CFG_AUTOCOMPLETE_TOPK,
+)
 from vlnce_baselines.visualization.obstacle_analysis import (
     calculate_obstacle_distances_from_depth,
 )
@@ -62,28 +67,19 @@ class VLMNavigationController(InteractiveNavigationController):
     注意：每次验证重规划前都会执行360°环视，以更新语义地图和当前位置的4方向观察
     """
 
-    ACTION_SUBTASK_AUTOCOMPLETE_OPEN_DISTANCE_M = 0.5
-    ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M = 1.0
-    ACTION_SUBTASK_AUTOCOMPLETE_TOPK = 2
+    ACTION_SUBTASK_AUTOCOMPLETE_OPEN_DISTANCE_M = CFG_AUTOCOMPLETE_OPEN_DISTANCE_M
+    ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M = CFG_AUTOCOMPLETE_SOLID_DISTANCE_M
+    ACTION_SUBTASK_AUTOCOMPLETE_TOPK = CFG_AUTOCOMPLETE_TOPK
     
     def __init__(self, config: Config,
-                 config_path: str = None,
-                 llm_config_path: str = "vlnce_baselines/vlm/llm_config.yaml",
-                 vlm_config_path: str = "vlnce_baselines/vlm/vlm_config.yaml"):
+                 config_path: str = "vlnce_baselines/config/api/vlm_api_config.yaml"):
         """
         初始化VLM导航控制器
         
         Args:
             config: Habitat配置
-            config_path: 统一API配置文件路径（同时设置LLM和VLM，优先于下面两个参数）
-            llm_config_path: LLM配置文件路径（仅当 config_path=None 时生效）
-            vlm_config_path: VLM配置文件路径（仅当 config_path=None 时生效）
+            config_path: 统一API配置文件路径（同时设置LLM和VLM）
         """
-        # 统一配置文件优先
-        if config_path is not None:
-            llm_config_path = config_path
-            vlm_config_path = config_path
-        
         # 调用父类初始化（初始化环境、检测、建图、可视化）
         super().__init__(config)
         
@@ -99,14 +95,14 @@ class VLMNavigationController(InteractiveNavigationController):
         
         # 初始化LLM规划器
         try:
-            self.planner = LLMPlanner(llm_config_path, self.action_space)
+            self.planner = LLMPlanner(config_path, self.action_space)
         except Exception as e:
             print(f"[WARN] LLM Planner init failed: {e}")
             self.planner = None
         
         # 初始化VLM执行器
         try:
-            self.action_executor = ActionExecutor(vlm_config_path, self.turn_angle, self.move_distance)
+            self.action_executor = ActionExecutor(config_path, self.turn_angle, self.move_distance)
         except Exception as e:
             print(f"[WARN] Action Executor init failed: {e}")
             self.action_executor = None

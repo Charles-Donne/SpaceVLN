@@ -1,4 +1,11 @@
-# 交互式导航系统 - 只保留新系统需要的导入
-# 旧系统的 ZS_Evaluator_mp 和 models 已移除
+"""SpaceVLN baseline package.
+
+Top-level structure:
+- `config/`: runtime config plus project-level config helpers/params
+- `common/`: cross-cutting shared utilities
+- `mapping/`: semantic/world-map maintenance
+- `visualization/`: renderers and overlays
+- `vlm/`: planner/executor/model-facing logic
+"""
 
 from vlnce_baselines.common import environments

@@ -15,7 +15,7 @@ import torch
 from skimage.morphology import disk, remove_small_objects
 from skimage.morphology import binary_closing as _binary_closing_compat
 
-from vlnce_baselines.config_system.constants import mapping_classes
+from vlnce_baselines.config.core.constants import mapping_classes
 from vlnce_baselines.mapping.room_area_manager import RoomAreaManager
 from vlnce_baselines.mapping.waypoint_manager import WaypointManager
 

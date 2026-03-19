@@ -7,6 +7,14 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
 
+from vlnce_baselines.config.core.params.spatial import (
+    ROOM_CONNECTOR_TYPES,
+    ROOM_CURRENT_AREA_WAYPOINT_MAX_DISTANCE_M,
+    ROOM_MAX_CONNECTED_AREAS,
+    ROOM_MAX_CONNECTION_DISTANCE_M,
+    ROOM_MAX_SAME_TYPE_WAYPOINT_MERGE_DISTANCE_M,
+    ROOM_SAMPLE_PIXELS_PER_AREA,
+)
 from vlnce_baselines.mapping.space_types import normalize_space_type
 from vlnce_baselines.visualization.map_projection import RotatedMapProjector
 
@@ -14,12 +22,12 @@ from vlnce_baselines.visualization.map_projection import RotatedMapProjector
 class RoomAreaManager:
     """Track room-type areas, variants, and the current area label on the world map."""
 
-    CONNECTOR_ROOM_TYPES = {"hallway", "entryway"}
-    MAX_CONNECTED_AREAS = 3
-    MAX_CONNECTION_DISTANCE_M = 3.0
-    MAX_SAME_TYPE_WAYPOINT_MERGE_DISTANCE_M = 5.0
-    SAMPLE_PIXELS_PER_AREA = 9
-    CURRENT_AREA_WAYPOINT_MAX_DISTANCE_M = 1.25
+    CONNECTOR_ROOM_TYPES = ROOM_CONNECTOR_TYPES
+    MAX_CONNECTED_AREAS = ROOM_MAX_CONNECTED_AREAS
+    MAX_CONNECTION_DISTANCE_M = ROOM_MAX_CONNECTION_DISTANCE_M
+    MAX_SAME_TYPE_WAYPOINT_MERGE_DISTANCE_M = ROOM_MAX_SAME_TYPE_WAYPOINT_MERGE_DISTANCE_M
+    SAMPLE_PIXELS_PER_AREA = ROOM_SAMPLE_PIXELS_PER_AREA
+    CURRENT_AREA_WAYPOINT_MAX_DISTANCE_M = ROOM_CURRENT_AREA_WAYPOINT_MAX_DISTANCE_M
 
     def __init__(self, map_shape: Tuple[int, int], resolution: int = 5):
         self.map_shape = map_shape

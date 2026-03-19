@@ -24,7 +24,7 @@ if ! [[ "$MAX_STEPS" =~ ^[0-9]+$ ]] || [ "$MAX_STEPS" -lt 1 ]; then
     exit 1
 fi
 
-CONFIG_FILE="vlnce_baselines/config/exp1.yaml"
+CONFIG_FILE="vlnce_baselines/config/experiments/r2r_eval.yaml"
 RESULTS_DIR="data/interactive_navigation"
 
 if [ ! -f "$CONFIG_FILE" ]; then

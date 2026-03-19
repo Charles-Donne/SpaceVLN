@@ -18,7 +18,7 @@ class LLMPlanner(BaseAPIClient):
     REQUIRED_FIELDS_INITIAL = ['current_waypoint', 'next_waypoint_direction', 'next_waypoint_destination', 'subtask_instruction']
     REQUIRED_FIELDS_VERIFY = ['current_waypoint', 'next_waypoint_direction', 'next_waypoint_destination', 'subtask_instruction']
     
-    def __init__(self, config_path: str = "vlnce_baselines/vlm/llm_config.yaml", 
+    def __init__(self, config_path: str = "vlnce_baselines/config/api/vlm_api_config.yaml", 
                  action_space: str = None):
         """
         初始化LLM规划器

@@ -1,16 +1,15 @@
 """
-VLM (Vision-Language Model) 模块
-================================
-集成大语言模型进行导航规划和动作决策
+VLM subsystem.
 
-模块组成:
-- api_client: API配置和客户端基类
-- prompts: 规划提示词模板
-- action_prompt: 动作执行提示词模板
-- thinking: LLM规划器
-- action: VLM动作执行器
-- navigation_visualizer: 导航可视化和GIF生成
-- save_manager: 数据保存管理
+This package contains model-facing logic:
+- `api_client`: shared API/YAML loading layer
+- `thinking` / `action`: planner and executor
+- `prompts` / `action_prompt`: prompt templates
+- `navigation_visualizer` / `save_manager`: model I/O artifacts
+
+Canonical API YAML files now live under `vlnce_baselines/config/api/`.
+Old `vlnce_baselines/vlm/*.yaml` paths are resolved for backward compatibility
+when users still pass them explicitly.
 """
 
 from vlnce_baselines.vlm.api_client import APIConfig, BaseAPIClient

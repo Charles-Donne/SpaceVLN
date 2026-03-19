@@ -74,10 +74,9 @@ if [ -z "$RANDOM_MODE" ] && [ -z "$EPISODE_IDS_MODE" ]; then
 fi
 
 # 配置路径
-CONFIG_FILE="vlnce_baselines/config/exp1.yaml"
+CONFIG_FILE="vlnce_baselines/config/experiments/r2r_eval.yaml"
 RESULTS_DIR="/root/autodl-tmp/result/spacevln"  # 修改此处可更改结果存储路径
-LLM_CONFIG="vlnce_baselines/vlm/llm_config.yaml"
-VLM_CONFIG="vlnce_baselines/vlm/vlm_config.yaml"
+API_CONFIG="vlnce_baselines/config/api/vlm_api_config.yaml"
 
 # 检查配置文件
 if [ ! -f "$CONFIG_FILE" ]; then
@@ -85,14 +84,9 @@ if [ ! -f "$CONFIG_FILE" ]; then
     exit 1
 fi
 
-if [ ! -f "$LLM_CONFIG" ]; then
-    echo "⚠️  LLM配置文件不存在: $LLM_CONFIG"
-    echo "   请从 llm_config.yaml.template 复制并配置"
-fi
-
-if [ ! -f "$VLM_CONFIG" ]; then
-    echo "⚠️  VLM配置文件不存在: $VLM_CONFIG"
-    echo "   请从 vlm_config.yaml.template 复制并配置"
+if [ ! -f "$API_CONFIG" ]; then
+    echo "⚠️  统一 API 配置文件不存在: $API_CONFIG"
+    echo "   请从 vlnce_baselines/config/api/vlm_api_config.yaml.template 复制并配置"
 fi
 
 # 环境检查
@@ -141,8 +135,7 @@ fi
 echo "📁 结果: $RESULTS_DIR/"
 echo ""
 echo "🤖 模型配置:"
-echo "   LLM: $LLM_CONFIG"
-echo "   VLM: $VLM_CONFIG"
+echo "   API: $API_CONFIG"
 echo ""
 echo "🔄 工作流程:"
 echo "   1. 360°环视建图 + 收集4方向图像"
@@ -171,8 +164,7 @@ CUDA_VISIBLE_DEVICES=0 python vlm_navigation.py \
     $RANDOM_MODE \
     $EPISODE_IDS_MODE ${EPISODE_IDS:+"$EPISODE_IDS"} \
     --results-dir "$RESULTS_DIR" \
-    --llm-config "$LLM_CONFIG" \
-    --vlm-config "$VLM_CONFIG" \
+    --vlm-api-config "$API_CONFIG" \
     --max-subtask-steps 5 \
     $MAX_STEPS_ARG
 

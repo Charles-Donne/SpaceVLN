@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 from collections import Sequence
-from vlnce_baselines.config_system.constants import legend_color_palette
+from vlnce_baselines.config.core.constants import legend_color_palette
 
 
 def get_contour_points(pos, origin, size=20):
