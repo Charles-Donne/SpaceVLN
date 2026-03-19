@@ -1,8 +1,8 @@
-# MapReAct-VLN System Architecture
+# SpaceVLN System Architecture
 
 ## 1. System Goal
 
-MapReAct-VLN is a layered navigation system that combines:
+SpaceVLN is a layered navigation system that combines:
 
 1. Habitat simulation and episode control
 2. RGB-D detection and semantic mapping
@@ -40,7 +40,7 @@ Rule: no mapping, planning, detection, or rendering logic should live in the CLI
   - shared navigation primitives
 
 - `vlnce_baselines/vlm_navigation_controller.py`
-  - MapReAct runtime loop
+  - SpaceVLN runtime loop
   - look-around -> think -> auto-rotate -> act -> verify/replan
   - prompt input assembly
   - subtask state and retry policy

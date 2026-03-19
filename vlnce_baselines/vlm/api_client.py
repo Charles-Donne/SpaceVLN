@@ -359,7 +359,7 @@ class BaseAPIClient(ABC):
             if is_openrouter:
                 # OpenRouter: 固定优先走阿里云 Tongyi 后端（Qwen 系列在此最快，~90-100 TPS）
                 # 若阿里云不可用则 fallback 到其他 provider
-                headers["X-Title"] = "MapReAct-VLN"
+                headers["X-Title"] = "SpaceVLN"
                 payload["provider"] = {
                     "order": ["Alibaba"],         # 固定优先走阿里云（最高吞吐）
                     "allow_fallbacks": True       # 阿里云不可用时允许回退

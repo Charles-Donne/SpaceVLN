@@ -1,4 +1,4 @@
-# MapReAct-VLN: Map-Guided ReAct for Vision-Language Navigation
+# SpaceVLN: Space-Guided Vision-Language Navigation
 
 <div align="center">
 
@@ -15,7 +15,7 @@
 
 ## 🎯 Overview
 
-MapReAct-VLN implements a **hierarchical ReAct framework** for Vision-Language Navigation in Continuous Environments (VLN-CE):
+SpaceVLN implements a **hierarchical navigation framework** for Vision-Language Navigation in Continuous Environments (VLN-CE):
 
 - **THOUGHT**: LLM decomposes tasks into subtasks with map context
 - **ACT**: VLM executes actions guided by RGB + Detection + Local Map

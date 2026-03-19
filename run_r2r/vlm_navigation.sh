@@ -3,7 +3,7 @@
 # VLM自动导航系统：LLM规划 + VLM执行 + 语义建图
 # 
 # ⚠️ 步数限制说明：
-# 1. 默认：从 habitat_extensions/config/zs_vlnce_task.yaml 读取
+# 1. 默认：从 habitat_extensions/config/spacevln_task.yaml 读取
 #    ENVIRONMENT.MAX_EPISODE_STEPS: 500 (默认)
 # 2. 命令行参数可以覆盖配置文件的值
 # 
@@ -75,7 +75,7 @@ fi
 
 # 配置路径
 CONFIG_FILE="vlnce_baselines/config/exp1.yaml"
-RESULTS_DIR="/root/autodl-tmp/result/mapreact"  # 修改此处可更改结果存储路径
+RESULTS_DIR="/root/autodl-tmp/result/spacevln"  # 修改此处可更改结果存储路径
 LLM_CONFIG="vlnce_baselines/vlm/llm_config.yaml"
 VLM_CONFIG="vlnce_baselines/vlm/vlm_config.yaml"
 
@@ -114,7 +114,7 @@ echo "╚═══════════════════════�
 echo ""
 
 # 从配置文件读取默认最大步数
-DEFAULT_MAX_STEPS=$(grep -A 2 "ENVIRONMENT:" habitat_extensions/config/zs_vlnce_task.yaml | grep "MAX_EPISODE_STEPS" | awk '{print $2}' || echo "500")
+DEFAULT_MAX_STEPS=$(grep -A 2 "ENVIRONMENT:" habitat_extensions/config/spacevln_task.yaml | grep "MAX_EPISODE_STEPS" | awk '{print $2}' || echo "500")
 
 # 如果命令行指定了最大步数，使用命令行参数；否则使用配置文件的值
 if [ -z "$MAX_STEPS" ]; then

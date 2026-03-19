@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-MapReAct-VLN 结果分析脚本
+SpaceVLN 结果分析脚本
 =========================
 分析评估结果，计算汇总统计指标，并检查指标计算逻辑
 
@@ -149,7 +149,7 @@ def print_summary(metrics: Dict[str, Any]):
     n = metrics['total_episodes']
     
     print("\n" + "="*80)
-    print("📊 MapReAct-VLN 评估结果汇总")
+    print("📊 SpaceVLN 评估结果汇总")
     print("="*80)
     
     print(f"\n🎯 核心指标:")
@@ -229,7 +229,7 @@ def save_summary(metrics: Dict[str, Any], output_path: str):
     
     content = f"""
 ================================================================================
-📊 MapReAct-VLN 评估结果汇总
+📊 SpaceVLN 评估结果汇总
 ================================================================================
 
 🎯 核心指标:

@@ -1,7 +1,7 @@
 """
 VLM Navigation Runner
 =====================
-Thin CLI entrypoint for MapReAct-VLN batch navigation.
+Thin CLI entrypoint for SpaceVLN batch navigation.
 """
 
 from vlnce_baselines.vlm.runner import build_arg_parser, run_navigation_from_args

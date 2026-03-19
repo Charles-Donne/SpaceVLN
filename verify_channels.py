@@ -4,7 +4,9 @@
 
 # 检查constants
 import sys
-sys.path.insert(0, '/root/navid_ws/MapReAct-VLN')
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from vlnce_baselines.config_system.constants import map_channels
 
@@ -39,4 +41,3 @@ print(f"   - 减少内存占用约40%")
 print(f"   - 语义类别从通道3开始（原来是5）")
 
 print(f"\n✅ 所有检查通过！通道合并优化成功！")
-

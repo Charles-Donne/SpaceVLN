@@ -10,7 +10,7 @@ from habitat_extensions.config.default import get_extended_config as get_task_co
 # EXPERIMENT CONFIG
 # -----------------------------------------------------------------------------
 _C = CN()
-_C.BASE_TASK_CONFIG_PATH = "habitat_extensions/config/zs_vlnce_task.yaml"
+_C.BASE_TASK_CONFIG_PATH = "habitat_extensions/config/spacevln_task.yaml"
 _C.TASK_CONFIG = CN()  # task_config will be stored as a config node
 _C.TRAINER_NAME = "ZS-Evaluator"
 _C.ENV_NAME = "VLNCEZeroShotEnv"
