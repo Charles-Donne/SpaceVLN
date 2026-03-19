@@ -61,7 +61,8 @@ class InteractiveNavigationController:
             self.resolution, 
             self.map_shape,
             enable_global_map_crop=self.config.MAP.ENABLE_GLOBAL_MAP_CROP,
-            enable_adaptive_zoom=self.config.MAP.ENABLE_ADAPTIVE_ZOOM
+            enable_adaptive_zoom=self.config.MAP.ENABLE_ADAPTIVE_ZOOM,
+            debug_save_renderings=bool(getattr(self.config.MAP, "DEBUG_SAVE_RENDERINGS", True)),
         )
         
         self.category_config = create_category_config()

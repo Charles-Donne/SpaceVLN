@@ -912,10 +912,15 @@ class VLMNavigationController(InteractiveNavigationController):
         # 不在环视前更新距离（地图还未扫描，数据不准确）
         # 距离计算会在环视完成后进行
         
+        debug_save_renderings = bool(getattr(self.config.MAP, 'DEBUG_SAVE_RENDERINGS', True))
+
         # 存储12张环视图像用于合成全景图（step 1-12）
         lookaround_images = []
         lookaround_depths = []
         total_new_classes = 0
+        final_map_state = None
+        final_snapshot_paths = {}
+        final_last_waypoint_angle = None
         
         from habitat.sims.habitat_simulator.actions import HabitatSimActions
         
@@ -946,6 +951,7 @@ class VLMNavigationController(InteractiveNavigationController):
                 batch_obs, poses, look_step,
                 list(self.detected_classes), self.current_episode_id
             )
+            final_map_state = map_state
             
             new_classes = len(self.detected_classes) - prev_class_count
             total_new_classes += new_classes
@@ -959,53 +965,54 @@ class VLMNavigationController(InteractiveNavigationController):
             vis_masks = None
             vis_landmark_classes = []
             
-            paths, detected_landmarks_step, _ = self.visualizer.save_step_visualization(
-                step=look_step,
-                episode_id=self.current_episode_id,
-                rgb=rgb_bgr,
-                full_map=map_state['full_map'],
-                trajectory_points=map_state.get('subtask_trajectory_points', []),  # 子任务轨迹（local map用）
-                detected_classes=list(self.detected_classes),
-                current_pose=map_state['full_pose'],
-                floor=map_state['floor'],
-                hfov=self.config.MAP.HFOV,
-                detections=vis_detections,
-                labels=vis_labels,
-                masks=vis_masks,
-                landmark_classes=vis_landmark_classes,
-                mapping_classes=self.mapping_classes,
-                landmark_config={
-                    'min_total_pixels': self.landmark_min_total_pixels,
-                    'min_area_threshold': self.landmark_min_area_threshold
-                },
-                waypoint_positions=map_state.get('waypoint_positions', []),  # 从map_state获取（已旋转）
-                waypoint_ids=map_state.get('waypoint_ids', []),  # 从map_state获取
-                room_area_layer=map_state.get('room_area_layer'),
-                room_area_records=map_state.get('room_area_records', []),
-                phase=phase,
-                global_trajectory_points=map_state.get('global_trajectory_points', []),  # 全局轨迹（global map用）
-                crop_offset=map_state.get('crop_offset'),  # 从map_state获取
-                controller=self
-            )
-            
-            # 保存导航可视化（RGB+俯视图拼接）
-            if self.nav_visualizer:
-                subtask_text = self.current_subtask.get('subtask_instruction', '') if self.current_subtask else f"[环视建图 {phase}]"
-                distance = 0.0
-                if infos and len(infos) > 0:
-                    distance = infos[0].get('distance_to_goal', 0.0)
-                
-                # 环视阶段的subtask_id为phase（如initial, verify_1a）
-                self.nav_visualizer.save_step_visualization(
-                    observations=obs[0],
-                    info=infos[0] if infos and len(infos) > 0 else {},
+            if debug_save_renderings:
+                final_snapshot_paths, detected_landmarks_step, final_last_waypoint_angle = self.visualizer.save_step_visualization(
                     step=look_step,
-                    instruction=self.current_instruction,
-                    current_subtask=subtask_text,
-                    distance=distance,
-                    action=f"TURN_LEFT (360°环视 {i}/12)",
-                    subtask_id=phase
+                    episode_id=self.current_episode_id,
+                    rgb=rgb_bgr,
+                    full_map=map_state['full_map'],
+                    trajectory_points=map_state.get('subtask_trajectory_points', []),  # 子任务轨迹（local map用）
+                    detected_classes=list(self.detected_classes),
+                    current_pose=map_state['full_pose'],
+                    floor=map_state['floor'],
+                    hfov=self.config.MAP.HFOV,
+                    detections=vis_detections,
+                    labels=vis_labels,
+                    masks=vis_masks,
+                    landmark_classes=vis_landmark_classes,
+                    mapping_classes=self.mapping_classes,
+                    landmark_config={
+                        'min_total_pixels': self.landmark_min_total_pixels,
+                        'min_area_threshold': self.landmark_min_area_threshold
+                    },
+                    waypoint_positions=map_state.get('waypoint_positions', []),  # 从map_state获取（已旋转）
+                    waypoint_ids=map_state.get('waypoint_ids', []),  # 从map_state获取
+                    room_area_layer=map_state.get('room_area_layer'),
+                    room_area_records=map_state.get('room_area_records', []),
+                    phase=phase,
+                    global_trajectory_points=map_state.get('global_trajectory_points', []),  # 全局轨迹（global map用）
+                    crop_offset=map_state.get('crop_offset'),  # 从map_state获取
+                    controller=self
                 )
+                
+                # 保存导航可视化（RGB+俯视图拼接）
+                if self.nav_visualizer:
+                    subtask_text = self.current_subtask.get('subtask_instruction', '') if self.current_subtask else f"[环视建图 {phase}]"
+                    distance = 0.0
+                    if infos and len(infos) > 0:
+                        distance = infos[0].get('distance_to_goal', 0.0)
+                    
+                    # 环视阶段的subtask_id为phase（如initial, verify_1a）
+                    self.nav_visualizer.save_step_visualization(
+                        observations=obs[0],
+                        info=infos[0] if infos and len(infos) > 0 else {},
+                        step=look_step,
+                        instruction=self.current_instruction,
+                        current_subtask=subtask_text,
+                        distance=distance,
+                        action=f"TURN_LEFT (360°环视 {i}/12)",
+                        subtask_id=phase
+                    )
             
             # New classes detected (静默处理)
             pass
@@ -1036,56 +1043,44 @@ class VLMNavigationController(InteractiveNavigationController):
         ]
         self.latest_lookaround_phase = str(phase)
         
-        # 环视结束后，计算waypoint角度（只计算一次，用于显示在12张view上）
-        # 注意：initial时不显示waypoint（还没有历史），replan时显示上一个waypoint
         waypoint_info = None
         last_waypoint_angle_deg = None
-        if phase != "initial" and hasattr(self, 'mapper') and self.mapper:
-            # 获取当前地图状态（包含旋转后的waypoint坐标）
-            map_state = self.mapper.get_map_state()
-            wp_positions = map_state.get('waypoint_positions', [])
-            wp_ids = map_state.get('waypoint_ids', [])
-            
-            if wp_positions:  # 如果有waypoint
-                rgb_bgr = cv2.cvtColor(obs[0]['rgb'], cv2.COLOR_RGB2BGR)
-                
-                # 调用visualizer渲染地图并计算waypoint角度
-                # Waypoint角度计算
-                _, _, last_waypoint_angle = self.visualizer.save_step_visualization(
-                    step=look_step,  # 使用最后一步的timestep
-                    episode_id=self.current_episode_id,
-                    rgb=rgb_bgr,
-                    full_map=map_state['full_map'],
-                    trajectory_points=map_state.get('subtask_trajectory_points', []),  # local map用子任务轨迹
-                    detected_classes=list(self.detected_classes),
-                    current_pose=map_state['full_pose'],
-                    floor=map_state['floor'],
-                    hfov=self.config.MAP.HFOV,
-                    detections=None,
-                    labels=None,
-                    masks=None,
-                    landmark_classes=self.landmark_classes,
-                    mapping_classes=self.mapping_classes,
-                    landmark_config={
-                        'min_total_pixels': self.landmark_min_total_pixels,
-                        'min_area_threshold': self.landmark_min_area_threshold
-                    },
-                    waypoint_positions=wp_positions,  # 旋转后的坐标
-                    waypoint_ids=wp_ids,
-                    room_area_layer=map_state.get('room_area_layer'),
-                    room_area_records=map_state.get('room_area_records', []),
-                    phase=phase,
-                    global_trajectory_points=map_state.get('global_trajectory_points', []),  # global map用全局轨迹
-                    crop_offset=map_state.get('crop_offset')  # 从map_state获取
-                )
-                
-                # 转换为度数用于view映射
-                if last_waypoint_angle is not None:
-                    last_waypoint_angle_deg = np.degrees(last_waypoint_angle)
-                    # print(f"  📍 Last Waypoint角度: {last_waypoint_angle_deg:.1f}°")
-                
-                # 保存waypoint信息用于绘制在view上
-                # 注意：这里保存原始世界坐标（用于waypoint描述）
+        if final_map_state is not None and not debug_save_renderings:
+            final_snapshot_paths, _detected_landmarks_step, final_last_waypoint_angle = self.visualizer.save_step_visualization(
+                step=look_step,
+                episode_id=self.current_episode_id,
+                rgb=lookaround_images[-1].copy(),
+                full_map=final_map_state['full_map'],
+                trajectory_points=final_map_state.get('subtask_trajectory_points', []),
+                detected_classes=list(self.detected_classes),
+                current_pose=final_map_state['full_pose'],
+                floor=final_map_state['floor'],
+                hfov=self.config.MAP.HFOV,
+                detections=None,
+                labels=None,
+                masks=None,
+                landmark_classes=[],
+                mapping_classes=self.mapping_classes,
+                landmark_config={
+                    'min_total_pixels': self.landmark_min_total_pixels,
+                    'min_area_threshold': self.landmark_min_area_threshold
+                },
+                waypoint_positions=final_map_state.get('waypoint_positions', []),
+                waypoint_ids=final_map_state.get('waypoint_ids', []),
+                room_area_layer=final_map_state.get('room_area_layer'),
+                room_area_records=final_map_state.get('room_area_records', []),
+                phase=phase,
+                global_trajectory_points=final_map_state.get('global_trajectory_points', []),
+                crop_offset=final_map_state.get('crop_offset'),
+                controller=self,
+            )
+
+        if phase != "initial" and final_map_state is not None:
+            wp_positions = final_map_state.get('waypoint_positions', [])
+            wp_ids = final_map_state.get('waypoint_ids', [])
+            if wp_positions:
+                if final_last_waypoint_angle is not None:
+                    last_waypoint_angle_deg = np.degrees(final_last_waypoint_angle)
                 _, orig_wp_ids, wp_descriptions = self.mapper.get_waypoints()
                 waypoint_info = (wp_positions, wp_ids, wp_descriptions)
         
@@ -1122,28 +1117,18 @@ class VLMNavigationController(InteractiveNavigationController):
             draw_distance_fn=self.visualizer.draw_distance_on_view,
             distance_lookup=self.latest_obstacle_distances_12,
             waypoint_info=waypoint_info,
-            waypoint_area_labels=map_state.get('waypoint_area_labels', []),
-            current_pose=map_state.get('full_pose'),
+            waypoint_area_labels=(final_map_state or {}).get('waypoint_area_labels', []),
+            current_pose=(final_map_state or {}).get('full_pose'),
             resolution_cm=float(getattr(self.mapper, 'resolution', 5)),
-            current_room_area_label=str(map_state.get('current_room_area_label', 'Unknown') or 'Unknown'),
-            full_map=map_state.get('full_map'),
-            crop_offset=map_state.get('crop_offset'),
+            current_room_area_label=str((final_map_state or {}).get('current_room_area_label', 'Unknown') or 'Unknown'),
+            full_map=(final_map_state or {}).get('full_map'),
+            crop_offset=(final_map_state or {}).get('crop_offset'),
             waypoint_angle_deg=last_waypoint_angle_deg,
             draw_waypoints_fn=self._draw_waypoints_on_view,
         )
         
-        # 保存 Global / Local Map 到对应目录
-        # 使用当前step的地图（环视完成后的最新地图）
-        self.latest_global_map = os.path.join(self.episode_dir, 'global_map', f'step_{self.current_step:04d}_{phase}.png')
-        self.latest_local_map = os.path.join(self.episode_dir, 'local_map', f'step_{self.current_step:04d}_{phase}.png')
-        
-        if not os.path.exists(self.latest_global_map):
-            print(f"  [WARN] Global Map not found: {self.latest_global_map}")
-            self.latest_global_map = None
-        
-        if not os.path.exists(self.latest_local_map):
-            print(f"  [WARN] Local Map not found: {self.latest_local_map}")
-            self.latest_local_map = None
+        self.latest_global_map = final_snapshot_paths.get('global_map')
+        self.latest_local_map = final_snapshot_paths.get('local_map')
 
         # print(f"  12方向独立视图已保存")
         
@@ -1195,6 +1180,17 @@ class VLMNavigationController(InteractiveNavigationController):
         
         return direction_paths, direction_names, global_map_path, local_map_path
 
+    def run_lookaround_and_update_state(self, phase: str) -> Dict[str, Any]:
+        """Unified lookaround entry used by initial / verify thinking cycles."""
+        direction_paths, direction_names = self.look_around_and_collect(phase)
+        return {
+            "phase": str(phase),
+            "direction_paths": direction_paths,
+            "direction_names": direction_names,
+            "global_map_path": getattr(self, 'latest_global_map', None),
+            "local_map_path": getattr(self, 'latest_local_map', None),
+        }
+
     def _collect_thinking_detected_landmarks(self) -> List[str]:
         """Collect landmark names seen during the latest lookaround for thinking verification."""
         if hasattr(self, 'current_step_landmarks') and self.current_step_landmarks:
@@ -1238,7 +1234,9 @@ class VLMNavigationController(InteractiveNavigationController):
             )
             print(f"\n[Verify] #{self.subtask_count}{attempt_letter} (lookaround step {self.current_step + 1}-{self.current_step + 12})")
 
-        image_paths, direction_names = self.look_around_and_collect(phase)
+        lookaround_state = self.run_lookaround_and_update_state(phase)
+        image_paths = lookaround_state.get("direction_paths", []) or []
+        direction_names = lookaround_state.get("direction_names", []) or []
         if not image_paths:
             self.latest_thinking_cycle_info = {
                 "mode": mode_key,
@@ -1252,7 +1250,7 @@ class VLMNavigationController(InteractiveNavigationController):
                 print("[ERR] Lookaround failed, cannot verify")
             return None, None, dict(self.latest_thinking_cycle_info)
 
-        _, _, global_map, _local_map = self.get_observations_and_maps(phase)
+        global_map = lookaround_state.get("global_map_path")
         if not global_map or not os.path.exists(global_map):
             print(f"[ERR] Global map not found: {global_map}")
             self.latest_thinking_cycle_info = {
@@ -2020,17 +2018,26 @@ class VLMNavigationController(InteractiveNavigationController):
         if self.latest_obs is None:
             return False
 
-        required_paths = [
-            os.path.join(self.episode_dir, 'rgb', f'step_{self.current_step:04d}_{phase}.png'),
-            os.path.join(self.episode_dir, 'global_map', f'step_{self.current_step:04d}_{phase}.png'),
-            os.path.join(self.episode_dir, 'local_map', f'step_{self.current_step:04d}_{phase}.png'),
-        ]
-        if enable_landmark_detection:
+        render_policy = self.visualizer.get_render_policy(phase)
+        required_paths = []
+        if render_policy.get('save_rgb', False):
+            required_paths.append(
+                os.path.join(self.episode_dir, 'rgb', f'step_{self.current_step:04d}_{phase}.png')
+            )
+        if render_policy.get('save_global_map', False):
+            required_paths.append(
+                os.path.join(self.episode_dir, 'global_map', f'step_{self.current_step:04d}_{phase}.png')
+            )
+        if render_policy.get('save_local_map', False):
+            required_paths.append(
+                os.path.join(self.episode_dir, 'local_map', f'step_{self.current_step:04d}_{phase}.png')
+            )
+        if enable_landmark_detection and render_policy.get('save_detection', False):
             required_paths.append(
                 os.path.join(self.episode_dir, 'detection', f'step_{self.current_step:04d}_{phase}.png')
             )
 
-        if not force and all(os.path.exists(path) for path in required_paths):
+        if not force and required_paths and all(os.path.exists(path) for path in required_paths):
             if not enable_landmark_detection:
                 return True
             if hasattr(self, 'current_step_landmarks') and self.current_step in self.current_step_landmarks:
@@ -2074,6 +2081,7 @@ class VLMNavigationController(InteractiveNavigationController):
             global_trajectory_points=map_state.get('global_trajectory_points', []),
             crop_offset=map_state.get('crop_offset'),
             controller=self,
+            render_policy=render_policy,
         )
 
         if paths.get('global_map'):
