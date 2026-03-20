@@ -63,19 +63,19 @@ INITIAL_PLANNING_PROMPT = """**Role**: You are a VLN planning module. Analyze th
 
 #Examples (abbreviated):
 
-## Ex1: Exercise room task
-**Task**: Turn around walk through exercise room into living room. Wait by Table.
-**Obs:** IMAGE 1: Bookshelf. IMAGE 5: Exercise room doorway, gym equipment. IMAGE 10: Toilet, washbasin
+## Ex1: Bedroom to rug
+**Task**: Exit bedroom, turn left. Walk straight passing gray couch, stop at rug.
+**Obs:** IMAGE 2-5: hallway entrance. IMAGE 6-9: bedroom interior with bed / tripod / couch / curtains.
 
 {{
-    "reasoning": "1) 12-Views: IMAGE1(Front 0°): restroom edge, bookshelf FAR. IMAGE2(Right 30°): restroom wall NEAR, blocked. IMAGE3(Right 60°): restroom wall NEAR, blocked. IMAGE4(Right 90°): restroom wall NEAR, blocked. IMAGE5(Left 120°): exercise-room entrance FAR, exercise equipment FAR, passable. IMAGE6(Left 150°): exercise-room side opening FAR. IMAGE7(Back 180°): restroom side wall NEAR. IMAGE8(Right 210°): restroom side wall NEAR. IMAGE9(Left 240°): toilet NEAR. IMAGE10(Left 270°): toilet and sink NEAR. IMAGE11(Left 300°): sink/counter NEAR. IMAGE12(Left 330°): restroom corner NEAR. Conclusion: currently in restroom; IMAGE5 best continues the task. 2) Current position + final goal + task chain: the NEAR toilet/sink evidence across IMAGE9-12 and the enclosed walls around IMAGE2-4 show the current start place is a restroom back corner by the toilet and sink. The final task goal is the living room's table area, which is not the current restroom location. Since this is the task start, nothing is completed yet and the final goal is not reached, so do not stop. Chain: Restroom(Start/Current)→Exercise Room→Living Room→Table(Goal), and the first stage to execute now is entering the exercise room. 3) Subtask destination + instruction: the immediate next subtask destination is the exercise room's exercise equipment, and the next direct basic subtask is to move into the exercise room toward that equipment. 4) Direction selection + summary: choose IMAGE5 because it best matches the subtask destination/transition space and avoids blocked views; short-term rotate to IMAGE5 and move toward the exercise-room entrance/equipment area; long-term continue through the exercise room to the living room, then the table.",
-    "current_waypoint": "Restroom - by toilet and sink",
-    "waypoint_chain": "Restroom(Start/Current)→Exercise Room→Living Room→Table(Goal)",
-    "task_progress": "Initial state: restroom(Start/Current), then exercise room, then living room, then table.",
-    "next_waypoint_direction": "IMAGE 5 (Left 120°)",
-    "next_waypoint_destination": "Exercise Room's exercise equipment",
-    "subtask_instruction": "From IMAGE 5 (Left 120deg) view, start, move toward the exercise room's exercise equipment.",
-    "next_waypoint_landmark": "exercise equipment",
+    "reasoning": "1) 12-Views: IMAGE1(Front 0°): wall edge NEAR, blocked. IMAGE2(Left 30°): hallway entrance FAR, passable. IMAGE3(Left 60°): hallway entrance FAR, passable. IMAGE4(Left 90°): hallway entrance FAR, passable. IMAGE5(Left 120°): hallway entrance FAR, passable. IMAGE6(Left 150°): bedroom doorway FAR, bed and tripod NEAR, passable. IMAGE7(Back 180°): bedroom interior FAR, couch and curtains NEAR, open. IMAGE8(Right 150°): bedroom interior FAR, couch and curtains NEAR, passable. IMAGE9(Right 120°): bedroom interior FAR, couch and curtains NEAR, passable. IMAGE10(Right 90°): wall edge NEAR, blocked. IMAGE11(Right 60°): wall edge NEAR, blocked. IMAGE12(Right 30°): wall edge NEAR, blocked. Conclusion: currently at a bedroom entrance beside a hallway; IMAGE2 best continues the task. 2) Current position + final goal + task chain: the NEAR bed/tripod/couch/curtain evidence around IMAGE6-9 and the open hallway in IMAGE2-5 show the current start place is the bedroom entrance facing the hallway. The final task goal is the living room's rug near the gray couch. Since this is the task start, nothing is completed yet and the final goal is not reached. Chain: Bedroom(Start/Current)→Hallway→Living Room→Rug(Goal), and the first stage to execute now is exiting the bedroom into the hallway. 3) Subtask destination + instruction: the immediate next subtask destination is the hallway's entrance opening, and the next direct basic subtask is to move into the hallway. 4) Direction selection + summary: choose IMAGE2 because it best matches the subtask destination/transition space and avoids blocked views; short-term rotate to IMAGE2 and move into the hallway; long-term continue into the living room, pass the gray couch, and stop near the rug.",
+    "current_waypoint": "Bedroom - at entrance",
+    "waypoint_chain": "Bedroom(Start/Current)→Hallway→Living Room→Rug(Goal)",
+    "task_progress": "Initial state: bedroom(Start/Current), then hallway, then living room, then rug.",
+    "next_waypoint_direction": "IMAGE 2 (Left 30°)",
+    "next_waypoint_destination": "Hallway's entrance opening",
+    "subtask_instruction": "From IMAGE 2 (Left 30deg) view, start, move into the hallway.",
+    "next_waypoint_landmark": "tripod",
     "global_task_finish": false
 }}
 

@@ -29,26 +29,22 @@ You are provided with 1 image:
 
 **Current View (front-facing, RGB HFOV about 79°)** — Object detection overlaid with 3 depth-sampled obstacle-distance lines:
 - Directions: Left 30deg, FRONT, Right 30deg
-- Red = nearest obstacle <0.5m (blocked), Yellow = 0.5–2m (caution), Green = >2m (open)
+- Red = nearest obstacle <0.5m (blocked), Yellow = 0.5-2m (caution), Green = >2m (open)
 - **Yellow bounding box**: candidate subtask-landmark detection ({detected_landmarks}); first judge whether it is valid task-relevant evidence or just duplicate/noisy evidence
 - **Bottom white strip** (if present): ranked landmark entries plus reachable `space waypoint` cues. Landmark entries are `vis/off vis + landmark name + distance + direction + confidence`; `vis` = detected now, `off vis` = mapped earlier but outside the current view
 
-# Your Task
+# Reasoning Process:
 
-**Decision Process**:
-1. **Detection + View Analysis**: Read detection + space cues in the current view first, ordered from near to far. Check whether each current detection is valid subtask evidence, duplicate evidence, or weak/noisy evidence. Also read visible `space waypoint` / space-area cues in the strip if present. Then analyze FRONT, Left 30deg, and Right 30deg using only visible evidence: likely room/space, near objects, farther objects, valid landmark(s), valid space cue(s), and where the subtask destination most likely is. If something is not visible, do not mention it and do not write filler like `none`.
-2. **Space Structure**: Analyze two parts under Space Structure. First read **space areas**: merged same-type regions such as Bedroom1 / Hallway1 with any shown links. Then read **space waypoints**: `Space WP#...` entries with snapped direction/distance. Use both to infer which way continues toward the most likely task-relevant room/object.
-3. **Current Position + Destination Relation**: From the current view plus the space structure, infer where you are and where the target room/object most likely is.
-4. **Arrival Check**: If the current evidence shows you are already at the subtask destination, stop immediately. During normal action steps, the system will also automatically end the current subtask and switch to thinking if one of the highest-confidence top-2 displayed destination landmarks becomes near enough. Opening-like cues (entrance / doorway / hallway / passage) use about 0.5m; solid object cues use about 1.0m.
-5. **Depth + Avoidance**: Check Left 30 / Front / Right 30 for obstacle safety. Avoid blocked directions and prefer safe progress toward the destination.
-6. **Action Decision**: Base the action on the visual analysis first, then the subtask destination, then the subtask instruction and space structure. Prefer the direction that best matches the destination and instruction while staying safe. If FRONT is blocked, choose the safest side that still stays closest to the destination.
-
-**Safety Priority**: Avoid directions with red distance lines (<0.5m). Never move into an obviously blocked direction.
+1. **Current View Content**: First analyze the marked landmarks together (if present) with the current Image Content. From near to far, judge whether the visible objects belong to the current space or a farther transition/target space. Then compare FRONT, Left 30deg, and Right 30deg using only visible evidence to judge where the subtask destination most likely is. If something is not visible, do not mention it and do not write filler like `none`.
+2. **Bottom Strip: Detected Landmarks / Space Waypoint**: If the bottom white strip is present, read it item by item. For each landmark, know its confidence and whether it matches the image content, how far it is, which direction it is in, and whether it already means arrival. For each space waypoint, judge whether it is the waypoint you need to go to, how far it is, which direction it is in.
+3. **Current Position + Arrival Check**: Use nearby objects, valid landmarks, and the space structure to confirm your current position and where the subtask destination is relative to you. If you have already reached the subtask destination, stop immediately; otherwise continue moving toward that destination.
+   **Arrival rule**: Treat the subtask as reached when you are already in the destination place, or when the detected landmark itself is the destination and is close enough to stop. For solid-object destinations, stopping is allowed once it is within about 1.0m or already clearly at hand. For opening-like destinations (entrance / doorway / hallway), stop only when it is within about 0.5m or when that opening has moved to >90deg or the back side, meaning you have already passed through it.
+4. **Action Decision + Obstacle Avoidance**: Choose the action from the subtask destination/instruction, while avoiding obstacles. If the destination is clearly ahead and FRONT is safe, prefer moving forward with a distance that matches the visible depth. If the destination is not visible ahead or is more consistent with Left 30deg / Right 30deg, prefer turning toward that side. If FRONT has obstacle distance <0.5m, treat it as blocked and choose the safer side whose image content is more likely to lead to the subtask destination. Never move into an obviously blocked direction.
 
 # Output Format (JSON only)
 
 {{
-    "reasoning": "Brief chain: view analysis (detection + space cues, near to far), current position vs destination, arrival check, depth safety / obstacle avoidance, final action",
+    "reasoning": "One concise chain: current-view content, bottom-strip landmark/space cues if present, current position + arrival check, then safe action toward the subtask destination",
     "action_analysis": "One short sentence with the key evidence and why this action is best",
     "action": "<MOVE_FORWARD 0.25m | MOVE_FORWARD 0.5m | MOVE_FORWARD 0.75m | MOVE_FORWARD 1.0m | MOVE_FORWARD 1.25m | TURN_LEFT 30deg | TURN_RIGHT 30deg | STOP>"
 }}
@@ -82,15 +78,12 @@ You are provided with 1 image:
 }}
 
 **Critical Rules**:
-- if the current evidence already shows the subtask destination is reached, output `STOP` immediately
-- during normal action steps the system also automatically ends the current subtask when one of the highest-confidence top-2 displayed destination landmarks is within its stop range: about 0.5m for opening-like cues and about 1.0m for solid objects
-- reasoning must stay concise and evidence-only: cover FRONT/LEFT30/RIGHT30, visible/off-screen landmarks if present, visible space cues if present, current position, destination room/object relation, space-area and space-waypoint alignment, and depth safety / obstacle avoidance before choosing an action; omit empty items and never invent evidence
+- if current evidence satisfies the arrival rule, output `STOP` immediately; the system also auto-ends the subtask when a highest-confidence top-2 destination landmark is close enough: about 1.0m for solid objects, about 0.5m for openings, or already >90deg / behind for passed-through openings
+- keep reasoning concise and evidence-only: follow the 4-step structure, mention only visible or listed cues, omit empty items, and never invent evidence
 - use one common room/space type only; ignore modifiers and normalize corridor-like wording to `hallway`
-- output `action` must stay inside the fixed action space: `TURN_LEFT 30deg` / `TURN_RIGHT 30deg` / `MOVE_FORWARD {{0.25m, 0.5m, 0.75m, 1.0m, 1.25m}}` / `STOP` (`STOP` is compatibility fallback only)
-- If the destination is ahead and FRONT is clear, prefer MOVE_FORWARD
-- If FRONT is blocked, choose the closest safe side direction toward the destination, not a wider detour
-- For off-screen landmarks, **always turn toward the indicated direction first**
-- Use the current visual evidence together with the subtask destination, subtask instruction, and space structure to keep moving toward the most likely relevant space/object
+- output `action` only from the fixed action space: `TURN_LEFT 30deg` / `TURN_RIGHT 30deg` / `MOVE_FORWARD {{0.25m, 0.5m, 0.75m, 1.0m, 1.25m}}` / `STOP`
+- prefer the action that best matches the destination and instruction while staying safe: go forward if FRONT clearly matches and is open, turn toward off-screen or side cues first, and if FRONT is blocked choose the closer safe side instead of a wide detour
+- always use current visual evidence together with the subtask destination, subtask instruction, and space structure to keep moving toward the most likely relevant space/object
 """
 
 
