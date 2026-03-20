@@ -452,28 +452,35 @@ class ThinkingViewRenderer:
                 continue
             seen_name_indices[name] = seen_name_indices.get(name, 0) + 1
             suffix = f" #{seen_name_indices[name]}" if same_name_counts.get(name, 0) > 1 else ""
+            distance_m = float(entry.get("distance_m", 1e9))
+            confidence = float(entry.get("confidence", 0.0))
+            sort_key = (distance_m, 0.0, -confidence)
             lines.append(
                 LandmarkStripLine(
-                    distance_m=float(entry.get("distance_m", 1e9)),
-                    confidence=float(entry.get("confidence", 0.0)),
+                    distance_m=distance_m,
+                    confidence=confidence,
                     priority=0,
+                    sort_key=sort_key,
                     segments=(
                         LandmarkStripSegment("landmark: ", prefix_color),
                         LandmarkStripSegment(cls._short_text(f"{name}{suffix}", max_len=30), value_color),
-                        LandmarkStripSegment(f"  {float(entry.get('distance_m', 0.0)):.1f}m", value_color),
+                        LandmarkStripSegment(f"  {distance_m:.1f}m", value_color),
                         LandmarkStripSegment("  confidence: ", prefix_color),
-                        LandmarkStripSegment(f"{float(entry.get('confidence', 0.0)):.3f}", value_color),
+                        LandmarkStripSegment(f"{confidence:.3f}", value_color),
                     ),
                 )
             )
 
         for entry in waypoint_entries:
             if bool(entry.get("is_current_area")):
+                distance_m = float(entry.get("distance_m", 0.0))
+                sort_key = (distance_m, 1.0, 0.0)
                 lines.append(
                     LandmarkStripLine(
-                        distance_m=float(entry.get("distance_m", 0.0)),
+                        distance_m=distance_m,
                         confidence=0.0,
                         priority=1,
+                        sort_key=sort_key,
                         segments=(
                             LandmarkStripSegment("your current area: ", prefix_color),
                             LandmarkStripSegment(cls._short_text(entry.get("label", "Unknown"), max_len=34), value_color),
@@ -484,21 +491,24 @@ class ThinkingViewRenderer:
 
             note = " (came from here)" if bool(entry.get("is_last_visited")) else ""
             waypoint_text = f"WP#{int(entry.get('id', 0))} {entry.get('label', 'Unknown')}".strip()
+            distance_m = float(entry.get("distance_m", 1e9))
+            sort_key = (distance_m, 1.0, 0.0)
             lines.append(
                 LandmarkStripLine(
-                    distance_m=float(entry.get("distance_m", 1e9)),
+                    distance_m=distance_m,
                     confidence=0.0,
                     priority=1,
+                    sort_key=sort_key,
                     segments=(
                         LandmarkStripSegment("waypoint area: ", prefix_color),
                         LandmarkStripSegment(cls._short_text(waypoint_text, max_len=34), value_color),
-                        LandmarkStripSegment(f"  {float(entry.get('distance_m', 0.0)):.1f}m", value_color),
+                        LandmarkStripSegment(f"  {distance_m:.1f}m", value_color),
                         LandmarkStripSegment(note, prefix_color),
                     ),
                 )
             )
 
-        lines.sort(key=lambda line: (float(line.distance_m), int(line.priority), -float(line.confidence)))
+        lines.sort(key=lambda line: line.sort_key)
         return lines
 
     @staticmethod
