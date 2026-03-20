@@ -158,28 +158,9 @@ class MapVisualizer:
             if cached is not None:
                 return cached.copy()
 
-        raw_obstacle_mask = self._build_raw_obstacle_mask(full_map, cache_key=cache_token)
-
-        # Render obstacles as a cleaner expert-style display layer while keeping
-        # logic-side navigation on a separate, lighter-weight mask.
-        obstacle_mask = build_rotated_obstacle_mask(
-            full_map,
-            threshold=0.5,
-            open_kernel_size=2,
-            close_kernel_size=5,
-            axis_close_kernel_size=7,
-            min_component_area=10,
-            hole_fill_area=48,
-            orthogonal_kernel_size=11,
-            orthogonal_min_component_area=72,
-            dilate_kernel_size=3,
-        )
-        raw_pixels = int(np.count_nonzero(raw_obstacle_mask))
-        cleaned_pixels = int(np.count_nonzero(obstacle_mask))
-        # Keep the cleaned rendering when it is stable; otherwise fall back to the raw
-        # obstacle layer so obstacles never disappear entirely on sparse maps.
-        if raw_pixels > 0 and (cleaned_pixels == 0 or cleaned_pixels < max(8, int(raw_pixels * 0.08))):
-            obstacle_mask = raw_obstacle_mask
+        # Keep display-side obstacles identical to the navigation-side mask so
+        # we do not maintain a separate "beautified" obstacle map anymore.
+        obstacle_mask = self._build_logic_obstacle_mask(full_map, cache_key=cache_token)
         if cache_token is not None:
             self._render_cache["obstacle_mask_display"][cache_token] = obstacle_mask.copy()
         return obstacle_mask

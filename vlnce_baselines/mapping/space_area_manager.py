@@ -53,6 +53,7 @@ class SpaceAreaManager:
         space_type = self._parse_space_type(description)
         if space_type == "Unknown":
             return "Unknown"
+        first_area_attempt = len(self.space_area_records) == 0
         space_key = self._space_type_key(space_type)
         world_pixels = self._compute_space_area_world_pixels(
             pixel_y=pixel_y,
@@ -61,6 +62,14 @@ class SpaceAreaManager:
             full_pose=full_pose,
             crop_offset=crop_offset,
         )
+        if first_area_attempt:
+            print(
+                f"[SpaceAreaDebug] first area candidate='{description}' "
+                f"| type={space_type} | pixels={len(world_pixels)}"
+            )
+        if not world_pixels:
+            self._set_unknown_current_area()
+            return "Unknown"
 
         projector = self._build_projector(full_map, full_pose, crop_offset)
         obstacle_mask = (
@@ -134,6 +143,11 @@ class SpaceAreaManager:
         self.space_area_records.append(record)
         self.current_space_area_label = label
         self.current_space_area_type = space_type
+        if first_area_attempt:
+            print(
+                f"[SpaceAreaDebug] first area created='{label}' "
+                f"| type={space_type} | pixels={len(record['pixels'])}"
+            )
         self._consolidate_same_type_records(
             obstacle_mask=obstacle_mask,
             projector=projector,
@@ -202,7 +216,9 @@ class SpaceAreaManager:
 
         self._set_current_space_area_from_layer(
             layer=layer,
+            full_map=full_map,
             full_pose=full_pose,
+            crop_offset=crop_offset,
             projector=projector,
             waypoint_positions=waypoint_positions,
             waypoint_area_labels=waypoint_area_labels,
@@ -423,13 +439,18 @@ class SpaceAreaManager:
         traversible = explored_mask & (~obstacle_mask)
         center_rot = projector.world_to_rotated_pixel(pixel_y, pixel_x)
         if center_rot is None:
-            return fallback
+            return set()
 
         center_row = int(round(center_rot[0]))
         center_col = int(round(center_rot[1]))
-        start = self._find_space_area_start(traversible, center_row, center_col)
-        if start is None:
-            return fallback
+        if not (
+            0 <= center_row < traversible.shape[0]
+            and 0 <= center_col < traversible.shape[1]
+            and traversible[center_row, center_col]
+        ):
+            return set()
+
+        start = (center_row, center_col)
 
         max_radius_px = int(round((max_radius_m * 100.0) / float(self.resolution)))
         h_map, w_map = traversible.shape
@@ -465,7 +486,6 @@ class SpaceAreaManager:
             if world is None:
                 continue
             world_pixels.add((int(round(world[0])), int(round(world[1]))))
-        world_pixels.add((int(pixel_y), int(pixel_x)))
         filtered_pixels = self._filter_obstacle_pixels(
             world_pixels=world_pixels,
             full_map=full_map,
@@ -482,12 +502,14 @@ class SpaceAreaManager:
             crop_offset=crop_offset,
         ):
             return {(int(pixel_y), int(pixel_x))}
-        return fallback
+        return set()
 
     def _set_current_space_area_from_layer(
         self,
         layer: np.ndarray,
+        full_map: Optional[np.ndarray],
         full_pose: Optional[Sequence[float]],
+        crop_offset: Optional[Tuple[int, int]],
         projector: RotatedMapProjector,
         waypoint_positions: Optional[Sequence[Tuple[int, int]]] = None,
         waypoint_area_labels: Optional[Sequence[str]] = None,
@@ -498,7 +520,14 @@ class SpaceAreaManager:
 
         curr_py = int(round(float(full_pose[1]) * 100.0 / float(self.resolution)))
         curr_px = int(round(float(full_pose[0]) * 100.0 / float(self.resolution)))
-        rotated = projector.world_to_rotated_pixel(curr_py, curr_px)
+        probe_py, probe_px = self._resolve_current_area_probe_pixel(
+            pixel_y=curr_py,
+            pixel_x=curr_px,
+            full_map=full_map,
+            full_pose=full_pose,
+            crop_offset=crop_offset,
+        )
+        rotated = projector.world_to_rotated_pixel(probe_py, probe_px)
         if rotated is not None:
             row = int(round(rotated[0]))
             col = int(round(rotated[1]))
@@ -525,6 +554,7 @@ class SpaceAreaManager:
             pixel_x=curr_px,
             waypoint_positions=waypoint_positions,
             waypoint_area_labels=waypoint_area_labels,
+            containment_pixel=(probe_py, probe_px),
         )
         if containing_record is not None:
             self._set_current_area_from_record(containing_record)
@@ -550,12 +580,20 @@ class SpaceAreaManager:
 
         curr_py = int(round(float(full_pose[1]) * 100.0 / float(self.resolution)))
         curr_px = int(round(float(full_pose[0]) * 100.0 / float(self.resolution)))
+        probe_py, probe_px = self._resolve_current_area_probe_pixel(
+            pixel_y=curr_py,
+            pixel_x=curr_px,
+            full_map=full_map,
+            full_pose=full_pose,
+            crop_offset=crop_offset,
+        )
 
         containing_record = self._find_current_record_from_waypoints(
             pixel_y=curr_py,
             pixel_x=curr_px,
             waypoint_positions=waypoint_positions,
             waypoint_area_labels=waypoint_area_labels,
+            containment_pixel=(probe_py, probe_px),
         )
         if containing_record is not None:
             self._set_current_area_from_record(containing_record)
@@ -580,8 +618,13 @@ class SpaceAreaManager:
         pixel_x: int,
         waypoint_positions: Optional[Sequence[Tuple[int, int]]] = None,
         waypoint_area_labels: Optional[Sequence[str]] = None,
+        containment_pixel: Optional[Tuple[int, int]] = None,
     ) -> Optional[Dict[str, Any]]:
-        containing_record = self._find_record_containing_pixel(pixel_y, pixel_x)
+        if containment_pixel is None:
+            contain_y, contain_x = int(pixel_y), int(pixel_x)
+        else:
+            contain_y, contain_x = int(containment_pixel[0]), int(containment_pixel[1])
+        containing_record = self._find_record_containing_pixel(contain_y, contain_x)
         if containing_record is None:
             return None
         if self._record_has_nearby_area_waypoint(
@@ -636,6 +679,44 @@ class SpaceAreaManager:
     def _set_current_area_from_record(self, record: Dict[str, Any]) -> None:
         self.current_space_area_label = str(record.get("label", "Unknown") or "Unknown")
         self.current_space_area_type = str(record.get("space_type", "Unknown") or "Unknown")
+
+    def _resolve_current_area_probe_pixel(
+        self,
+        pixel_y: int,
+        pixel_x: int,
+        full_map: Optional[np.ndarray],
+        full_pose: Optional[Sequence[float]],
+        crop_offset: Optional[Tuple[int, int]],
+    ) -> Tuple[int, int]:
+        """Snap the current pose to the nearest traversible map cell for area membership checks."""
+        projector = self._build_projector(full_map, full_pose, crop_offset)
+        if full_map is None or projector is None:
+            return int(pixel_y), int(pixel_x)
+
+        obstacle_mask = np.asarray(full_map[0] > 0.5, dtype=bool)
+        explored_mask = np.asarray(full_map[1] > 0.5, dtype=bool)
+        traversible = explored_mask & (~obstacle_mask)
+        rotated = projector.world_to_rotated_pixel(float(pixel_y), float(pixel_x))
+        if rotated is None:
+            return int(pixel_y), int(pixel_x)
+
+        center_row = int(round(rotated[0]))
+        center_col = int(round(rotated[1]))
+        if (
+            0 <= center_row < traversible.shape[0]
+            and 0 <= center_col < traversible.shape[1]
+            and traversible[center_row, center_col]
+        ):
+            return int(pixel_y), int(pixel_x)
+
+        nearest = self._find_space_area_start(traversible, center_row, center_col)
+        if nearest is None:
+            return int(pixel_y), int(pixel_x)
+
+        world = projector.rotated_to_world_pixel(nearest[0], nearest[1])
+        if world is None:
+            return int(pixel_y), int(pixel_x)
+        return int(round(world[0])), int(round(world[1]))
 
     def get_display_label(self, label: str) -> str:
         target_label = self._resolve_label_alias(str(label or "").strip())
