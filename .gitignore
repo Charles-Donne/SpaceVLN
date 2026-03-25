@@ -73,6 +73,7 @@ logs/
 # Temporary files
 tmp/
 temp/
+failed_vlm_responses/
 *.tmp
 *.bak
 *.swp

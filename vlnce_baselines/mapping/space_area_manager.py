@@ -15,7 +15,10 @@ from vlnce_baselines.config.core.params.spatial import (
     SPACE_AREA_MAX_SAME_TYPE_WAYPOINT_MERGE_DISTANCE_M,
     SPACE_AREA_SAMPLE_PIXELS_PER_AREA,
 )
-from vlnce_baselines.mapping.space_types import normalize_space_type
+from vlnce_baselines.mapping.space_types import (
+    normalize_space_type,
+    strip_space_type_label_variant_suffix,
+)
 from vlnce_baselines.visualization.map_projection import RotatedMapProjector
 
 
@@ -28,6 +31,8 @@ class SpaceAreaManager:
     MAX_SAME_TYPE_WAYPOINT_MERGE_DISTANCE_M = SPACE_AREA_MAX_SAME_TYPE_WAYPOINT_MERGE_DISTANCE_M
     SAMPLE_PIXELS_PER_AREA = SPACE_AREA_SAMPLE_PIXELS_PER_AREA
     CURRENT_AREA_WAYPOINT_MAX_DISTANCE_M = SPACE_AREA_CURRENT_WAYPOINT_MAX_DISTANCE_M
+    MIN_RENDERABLE_AREA_PIXELS = 24
+    MIN_SEED_AREA_RADIUS_M = 0.60
 
     def __init__(self, map_shape: Tuple[int, int], resolution: int = 5):
         self.map_shape = map_shape
@@ -53,7 +58,6 @@ class SpaceAreaManager:
         space_type = self._parse_space_type(description)
         if space_type == "Unknown":
             return "Unknown"
-        first_area_attempt = len(self.space_area_records) == 0
         space_key = self._space_type_key(space_type)
         world_pixels = self._compute_space_area_world_pixels(
             pixel_y=pixel_y,
@@ -62,11 +66,6 @@ class SpaceAreaManager:
             full_pose=full_pose,
             crop_offset=crop_offset,
         )
-        if first_area_attempt:
-            print(
-                f"[SpaceAreaDebug] first area candidate='{description}' "
-                f"| type={space_type} | pixels={len(world_pixels)}"
-            )
         if not world_pixels:
             self._set_unknown_current_area()
             return "Unknown"
@@ -143,11 +142,6 @@ class SpaceAreaManager:
         self.space_area_records.append(record)
         self.current_space_area_label = label
         self.current_space_area_type = space_type
-        if first_area_attempt:
-            print(
-                f"[SpaceAreaDebug] first area created='{label}' "
-                f"| type={space_type} | pixels={len(record['pixels'])}"
-            )
         self._consolidate_same_type_records(
             obstacle_mask=obstacle_mask,
             projector=projector,
@@ -187,12 +181,14 @@ class SpaceAreaManager:
             self._set_unknown_current_area()
             return layer, []
 
+        traversible = np.asarray(full_map[1] > 0.5, dtype=bool) & (~obstacle_mask)
         area_records: List[Dict[str, Any]] = []
         self._refresh_connection_metadata(full_map, full_pose, crop_offset)
         for record in self.space_area_records:
             center_py, center_px = record["center_world_px"]
+            record_id = int(record["id"])
             area_records.append({
-                "id": int(record["id"]),
+                "id": record_id,
                 "label": str(record["label"]),
                 "display_label": str(record.get("display_label", record["label"])),
                 "space_type": str(record["space_type"]),
@@ -201,6 +197,7 @@ class SpaceAreaManager:
                 "connected_area_labels": list(record.get("connected_area_labels", [])),
             })
 
+            projected_pixel_count = 0
             for world_py, world_px in record["pixels"]:
                 rotated = projector.world_to_rotated_pixel(world_py, world_px)
                 if rotated is None:
@@ -211,8 +208,20 @@ class SpaceAreaManager:
                     continue
                 dist = float(np.hypot(world_py - center_py, world_px - center_px))
                 if dist < best_distance[row, col]:
+                    if layer[row, col] != record_id:
+                        projected_pixel_count += 1
                     best_distance[row, col] = dist
-                    layer[row, col] = int(record["id"])
+                    layer[row, col] = record_id
+
+            if projected_pixel_count < self.MIN_RENDERABLE_AREA_PIXELS:
+                self._paint_record_seed_region(
+                    layer=layer,
+                    best_distance=best_distance,
+                    record_id=record_id,
+                    center_world_px=(int(center_py), int(center_px)),
+                    traversible=traversible,
+                    projector=projector,
+                )
 
         self._set_current_space_area_from_layer(
             layer=layer,
@@ -231,6 +240,8 @@ class SpaceAreaManager:
         projector: Optional[RotatedMapProjector] = None,
     ) -> None:
         """Merge any same-type area records that now overlap or touch."""
+        self._normalize_space_area_records()
+
         changed = True
         while changed:
             changed = False
@@ -261,6 +272,7 @@ class SpaceAreaManager:
                         key=lambda item: (int(item.get("variant", 0)), int(item.get("id", 0))),
                     )
                     self._merge_space_area_records(primary, secondary)
+                    self._normalize_space_area_records()
                     changed = True
                     break
                 if changed:
@@ -308,6 +320,36 @@ class SpaceAreaManager:
         return int(round(float(rows.mean()))), int(round(float(cols.mean())))
 
     @staticmethod
+    def _normalize_space_type_name(space_type: str) -> str:
+        compact_text = strip_space_type_label_variant_suffix(space_type)
+        compact_text = " ".join(str(compact_text or "").split())
+        if not compact_text:
+            return "Unknown"
+
+        canonical = normalize_space_type(compact_text)
+        if canonical != "Unknown":
+            return canonical
+        return compact_text
+
+    def _normalize_space_area_records(self) -> None:
+        grouped_records: Dict[str, List[Dict[str, Any]]] = {}
+        for record in self.space_area_records:
+            normalized_type = self._normalize_space_type_name(str(record.get("space_type", "Unknown") or "Unknown"))
+            record["space_type"] = normalized_type
+            record["space_key"] = self._space_type_key(normalized_type)
+            grouped_records.setdefault(record["space_key"], []).append(record)
+
+        for records in grouped_records.values():
+            records.sort(key=lambda item: (int(item.get("variant", 0) or 0), int(item.get("id", 0) or 0)))
+            for variant, record in enumerate(records, start=1):
+                old_label = str(record.get("label", "") or "")
+                new_label = self._space_area_label(str(record.get("space_type", "Unknown") or "Unknown"), variant)
+                record["variant"] = variant
+                record["label"] = new_label
+                if old_label and old_label != new_label:
+                    self._register_label_alias(old_label=old_label, new_label=new_label)
+
+    @staticmethod
     def _parse_space_type(description: str) -> str:
         text = (description or "").strip()
         if not text:
@@ -316,11 +358,7 @@ class SpaceAreaManager:
         for sep in ("|", "-", "Nearby", "Connected"):
             if sep in text:
                 text = text.split(sep)[0].strip()
-        compact_text = " ".join(text.split())
-        canonical = normalize_space_type(compact_text)
-        if canonical != "Unknown":
-            return canonical
-        return compact_text or "Unknown"
+        return SpaceAreaManager._normalize_space_type_name(text)
 
     @staticmethod
     def _space_type_key(space_type: str) -> str:
@@ -450,12 +488,11 @@ class SpaceAreaManager:
         ):
             nearest = self._find_space_area_start(traversible, center_row, center_col)
             if nearest is None:
-                if self._world_pixel_is_traversible(
+                if self._world_pixel_is_traversible_with_projector(
                     pixel_y=int(pixel_y),
                     pixel_x=int(pixel_x),
                     full_map=full_map,
-                    full_pose=full_pose,
-                    crop_offset=crop_offset,
+                    projector=projector,
                 ):
                     return {(int(pixel_y), int(pixel_x))}
                 return set()
@@ -464,17 +501,60 @@ class SpaceAreaManager:
         start = (center_row, center_col)
 
         max_radius_px = int(round((max_radius_m * 100.0) / float(self.resolution)))
+        selected_rotated = self._collect_connected_rotated_pixels(
+            traversible=traversible,
+            start=start,
+            max_radius_px=max_radius_px,
+        )
+        world_pixels = self._rotated_pixels_to_world_pixels(
+            rotated_pixels=selected_rotated,
+            projector=projector,
+            full_map=full_map,
+        )
+
+        if len(world_pixels) < self.MIN_RENDERABLE_AREA_PIXELS:
+            seed_radius_px = int(round((self.MIN_SEED_AREA_RADIUS_M * 100.0) / float(self.resolution)))
+            seed_rotated = self._collect_connected_rotated_pixels(
+                traversible=traversible,
+                start=start,
+                max_radius_px=max(1, min(seed_radius_px, max_radius_px)),
+            )
+            world_pixels.update(
+                self._rotated_pixels_to_world_pixels(
+                    rotated_pixels=seed_rotated,
+                    projector=projector,
+                    full_map=full_map,
+                )
+            )
+
+        if world_pixels:
+            return world_pixels
+        if self._world_pixel_is_traversible_with_projector(
+            pixel_y=int(pixel_y),
+            pixel_x=int(pixel_x),
+            full_map=full_map,
+            projector=projector,
+        ):
+            return {(int(pixel_y), int(pixel_x))}
+        return set()
+
+    @staticmethod
+    def _collect_connected_rotated_pixels(
+        traversible: np.ndarray,
+        start: Tuple[int, int],
+        max_radius_px: int,
+    ) -> List[Tuple[int, int]]:
         h_map, w_map = traversible.shape
         visited = np.zeros((h_map, w_map), dtype=bool)
         queue = deque([start])
         visited[start[0], start[1]] = True
-        selected_rotated: List[Tuple[int, int]] = []
+        selected: List[Tuple[int, int]] = []
 
         while queue:
             row, col = queue.popleft()
             if ((row - start[0]) ** 2 + (col - start[1]) ** 2) > max_radius_px ** 2:
                 continue
-            selected_rotated.append((row, col))
+            selected.append((row, col))
 
             for d_row in (-1, 0, 1):
                 for d_col in (-1, 0, 1):
@@ -491,29 +571,114 @@ class SpaceAreaManager:
                     visited[next_row, next_col] = True
                     queue.append((next_row, next_col))
 
+        return selected
+
+    def _rotated_pixels_to_world_pixels(
+        self,
+        rotated_pixels: Sequence[Tuple[int, int]],
+        projector: RotatedMapProjector,
+        full_map: np.ndarray,
+    ) -> Set[Tuple[int, int]]:
         world_pixels: Set[Tuple[int, int]] = set()
-        for row, col in selected_rotated:
-            world = projector.rotated_to_world_pixel(row, col)
-            if world is None:
+        for row, col in rotated_pixels:
+            world_pixel = self._select_world_pixel_for_rotated(
+                rotated_row=int(row),
+                rotated_col=int(col),
+                projector=projector,
+                full_map=full_map,
+            )
+            if world_pixel is None:
                 continue
-            world_pixels.add((int(round(world[0])), int(round(world[1]))))
-        filtered_pixels = self._filter_obstacle_pixels(
-            world_pixels=world_pixels,
+            world_pixels.add(world_pixel)
+        return world_pixels
+
+    def _select_world_pixel_for_rotated(
+        self,
+        rotated_row: int,
+        rotated_col: int,
+        projector: RotatedMapProjector,
+        full_map: np.ndarray,
+    ) -> Optional[Tuple[int, int]]:
+        world = projector.rotated_to_world_pixel(float(rotated_row), float(rotated_col))
+        if world is None:
+            return None
+
+        world_row = float(world[0])
+        world_col = float(world[1])
+        base_row = int(np.floor(world_row))
+        base_col = int(np.floor(world_col))
+        best_candidate: Optional[Tuple[float, int, int]] = None
+
+        for cand_row in range(base_row - 1, base_row + 2):
+            for cand_col in range(base_col - 1, base_col + 2):
+                if not self._world_pixel_is_traversible_with_projector(
+                    pixel_y=int(cand_row),
+                    pixel_x=int(cand_col),
+                    full_map=full_map,
+                    projector=projector,
+                ):
+                    continue
+                projected = projector.world_to_rotated_pixel(float(cand_row), float(cand_col))
+                if projected is None:
+                    continue
+                reproj_error = float(np.hypot(
+                    float(projected[0]) - float(rotated_row),
+                    float(projected[1]) - float(rotated_col),
+                ))
+                candidate = (reproj_error, int(cand_row), int(cand_col))
+                if best_candidate is None or candidate < best_candidate:
+                    best_candidate = candidate
+
+        if best_candidate is not None:
+            return int(best_candidate[1]), int(best_candidate[2])
+
+        rounded_row = int(round(world_row))
+        rounded_col = int(round(world_col))
+        if self._world_pixel_is_traversible_with_projector(
+            pixel_y=rounded_row,
+            pixel_x=rounded_col,
             full_map=full_map,
-            full_pose=full_pose,
-            crop_offset=crop_offset,
-        )
-        if filtered_pixels:
-            return filtered_pixels
-        if self._world_pixel_is_traversible(
-            pixel_y=int(pixel_y),
-            pixel_x=int(pixel_x),
-            full_map=full_map,
-            full_pose=full_pose,
-            crop_offset=crop_offset,
+            projector=projector,
         ):
-            return {(int(pixel_y), int(pixel_x))}
-        return set()
+            return rounded_row, rounded_col
+        return None
+
+    def _paint_record_seed_region(
+        self,
+        layer: np.ndarray,
+        best_distance: np.ndarray,
+        record_id: int,
+        center_world_px: Tuple[int, int],
+        traversible: np.ndarray,
+        projector: RotatedMapProjector,
+    ) -> None:
+        rotated = projector.world_to_rotated_pixel(
+            float(center_world_px[0]),
+            float(center_world_px[1]),
+        )
+        if rotated is None:
+            return
+
+        seed_row = int(round(rotated[0]))
+        seed_col = int(round(rotated[1]))
+        if not (0 <= seed_row < traversible.shape[0] and 0 <= seed_col < traversible.shape[1]):
+            return
+        if not traversible[seed_row, seed_col]:
+            nearest = self._find_space_area_start(traversible, seed_row, seed_col)
+            if nearest is None:
+                return
+            seed_row, seed_col = int(nearest[0]), int(nearest[1])
+
+        seed_radius_px = max(1, int(round((self.MIN_SEED_AREA_RADIUS_M * 100.0) / float(self.resolution))))
+        for row, col in self._collect_connected_rotated_pixels(
+            traversible=traversible,
+            start=(seed_row, seed_col),
+            max_radius_px=seed_radius_px,
+        ):
+            dist = float(np.hypot(float(row) - float(seed_row), float(col) - float(seed_col)))
+            if dist < best_distance[row, col]:
+                best_distance[row, col] = dist
+                layer[row, col] = int(record_id)
 
     def _set_current_space_area_from_layer(
         self,
@@ -771,7 +936,10 @@ class SpaceAreaManager:
     ) -> None:
         for record in self.space_area_records:
             record["connected_area_labels"] = []
-            record["display_label"] = str(record.get("label", "Unknown") or "Unknown")
+            record["display_label"] = self._space_area_label(
+                str(record.get("space_type", "Unknown") or "Unknown"),
+                int(record.get("variant", 0) or 1),
+            )
 
         if full_map is None or full_pose is None or crop_offset is None:
             return
@@ -790,11 +958,21 @@ class SpaceAreaManager:
                 obstacle_mask=obstacle_mask,
                 projector=projector,
             )
-            connected_labels = [str(item.get("label", "")) for item in connected[: self.MAX_CONNECTED_AREAS]]
+            connected_labels = [
+                self._space_area_label(
+                    str(item.get("space_type", "Unknown") or "Unknown"),
+                    int(item.get("variant", 0) or 1),
+                )
+                for item in connected[: self.MAX_CONNECTED_AREAS]
+            ]
             record["connected_area_labels"] = connected_labels
             if connected_labels:
+                base_label = self._space_area_label(
+                    str(record.get("space_type", "Unknown") or "Unknown"),
+                    int(record.get("variant", 0) or 1),
+                )
                 record["display_label"] = (
-                    f"{record['label']} [links: {', '.join(connected_labels[: self.MAX_CONNECTED_AREAS])}]"
+                    f"{base_label} [links: {', '.join(connected_labels[: self.MAX_CONNECTED_AREAS])}]"
                 )
 
     def _compute_connected_areas_for_record(
@@ -1022,25 +1200,22 @@ class SpaceAreaManager:
 
         filtered: Set[Tuple[int, int]] = set()
         for pixel_y, pixel_x in world_pixels:
-            if self._world_pixel_is_traversible(
+            if self._world_pixel_is_traversible_with_projector(
                 pixel_y=int(pixel_y),
                 pixel_x=int(pixel_x),
                 full_map=full_map,
-                full_pose=full_pose,
-                crop_offset=crop_offset,
+                projector=projector,
             ):
                 filtered.add((int(pixel_y), int(pixel_x)))
         return filtered
 
-    def _world_pixel_is_traversible(
+    def _world_pixel_is_traversible_with_projector(
         self,
         pixel_y: int,
         pixel_x: int,
         full_map: Optional[np.ndarray],
-        full_pose: Optional[Sequence[float]],
-        crop_offset: Optional[Tuple[int, int]],
+        projector: Optional[RotatedMapProjector],
     ) -> bool:
-        projector = self._build_projector(full_map, full_pose, crop_offset)
         if full_map is None or projector is None:
             return True
         rotated = projector.world_to_rotated_pixel(float(pixel_y), float(pixel_x))
@@ -1053,3 +1228,19 @@ class SpaceAreaManager:
         obstacle = bool(full_map[0, row, col] > 0.5)
         explored = bool(full_map[1, row, col] > 0.5)
         return explored and not obstacle
+
+    def _world_pixel_is_traversible(
+        self,
+        pixel_y: int,
+        pixel_x: int,
+        full_map: Optional[np.ndarray],
+        full_pose: Optional[Sequence[float]],
+        crop_offset: Optional[Tuple[int, int]],
+    ) -> bool:
+        projector = self._build_projector(full_map, full_pose, crop_offset)
+        return self._world_pixel_is_traversible_with_projector(
+            pixel_y=pixel_y,
+            pixel_x=pixel_x,
+            full_map=full_map,
+            projector=projector,
+        )

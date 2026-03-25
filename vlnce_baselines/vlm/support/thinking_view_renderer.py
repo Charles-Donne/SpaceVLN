@@ -109,7 +109,7 @@ class ThinkingViewRenderer:
                 segments.append((", ", dark))
             segments.extend([
                 (name, blue),
-                (" (confidence: ", dark),
+                (" (conf: ", dark),
                 (f"{confidence:.2f}", blue),
                 (")", dark),
             ])
@@ -465,7 +465,7 @@ class ThinkingViewRenderer:
                         LandmarkStripSegment("landmark: ", prefix_color),
                         LandmarkStripSegment(cls._short_text(f"{name}{suffix}", max_len=30), value_color),
                         LandmarkStripSegment(f"  {distance_m:.1f}m", value_color),
-                        LandmarkStripSegment("  confidence: ", prefix_color),
+                        LandmarkStripSegment("  conf: ", prefix_color),
                         LandmarkStripSegment(f"{confidence:.3f}", value_color),
                     ),
                 )

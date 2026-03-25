@@ -8,6 +8,7 @@ from vlnce_baselines.config.core.params.spatial import (
     WAYPOINT_VISIBILITY_RADIUS_M,
     WAYPOINT_VISIBILITY_SAMPLES,
 )
+from vlnce_baselines.mapping.space_types import strip_space_type_variant_suffixes
 from vlnce_baselines.visualization.map_projection import RotatedMapProjector
 
 
@@ -67,7 +68,7 @@ def build_waypoint_summary(
     include_area_chain: bool = True,
     include_path: bool = True,
 ) -> str:
-    """Summarize visited waypoints relative to the current pose."""
+    """Summarize visited waypoints relative to the current pose as a maintained chain."""
     header_lines: List[str] = []
     display_area_label = current_space_area_label or "Unknown"
     display_area_type = current_space_area_type or "Unknown"
@@ -78,20 +79,20 @@ def build_waypoint_summary(
     )
     header_lines.append(f"Your Current Area: {display_area_label}{space_type_note}")
 
-    empty_area_path_line = None
+    empty_area_chain_line = None
     if include_area_chain:
         current_area_display = str(current_space_area_label or "Unknown").strip() or "Unknown"
-        empty_area_path_line = f"Space Waypoint Path: Current({current_area_display})"
+        empty_area_chain_line = f"Space Waypoint Chain: Current({current_area_display})"
 
     if not waypoint_ids:
         lines = list(header_lines)
-        if empty_area_path_line:
-            lines.append(empty_area_path_line)
+        if empty_area_chain_line:
+            lines.append(empty_area_chain_line)
         lines.append("No space waypoints recorded yet.")
         return "\n".join(lines)
 
     waypoint_distances_m: List[Optional[float]] = []
-    close_last_waypoint = False
+    last_waypoint_overlaps_current = False
     if current_pose is not None:
         curr_x_m, curr_y_m, _curr_orientation_deg = current_pose[:3]
         for wp_py, wp_px in waypoint_positions:
@@ -99,23 +100,23 @@ def build_waypoint_summary(
             wp_y_m = wp_py * resolution_cm / 100.0
             waypoint_distances_m.append(math.hypot(wp_x_m - curr_x_m, wp_y_m - curr_y_m))
         if waypoint_distances_m and waypoint_distances_m[-1] <= CURRENT_AREA_OVERLAP_THRESHOLD_M:
-            close_last_waypoint = True
+            last_waypoint_overlaps_current = True
     else:
         waypoint_distances_m = [None] * len(waypoint_ids)
 
     visible_indices = list(range(len(waypoint_ids)))
-    if close_last_waypoint and visible_indices:
-        visible_indices = visible_indices[:-1]
     last_visible_index = visible_indices[-1] if visible_indices else None
 
     all_area_labels = list(waypoint_area_labels or [])
     node_lines: List[str] = []
     for index in visible_indices:
         wp_id = waypoint_ids[index]
-        wp_desc = waypoint_descriptions[index]
+        wp_desc = str(strip_space_type_variant_suffixes(waypoint_descriptions[index]) or waypoint_descriptions[index] or "").strip()
         wp_py, wp_px = waypoint_positions[index]
         is_last = last_visible_index is not None and index == last_visible_index
-        suffix = "  <- LAST VISITED (came from here)" if is_last else ""
+        suffix = ""
+        if is_last:
+            suffix = "  <- LAST VISITED / CURRENT AREA" if last_waypoint_overlaps_current else "  <- LAST VISITED (came from here)"
 
         distance_m = None
         relative_bearing_deg = None
@@ -406,7 +407,7 @@ def _build_waypoint_area_path_line(
         })
 
     if not node_entries:
-        return "Space Waypoint Path: Current(Unknown)" if include_area_chain else None
+        return "Space Waypoint Chain: Current(Unknown)" if include_area_chain else None
 
     grouped_entries: List[Dict[str, Any]] = []
     for node_index, entry in enumerate(node_entries):
@@ -444,7 +445,7 @@ def _build_waypoint_area_path_line(
         return f"{area_label} ({token_chain})"
 
     if len(grouped_entries) == 1:
-        return "Space Waypoint Path: " + _format_group(grouped_entries[0])
+        return "Space Waypoint Chain: " + _format_group(grouped_entries[0])
 
     parts: List[str] = [_format_group(grouped_entries[0])]
     for index in range(1, len(grouped_entries)):
@@ -484,7 +485,7 @@ def _build_waypoint_area_path_line(
             parts.append(" -> ")
         parts.append(_format_group(curr_entry))
 
-    return "Space Waypoint Path: " + "".join(parts)
+    return "Space Waypoint Chain: " + "".join(parts)
 
 
 def build_action_landmark_map_info(

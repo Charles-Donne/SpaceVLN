@@ -38,6 +38,7 @@ summary结构示例:
 import os
 import json
 import shutil
+import math
 from typing import Dict, List, Optional
 from datetime import datetime
 
@@ -59,6 +60,68 @@ class SaveManager:
         self.records_dir = os.path.join(self.episode_dir, "records")  # 统一的记录目录
         os.makedirs(self.episode_dir, exist_ok=True)
         os.makedirs(self.records_dir, exist_ok=True)
+
+    @staticmethod
+    def _load_json_if_exists(path: str) -> Optional[Dict]:
+        if not os.path.exists(path):
+            return None
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _safe_float(value, default: float) -> float:
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return default
+        if math.isnan(numeric) or math.isinf(numeric):
+            return default
+        return numeric
+
+    @staticmethod
+    def _safe_int(value, default: int = 0) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _result_rank_key(self, result: Optional[Dict]) -> tuple:
+        if not result:
+            return (-1, float("-inf"), float("-inf"), float("-inf"), float("-inf"), float("-inf"), float("-inf"))
+
+        success = self._safe_int(result.get('success', 0), 0)
+        spl = self._safe_float(result.get('spl', 0.0), 0.0)
+        oracle_success = self._safe_int(result.get('oracle_success', 0), 0)
+        oracle_spl = self._safe_float(result.get('oracle_spl', 0.0), 0.0)
+
+        dtg = self._safe_float(result.get('distance_to_goal', float('inf')), float('inf'))
+        if dtg < 0:
+            dtg = float('inf')
+        path_length = self._safe_float(result.get('path_length', float('inf')), float('inf'))
+        if path_length < 0:
+            path_length = float('inf')
+        total_steps = self._safe_float(result.get('total_steps', float('inf')), float('inf'))
+        if total_steps < 0:
+            total_steps = float('inf')
+
+        # 排序规则：success > SPL > DTG更小 > oracle success > oracle SPL > path更短 > steps更少
+        return (
+            success,
+            spl,
+            -dtg,
+            oracle_success,
+            oracle_spl,
+            -path_length,
+            -total_steps,
+        )
+
+    def _is_better_result(self, new_result: Dict, old_result: Optional[Dict]) -> bool:
+        if not old_result:
+            return True
+        return self._result_rank_key(new_result) > self._result_rank_key(old_result)
     
     def save_thinking_input(self, thinking_record: Dict) -> str:
         """
@@ -222,26 +285,30 @@ class SaveManager:
     
     def save_result(self, result: Dict):
         """
-        保存最终结果到两个位置:
-        1. episode_xxx/records/result.json (详细结果)
-        2. log/episode_xxx.json (用于analyze_results.py分析)
+        保存最终结果，并维护按episode的最佳结果:
+        1. episode_xxx/records/result_latest.json (本次运行结果)
+        2. episode_xxx/records/result.json (该episode当前最佳结果)
+        3. log/episode_xxx.json (该episode当前最佳结果，用于analyze_results.py分析)
         """
-        # 保存到records/目录（详细结果）
-        result_path = os.path.join(self.records_dir, "result.json")
-        with open(result_path, 'w', encoding='utf-8') as f:
+        latest_result_path = os.path.join(self.records_dir, "result_latest.json")
+        with open(latest_result_path, 'w', encoding='utf-8') as f:
             json.dump(result, f, indent=2, ensure_ascii=False)
-        
-        # 保存到log/目录（用于结果分析）
+
+        # 保存到records/目录（最佳结果）
+        result_path = os.path.join(self.records_dir, "result.json")
+        existing_best_result = self._load_json_if_exists(result_path)
+
+        # 保存到log/目录（用于结果分析，保持每个episode只保留最佳结果）
         log_dir = os.path.join(self.dump_dir, "log")
         os.makedirs(log_dir, exist_ok=True)
-        
         log_path = os.path.join(log_dir, f"episode_{self.episode_id}.json")
-        
+
         # 提取关键指标用于分析
         log_result = {
             'episode_id': result['episode_id'],
             'instruction': result.get('instruction', ''),
             'total_steps': result.get('total_steps', 0),
+            'subtask_count': result.get('subtask_count', 0),
             
             # 核心导航指标（用于analyze_results.py）
             'success': result.get('success', 0),
@@ -253,15 +320,32 @@ class SaveManager:
             'oracle_success': result.get('oracle_success', 0),
             'oracle_navigation_error': result.get('oracle_navigation_error', float('inf')),
             'oracle_spl': result.get('oracle_spl', 0.0),
+            'timestamp': result.get('timestamp', datetime.now().isoformat()),
         }
-        
-        with open(log_path, 'w', encoding='utf-8') as f:
-            json.dump(log_result, f, indent=2, ensure_ascii=False)
+
+        existing_best_log = self._load_json_if_exists(log_path)
+        compare_baseline = existing_best_result if existing_best_result else existing_best_log
+        should_update_best = (
+            existing_best_result is None
+            or existing_best_log is None
+            or self._is_better_result(log_result, compare_baseline)
+        )
+
+        if should_update_best:
+            with open(result_path, 'w', encoding='utf-8') as f:
+                json.dump(result, f, indent=2, ensure_ascii=False)
+            with open(log_path, 'w', encoding='utf-8') as f:
+                json.dump(log_result, f, indent=2, ensure_ascii=False)
         
         print(f"\n{'='*60}")
         print(f"Results saved:")
-        print(f"  {result_path}")
-        print(f"  {log_path}")
+        print(f"  Latest: {latest_result_path}")
+        if should_update_best:
+            print(f"  Best:   {result_path}")
+            print(f"  Log:    {log_path} (updated)")
+        else:
+            print(f"  Best:   {result_path} (kept existing better result)")
+            print(f"  Log:    {log_path} (not replaced)")
         print(f"  Steps: {result.get('total_steps', 0)} | Subtasks: {result.get('subtask_count', 0)}")
         print(f"  Success: {result.get('success', 0)} | SPL: {result.get('spl', 0.0):.4f}")
         print(f"  Distance to Goal: {result.get('distance_to_goal', -1):.3f}m")

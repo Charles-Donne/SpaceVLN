@@ -205,6 +205,7 @@ def _select_action_landmark_instances(
     for rank, inst in enumerate(selected):
         normalized = dict(inst)
         normalized["selection_rank"] = rank
+        normalized["display_id"] = rank + 1
         output.append(normalized)
     return output
 
@@ -733,8 +734,8 @@ def _build_local_landmarks_from_instances(owner,
                                           current_pose: Optional[Tuple[float, float, float]],
                                           crop_offset: Optional[Tuple[int, int]],
                                           topk: int = local_map_landmark_topk
-                                          ) -> List[Tuple[float, float, str, float, float]]:
-    """Keep only the highest-confidence landmark instances that land inside the local-map crop."""
+                                          ) -> List[Dict[str, Any]]:
+    """Keep only the selected local-map landmarks and preserve their display numbering."""
     if not landmark_instances:
         return []
 
@@ -742,21 +743,39 @@ def _build_local_landmarks_from_instances(owner,
     if projector is None:
         return []
 
-    ranked_candidates: List[Tuple[float, float, Tuple[float, float, str, float, float]]] = []
+    ranked_candidates: List[Tuple[Tuple[float, float, float], Dict[str, Any]]] = []
     for inst in landmark_instances:
         converted = owner._world_instance_to_rotated_landmark(inst, full_map, current_pose, crop_offset)
         if converted is None:
             continue
-        marker_x, marker_y, _cls_name, dist_m, _angle_deg = converted
+        marker_x, marker_y, cls_name, dist_m, angle_deg = converted
         local_display = projector.rotated_to_local_display(marker_y, marker_x)
         if local_display is None:
             continue
+
+        selection_rank = inst.get("selection_rank")
+        try:
+            selection_key = float(selection_rank) if selection_rank is not None else 1e9
+        except (TypeError, ValueError):
+            selection_key = 1e9
         ranked_candidates.append((
-            float(inst.get("confidence", 0.0)),
-            float(dist_m),
-            converted,
+            (
+                selection_key,
+                float(dist_m),
+                -float(inst.get("confidence", 0.0)),
+            ),
+            {
+                "marker_x": float(marker_x),
+                "marker_y": float(marker_y),
+                "name": str(cls_name),
+                "distance_m": float(dist_m),
+                "angle_deg": float(angle_deg),
+                "display_id": int(inst.get("display_id", int(selection_key) + 1 if selection_key < 1e9 else 0) or 0),
+                "selection_rank": int(selection_rank) if selection_rank is not None else None,
+                "confidence": float(inst.get("confidence", 0.0)),
+            },
         ))
 
-    ranked_candidates.sort(key=lambda item: (-item[0], item[1]))
+    ranked_candidates.sort(key=lambda item: item[0])
     keep_n = max(1, int(topk))
-    return [item[2] for item in ranked_candidates[:keep_n]]
+    return [item[1] for item in ranked_candidates[:keep_n]]

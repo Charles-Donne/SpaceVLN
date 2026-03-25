@@ -61,6 +61,8 @@ _C.MAP.REPVITSAM = 0
 _C.MAP.ENABLE_GLOBAL_MAP_CROP = False  # 是否裁剪global map到440×440（默认False，保持480×480）
 _C.MAP.ENABLE_ADAPTIVE_ZOOM = True     # 是否启用自适应缩放（内容较小时自动放大到接近边缘）
 _C.MAP.DEBUG_SAVE_RENDERINGS = True    # 默认开启debug渲染；关闭后只保存推理真正需要的最小可视化
+_C.MAP.ENABLE_AUTO_RETREAT = False      # 是否启用卡住时自动转身后退重规划
+_C.MAP.AUTO_RETREAT_STOP_EARLY_IF_REVERSE_BLOCKED = False  # 自动回退时，反向也阻挡是否提前停止
 
 
 

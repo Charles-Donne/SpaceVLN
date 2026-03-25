@@ -59,6 +59,8 @@ class MapVisualizer:
             "obstacle_mask_display": {},
             "space_area_layer": {},
             "space_area_mask": {},
+            "space_area_contours": {},
+            "space_area_label_anchor": {},
         }
         self._active_render_cache_key = None
 
@@ -89,7 +91,12 @@ class MapVisualizer:
             for key in stale_keys:
                 bucket.pop(key, None)
 
-        for name in ("space_area_layer", "space_area_mask"):
+        for name in (
+            "space_area_layer",
+            "space_area_mask",
+            "space_area_contours",
+            "space_area_label_anchor",
+        ):
             bucket = self._render_cache.get(name, {})
             stale_keys = [key for key in bucket.keys() if not isinstance(key, tuple) or not key or key[0] != keep_token]
             for key in stale_keys:
@@ -217,7 +224,7 @@ class MapVisualizer:
         cv2.drawContours(filled, contours, -1, 255, thickness=-1)
         return filled > 127
 
-    def _overlay_space_areas(
+    def _draw_space_areas_in_place(
         self,
         image: np.ndarray,
         space_area_layer: Optional[np.ndarray],
@@ -237,45 +244,55 @@ class MapVisualizer:
         if display_layer is None or not space_area_records:
             return image
 
-        output = image.copy()
         for record in space_area_records:
             area_id = int(record.get("id", 0) or 0)
             if area_id <= 0:
                 continue
-            mask_cache_key = None
-            if cache_token is not None:
-                mask_cache_key = (
-                    cache_token,
-                    int(image.shape[1]),
-                    int(area_id),
-                )
-            mask = None
-            if mask_cache_key is not None:
-                cached_mask = self._render_cache["space_area_mask"].get(mask_cache_key)
-                if cached_mask is not None:
-                    mask = cached_mask.copy()
-            if mask is None:
-                mask = self._refine_space_area_mask(display_layer == area_id)
-                if mask_cache_key is not None:
-                    self._render_cache["space_area_mask"][mask_cache_key] = mask.copy()
+            mask, contours, label_anchor = self._get_space_area_render_assets(
+                display_layer=display_layer,
+                area_id=area_id,
+                output_size=int(image.shape[1]),
+                cache_token=cache_token,
+            )
             if not np.any(mask):
                 continue
             color = self._space_area_color(area_id, str(record.get("space_type", "")))
             if fill_regions:
-                output[mask] = color
+                image[mask] = color
 
-            mask_uint8 = (mask.astype(np.uint8) * 255)
-            contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             if contours:
                 if fill_regions:
-                    cv2.drawContours(output, contours, -1, color, 3)
+                    cv2.drawContours(image, contours, -1, color, 3)
                 if show_labels:
                     label_key = "display_label" if use_display_label else "label"
                     label = str(record.get(label_key, record.get("label", "")) or "")
                     if label:
-                        self._draw_space_area_label(output, mask_uint8, contours, label, color)
+                        self._draw_space_area_label(image, contours, label, color, label_anchor=label_anchor)
 
-        return output
+        return image
+
+    def _overlay_space_areas(
+        self,
+        image: np.ndarray,
+        space_area_layer: Optional[np.ndarray],
+        space_area_records: Optional[List[Dict[str, Any]]],
+        alpha: float = 0.45,
+        fill_regions: bool = True,
+        show_labels: bool = False,
+        use_display_label: bool = True,
+        cache_key: Optional[Any] = None,
+    ) -> np.ndarray:
+        output = image.copy()
+        return self._draw_space_areas_in_place(
+            output,
+            space_area_layer,
+            space_area_records,
+            alpha=alpha,
+            fill_regions=fill_regions,
+            show_labels=show_labels,
+            use_display_label=use_display_label,
+            cache_key=cache_key,
+        )
 
     @staticmethod
     def _compute_adaptive_zoom_box(
@@ -364,29 +381,86 @@ class MapVisualizer:
             output_images.append(resized)
         return output_images
 
+    def _get_space_area_render_assets(
+        self,
+        display_layer: np.ndarray,
+        area_id: int,
+        output_size: int,
+        cache_token: Optional[Any] = None,
+    ) -> Tuple[np.ndarray, List[np.ndarray], Optional[Tuple[int, int]]]:
+        cache_key = None
+        if cache_token is not None:
+            cache_key = (
+                cache_token,
+                int(output_size),
+                int(area_id),
+            )
+
+        mask_bucket = self._render_cache["space_area_mask"]
+        contours_bucket = self._render_cache["space_area_contours"]
+        anchor_bucket = self._render_cache["space_area_label_anchor"]
+
+        has_mask = cache_key is not None and cache_key in mask_bucket
+        has_contours = cache_key is not None and cache_key in contours_bucket
+        has_anchor = cache_key is not None and cache_key in anchor_bucket
+
+        if has_mask:
+            mask = mask_bucket[cache_key]
+        else:
+            mask = self._refine_space_area_mask(display_layer == int(area_id))
+            if cache_key is not None:
+                mask_bucket[cache_key] = mask
+
+        mask_uint8 = (mask.astype(np.uint8) * 255)
+        if has_contours:
+            contours = contours_bucket[cache_key]
+        else:
+            contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if cache_key is not None:
+                contours_bucket[cache_key] = contours
+
+        if has_anchor:
+            label_anchor = anchor_bucket[cache_key]
+        else:
+            label_anchor = self._compute_space_area_label_anchor(mask_uint8, contours)
+            if cache_key is not None:
+                anchor_bucket[cache_key] = label_anchor
+
+        return mask, contours, label_anchor
+
     @staticmethod
-    def _draw_space_area_label(
-        image: np.ndarray,
+    def _compute_space_area_label_anchor(
         mask_uint8: np.ndarray,
         contours: List[np.ndarray],
-        label: str,
-        color: Tuple[int, int, int],
-    ) -> None:
-        center_x = None
-        center_y = None
+    ) -> Optional[Tuple[int, int]]:
         if mask_uint8 is not None and np.count_nonzero(mask_uint8) > 0:
             distance = cv2.distanceTransform(mask_uint8, cv2.DIST_L2, 5)
             _min_val, max_val, _min_loc, max_loc = cv2.minMaxLoc(distance)
             if max_val > 0:
-                center_x, center_y = int(max_loc[0]), int(max_loc[1])
+                return int(max_loc[0]), int(max_loc[1])
 
-        if center_x is None or center_y is None:
-            largest_contour = max(contours, key=cv2.contourArea)
-            moments = cv2.moments(largest_contour)
-            if abs(moments["m00"]) < 1e-6:
-                return
-            center_x = int(moments["m10"] / moments["m00"])
-            center_y = int(moments["m01"] / moments["m00"])
+        if not contours:
+            return None
+
+        largest_contour = max(contours, key=cv2.contourArea)
+        moments = cv2.moments(largest_contour)
+        if abs(moments["m00"]) < 1e-6:
+            return None
+        return int(moments["m10"] / moments["m00"]), int(moments["m01"] / moments["m00"])
+
+    @staticmethod
+    def _draw_space_area_label(
+        image: np.ndarray,
+        contours: List[np.ndarray],
+        label: str,
+        color: Tuple[int, int, int],
+        label_anchor: Optional[Tuple[int, int]] = None,
+    ) -> None:
+        if label_anchor is None:
+            return
+
+        center_x = int(label_anchor[0])
+        center_y = int(label_anchor[1])
 
         text = str(label)
         font = cv2.FONT_HERSHEY_SIMPLEX
@@ -805,20 +879,6 @@ class MapVisualizer:
             )
 
             if should_render_detection:
-                rgb_for_det = rgb.copy()
-                detection_vis, detected_landmarks_step, _visible, landmark_strip = self.render_detection_bbox(
-                    rgb_for_det, detections, labels or [],
-                    landmark_classes, mapping_classes,
-                    depth_meters=getattr(controller, 'latest_depth_meters', None) if controller is not None else None,
-                    hfov=hfov,
-                    landmark_dist_map=landmark_dist_map if landmark_dist_map else None,
-                    landmark_dist_map_multi=landmark_dist_map_multi if landmark_dist_map_multi else None,
-                    append_bottom_strip=False,
-                    controller=controller,
-                    selected_landmark_instances=selected_action_landmark_instances,
-                    action_landmark_context=action_landmark_context,
-                )
-
                 map_obstacle_distances = self.calculate_obstacle_distances_from_full_map(full_map)
                 try:
                     obstacle_distances = self.calculate_obstacle_distances_from_depth(
@@ -832,6 +892,21 @@ class MapVisualizer:
                         'left_30': '>2.0m open',
                         'right_30': '>2.0m open',
                     }
+
+                rgb_for_det = rgb.copy()
+                detection_vis, detected_landmarks_step, _visible, landmark_strip = self.render_detection_bbox(
+                    rgb_for_det, detections, labels or [],
+                    landmark_classes, mapping_classes,
+                    depth_meters=getattr(controller, 'latest_depth_meters', None) if controller is not None else None,
+                    hfov=hfov,
+                    landmark_dist_map=landmark_dist_map if landmark_dist_map else None,
+                    landmark_dist_map_multi=landmark_dist_map_multi if landmark_dist_map_multi else None,
+                    append_bottom_strip=False,
+                    controller=controller,
+                    selected_landmark_instances=selected_action_landmark_instances,
+                    action_landmark_context=action_landmark_context,
+                    action_distance_overlay=obstacle_distances,
+                )
 
                 detection_vis = self.draw_distance_on_action_view(detection_vis, obstacle_distances)
                 if controller is not None:

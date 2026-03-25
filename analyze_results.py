@@ -31,6 +31,7 @@ import os
 import argparse
 import json
 import math
+import csv
 from typing import List, Dict, Any
 from datetime import datetime
 
@@ -260,6 +261,120 @@ def save_summary(metrics: Dict[str, Any], output_path: str):
     return content
 
 
+def _format_metric_value(value: Any, digits: int = 3) -> str:
+    if isinstance(value, float):
+        if math.isinf(value) or math.isnan(value):
+            return "N/A"
+        return f"{value:.{digits}f}"
+    return str(value)
+
+
+def save_episode_tables(results: List[Dict[str, Any]], metrics: Dict[str, Any], results_dir: str) -> Dict[str, str]:
+    """保存逐episode结果表格（CSV + Markdown）。"""
+    csv_path = os.path.join(results_dir, "episode_results.csv")
+    md_path = os.path.join(results_dir, "episode_results.md")
+
+    sorted_results = sorted(results, key=lambda item: int(item.get("episode_id", -1)))
+    headers = [
+        "episode_id",
+        "success",
+        "spl",
+        "distance_to_goal",
+        "path_length",
+        "total_steps",
+        "subtask_count",
+        "oracle_success",
+        "oracle_navigation_error",
+        "oracle_spl",
+        "success_rate",
+        "instruction",
+        "timestamp",
+    ]
+
+    with open(csv_path, "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=headers)
+        writer.writeheader()
+        for item in sorted_results:
+            writer.writerow({
+                "episode_id": item.get("episode_id", ""),
+                "success": item.get("success", 0),
+                "spl": _format_metric_value(check_inf_nan(item.get("spl", 0.0)), 4),
+                "distance_to_goal": _format_metric_value(check_inf_nan(item.get("distance_to_goal", -1.0)), 3),
+                "path_length": _format_metric_value(check_inf_nan(item.get("path_length", 0.0)), 3),
+                "total_steps": item.get("total_steps", 0),
+                "subtask_count": item.get("subtask_count", 0),
+                "oracle_success": item.get("oracle_success", 0),
+                "oracle_navigation_error": _format_metric_value(check_inf_nan(item.get("oracle_navigation_error", -1.0)), 3),
+                "oracle_spl": _format_metric_value(check_inf_nan(item.get("oracle_spl", 0.0)), 4),
+                "success_rate": "",
+                "instruction": item.get("instruction", ""),
+                "timestamp": item.get("timestamp", ""),
+            })
+        writer.writerow({
+            "episode_id": "TOTAL",
+            "success": f"{metrics['success_count']}/{metrics['total_episodes']}",
+            "spl": _format_metric_value(metrics["avg_spl"], 4),
+            "distance_to_goal": _format_metric_value(metrics["avg_distance_to_goal"], 3),
+            "path_length": _format_metric_value(metrics["avg_path_length"], 3),
+            "total_steps": _format_metric_value(metrics["avg_steps"], 1),
+            "subtask_count": _format_metric_value(metrics["avg_subtasks"], 1),
+            "oracle_success": f"{metrics['oracle_success_count']}/{metrics['total_episodes']}",
+            "oracle_navigation_error": _format_metric_value(metrics["avg_oracle_navigation_error"], 3),
+            "oracle_spl": _format_metric_value(metrics["avg_oracle_spl"], 4),
+            "success_rate": _format_metric_value(metrics["success_rate"], 4),
+            "instruction": "best result kept per episode",
+            "timestamp": datetime.now().isoformat(),
+        })
+
+    md_lines = [
+        "# Episode Results",
+        "",
+        "| Episode | Success | SPL | DTG(m) | Path(m) | Steps | Subtasks | Oracle | OracleErr(m) | Oracle SPL |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for item in sorted_results:
+        md_lines.append(
+            "| {episode} | {success} | {spl} | {dtg} | {path} | {steps} | {subtasks} | {oracle_success} | {oracle_err} | {oracle_spl} |".format(
+                episode=item.get("episode_id", ""),
+                success=item.get("success", 0),
+                spl=_format_metric_value(check_inf_nan(item.get("spl", 0.0)), 4),
+                dtg=_format_metric_value(check_inf_nan(item.get("distance_to_goal", -1.0)), 3),
+                path=_format_metric_value(check_inf_nan(item.get("path_length", 0.0)), 3),
+                steps=item.get("total_steps", 0),
+                subtasks=item.get("subtask_count", 0),
+                oracle_success=item.get("oracle_success", 0),
+                oracle_err=_format_metric_value(check_inf_nan(item.get("oracle_navigation_error", -1.0)), 3),
+                oracle_spl=_format_metric_value(check_inf_nan(item.get("oracle_spl", 0.0)), 4),
+            )
+        )
+    md_lines.extend([
+        "",
+        "## Summary",
+        "",
+        "| Total Episodes | Success Rate | Avg SPL | Avg DTG(m) | Avg Path(m) | Avg Steps | Avg Subtasks | Oracle Success Rate | Avg Oracle SPL |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| {total} | {success_count}/{total} ({success_rate}) | {avg_spl} | {avg_dtg} | {avg_path} | {avg_steps} | {avg_subtasks} | {oracle_count}/{total} ({oracle_rate}) | {avg_oracle_spl} |".format(
+            total=metrics["total_episodes"],
+            success_count=metrics["success_count"],
+            success_rate=_format_metric_value(metrics["success_rate"], 4),
+            avg_spl=_format_metric_value(metrics["avg_spl"], 4),
+            avg_dtg=_format_metric_value(metrics["avg_distance_to_goal"], 3),
+            avg_path=_format_metric_value(metrics["avg_path_length"], 3),
+            avg_steps=_format_metric_value(metrics["avg_steps"], 1),
+            avg_subtasks=_format_metric_value(metrics["avg_subtasks"], 1),
+            oracle_count=metrics["oracle_success_count"],
+            oracle_rate=_format_metric_value(metrics["oracle_success_rate"], 4),
+            avg_oracle_spl=_format_metric_value(metrics["avg_oracle_spl"], 4),
+        ),
+        "",
+        "> Note: repeated evaluation of the same episode keeps only the better result in `log/episode_XXX.json`.",
+    ])
+    with open(md_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(md_lines) + "\n")
+
+    return {"csv": csv_path, "md": md_path}
+
+
 def main():
     parser = argparse.ArgumentParser(description="分析VLN评估结果")
     parser.add_argument("--path", type=str, required=True, help="结果目录路径")
@@ -295,7 +410,10 @@ def main():
     if args.save:
         summary_path = os.path.join(args.path, "summary.txt")
         content = save_summary(metrics, summary_path)
+        table_paths = save_episode_tables(results, metrics, args.path)
         print(content)
+        print(f"📋 Episode表格已保存: {table_paths['csv']}")
+        print(f"📋 Markdown表格已保存: {table_paths['md']}")
 
 
 if __name__ == "__main__":

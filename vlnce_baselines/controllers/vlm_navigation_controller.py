@@ -17,7 +17,6 @@ VLM Navigation Controller
 """
 import os
 import re
-import shutil
 import cv2
 import json
 import numpy as np
@@ -68,6 +67,7 @@ class VLMNavigationController(BaseNavigationController):
     ACTION_SUBTASK_AUTOCOMPLETE_OPEN_DISTANCE_M = CFG_AUTOCOMPLETE_OPEN_DISTANCE_M
     ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M = CFG_AUTOCOMPLETE_SOLID_DISTANCE_M
     ACTION_SUBTASK_AUTOCOMPLETE_TOPK = CFG_AUTOCOMPLETE_TOPK
+    AUTO_RETREAT_STOP_EARLY_IF_REVERSE_BLOCKED = False
     
     def __init__(self, config: Config,
                  config_path: str = "vlnce_baselines/config/api/vlm_api_config.yaml"):
@@ -90,6 +90,14 @@ class VLMNavigationController(BaseNavigationController):
         
         # 动作空间描述
         self.action_space = f"MOVE_FORWARD ({self.move_distance}m), TURN_LEFT ({self.turn_angle}°), TURN_RIGHT ({self.turn_angle}°), STOP"
+        self.enable_auto_retreat = bool(getattr(config.MAP, "ENABLE_AUTO_RETREAT", False))
+        self.auto_retreat_stop_early_if_reverse_blocked = bool(
+            getattr(
+                config.MAP,
+                "AUTO_RETREAT_STOP_EARLY_IF_REVERSE_BLOCKED",
+                self.AUTO_RETREAT_STOP_EARLY_IF_REVERSE_BLOCKED,
+            )
+        )
         
         # 初始化LLM规划器
         try:
@@ -339,6 +347,9 @@ class VLMNavigationController(BaseNavigationController):
         move_steps = max(1, round(float(retreat_distance_m) / float(self.move_distance)))
         retreated_m = 0.0
         episode_done = False
+        reverse_path_blocked = False
+        reverse_block_warning_printed = False
+        stop_early_if_reverse_blocked = bool(self.auto_retreat_stop_early_if_reverse_blocked)
 
         print(
             f"\n[AutoRetreat] FRONT/LEFT30/RIGHT30 all blocked (<0.5m). "
@@ -364,19 +375,34 @@ class VLMNavigationController(BaseNavigationController):
                 getattr(self, 'latest_obstacle_distances', {}).get('front'),
                 threshold_m=0.5,
             ):
-                print("  [AutoRetreat] Reverse path is also blocked after turning around; stop retreat early.")
-                break
+                reverse_path_blocked = True
+                if stop_early_if_reverse_blocked:
+                    print("  [AutoRetreat] Reverse path is also blocked after turning around; stop retreat early.")
+                    break
+                if not reverse_block_warning_printed:
+                    print(
+                        "  [AutoRetreat] Reverse path is also blocked after turning around, "
+                        "but early-stop is disabled; keep retreat attempts."
+                    )
+                    reverse_block_warning_printed = True
 
+            pose_before_step = self._get_agent_pose()
             result = self.step_with_vlm(
                 HabitatSimActions.MOVE_FORWARD,
                 action_name="AUTO_RETREAT_FORWARD",
                 save_vis=True,
                 enable_landmark_detection=True,
             )
-            retreated_m += float(self.move_distance)
+            pose_after_step = self._get_agent_pose()
+
+            actual_m = float(np.hypot(
+                pose_after_step[0] - pose_before_step[0],
+                pose_after_step[1] - pose_before_step[1],
+            ))
+            retreated_m += actual_m
             print(
                 f"  [Step {self.current_step}] AUTO_RETREAT_FORWARD "
-                f"({retreated_m:.2f}/{retreat_distance_m:.2f}m)"
+                f"({retreated_m:.2f}/{retreat_distance_m:.2f}m, actual {actual_m:.2f}m)"
             )
             if result.get('done', False):
                 episode_done = True
@@ -390,7 +416,7 @@ class VLMNavigationController(BaseNavigationController):
                 f"Front, Left 30deg, and Right 30deg were all blocked under 0.5m, "
                 f"so the system turned around, moved {retreated_m:.2f}m, and started rethinking from the new heading."
             )
-        else:
+        elif reverse_path_blocked and stop_early_if_reverse_blocked:
             self._append_progress_note(
                 "Had encountered obstacles on front/left30/right30 (<0.5m), then turned around but the reverse path was also blocked, and triggered replan"
             )
@@ -398,10 +424,26 @@ class VLMNavigationController(BaseNavigationController):
                 "Front, Left 30deg, and Right 30deg were all blocked under 0.5m, "
                 "so the system turned around, found the reverse path blocked too, and triggered rethinking."
             )
+        elif reverse_path_blocked:
+            self._append_progress_note(
+                "Had encountered obstacles on front/left30/right30 (<0.5m), then turned around, kept retreat attempts even though the reverse path still looked blocked, and triggered replan"
+            )
+            self.previous_action_reason = (
+                "Front, Left 30deg, and Right 30deg were all blocked under 0.5m, "
+                "so the system turned around, kept retreat attempts with reverse-block early-stop disabled, and then triggered rethinking."
+            )
+        else:
+            self._append_progress_note(
+                "Had encountered obstacles on front/left30/right30 (<0.5m), then turned around and triggered replan"
+            )
+            self.previous_action_reason = (
+                "Front, Left 30deg, and Right 30deg were all blocked under 0.5m, "
+                "so the system turned around and triggered rethinking."
+            )
 
         self.pose_before_action = self._get_agent_pose()
         return retreated_m, episode_done
-    
+
     def reset_episode(self, episode_id: int = None):
         """重置Episode，包括VLM状态"""
         # 清理之前episode的输出目录
@@ -1121,10 +1163,6 @@ class VLMNavigationController(BaseNavigationController):
             )
         if refresh_direction_views:
             self._refresh_cached_lookaround_direction_views(phase=phase)
-        self._sync_postthinking_visual_artifacts(
-            phase=phase,
-            thinking_dir=thinking_dir,
-        )
         self._save_waypoint_area_memory_snapshot()
         return waypoint_id
 
@@ -1199,58 +1237,6 @@ class VLMNavigationController(BaseNavigationController):
             draw_waypoints_fn=self._draw_waypoints_on_view,
         )
         return True
-
-    def _sync_postthinking_visual_artifacts(
-        self,
-        phase: str,
-        thinking_dir: Optional[str],
-    ) -> bool:
-        """Mirror the refreshed post-thinking visuals into the thinking artifact folder."""
-        if not thinking_dir:
-            return False
-
-        os.makedirs(thinking_dir, exist_ok=True)
-        planner_input_dir = os.path.join(thinking_dir, 'planner_input')
-        synced_any = False
-
-        def _backup_and_copy(src_path: Optional[str], dst_name: str) -> bool:
-            if not src_path or not os.path.exists(src_path):
-                return False
-
-            dst_path = os.path.join(thinking_dir, dst_name)
-            if os.path.exists(dst_path):
-                os.makedirs(planner_input_dir, exist_ok=True)
-                backup_path = os.path.join(planner_input_dir, dst_name)
-                if not os.path.exists(backup_path):
-                    shutil.copy2(dst_path, backup_path)
-
-            shutil.copy2(src_path, dst_path)
-            return True
-
-        if _backup_and_copy(getattr(self, 'latest_global_map', None), 'global_map.png'):
-            synced_any = True
-        if _backup_and_copy(getattr(self, 'latest_local_map', None), 'local_map.png'):
-            synced_any = True
-
-        directions_dir = os.path.join(
-            self.config.RESULTS_DIR,
-            f"episode_{self.current_episode_id}",
-            'directions',
-        )
-        prefix = f"{phase}_direction_"
-        if os.path.isdir(directions_dir):
-            for filename in sorted(os.listdir(directions_dir)):
-                if not filename.startswith(prefix) or not filename.endswith('.png'):
-                    continue
-                angle_match = re.search(r'(\d{3})\.png$', filename)
-                if not angle_match:
-                    continue
-                src_path = os.path.join(directions_dir, filename)
-                dst_name = f"direction_{angle_match.group(1)}.png"
-                if _backup_and_copy(src_path, dst_name):
-                    synced_any = True
-
-        return synced_any
 
     def auto_rotate_to_waypoint(self, waypoint_direction: str) -> Tuple[bool, List[Dict]]:
         """
@@ -1494,7 +1480,7 @@ class VLMNavigationController(BaseNavigationController):
         action_save_dir = os.path.join(subtask_dir, f"step_{self.current_step + 1}")
         os.makedirs(action_save_dir, exist_ok=True)
 
-        waypoint_summary = self._get_waypoint_summary(include_area_chain=False, include_path=False)
+        waypoint_summary = self._get_waypoint_summary(include_area_chain=True, include_path=True)
         
         # 保存子任务信息（首次创建时）
         info_file = os.path.join(subtask_dir, "info.json")
@@ -1646,6 +1632,13 @@ class VLMNavigationController(BaseNavigationController):
 
         while True:
             if self._all_action_directions_blocked(threshold_m=0.5):
+                if not self.enable_auto_retreat:
+                    print(
+                        '[AutoRetreat] FRONT/LEFT30/RIGHT30 all blocked (<0.5m), '
+                        'but auto-retreat is disabled in config; hand control back to the thinking controller.'
+                    )
+                    return 'thinking'
+
                 retreated_m, retreat_done = self._execute_auto_retreat(retreat_distance_m=1.0)
 
                 if retreat_done:
@@ -1958,7 +1951,7 @@ class VLMNavigationController(BaseNavigationController):
     def _get_waypoint_summary(self, include_area_chain: bool = True, include_path: bool = True) -> str:
         """
         获取waypoint摘要（用于LLM提示词）
-        包含每个waypoint相对当前pose的距离和方向，以及顺序拓扑路径。
+        包含每个waypoint相对当前pose的距离和方向，以及顺序拓扑chain。
         """
         wp_pos, wp_ids, wp_descs = self.mapper.get_waypoints()
         return build_waypoint_summary(
@@ -1968,7 +1961,7 @@ class VLMNavigationController(BaseNavigationController):
             waypoint_area_labels=self.mapper.get_waypoint_area_labels(),
             current_pose=self.mapper.full_pose,
             resolution_cm=self.mapper.resolution,
-            current_space_area_label=getattr(self.mapper, 'current_space_area_label', ""),
+            current_space_area_label=getattr(self.mapper, 'current_space_area_display_label', ""),
             current_space_area_type=getattr(self.mapper, 'current_space_area_type', ""),
             full_map=getattr(self.mapper, 'full_map', None),
             crop_offset=getattr(getattr(self.mapper, 'mapping_module', None), 'full_map_crop_offset', None),

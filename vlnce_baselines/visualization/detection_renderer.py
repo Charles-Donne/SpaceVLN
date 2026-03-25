@@ -37,7 +37,8 @@ def render_detection_bbox(owner,
                           controller=None,
                           selected_landmark_instances: Optional[Sequence[Dict[str, Any]]] = None,
                           action_landmark_context: Optional[Dict[str, Any]] = None,
-                          return_visible_entries: bool = False) -> np.ndarray:
+                          return_visible_entries: bool = False,
+                          action_distance_overlay: Optional[Dict[str, str]] = None) -> np.ndarray:
     """
     直接在RGB上渲染边界框（只标注Landmark类别，显示距离+水平偏角）
 
@@ -158,6 +159,31 @@ def render_detection_bbox(owner,
         except (TypeError, ValueError):
             return None
 
+    def _entry_display_id(entry: Optional[Dict[str, Any]], default: Optional[int] = None) -> Optional[int]:
+        if not entry:
+            return default
+        display_id = entry.get("display_id")
+        try:
+            if display_id is not None:
+                return int(display_id)
+        except (TypeError, ValueError):
+            pass
+
+        rank_value = entry.get("selection_rank")
+        try:
+            if rank_value is not None:
+                return int(rank_value) + 1
+        except (TypeError, ValueError):
+            pass
+
+        instance_idx = entry.get("instance_idx")
+        try:
+            if instance_idx is not None:
+                return int(instance_idx) + 1
+        except (TypeError, ValueError):
+            pass
+        return default
+
     def _normalize_selected_world_entry(
         inst: Dict[str, Any],
         source: str,
@@ -173,6 +199,9 @@ def render_detection_bbox(owner,
         cls_name = str(normalized.get("name", "") or "")
         normalized["source"] = "vis" if source == "vis" else "off"
         normalized["selection_rank"] = int(normalized.get("selection_rank", 0) or 0)
+        display_id = _entry_display_id(normalized)
+        if display_id is not None:
+            normalized["display_id"] = int(display_id)
         normalized["class_total"] = int(world_class_totals.get(cls_name, max(int(normalized.get("instance_idx", 0) or 0) + 1, 1)))
         confidence_value = _float_or_none(normalized.get("confidence"))
         if confidence_value is None and candidate is not None:
@@ -216,19 +245,28 @@ def render_detection_bbox(owner,
     def _build_landmark_strip(selected_entries: List[Dict[str, Any]]) -> Tuple[Optional[np.ndarray], List[Dict[str, Any]]]:
         ordered_entries = [dict(item) for item in selected_entries]
         strip = None
-        if ordered_entries or action_waypoint_entries:
-            selected_visible_entries = [entry for entry in ordered_entries if str(entry.get("source", "off")) == "vis"]
-            selected_offscreen_items = [entry for entry in ordered_entries if str(entry.get("source", "off")) != "vis"]
+        if ordered_entries:
+            selected_visible_entries = [
+                entry for entry in ordered_entries
+                if str(entry.get("source", "off")) == "vis"
+            ][:max(1, int(landmark_strip_topk))]
             item_lines = build_landmark_strip_lines(
                 selected_visible_entries,
-                selected_offscreen_items,
+                [],
                 landmark_dist_map_multi=landmark_dist_map_multi,
-                waypoint_entries=action_waypoint_entries,
+                waypoint_entries=None,
             )
-            strip = render_landmark_strip(detection_vis.shape[1], item_lines)
+            if item_lines:
+                strip = render_landmark_strip(
+                    detection_vis.shape[1],
+                    item_lines,
+                    font_scale=0.54,
+                    font_thickness=1,
+                    compact=True,
+                )
         return strip, ordered_entries
 
-    action_waypoint_entries = _build_action_waypoint_entries()
+    action_waypoint_entries: List[Dict[str, Any]] = []
 
     if detections is None or len(detections.xyxy) == 0:
         selected_topk_entries = [
@@ -375,10 +413,9 @@ def render_detection_bbox(owner,
             if shown_angle_deg is None:
                 shown_angle_deg = _float_or_none(selected_inst.get("angle_deg"))
 
-            inst_prefix = ""
             same_cls_total = int(world_class_totals.get(label_name, len(landmark_dist_map_multi.get(label_name, [])) or 1))
-            if display_idx is not None and same_cls_total > 1:
-                inst_prefix = f"#{display_idx + 1} "
+            display_id = _entry_display_id(selected_inst, default=_entry_display_id(matched_inst))
+            inst_prefix = f"#{display_id} " if display_id is not None else ""
 
             if shown_dist_m is not None and shown_angle_deg is not None:
                 row1 = f"{inst_prefix}{shown_dist_m:.1f}m {format_relative_direction(shown_angle_deg)}"
@@ -412,6 +449,8 @@ def render_detection_bbox(owner,
             )
             if display_idx is not None:
                 visible_entry["instance_idx"] = int(display_idx)
+            if display_id is not None:
+                visible_entry["display_id"] = int(display_id)
             visible_entry["distance_m"] = float(shown_dist_m) if shown_dist_m is not None else float(visible_entry.get("distance_m", 1e9))
             visible_entry["angle_deg"] = float(shown_angle_deg) if shown_angle_deg is not None else float(visible_entry.get("angle_deg", 0.0))
             visible_entry["class_total"] = same_cls_total
@@ -470,9 +509,8 @@ def render_detection_bbox(owner,
                 map_instance_idx = 0
 
             row1 = ""
-            inst_prefix = ""
-            if map_instance_idx is not None and same_cls_total > 1:
-                inst_prefix = f"#{map_instance_idx + 1} "
+            display_id = int(selection_rank) + 1
+            inst_prefix = f"#{display_id} "
             shown_dist_m = map_dist_m
             shown_angle_deg = map_angle_deg
             if shown_dist_m is not None and shown_angle_deg is not None:
@@ -503,6 +541,7 @@ def render_detection_bbox(owner,
                 "distance_m": float(shown_dist_m),
                 "angle_deg": float(shown_angle_deg),
                 "instance_idx": map_instance_idx,
+                "display_id": display_id,
                 "selection_rank": int(selection_rank),
                 "source": "vis",
                 "class_total": int(max(same_cls_total, (map_instance_idx or 0) + 1)),
@@ -527,7 +566,12 @@ def render_detection_bbox(owner,
     color = detection_colors["landmark"]
     thickness = detection_thickness["landmark"]
     draw_landmark_boxes(detection_vis, draw_items, color, thickness)
-    draw_landmark_labels(detection_vis, draw_items, color)
+    draw_landmark_labels(
+        detection_vis,
+        draw_items,
+        color,
+        avoid_boxes=_build_action_distance_label_boxes(detection_vis.shape, action_distance_overlay),
+    )
 
     strip, selected_topk_entries = _build_landmark_strip(selected_topk_entries)
     if append_bottom_strip and strip is not None:
@@ -541,6 +585,65 @@ def render_detection_bbox(owner,
     if return_visible_entries:
         return detection_vis, detected_landmarks, matched_in_view, strip, visible_entries_meta
     return detection_vis, detected_landmarks, matched_in_view, strip
+
+def _build_action_distance_label_boxes(
+    image_shape: Tuple[int, int, int],
+    distance_dict: Optional[Dict[str, str]],
+) -> List[Tuple[int, int, int, int]]:
+    if not distance_dict:
+        return []
+
+    h, w = image_shape[:2]
+    center_x = w // 2
+    bottom_y = h - 10
+    direction_configs = [
+        {'key': 'left_30', 'angle': -120, 'label': 'Left 30'},
+        {'key': 'front', 'angle': -90, 'label': 'FRONT'},
+        {'key': 'right_30', 'angle': -60, 'label': 'Right 30'},
+    ]
+
+    reserved_boxes: List[Tuple[int, int, int, int]] = []
+    for config in direction_configs:
+        dist_str = distance_dict.get(config['key'], 'Unknown')
+        if dist_str == 'Unknown':
+            continue
+
+        if 'WARNING' in dist_str or '<0.5' in dist_str:
+            line_length = 65 if config['key'] == 'front' else 60
+        elif '>2.0' in dist_str or 'open' in dist_str:
+            line_length = 140 if config['key'] == 'front' else 120
+        else:
+            line_length = 105 if config['key'] == 'front' else 90
+
+        angle_rad = np.deg2rad(config['angle'])
+        end_x = int(center_x + line_length * np.cos(angle_rad))
+        end_y = int(bottom_y + line_length * np.sin(angle_rad))
+        font_scale = 0.72 if config['key'] == 'front' else 0.62
+        font_thickness = 2
+        combined_label = f"{config['label']} {dist_str}"
+        label_size = cv2.getTextSize(combined_label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thickness)[0]
+        label_offset = 25
+        base_x = int(end_x + label_offset * np.cos(angle_rad))
+        base_y = int(end_y + label_offset * np.sin(angle_rad))
+
+        if config['key'] == 'front':
+            text_x = base_x - label_size[0] // 2
+            text_y = base_y + label_size[1] // 2
+        elif config['key'] == 'left_30':
+            text_x = base_x - label_size[0] - 15
+            text_y = base_y + label_size[1] // 2
+        else:
+            text_x = base_x + 15
+            text_y = base_y + label_size[1] // 2
+
+        margin = 8
+        x1 = max(0, text_x - 2 - margin)
+        y1 = max(0, text_y - label_size[1] - 2 - margin)
+        x2 = min(w - 1, text_x + label_size[0] + 2 + margin)
+        y2 = min(h - 1, text_y + 2 + margin)
+        reserved_boxes.append((x1, y1, x2, y2))
+
+    return reserved_boxes
 
 def save_rgb(owner, step: int, episode_id: int, rgb: np.ndarray, phase: str = "action", controller = None) -> str:
     """
@@ -808,4 +911,3 @@ def save_detection(owner,
     save_path = os.path.join(episode_dir, 'detection', f'step_{step:04d}_{phase}.png')
     cv2.imwrite(save_path, detection_vis)
     return save_path
-

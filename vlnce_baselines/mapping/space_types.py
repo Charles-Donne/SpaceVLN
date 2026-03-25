@@ -67,7 +67,32 @@ def strip_space_type_variant_suffixes(text: Optional[str]) -> Optional[str]:
             cleaned,
         )
 
+    # Also clean unknown/custom space labels like `Poolarea11` when the suffixed
+    # token is used as a space name prefix or area reference.
+    generic_pattern = re.compile(
+        r"(?i)\b([a-z][a-z_-]*[a-z])(?:[-_]?)(\d+)(?=(?:'s\b)|\s*[-|,:)\]]|$)"
+    )
+    cleaned = generic_pattern.sub(lambda match: match.group(1), cleaned)
+
     return cleaned
+
+
+def strip_space_type_label_variant_suffix(text: Optional[str]) -> Optional[str]:
+    """Remove a trailing variant id from an isolated room/space label."""
+    if text is None:
+        return None
+
+    cleaned = strip_space_type_variant_suffixes(text)
+    if cleaned is None:
+        return None
+
+    full_label_pattern = re.compile(
+        r"(?i)^\s*([a-z][a-z ]*[a-z])(?:\s*[-_ ]\s*|\s+)(\d+)\s*$"
+    )
+    match = full_label_pattern.match(cleaned)
+    if match:
+        return " ".join(match.group(1).split())
+    return " ".join(str(cleaned).split())
 
 
 def normalize_space_type(text: Optional[str]) -> str:

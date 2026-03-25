@@ -99,7 +99,7 @@ def render_global_map(owner,
     sem_map_vis = cv2.resize(sem_map_vis, (480, 480), interpolation=cv2.INTER_NEAREST)
     obstacle_mask_display = owner._build_display_obstacle_mask(full_map)
     sem_map_vis[obstacle_mask_display] = [0, 0, 0]
-    sem_map_vis = owner._overlay_space_areas(
+    owner._draw_space_areas_in_place(
         sem_map_vis,
         space_area_layer,
         space_area_records,
@@ -131,15 +131,12 @@ def render_global_map(owner,
 
     projector = owner._build_map_projector(full_map, current_pose, crop_offset)
     global_map_rotated = sem_map_vis.copy()
-    global_map_with_trajectory = global_map_rotated.copy()
+    global_map_with_trajectory = sem_map_vis.copy()
     last_waypoint_angle = None
 
     if current_pose is not None:
-        # ===== 阶段5: 创建global_map的显示副本（用于绘制trajectory和landmark）=====
+        # ===== 阶段5: 分层渲染global map：area fill -> trajectory -> area labels -> agent =====
         # trajectory_points 是世界像素坐标，统一通过 projector 转到当前旋转显示坐标。
-        global_map_with_trajectory[obstacle_mask_display] = [0, 0, 0]
-        global_map_rotated[obstacle_mask_display] = [0, 0, 0]
-
         if projector is not None and trajectory_points is not None and len(trajectory_points) > 1:
             trajectory_color = owner.GLOBAL_TRAJECTORY_COLOR
             display_points = projector.world_points_to_global_display(trajectory_points)
@@ -152,16 +149,7 @@ def render_global_map(owner,
                     thickness=3,
                 )
 
-        center_x, center_y = 240, 240
-        global_map_with_trajectory = owner._overlay_space_areas(
-            global_map_with_trajectory,
-            space_area_layer,
-            space_area_records,
-            fill_regions=False,
-            show_labels=True,
-            use_display_label=False,
-        )
-        global_map_rotated = owner._overlay_space_areas(
+        owner._draw_space_areas_in_place(
             global_map_rotated,
             space_area_layer,
             space_area_records,
@@ -169,7 +157,16 @@ def render_global_map(owner,
             show_labels=True,
             use_display_label=False,
         )
+        owner._draw_space_areas_in_place(
+            global_map_with_trajectory,
+            space_area_layer,
+            space_area_records,
+            fill_regions=False,
+            show_labels=True,
+            use_display_label=False,
+        )
 
+        center_x, center_y = 240, 240
         arrow_angle = np.deg2rad(-90)
         agent_pos = (center_x, center_y, arrow_angle)
         agent_arrow = vu.get_contour_points(agent_pos, origin=(0, 0), size=15)
@@ -273,7 +270,7 @@ def render_local_map(owner,
     sem_map_vis = cv2.resize(sem_map_vis, (480, 480), interpolation=cv2.INTER_NEAREST)
     obstacle_mask_resized = owner._build_display_obstacle_mask(full_map)
     sem_map_vis[obstacle_mask_resized] = [0, 0, 0]
-    sem_map_vis = owner._overlay_space_areas(
+    owner._draw_space_areas_in_place(
         sem_map_vis,
         space_area_layer,
         space_area_records,
@@ -422,21 +419,58 @@ def render_local_map(owner,
             mapping_classes=mapping_classes
         )
 
-    for marker_x, marker_y, cls_name, _dist_m, _angle_deg in landmarks:
+    for landmark in landmarks:
+        raw_display_id = None
+        if isinstance(landmark, dict):
+            marker_x = float(landmark.get("marker_x", 0.0))
+            marker_y = float(landmark.get("marker_y", 0.0))
+            raw_display_id = landmark.get("display_id")
+        elif isinstance(landmark, (tuple, list)) and len(landmark) >= 2:
+            try:
+                marker_x = float(landmark[0])
+                marker_y = float(landmark[1])
+            except (TypeError, ValueError):
+                continue
+        else:
+            continue
+
         local_display = None
         if projector is not None:
             local_display = projector.rotated_to_local_display(marker_y, marker_x)
         if local_display is not None:
             local_x, local_y = local_display
             local_landmark_radius = 10
-            cv2.circle(local_map,
-                       (int(local_x), int(local_y)),
-                       local_landmark_radius,
-                       landmark_marker_color, -1)
-            cv2.circle(local_map,
-                       (int(local_x), int(local_y)),
-                       local_landmark_radius,
-                       landmark_marker_border, 1)
+            center = (int(local_x), int(local_y))
+            cv2.circle(local_map, center, local_landmark_radius, landmark_marker_color, -1)
+            cv2.circle(local_map, center, local_landmark_radius, landmark_marker_border, 1)
+
+            try:
+                display_id = int(raw_display_id) if raw_display_id is not None else None
+            except (TypeError, ValueError):
+                display_id = None
+            if display_id is not None and display_id > 0:
+                label_text = f"#{display_id}"
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                font_scale = 0.42
+                font_thickness = 1
+                (text_w, text_h), baseline = cv2.getTextSize(label_text, font, font_scale, font_thickness)
+                pad = 3
+                tag_x1 = max(0, min(local_map.shape[1] - (text_w + pad * 2), center[0] + 10))
+                tag_y1 = max(0, min(local_map.shape[0] - (text_h + baseline + pad * 2), center[1] - text_h - 12))
+                tag_x2 = tag_x1 + text_w + pad * 2
+                tag_y2 = tag_y1 + text_h + baseline + pad * 2
+                cv2.rectangle(local_map, (tag_x1, tag_y1), (tag_x2, tag_y2), (255, 255, 255), -1)
+                cv2.rectangle(local_map, (tag_x1, tag_y1), (tag_x2, tag_y2), landmark_marker_border, 1)
+                cv2.putText(
+                    local_map,
+                    label_text,
+                    (tag_x1 + pad, tag_y2 - baseline - pad),
+                    font,
+                    font_scale,
+                    landmark_marker_border,
+                    font_thickness,
+                    cv2.LINE_AA,
+                )
 
     # ===== 阶段9: 绘制朝上的箭头（最上层）=====
     arrow_color = (0, 0, 255)

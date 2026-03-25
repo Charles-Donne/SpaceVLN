@@ -158,6 +158,22 @@ class BaseAPIClient(ABC):
         self.compress_images = DEFAULT_IMAGE_COMPRESSION_ENABLED
         self.compression_max_size = DEFAULT_IMAGE_COMPRESSION_MAX_SIZE
         self.compression_quality = DEFAULT_IMAGE_COMPRESSION_QUALITY
+
+    def _apply_reasoning_disabled_defaults(self, payload: Dict) -> Dict:
+        """Best-effort disable provider-side thinking/reasoning by default."""
+        base_url = str(getattr(self.config, 'base_url', '') or '').lower()
+        provider = str(getattr(self.config, 'provider', '') or '').lower()
+
+        if 'dashscope' in base_url or provider == 'dashscope':
+            payload['enable_thinking'] = False
+
+        if 'openrouter' in base_url or provider == 'openrouter':
+            payload['reasoning'] = {
+                'effort': 'none',
+                'exclude': True,
+            }
+
+        return payload
     
     def set_compression_config(self, enabled: bool = True, max_size: int = 384, quality: int = 80):
         """
@@ -289,9 +305,12 @@ class BaseAPIClient(ABC):
         """保存解析失败的VLM原始输出"""
         import os
         from datetime import datetime
-        
-        # 保存到当前工作目录下的failed_vlm_responses文件夹
-        failed_dir = "failed_vlm_responses"
+
+        # 保存到仓库内已忽略的 tmp 目录，避免误提交到 GitHub。
+        project_root = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", "..", "..")
+        )
+        failed_dir = os.path.join(project_root, "tmp", "failed_vlm_responses")
         os.makedirs(failed_dir, exist_ok=True)
         
         # 生成时间戳文件名
@@ -390,6 +409,7 @@ class BaseAPIClient(ABC):
                 "temperature": self.config.temperature,
                 "max_tokens": self.config.max_tokens
             }
+            payload = self._apply_reasoning_disabled_defaults(payload)
             
             # 构建headers（支持OpenRouter优化）
             headers = self.config.get_headers()
