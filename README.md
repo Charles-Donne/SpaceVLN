@@ -248,6 +248,31 @@ look_around_and_collect()  # 12 steps × 30° = 360°
 
 ---
 
+## 🛠️ Local Environment Notes (2026-03-23)
+
+This repository was adapted for local execution under `nav_ws` with relative paths and GPU-EGL fixes.
+
+### Dependency versions in use
+
+- `supervision==0.4.0`
+- `gym==0.21.0`
+- `numpy==1.23.5`
+
+### Why `supervision==0.4.0` can fail by default
+
+In this version, `sv.Detections` may not always expose a `mask` attribute in the same way as newer releases.
+To avoid runtime crashes, `grounded_sam.py` now uses compatibility-safe access (`getattr(..., None)`).
+
+### Runtime/path adjustments applied
+
+- Relative dataset/model paths under `../data/...` (from SpaceVLN root)
+- Launcher forces `spatial_agent` Python interpreter
+- Headless EGL is pinned to NVIDIA vendor to avoid Mesa/dri2 context failures
+
+For exact edited files and rationale, see [docs/LOCAL_CHANGES_2026-03-23.md](docs/LOCAL_CHANGES_2026-03-23.md).
+
+---
+
 ## 📚 Documentation
 
 - **[工作流程图.md](docs/工作流程图.md)**: Detailed workflow with diagrams

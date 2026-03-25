@@ -40,6 +40,12 @@ You are provided with 1 image:
 3. **Current Position + Arrival Check**: Use nearby objects, valid landmarks, and the space structure to confirm your current position and where the subtask destination is relative to you. If you have already reached the subtask destination, stop immediately; otherwise continue moving toward that destination.
    **Arrival rule**: Treat the subtask as reached when you are already in the destination place, or when the detected landmark itself is the destination and is close enough to stop. For solid-object destinations, stopping is allowed once it is within about 1.0m or already clearly at hand. For opening-like destinations (entrance / doorway / hallway), stop only when it is within about 0.5m or when that opening has moved to >90deg or the back side, meaning you have already passed through it.
 4. **Action Decision + Obstacle Avoidance**: Choose the action from the subtask destination/instruction, while avoiding obstacles. If the destination is clearly ahead and FRONT is safe, prefer moving forward with a distance that matches the visible depth. If the destination is not visible ahead or is more consistent with Left 30deg / Right 30deg, prefer turning toward that side. If FRONT has obstacle distance <0.5m, treat it as blocked and choose the safer side whose image content is more likely to lead to the subtask destination. Never move into an obviously blocked direction.
+   **Action guidance**:
+   a. If the destination or task-relevant landmark is visible and still clearly far, prefer moving forward first.
+   b. Do not overuse turns. Turn mainly when FRONT is blocked, or when the subtask destination is already near but clearly off-front / out of view.
+   c. If you only need to pass by a landmark before entering the true destination, and that landmark is already near but not centered ahead, do not force a turn just to face it.
+   d. If you are unsure where the destination is, or the destination already appears very near / beside you / already passed, stop immediately.
+   e. When choosing `MOVE_FORWARD`, select 0.25m-1.25m to match the visible depth to the destination or key landmark.
 
 # Output Format (JSON only)
 

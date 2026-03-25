@@ -17,6 +17,7 @@ VLM Navigation Controller
 """
 import os
 import re
+import shutil
 import cv2
 import json
 import numpy as np
@@ -979,44 +980,86 @@ class VLMNavigationController(BaseNavigationController):
         self.latest_thinking_cycle_info = dict(cycle_info)
         return response, prompt, cycle_info
 
-    def generate_initial_subtask(self) -> Optional[Dict]:
-        """
-        生成初始子任务
-        
-        使用环视收集的4方向全景图 + 全局地图 + 局部地图调用LLM生成子任务
-        """
-        response, _prompt, cycle_info = self._run_thinking_cycle(mode="initial")
-        if not response or cycle_info is None:
-            return None
-
-        # 保存子任务并初始化计数
-        self.current_subtask = response
-        self.subtask_count = 1  # 初始化为第1个子任务
-        self.subtask_attempt = 0  # 第a次尝试
+    def _reset_post_thinking_action_state(self) -> None:
+        """Reset per-subtask action state before handing control back to action."""
+        if self.mapper is not None:
+            self.mapper.clear_trajectory()
+        self._reset_custom_landmark_state()
         self.progress_summary = ""
-        self.pose_before_action = None  # 重置pose追踪（新子任务从当前位置开始）
-        
-        # 记录当前位置信息（用于后续验证参考）
+        self.previous_action_reason = ""
+        self.pose_before_action = None
+        self.last_planned_degrees = 0
+        self.last_planned_meters = 0
+        self.last_action_name = ""
+
+    def _record_current_position_from_thinking_response(self, response: Dict[str, Any]) -> None:
+        """Store the planner-localized position for later verification/debug use."""
         self.current_position_info = {
             'waypoint': response.get('current_waypoint', 'Unknown'),
             'observation': response.get('current_observation', ''),
-            'step': self.current_step
+            'step': self.current_step,
         }
-        
+
+    def _auto_rotate_to_current_subtask_waypoint(self) -> None:
+        """Rotate to the planned waypoint heading before the action controller starts."""
+        if not self.current_subtask:
+            return
+
+        next_waypoint_direction = self.current_subtask.get('next_waypoint_direction', '')
+        if next_waypoint_direction and 'Front' not in next_waypoint_direction:
+            success, action_sequence = self.auto_rotate_to_waypoint(next_waypoint_direction)
+            if success and action_sequence:
+                self.execute_rotation_sequence(action_sequence)
+                print()
+
+    def _apply_thinking_cycle_result(
+        self,
+        response: Dict[str, Any],
+        cycle_info: Dict[str, Any],
+        mode: str,
+    ) -> bool:
+        """Apply a thinking result using the shared replan-style area update flow."""
+        mode_key = str(mode).strip().lower()
+        is_initial = mode_key == 'initial'
+        task_finished = bool(response.get('global_task_finish', False))
+        phase_default = 'initial' if is_initial else ''
+
+        if not is_initial:
+            attempt_letter = chr(ord('a') + self.subtask_attempt)
+            print(f"  #{self.subtask_count}{attempt_letter} -> {response.get('next_waypoint_destination', 'N/A')} | finish={task_finished}")
+
         self._apply_postplanning_space_area_update(
             response=response,
-            phase=str(cycle_info.get("phase", "initial")),
-            thinking_dir=cycle_info.get("thinking_dir"),
-            refresh_direction_views=False,
+            phase=str(cycle_info.get('phase', phase_default)),
+            thinking_dir=cycle_info.get('thinking_dir'),
+            refresh_direction_views=True,
         )
-        
-        # 初始子任务开始前也显式清空旧自定义 landmark 状态
-        self._reset_custom_landmark_state()
+        self._record_current_position_from_thinking_response(response)
 
-        # 动态更新目标landmark（直接使用VLM输出的next_waypoint_landmark）
+        if task_finished:
+            self.current_subtask = response
+            if is_initial:
+                self.subtask_count = 1
+                self.subtask_attempt = 0
+                self._print_subtask_info(response, is_initial=True)
+                print('[DONE] Global task complete at initial planning')
+            else:
+                print('[DONE] Global task complete')
+            return True
+
+        self._reset_post_thinking_action_state()
+
+        if is_initial:
+            self.subtask_count = 1
+            self.subtask_attempt = 0
+        else:
+            self.subtask_count += 1
+            self.subtask_attempt = 0
+            print(f"  Next #{self.subtask_count}a: {response.get('subtask_instruction', 'N/A')[:60]}")
+
+        self.current_subtask = response
+
         next_waypoint_landmark = response.get('next_waypoint_landmark', None)
-        
-        # 直接使用VLM输出，不自动提取；新子任务会覆盖旧landmark
         self._set_current_landmark_tracking(
             next_waypoint_landmark,
             fallback_sources=[
@@ -1026,9 +1069,33 @@ class VLMNavigationController(BaseNavigationController):
             ]
         )
 
-        # 打印子任务信息
-        self._print_subtask_info(response, is_initial=True)
-        
+        self._print_subtask_info(response, is_initial=is_initial)
+        self._auto_rotate_to_current_subtask_waypoint()
+        return False
+
+    def _run_thinking_controller(
+        self,
+        mode: str,
+    ) -> Tuple[str, Optional[Dict[str, Any]], Optional[str]]:
+        """Shared thinking controller for both initial planning and verify/replan."""
+        response, prompt, cycle_info = self._run_thinking_cycle(mode=mode)
+        if not response or cycle_info is None:
+            return 'failed', None, prompt
+
+        task_finished = self._apply_thinking_cycle_result(
+            response=response,
+            cycle_info=cycle_info,
+            mode=mode,
+        )
+        if task_finished:
+            return 'complete', response, None
+        return 'action', response, prompt
+
+    def generate_initial_subtask(self) -> Optional[Dict]:
+        """Backward-compatible wrapper around the shared thinking controller."""
+        next_mode, response, _prompt = self._run_thinking_controller(mode='initial')
+        if next_mode == 'failed':
+            return None
         return response
 
     def _apply_postplanning_space_area_update(
@@ -1054,6 +1121,10 @@ class VLMNavigationController(BaseNavigationController):
             )
         if refresh_direction_views:
             self._refresh_cached_lookaround_direction_views(phase=phase)
+        self._sync_postthinking_visual_artifacts(
+            phase=phase,
+            thinking_dir=thinking_dir,
+        )
         self._save_waypoint_area_memory_snapshot()
         return waypoint_id
 
@@ -1084,7 +1155,7 @@ class VLMNavigationController(BaseNavigationController):
         if wp_positions and wp_ids:
             waypoint_info = (wp_positions, wp_ids, wp_descriptions)
 
-        directions_dir = os.path.join(self.config.RESULTS_DIR, f"episode_{self.current_episode_id}", "directions")
+        directions_dir = os.path.join(self.config.RESULTS_DIR, f"episode_{self.current_episode_id}", 'directions')
 
         def _render_thinking_detection(
             image: np.ndarray,
@@ -1129,6 +1200,58 @@ class VLMNavigationController(BaseNavigationController):
         )
         return True
 
+    def _sync_postthinking_visual_artifacts(
+        self,
+        phase: str,
+        thinking_dir: Optional[str],
+    ) -> bool:
+        """Mirror the refreshed post-thinking visuals into the thinking artifact folder."""
+        if not thinking_dir:
+            return False
+
+        os.makedirs(thinking_dir, exist_ok=True)
+        planner_input_dir = os.path.join(thinking_dir, 'planner_input')
+        synced_any = False
+
+        def _backup_and_copy(src_path: Optional[str], dst_name: str) -> bool:
+            if not src_path or not os.path.exists(src_path):
+                return False
+
+            dst_path = os.path.join(thinking_dir, dst_name)
+            if os.path.exists(dst_path):
+                os.makedirs(planner_input_dir, exist_ok=True)
+                backup_path = os.path.join(planner_input_dir, dst_name)
+                if not os.path.exists(backup_path):
+                    shutil.copy2(dst_path, backup_path)
+
+            shutil.copy2(src_path, dst_path)
+            return True
+
+        if _backup_and_copy(getattr(self, 'latest_global_map', None), 'global_map.png'):
+            synced_any = True
+        if _backup_and_copy(getattr(self, 'latest_local_map', None), 'local_map.png'):
+            synced_any = True
+
+        directions_dir = os.path.join(
+            self.config.RESULTS_DIR,
+            f"episode_{self.current_episode_id}",
+            'directions',
+        )
+        prefix = f"{phase}_direction_"
+        if os.path.isdir(directions_dir):
+            for filename in sorted(os.listdir(directions_dir)):
+                if not filename.startswith(prefix) or not filename.endswith('.png'):
+                    continue
+                angle_match = re.search(r'(\d{3})\.png$', filename)
+                if not angle_match:
+                    continue
+                src_path = os.path.join(directions_dir, filename)
+                dst_name = f"direction_{angle_match.group(1)}.png"
+                if _backup_and_copy(src_path, dst_name):
+                    synced_any = True
+
+        return synced_any
+
     def auto_rotate_to_waypoint(self, waypoint_direction: str) -> Tuple[bool, List[Dict]]:
         """
         解析waypoint方向并生成旋转动作序列
@@ -1143,8 +1266,6 @@ class VLMNavigationController(BaseNavigationController):
         """
         import re
         
-        # 解析方向和角度
-        # 支持格式: "IMAGE 5 (Left 120deg)" 或 "Left 120deg"
         match = re.search(r'Left (\d+)(?:deg|°)|Right (\d+)(?:deg|°)|Back (\d+)(?:deg|°)?|Front', waypoint_direction)
         
         if not match:
@@ -1162,23 +1283,20 @@ class VLMNavigationController(BaseNavigationController):
             direction = 'RIGHT'
         elif 'Back' in waypoint_direction:
             angle = 180
-            direction = 'LEFT'  # 向左转180度
+            direction = 'LEFT'
         elif 'Front' in waypoint_direction:
-            # 已经面向Front，无需旋转
-            # Waypoint already at Front, no rotation needed
             return True, []
         else:
             print(f"  [WARN] Unrecognized direction: {waypoint_direction}")
             return False, []
         
-        # 生成动作序列（每次30度）
         num_turns = angle // 30
         action_sequence = []
         
-        for i in range(num_turns):
+        for _ in range(num_turns):
             action_sequence.append({
-                "action": f"TURN_{direction}",
-                "degrees": 30
+                'action': f'TURN_{direction}',
+                'degrees': 30
             })
         
         return True, action_sequence
@@ -1186,33 +1304,20 @@ class VLMNavigationController(BaseNavigationController):
     def execute_rotation_sequence(self, action_sequence: List[Dict]) -> bool:
         """
         执行旋转动作序列（使用统一的执行器，确保地图更新、步数记录、可视化保存）
-        
-        Args:
-            action_sequence: 动作序列，格式 [{"action": "TURN_LEFT", "degrees": 30}, ...]
-            
-        Returns:
-            是否全部执行成功
         """
         from habitat.sims.habitat_simulator.actions import HabitatSimActions
         
         for i, action_dict in enumerate(action_sequence):
-            action_name = action_dict["action"]
-            degrees = action_dict["degrees"]
+            action_name = action_dict['action']
             
-            # 转换为habitat action ID
-            if action_name == "TURN_LEFT":
+            if action_name == 'TURN_LEFT':
                 action_id = HabitatSimActions.TURN_LEFT
-            elif action_name == "TURN_RIGHT":
+            elif action_name == 'TURN_RIGHT':
                 action_id = HabitatSimActions.TURN_RIGHT
             else:
                 print(f"    [WARN] Unknown action: {action_name}")
                 continue
             
-            # 使用统一的执行器（step_with_vlm），确保：
-            # - 更新地图
-            # - 保存可视化（RGB、detection、maps）
-            # - 更新距离信息
-            # - 正确记录步数
             is_last_turn = (i == len(action_sequence) - 1)
             result = self.step_with_vlm(
                 action_id,
@@ -1221,7 +1326,6 @@ class VLMNavigationController(BaseNavigationController):
                 enable_landmark_detection=is_last_turn,
             )
             
-            # 检查episode是否结束
             if result.get('done', False):
                 print(f"    [WARN] Episode ended during rotation")
                 return False
@@ -1229,95 +1333,16 @@ class VLMNavigationController(BaseNavigationController):
         return True
     
     def verify_and_replan(self) -> Tuple[Optional[Dict], Optional[str]]:
-        """
-        验证当前子任务并重新规划
-        
-        流程：
-        1. 执行360°环视建图（更新语义地图）- 占用12个step
-        2. 生成当前位置的4方向全景图
-        3. 调用LLM验证子任务完成状态
-        4. 如未完成，生成新子任务
-        
-        注意：重新扫描会占用新的12个step，验证完成后下一个action继续累加
-        
-        Returns:
-            (new_subtask_or_finish_response, prompt)
-        """
+        """Backward-compatible wrapper around the shared thinking controller."""
         if not self.current_subtask:
             return None, None
-        response, prompt, cycle_info = self._run_thinking_cycle(mode="verify")
-        if not response or cycle_info is None:
+        next_mode, response, prompt = self._run_thinking_controller(mode='verify')
+        if next_mode == 'failed':
             return None, None
-        
-        # 打印关键信息（精简）
-        task_finished = response.get('global_task_finish', False)
-        attempt_letter = chr(ord('a') + self.subtask_attempt)
-        print(f"  #{self.subtask_count}{attempt_letter} -> {response.get('next_waypoint_destination', 'N/A')} | finish={task_finished}")
-        
-        if task_finished:
-            print("[DONE] Global task complete")
+        if next_mode == 'complete':
             return response, None
-        else:
-            print(f"  Next #{self.subtask_count + 1}a: {response.get('subtask_instruction', 'N/A')[:60]}")
-            
-            self._apply_postplanning_space_area_update(
-                response=response,
-                phase=str(cycle_info.get("phase", "")),
-                thinking_dir=cycle_info.get("thinking_dir"),
-                refresh_direction_views=True,
-            )
-            
-            # 清空旧状态（为新子任务准备）
-            self.mapper.clear_trajectory()
-            self._reset_custom_landmark_state()
-            self.progress_summary = ""
-            self.previous_action_reason = ""
-            self.pose_before_action = None
-            self.last_planned_degrees = 0
-            self.last_planned_meters = 0
-            self.last_action_name = ""
-            
-            # 更新到新子任务：递增计数，重置尝试
-            self.subtask_count += 1
-            self.subtask_attempt = 0
-            self.current_subtask = response
-            
-            # 更新当前位置信息（用于后续参考）
-            self.current_position_info = {
-                'waypoint': response.get('current_waypoint', 'Unknown'),
-                'observation': response.get('current_observation', ''),
-                'step': self.current_step
-            }
-            
-            # 动态更新目标landmark（直接使用VLM输出的next_waypoint_landmark）
-            next_waypoint_landmark = response.get('next_waypoint_landmark', None)
-            
-            # 直接使用VLM输出，不自动提取；新子任务会覆盖旧landmark
-            self._set_current_landmark_tracking(
-                next_waypoint_landmark,
-                fallback_sources=[
-                    response.get('next_waypoint_destination'),
-                    response.get('subtask_instruction'),
-                    response.get('current_waypoint'),
-                ]
-            )
-            
-            # ⚠️ 重要：self.classes更新已在上方完成
-            
-            self._print_subtask_info(response)
-            
-            # 子任务完成后，自动旋转到新的waypoint方向
-            next_waypoint_direction = response.get('next_waypoint_direction', '')
-            if next_waypoint_direction and 'Front' not in next_waypoint_direction:
-                success, action_sequence = self.auto_rotate_to_waypoint(next_waypoint_direction)
-                
-                if success and action_sequence:
-                    self.execute_rotation_sequence(action_sequence)
-                    print()  # newline after rotation steps
+        return response, prompt
 
-        # 返回response（prompt已保存到save_dir）
-            return response, prompt
-    
     def execute_action_with_vlm(self) -> Tuple[Optional[int], Optional[str], bool, int, Optional[Dict]]:
         """
         使用VLM决策并执行动作
@@ -1615,302 +1640,226 @@ class VLMNavigationController(BaseNavigationController):
         
         return result
     
-    def run_vlm_navigation(self, max_subtask_steps: int = 5) -> Dict[str, Any]:
-        """
-        运行完整的VLM导航流程
-        
-        Args:
-            max_subtask_steps: 每个子任务最大步数（达到后强制触发验证，默认5步）
-            
-        Returns:
-            导航结果字典
-        """
-        # 从 Habitat 配置读取最大步数限制
-        max_steps = self.config.TASK_CONFIG.ENVIRONMENT.MAX_EPISODE_STEPS
-        
-        print(f"\n{'='*60}")
-        print(f"VLM Navigation | max_steps={max_steps} | subtask_steps={max_subtask_steps}")
-        print(f"Instruction: {self.current_instruction}")
-        print(f"{'='*60}")
-        
-        # 1. 统一的 initial thinking cycle（lookaround + planning + post-planning update）
-        subtask = self.generate_initial_subtask()
-        if not subtask:
-            cycle_reason = str(getattr(self, 'latest_thinking_cycle_info', {}).get('reason', '') or '')
-            failure_reason = 'initial_lookaround_failed' if cycle_reason == 'lookaround_failed' else 'initial_subtask_failed'
-            print("[ERR] Initial subtask generation failed")
-            return {
-                'success': False,
-                'total_steps': self.current_step,
-                'subtask_count': 0,
-                'detected_classes': list(self.detected_classes) if hasattr(self, 'detected_classes') else [],
-                'gif_path': None,
-                'result_file': None,
-                'reason': failure_reason,
-            }
-        
-        # 2. 自动旋转到waypoint方向
-        next_waypoint_direction = subtask.get('next_waypoint_direction', '')
-        if next_waypoint_direction and 'Front' not in next_waypoint_direction:
-            success, action_sequence = self.auto_rotate_to_waypoint(next_waypoint_direction)
-            
-            if success and action_sequence:
-                self.execute_rotation_sequence(action_sequence)
-                print()  # newline after rotation steps
-
-        # 3. 主导航循环
-        total_steps = self.current_step
+    def _run_action_controller(self, max_subtask_steps: int = 5) -> str:
+        """Run action decisions until control should return to thinking or the episode ends."""
         subtask_steps = 0
-        navigation_complete = False
-        
-        while True:
-            # 🔑 检查退出条件（执行action之前）
-            # 如果任务已完成（VLM判断或Habitat设置done），直接退出
-            if navigation_complete:
-                break
 
+        while True:
             if self._all_action_directions_blocked(threshold_m=0.5):
                 retreated_m, retreat_done = self._execute_auto_retreat(retreat_distance_m=1.0)
-                total_steps = self.current_step
 
                 if retreat_done:
-                    print("[WARN] Episode done during automatic retreat")
-                    navigation_complete = True
-                    break
+                    print('[WARN] Episode done during automatic retreat')
+                    return 'complete'
 
                 print(
                     f"[AutoRetreat] Finished turn-around move ({retreated_m:.2f}m). "
-                    f"Skip action VLM and start 12-view thinking/replan."
+                    f"Hand control back to the thinking controller."
                 )
-                navigation_complete, _new_subtask = self._trigger_verify_replan(
-                    "auto retreat replan",
-                    total_steps,
-                )
-                if navigation_complete:
-                    break
+                return 'thinking'
 
-                subtask_steps = 0
-                continue
-
-            # VLM决策动作（失败则重试）
             max_retries = 3
             action_id = None
             vlm_response = None
-            
+
             for retry in range(max_retries):
                 action_id, action_name, should_stop, repeat_count, vlm_response = self.execute_action_with_vlm()
-                
+
                 if action_id is not None:
                     break
-                
+
                 if retry < max_retries - 1:
                     wait = (retry + 1) * 2
                     print(f"  [WARN] VLM Action failed, retry in {wait}s ({retry + 1}/{max_retries - 1})...")
                     import time
                     time.sleep(wait)
-            
-            # 所有重试都失败，跳过此步
+
             if action_id is None:
-                print("[ERR] VLM Action failed after all retries, skipping step")
+                print('[ERR] VLM Action failed after all retries, skipping step')
                 continue
-            
-            # 关键检查：在执行任何action之前，检查VLM响应中的global_task_finish
+
             if vlm_response and vlm_response.get('global_task_finish', False):
-                print(f"[DONE] Task complete (action) | steps={total_steps}")
-                navigation_complete = True
-                break
-            
-            # 如果VLM决定停止 → 验证子任务
+                print(f"[DONE] Task complete (action) | steps={self.current_step}")
+                return 'complete'
+
             if should_stop:
-                print("\n[STOP] -> Verify...")
-                navigation_complete, _new_subtask = self._trigger_verify_replan(
-                    "verify",
-                    total_steps,
-                )
-                if navigation_complete:
-                    break
-                
-                # 子任务完成或重新规划，重置步数计数
-                subtask_steps = 0
-                continue
-            
-            # VLM决策计数（每次调用action模型算1步）
+                print('\n[STOP] -> Thinking controller...')
+                return 'thinking'
+
             subtask_steps += 1
-            
-            # 🔑 关键修复：在执行action后检查步数限制
-            # 如果达到最大步数（例如5步），执行完当前动作后立即强制replan
-            if subtask_steps >= max_subtask_steps:
-                # 继续执行当前动作，但标记下一轮要replan
-                force_replan_after_action = True
-            else:
-                force_replan_after_action = False
-            
-            # 执行动作前记录pose（用于后续计算实际变化）
+            force_replan_after_action = subtask_steps >= max_subtask_steps
+
             if self.pose_before_action is None:
                 self.pose_before_action = self._get_agent_pose()
             pose_before_action_batch = self._get_agent_pose()
             auto_completed_subtask = None
-            
-            # 执行动作（可能需要重复多次）
+
             for i in range(repeat_count):
                 result = self.step_with_vlm(action_id, action_name=action_name, save_vis=True)
-                total_steps = self.current_step
-                
+
                 if repeat_count > 1:
-                    print(f"  [Step {total_steps}] {action_name} ({i+1}/{repeat_count})")
+                    print(f"  [Step {self.current_step}] {action_name} ({i + 1}/{repeat_count})")
                 else:
-                    print(f"  [Step {total_steps}] {action_name} | subtask {subtask_steps}/{max_subtask_steps}")
-                
-                # 🔍 记录DTG轨迹（每步记录）
+                    print(f"  [Step {self.current_step}] {action_name} | subtask {subtask_steps}/{max_subtask_steps}")
+
                 if self.latest_info:
                     dtg = self.latest_info.get('distance_to_goal', -1)
                     if not hasattr(self, 'dtg_history'):
                         self.dtg_history = []
                     self.dtg_history.append(dtg)
-                
-                # 🔑 检查episode是否自动结束（Habitat内部判断，如达到MAX_EPISODE_STEPS）
+
                 if result['done']:
-                    print(f"[WARN] Episode done (Habitat)")
-                    # 不要尝试调用step(STOP)，因为episode已经done，会触发AssertionError
-                    # latest_info已在step_with_vlm中更新，包含最终指标
-                    navigation_complete = True
-                    break
+                    print('[WARN] Episode done (Habitat)')
+                    return 'complete'
 
                 current_step_landmark_entries = self._get_current_action_step_landmark_entries()
                 auto_completed_subtask = self._should_autocomplete_subtask_during_action_step(
                     current_step_landmark_entries
                 )
                 if auto_completed_subtask is not None:
-                    landmark_kind = "opening-like" if auto_completed_subtask.get("is_opening_like") else "solid"
+                    landmark_kind = 'opening-like' if auto_completed_subtask.get('is_opening_like') else 'solid'
                     print(
-                        "[AutoSubtaskComplete] "
+                        '[AutoSubtaskComplete] '
                         f"{auto_completed_subtask['name']} ({landmark_kind}) reached within "
                         f"{auto_completed_subtask['distance_m']:.2f}m "
                         f"(threshold {float(auto_completed_subtask.get('stop_distance_m', 1.0)):.2f}m) "
                         f"on action step {self.current_step}; "
-                        "skip remaining action repeats and start thinking/replan."
+                        'return control to the thinking controller.'
                     )
                     break
-            
-            # 所有重复执行完成后，计算总的progress（一次性）
-            if hasattr(self, 'last_action_name') and self.last_action_name and not navigation_complete:
+
+            if hasattr(self, 'last_action_name') and self.last_action_name:
                 pose_after_action_batch = self._get_agent_pose()
-                
-                # 计算实际位姿变化
+
                 x_before, y_before, ori_before = pose_before_action_batch
                 x_after, y_after, ori_after = pose_after_action_batch
-                
-                # 计算实际转向角度变化（保留符号）
+
                 import math
                 angle_diff = ori_after - ori_before
-                # 归一化到 [-pi, pi]
                 while angle_diff > math.pi:
                     angle_diff -= 2 * math.pi
                 while angle_diff < -math.pi:
                     angle_diff += 2 * math.pi
-                
-                # 判断实际转向方向（正=左转，负=右转）
+
                 actual_degrees = abs(math.degrees(angle_diff))
-                
-                # 根据实际方向校正action_name（处理转过头的情况）
+
                 actual_action_name = self.last_action_name
-                if self.last_action_name == 'TURN_LEFT' and angle_diff < -0.1:  # 计划左转但实际右转
+                if self.last_action_name == 'TURN_LEFT' and angle_diff < -0.1:
                     actual_action_name = 'TURN_RIGHT'
                     print(f"[Warning] Planned TURN_LEFT but actually turned RIGHT by {actual_degrees:.1f}°")
-                elif self.last_action_name == 'TURN_RIGHT' and angle_diff > 0.1:  # 计划右转但实际左转
+                elif self.last_action_name == 'TURN_RIGHT' and angle_diff > 0.1:
                     actual_action_name = 'TURN_LEFT'
                     print(f"[Warning] Planned TURN_RIGHT but actually turned LEFT by {actual_degrees:.1f}°")
-                
-                # 计算实际移动距离（2D欧氏距离）
-                actual_meters = math.sqrt((x_after - x_before)**2 + (y_after - y_before)**2)
-                
-                # 调用_generate_progress_update更新progress
+
+                actual_meters = math.sqrt((x_after - x_before) ** 2 + (y_after - y_before) ** 2)
+
                 self.progress_summary = self.action_executor._generate_progress_update(
                     current_progress=self.progress_summary,
-                    action_name=actual_action_name,  # 使用校正后的方向
+                    action_name=actual_action_name,
                     degrees=self.last_planned_degrees,
                     meters=self.last_planned_meters,
                     actual_degrees=actual_degrees,
                     actual_meters=actual_meters
                 )
-                
-                # Progress tracked internally
-                
-                # 更新pose_before为当前pose（供下次计算使用）
+
                 self.pose_before_action = pose_after_action_batch
 
-            if auto_completed_subtask is not None and not navigation_complete:
-                landmark_kind = "opening-like" if auto_completed_subtask.get("is_opening_like") else "solid"
+            if auto_completed_subtask is not None:
+                landmark_kind = 'opening-like' if auto_completed_subtask.get('is_opening_like') else 'solid'
                 self._append_progress_note(
                     f"had reached {auto_completed_subtask['name']} ({landmark_kind}) within "
                     f"{auto_completed_subtask['distance_m']:.2f}m "
                     f"(auto-stop threshold {float(auto_completed_subtask.get('stop_distance_m', 1.0)):.2f}m), "
-                    "so ended the current subtask and triggered replan"
+                    'so ended the current subtask and triggered replan'
                 )
                 self.previous_action_reason = (
                     f"Displayed destination landmark {auto_completed_subtask['name']} ({landmark_kind}) was within "
                     f"{auto_completed_subtask['distance_m']:.2f}m "
                     f"(threshold {float(auto_completed_subtask.get('stop_distance_m', 1.0)):.2f}m), "
-                    "so the system ended the current subtask and started thinking"
+                    'so the system ended the current subtask and started thinking'
                 )
-                navigation_complete, _new_subtask = self._trigger_verify_replan(
-                    "action step autocomplete",
-                    total_steps,
-                )
-                if navigation_complete:
-                    break
-                subtask_steps = 0
-                continue
-            
-            # 🔑 强制重规划检查：如果达到最大步数，执行完动作后立即触发verify
+                return 'thinking'
+
             if force_replan_after_action:
-                print(f"\n[Replan] Force replan after {max_subtask_steps} steps")
-                navigation_complete, _new_subtask = self._trigger_verify_replan(
-                    "force replan",
-                    total_steps,
-                )
-                if navigation_complete:
+                print(f'\n[Replan] Force replan after {max_subtask_steps} steps')
+                return 'thinking'
+
+    def run_vlm_navigation(self, max_subtask_steps: int = 5) -> Dict[str, Any]:
+        """Run the top-level scheduler over the thinking controller and action controller."""
+        max_steps = self.config.TASK_CONFIG.ENVIRONMENT.MAX_EPISODE_STEPS
+
+        print("\n" + "=" * 60)
+        print(f"VLM Navigation | max_steps={max_steps} | subtask_steps={max_subtask_steps}")
+        print(f"Instruction: {self.current_instruction}")
+        print(f"{'=' * 60}")
+
+        controller_mode = 'thinking'
+        thinking_mode = 'initial'
+        navigation_complete = False
+
+        while not navigation_complete:
+            if controller_mode == 'thinking':
+                controller_mode, _response, _prompt = self._run_thinking_controller(mode=thinking_mode)
+                if controller_mode == 'failed':
+                    cycle_reason = str(getattr(self, 'latest_thinking_cycle_info', {}).get('reason', '') or '')
+                    if thinking_mode == 'initial':
+                        failure_reason = 'initial_lookaround_failed' if cycle_reason == 'lookaround_failed' else 'initial_subtask_failed'
+                    else:
+                        failure_reason = 'verify_lookaround_failed' if cycle_reason == 'lookaround_failed' else 'verify_replan_failed'
+                    print(f"[ERR] Thinking controller failed ({thinking_mode})")
+                    return {
+                        'success': False,
+                        'total_steps': self.current_step,
+                        'subtask_count': self.subtask_count,
+                        'detected_classes': list(self.detected_classes) if hasattr(self, 'detected_classes') else [],
+                        'gif_path': None,
+                        'result_file': None,
+                        'reason': failure_reason,
+                    }
+
+                if controller_mode == 'complete':
+                    navigation_complete = True
                     break
-                subtask_steps = 0  # 重置步数
+
+                thinking_mode = 'verify'
                 continue
-            
-            if navigation_complete:
+
+            controller_mode = self._run_action_controller(max_subtask_steps=max_subtask_steps)
+            if controller_mode == 'complete':
+                navigation_complete = True
                 break
-        
-        # 主循环结束 - 记录退出原因和DTG轨迹统计
-        # DTG统计
+            thinking_mode = 'verify'
+
+        total_steps = self.current_step
+
         if hasattr(self, 'dtg_history') and self.dtg_history:
             valid_dtgs = [d for d in self.dtg_history if d >= 0]
             if valid_dtgs:
-                print(f"\nDTG: min={min(valid_dtgs):.2f}m final={valid_dtgs[-1]:.2f}m")
-        
-        # 4. 生成GIF动画
-        
+                print(f'\nDTG: min={min(valid_dtgs):.2f}m final={valid_dtgs[-1]:.2f}m')
+
         gif_path = None
         if self.nav_visualizer:
             gif_path = self.nav_visualizer.save_gif(fps=2)
-        
-        # 5. 调用finish_episode()执行STOP并获取最终指标
+
         final_metrics = self.finish_episode(
-            success=navigation_complete, 
-            stop_action=True  # 总是调用STOP以获得正确的Success判定
+            success=navigation_complete,
+            stop_action=True
         )
-        
-        # 使用STOP后的最终指标
+
         env_metrics = final_metrics if final_metrics else {}
         if not env_metrics:
             try:
                 if hasattr(self.envs, 'call_at'):
-                    env_metrics = self.envs.call_at(0, "get_metrics")
-            except Exception as e:
+                    env_metrics = self.envs.call_at(0, 'get_metrics')
+            except Exception:
                 env_metrics = {}
-        
+
         final_result = self._save_navigation_result(navigation_complete, total_steps, env_metrics)
-        
-        print(f"\n{'='*60}")
+
+        print("\n" + "=" * 60)
         print(f"{'OK' if navigation_complete else 'FAIL'} | steps={total_steps} | subtasks={self.subtask_count}")
-        print(f"{'='*60}")
-        
+        print(f"{'=' * 60}")
+
         return {
             'success': navigation_complete,
             'total_steps': total_steps,
@@ -1919,7 +1868,7 @@ class VLMNavigationController(BaseNavigationController):
             'gif_path': gif_path,
             'result_file': final_result
         }
-    
+
     def _save_navigation_result(self, success: bool, total_steps: int, env_metrics: Dict = None) -> str:
         """
         保存导航结果到log/目录

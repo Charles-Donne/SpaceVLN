@@ -29,6 +29,24 @@ export MAGNUM_LOG=quiet
 export PYTHONWARNINGS="ignore"
 export TRANSFORMERS_VERBOSITY=error
 
+# Force NVIDIA EGL backend to avoid Mesa/dri2 selection issues in headless mode.
+export __EGL_VENDOR_LIBRARY_FILENAMES="/usr/share/glvnd/egl_vendor.d/10_nvidia.json"
+export __GLX_VENDOR_LIBRARY_NAME="nvidia"
+
+# Python 解释器选择：优先使用 spatial_agent，避免误用 base 环境
+if [ -x "$HOME/anaconda3/envs/spatial_agent/bin/python" ]; then
+    PYTHON_BIN="$HOME/anaconda3/envs/spatial_agent/bin/python"
+    SPATIAL_ENV="$HOME/anaconda3/envs/spatial_agent"
+else
+    PYTHON_BIN="python"
+    SPATIAL_ENV=""
+fi
+
+# Ensure native libs are discoverable even without conda activation.
+if [ -n "$SPATIAL_ENV" ]; then
+    export LD_LIBRARY_PATH="$SPATIAL_ENV/lib:$SPATIAL_ENV/lib/python3.8/site-packages/torch/lib:${LD_LIBRARY_PATH:-}"
+fi
+
 # 参数解析
 EPISODE_ID=${1:-0}
 NUM_EPISODES=${2:-1}
@@ -75,7 +93,7 @@ fi
 
 # 配置路径
 CONFIG_FILE="vlnce_baselines/config/experiments/r2r_eval.yaml"
-RESULTS_DIR="/root/autodl-tmp/result/spacevln"  # 修改此处可更改结果存储路径
+RESULTS_DIR="../data/result/spacevln"  # 相对 SpaceVLN 根目录，指向 nav_ws/data/result/spacevln
 API_CONFIG="vlnce_baselines/config/api/vlm_api_config.yaml"
 
 # 检查配置文件
@@ -90,7 +108,7 @@ if [ ! -f "$API_CONFIG" ]; then
 fi
 
 # 环境检查
-if ! command -v python &> /dev/null; then
+if ! command -v "$PYTHON_BIN" &> /dev/null; then
     echo "❌ 未找到Python环境"
     exit 1
 fi
@@ -136,6 +154,7 @@ echo "📁 结果: $RESULTS_DIR/"
 echo ""
 echo "🤖 模型配置:"
 echo "   API: $API_CONFIG"
+echo "   Python: $PYTHON_BIN"
 echo ""
 echo "🔄 工作流程:"
 echo "   1. 360°环视建图 + 收集4方向图像"
@@ -157,7 +176,7 @@ echo "🚀 启动中..."
 START_TIME=$(date +%s)
 
 set +e
-CUDA_VISIBLE_DEVICES=0 python vlm_navigation.py \
+CUDA_VISIBLE_DEVICES=0 "$PYTHON_BIN" vlm_navigation.py \
     --exp-config "$CONFIG_FILE" \
     --episode-id "$EPISODE_ID" \
     --num-episodes "$NUM_EPISODES" \

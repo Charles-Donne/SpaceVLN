@@ -86,6 +86,9 @@ class GroundedSAM(Segment):
             box_areas = (detections.xyxy[:, 2] - detections.xyxy[:, 0]) * \
                        (detections.xyxy[:, 3] - detections.xyxy[:, 1])
         
+        # supervision<=0.4.0 has no built-in `mask` field on Detections.
+        masks = getattr(detections, "mask", None)
+
         i = len(detections) - 1
         while i >= 0:
             if box_areas[i] / (self.width * self.height) < 0.95:
@@ -93,8 +96,8 @@ class GroundedSAM(Segment):
                 continue
             else:
                 detections.xyxy = np.delete(detections.xyxy, i, axis=0)
-                if detections.mask is not None:
-                    detections.mask = np.delete(detections.mask, i, axis=0)
+                if masks is not None:
+                    masks = np.delete(masks, i, axis=0)
                 if detections.confidence is not None:
                     detections.confidence = np.delete(detections.confidence, i)
                 if detections.class_id is not None:
@@ -102,6 +105,9 @@ class GroundedSAM(Segment):
                 if detections.tracker_id is not None:
                     detections.tracker_id = np.delete(detections.tracker_id, i)
             i -= 1
+
+        if masks is not None:
+            detections.mask = masks
             
         return detections
     

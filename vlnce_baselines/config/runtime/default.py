@@ -20,23 +20,23 @@ _C.VIDEO_DIR = "videos/debug"
 _C.TENSORBOARD_DIR = "data/tensorboard_dirs/debug"
 _C.RESULTS_DIR = "data/checkpoints/pretrained/evals"
 # BLIP2 模型路径（根据实际路径修改）
-_C.BLIP2_MODEL_DIR = "/root/autodl-tmp/model_zoo/blip2/blip2_model.pt"
-_C.BLIP2_VIS_PROCESSORS_DIR = "/root/autodl-tmp/model_zoo/blip2/blip2_vis_processors.pt"
-_C.BLIP2_TEXT_PROCESSORS_DIR = "/root/autodl-tmp/model_zoo/blip2/blip2_text_processors.pt"
+_C.BLIP2_MODEL_DIR = "data/model_zoo/blip2/blip2_model.pt"
+_C.BLIP2_VIS_PROCESSORS_DIR = "data/model_zoo/blip2/blip2_vis_processors.pt"
+_C.BLIP2_TEXT_PROCESSORS_DIR = "data/model_zoo/blip2/blip2_text_processors.pt"
 # VQA 模型路径（根据实际路径修改）
-_C.VQA_MODEL_DIR = "/root/autodl-tmp/model_zoo/vqa/vqa_model.pt"
-_C.VQA_VIS_PROCESSORS_DIR = "/root/autodl-tmp/model_zoo/vqa/vqa_vis_processors.pt"
-_C.VQA_TEXT_PROCESSORS_DIR = "/root/autodl-tmp/model_zoo/vqa/vqa_text_processors.pt"
+_C.VQA_MODEL_DIR = "data/model_zoo/vqa/vqa_model.pt"
+_C.VQA_VIS_PROCESSORS_DIR = "data/model_zoo/vqa/vqa_vis_processors.pt"
+_C.VQA_TEXT_PROCESSORS_DIR = "data/model_zoo/vqa/vqa_text_processors.pt"
 _C.KEYBOARD_CONTROL = 0
 
 # -----------------------------------------------------------------------------
 # MAP CONFIG
 # -----------------------------------------------------------------------------
 _C.MAP = CN()
-_C.MAP.GROUNDING_DINO_CONFIG_PATH = "/root/autodl-tmp/data/grounded_sam/GroundingDINO_SwinT_OGC.py"
-_C.MAP.GROUNDING_DINO_CHECKPOINT_PATH = "/root/autodl-tmp/data/grounded_sam/groundingdino_swint_ogc.pth"
-_C.MAP.SAM_CHECKPOINT_PATH = "/root/autodl-tmp/data/grounded_sam/sam_vit_h_4b8939.pth"
-_C.MAP.RepViTSAM_CHECKPOINT_PATH = "/root/autodl-tmp/data/grounded_sam/repvit_sam.pt"
+_C.MAP.GROUNDING_DINO_CONFIG_PATH = "../data/model/grounded_sam/GroundingDINO_SwinT_OGC.py"
+_C.MAP.GROUNDING_DINO_CHECKPOINT_PATH = "../data/model/grounded_sam/groundingdino_swint_ogc.pth"
+_C.MAP.SAM_CHECKPOINT_PATH = "../data/model/grounded_sam/sam_vit_h_4b8939.pth"
+_C.MAP.RepViTSAM_CHECKPOINT_PATH = "../data/model/grounded_sam/repvit_sam.pt"
 _C.MAP.SAM_ENCODER_VERSION = "vit_h"
 _C.MAP.BOX_THRESHOLD = 0.25
 _C.MAP.TEXT_THRESHOLD = 0.25

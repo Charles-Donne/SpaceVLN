@@ -319,12 +319,12 @@ def _build_waypoint_reachability_note(
             str(waypoint_area_labels[next_index]).strip()
             if next_index < len(waypoint_area_labels) else "Unknown"
         ) or "Unknown"
-        return f"blocked from current; reach via {_format_waypoint_area_ref(next_waypoint_id, next_area)}"
+        return f"blocked to current position; reach via {_format_waypoint_area_ref(next_waypoint_id, next_area)}"
 
     if current_pose is not None:
         current_area_display = str(current_space_area_label or "Unknown").strip() or "Unknown"
-        return f"blocked from current; reach via Current({current_area_display})"
-    return "blocked from current"
+        return f"blocked to current position; reach via Current({current_area_display})"
+    return "blocked to current position"
 
 
 def _world_point_to_meters(point: Tuple[int, int], resolution_cm: float) -> Tuple[float, float]:

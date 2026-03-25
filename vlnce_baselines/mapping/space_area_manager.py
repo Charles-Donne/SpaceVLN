@@ -448,7 +448,18 @@ class SpaceAreaManager:
             and 0 <= center_col < traversible.shape[1]
             and traversible[center_row, center_col]
         ):
-            return set()
+            nearest = self._find_space_area_start(traversible, center_row, center_col)
+            if nearest is None:
+                if self._world_pixel_is_traversible(
+                    pixel_y=int(pixel_y),
+                    pixel_x=int(pixel_x),
+                    full_map=full_map,
+                    full_pose=full_pose,
+                    crop_offset=crop_offset,
+                ):
+                    return {(int(pixel_y), int(pixel_x))}
+                return set()
+            center_row, center_col = int(nearest[0]), int(nearest[1])
 
         start = (center_row, center_col)
 
@@ -538,15 +549,8 @@ class SpaceAreaManager:
                         (record for record in self.space_area_records if int(record["id"]) == area_id),
                         None,
                     )
-                    if current_record is not None and self._record_has_nearby_area_waypoint(
-                        record=current_record,
-                        pixel_y=curr_py,
-                        pixel_x=curr_px,
-                        waypoint_positions=waypoint_positions,
-                        waypoint_area_labels=waypoint_area_labels,
-                    ):
-                        self.current_space_area_label = str(current_record["label"])
-                        self.current_space_area_type = str(current_record["space_type"])
+                    if current_record is not None:
+                        self._set_current_area_from_record(current_record)
                         return
 
         containing_record = self._find_current_record_from_waypoints(
@@ -555,6 +559,7 @@ class SpaceAreaManager:
             waypoint_positions=waypoint_positions,
             waypoint_area_labels=waypoint_area_labels,
             containment_pixel=(probe_py, probe_px),
+            require_nearby_waypoint=False,
         )
         if containing_record is not None:
             self._set_current_area_from_record(containing_record)
@@ -594,6 +599,7 @@ class SpaceAreaManager:
             waypoint_positions=waypoint_positions,
             waypoint_area_labels=waypoint_area_labels,
             containment_pixel=(probe_py, probe_px),
+            require_nearby_waypoint=False,
         )
         if containing_record is not None:
             self._set_current_area_from_record(containing_record)
@@ -619,6 +625,7 @@ class SpaceAreaManager:
         waypoint_positions: Optional[Sequence[Tuple[int, int]]] = None,
         waypoint_area_labels: Optional[Sequence[str]] = None,
         containment_pixel: Optional[Tuple[int, int]] = None,
+        require_nearby_waypoint: bool = True,
     ) -> Optional[Dict[str, Any]]:
         if containment_pixel is None:
             contain_y, contain_x = int(pixel_y), int(pixel_x)
@@ -627,6 +634,8 @@ class SpaceAreaManager:
         containing_record = self._find_record_containing_pixel(contain_y, contain_x)
         if containing_record is None:
             return None
+        if not require_nearby_waypoint:
+            return containing_record
         if self._record_has_nearby_area_waypoint(
             record=containing_record,
             pixel_y=pixel_y,
