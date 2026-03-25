@@ -68,6 +68,8 @@ class VLMNavigationController(BaseNavigationController):
     ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M = CFG_AUTOCOMPLETE_SOLID_DISTANCE_M
     ACTION_SUBTASK_AUTOCOMPLETE_TOPK = CFG_AUTOCOMPLETE_TOPK
     AUTO_RETREAT_STOP_EARLY_IF_REVERSE_BLOCKED = False
+    THINKING_LOOKAROUND_STEPS = 12
+    FINAL_DESTINATION_MATCH_AUTOSTOP_STREAK = 3
     
     def __init__(self, config: Config,
                  config_path: str = "vlnce_baselines/config/api/vlm_api_config.yaml"):
@@ -98,6 +100,16 @@ class VLMNavigationController(BaseNavigationController):
                 self.AUTO_RETREAT_STOP_EARLY_IF_REVERSE_BLOCKED,
             )
         )
+        self.final_destination_match_autostop_streak = max(
+            1,
+            int(
+                getattr(
+                    config.MAP,
+                    "FINAL_DESTINATION_MATCH_AUTOSTOP_STREAK",
+                    self.FINAL_DESTINATION_MATCH_AUTOSTOP_STREAK,
+                ) or self.FINAL_DESTINATION_MATCH_AUTOSTOP_STREAK
+            ),
+        )
         
         # 初始化LLM规划器
         try:
@@ -122,6 +134,7 @@ class VLMNavigationController(BaseNavigationController):
         self.subtask_history = []
         self.latest_thinking_cycle_info = {}
         self.thinking_view_renderer = ThinkingViewRenderer()
+        self.final_goal_destination_match_streak = 0
         
         # 初始化管理器
         self.save_manager = None  # 在reset_episode时初始化
@@ -168,10 +181,36 @@ class VLMNavigationController(BaseNavigationController):
         else:
             self.progress_summary = f"{self.progress_summary}, {note}"
 
+    @staticmethod
+    def _get_next_waypoint_field(payload: Optional[Dict[str, Any]]) -> str:
+        if not payload:
+            return ""
+        return str(
+            payload.get('next_waypoint', payload.get('next_waypoint_destination', '')) or ''
+        ).strip()
+
+    @staticmethod
+    def _get_subtask_landmark_field(payload: Optional[Dict[str, Any]]) -> str:
+        if not payload:
+            return ""
+        return str(
+            payload.get('subtask_landmark', payload.get('next_waypoint_landmark', '')) or ''
+        ).strip()
+
+    def _get_episode_max_steps(self) -> int:
+        return int(getattr(self.config.TASK_CONFIG.ENVIRONMENT, 'MAX_EPISODE_STEPS', 0) or 0)
+
+    def _get_remaining_episode_steps(self) -> int:
+        return max(0, self._get_episode_max_steps() - int(getattr(self, 'current_step', 0) or 0))
+
+    def _has_budget_for_thinking_cycle(self) -> bool:
+        # Reserve one extra step so the controller can still call STOP after thinking if needed.
+        return self._get_remaining_episode_steps() > int(self.THINKING_LOOKAROUND_STEPS)
+
     def _parse_subtask_destination(self) -> Tuple[Optional[str], Optional[str]]:
         destination = ""
         if getattr(self, 'current_subtask', None):
-            destination = str(self.current_subtask.get('next_waypoint_destination', '') or '').strip()
+            destination = self._get_next_waypoint_field(self.current_subtask)
         if not destination or "'s " not in destination:
             return None, None
 
@@ -469,6 +508,7 @@ class VLMNavigationController(BaseNavigationController):
         self.subtask_history = []
         self.latest_thinking_cycle_info = {}
         self.tracked_landmark_classes = set()
+        self.final_goal_destination_match_streak = 0
         self.pose_before_action = None  # 重置pose追踪
         self.last_planned_degrees = 0  # 记录计划转向角度
         self.last_planned_meters = 0   # 记录计划移动距离
@@ -502,6 +542,66 @@ class VLMNavigationController(BaseNavigationController):
             return None
 
         return cleaned
+
+    @classmethod
+    def _normalize_waypoint_endpoint_label(cls, text: Optional[str]) -> Optional[str]:
+        """Normalize waypoint-chain endpoints / destinations for robust matching."""
+        if not text:
+            return None
+
+        cleaned = strip_space_type_variant_suffixes(str(text))
+        cleaned = cleaned.replace("’", "'").replace("`", "'")
+        cleaned = re.sub(r"\([^)]*\)", " ", cleaned)
+        cleaned = cleaned.replace("→", " ").replace("->", " ").replace("|", " ")
+        cleaned = " ".join(cleaned.split())
+        if not cleaned:
+            return None
+        return cls._normalize_landmark_candidate(cleaned)
+
+    @classmethod
+    def _extract_last_waypoint_chain_node(cls, waypoint_chain: Optional[str]) -> Optional[str]:
+        """Extract the last semantic node from a planner waypoint chain string."""
+        if not waypoint_chain:
+            return None
+
+        chain_text = strip_space_type_variant_suffixes(str(waypoint_chain)).replace("’", "'").strip()
+        if not chain_text:
+            return None
+
+        raw_nodes = re.split(r"\s*(?:→|->)\s*", chain_text)
+        raw_nodes = [node.strip() for node in raw_nodes if node and node.strip()]
+        if not raw_nodes:
+            return None
+
+        last_node = raw_nodes[-1]
+        last_node = re.sub(r"\([^)]*\)", "", last_node).strip()
+        return " ".join(last_node.split()) or None
+
+    def _update_final_goal_destination_match_streak(
+        self,
+        response: Dict[str, Any],
+    ) -> Tuple[bool, Optional[str], Optional[str], int]:
+        """Track consecutive matches between final waypoint-chain endpoint and next destination."""
+        waypoint_chain = response.get('waypoint_chain') or response.get('waypoint_sequence') or ''
+        next_destination = self._get_next_waypoint_field(response)
+        last_chain_node = self._extract_last_waypoint_chain_node(waypoint_chain)
+
+        normalized_last = self._normalize_waypoint_endpoint_label(last_chain_node)
+        normalized_destination = self._normalize_waypoint_endpoint_label(next_destination)
+        matched = bool(
+            normalized_last and
+            normalized_destination and
+            normalized_last == normalized_destination
+        )
+
+        if matched:
+            self.final_goal_destination_match_streak += 1
+        else:
+            self.final_goal_destination_match_streak = 0
+
+        response['final_waypoint_chain_goal'] = last_chain_node or ""
+        response['final_waypoint_destination_match_streak'] = self.final_goal_destination_match_streak
+        return matched, last_chain_node, str(next_destination).strip() or None, self.final_goal_destination_match_streak
 
     @classmethod
     def _iter_landmark_source_candidates(cls, source: Optional[str]) -> List[str]:
@@ -756,12 +856,22 @@ class VLMNavigationController(BaseNavigationController):
         if not response:
             return response
         response = dict(response)
+        if 'next_waypoint' not in response and response.get('next_waypoint_destination') is not None:
+            response['next_waypoint'] = response.pop('next_waypoint_destination')
+        elif 'next_waypoint_destination' in response:
+            response.pop('next_waypoint_destination', None)
+        if 'subtask_landmark' not in response and response.get('next_waypoint_landmark') is not None:
+            response['subtask_landmark'] = response.pop('next_waypoint_landmark')
+        elif 'next_waypoint_landmark' in response:
+            response.pop('next_waypoint_landmark', None)
         for key in (
             "current_waypoint",
             "waypoint_sequence",
+            "waypoint_chain",
             "task_progress",
-            "next_waypoint_destination",
+            "next_waypoint",
             "subtask_instruction",
+            "subtask_landmark",
         ):
             if isinstance(response.get(key), str):
                 response[key] = strip_space_type_variant_suffixes(response.get(key))
@@ -770,7 +880,7 @@ class VLMNavigationController(BaseNavigationController):
         )
         response["subtask_instruction"] = self._sanitize_subtask_instruction_text(
             response.get("subtask_instruction"),
-            response.get("next_waypoint_destination"),
+            response.get("next_waypoint"),
             response.get("next_waypoint_direction"),
             keep_view_prefix=True,
         )
@@ -789,7 +899,7 @@ class VLMNavigationController(BaseNavigationController):
         if not self.nav_visualizer:
             return
 
-        subtask_text = self.current_subtask.get('subtask_instruction', '') if self.current_subtask else f"[环视建图 {phase}]"
+        subtask_text = self.current_subtask.get('subtask_instruction', '') if self.current_subtask else f"[Lookaround {phase}]"
         distance = 0.0
         if info:
             distance = info.get('distance_to_goal', 0.0)
@@ -801,7 +911,7 @@ class VLMNavigationController(BaseNavigationController):
             instruction=self.current_instruction,
             current_subtask=subtask_text,
             distance=distance,
-            action=f"TURN_LEFT (360°环视 {look_index}/12)",
+            action=f"TURN_LEFT (360 scan {look_index}/12)",
             subtask_id=phase
         )
     
@@ -935,13 +1045,18 @@ class VLMNavigationController(BaseNavigationController):
         image_paths = lookaround_state.get("direction_paths", []) or []
         direction_names = lookaround_state.get("direction_names", []) or []
         if not image_paths:
+            failure_reason = "lookaround_failed"
+            if str(getattr(self, 'latest_lookaround_end_reason', '') or '') == "episode_done" or bool(getattr(self, 'latest_done', False)):
+                failure_reason = "episode_done_during_lookaround"
             self.latest_thinking_cycle_info = {
                 "mode": mode_key,
                 "phase": phase,
                 "thinking_dir": thinking_dir,
-                "reason": "lookaround_failed",
+                "reason": failure_reason,
             }
-            if mode_key == "initial":
+            if failure_reason == "episode_done_during_lookaround":
+                print("[WARN] Episode budget ended during lookaround; stop thinking and finalize")
+            elif mode_key == "initial":
                 print("[ERR] Initial lookaround failed, cannot start planning")
             else:
                 print("[ERR] Lookaround failed, cannot verify")
@@ -1042,17 +1157,19 @@ class VLMNavigationController(BaseNavigationController):
             'step': self.current_step,
         }
 
-    def _auto_rotate_to_current_subtask_waypoint(self) -> None:
+    def _auto_rotate_to_current_subtask_waypoint(self) -> bool:
         """Rotate to the planned waypoint heading before the action controller starts."""
         if not self.current_subtask:
-            return
+            return True
 
         next_waypoint_direction = self.current_subtask.get('next_waypoint_direction', '')
         if next_waypoint_direction and 'Front' not in next_waypoint_direction:
             success, action_sequence = self.auto_rotate_to_waypoint(next_waypoint_direction)
             if success and action_sequence:
-                self.execute_rotation_sequence(action_sequence)
+                rotation_ok = self.execute_rotation_sequence(action_sequence)
                 print()
+                return rotation_ok
+        return True
 
     def _apply_thinking_cycle_result(
         self,
@@ -1065,10 +1182,36 @@ class VLMNavigationController(BaseNavigationController):
         is_initial = mode_key == 'initial'
         task_finished = bool(response.get('global_task_finish', False))
         phase_default = 'initial' if is_initial else ''
+        previous_match_streak = int(getattr(self, 'final_goal_destination_match_streak', 0) or 0)
+        match_hit, last_chain_node, next_destination, match_streak = self._update_final_goal_destination_match_streak(response)
+
+        if match_hit:
+            print(
+                "[GoalRegionMatch] "
+                f"waypoint_chain tail='{last_chain_node}' matches destination='{next_destination}' "
+                f"| streak={match_streak}/{self.final_destination_match_autostop_streak}"
+            )
+        elif previous_match_streak > 0 and self.final_goal_destination_match_streak == 0:
+            print("[GoalRegionMatch] streak reset (final waypoint tail no longer matches destination)")
+
+        auto_finish_by_streak = (
+            not task_finished and
+            match_hit and
+            match_streak >= int(self.final_destination_match_autostop_streak)
+        )
+        if auto_finish_by_streak:
+            task_finished = True
+            response['global_task_finish'] = True
+            response['auto_task_finish_by_destination_streak'] = True
+            print(
+                "[AutoTaskComplete] "
+                f"final waypoint tail matched next destination for {match_streak} consecutive thinking cycles; "
+                "stop the task even though the planner did not set global_task_finish."
+            )
 
         if not is_initial:
             attempt_letter = chr(ord('a') + self.subtask_attempt)
-            print(f"  #{self.subtask_count}{attempt_letter} -> {response.get('next_waypoint_destination', 'N/A')} | finish={task_finished}")
+            print(f"  #{self.subtask_count}{attempt_letter} -> {self._get_next_waypoint_field(response) or 'N/A'} | finish={task_finished}")
 
         self._apply_postplanning_space_area_update(
             response=response,
@@ -1084,9 +1227,15 @@ class VLMNavigationController(BaseNavigationController):
                 self.subtask_count = 1
                 self.subtask_attempt = 0
                 self._print_subtask_info(response, is_initial=True)
-                print('[DONE] Global task complete at initial planning')
+                if auto_finish_by_streak:
+                    print('[DONE] Global task complete by final-goal destination streak at initial planning')
+                else:
+                    print('[DONE] Global task complete at initial planning')
             else:
-                print('[DONE] Global task complete')
+                if auto_finish_by_streak:
+                    print('[DONE] Global task complete by final-goal destination streak')
+                else:
+                    print('[DONE] Global task complete')
             return True
 
         self._reset_post_thinking_action_state()
@@ -1101,18 +1250,21 @@ class VLMNavigationController(BaseNavigationController):
 
         self.current_subtask = response
 
-        next_waypoint_landmark = response.get('next_waypoint_landmark', None)
+        next_waypoint_landmark = self._get_subtask_landmark_field(response)
         self._set_current_landmark_tracking(
             next_waypoint_landmark,
             fallback_sources=[
-                response.get('next_waypoint_destination'),
+                self._get_next_waypoint_field(response),
                 response.get('subtask_instruction'),
                 response.get('current_waypoint'),
             ]
         )
 
         self._print_subtask_info(response, is_initial=is_initial)
-        self._auto_rotate_to_current_subtask_waypoint()
+        rotation_ok = self._auto_rotate_to_current_subtask_waypoint()
+        if not rotation_ok and self._episode_done_cached():
+            print('[WARN] Episode ended while rotating toward the next waypoint; finalize current episode.')
+            return True
         return False
 
     def _run_thinking_controller(
@@ -1337,7 +1489,11 @@ class VLMNavigationController(BaseNavigationController):
             (action_id, action_name, should_stop, repeat_count, response)
         """
         if not self.action_executor or not self.current_subtask:
-            return None, None, True
+            return None, None, True, 1, None
+
+        if self._episode_done_cached():
+            print("[WARN] Episode already done, skip action decision")
+            return None, None, True, 1, None
         
         # 获取当前观察：使用缓存的观察或通过旋转获取
         if self.latest_obs is not None:
@@ -1345,18 +1501,22 @@ class VLMNavigationController(BaseNavigationController):
         else:
             # 如果没有缓存，执行一次右转再左转回来获取观察
             actions = [{"action": HabitatSimActions.TURN_RIGHT}]
-            outputs = self.envs.step(actions)
-            obs, _, dones, _ = [list(x) for x in zip(*outputs)]
+            step_data = self._safe_env_step(actions, context="action observation refresh turn-right")
+            if step_data is None:
+                return None, None, True, 1, None
+            obs, _, dones, _ = step_data
             if dones[0]:
                 print("[WARN] Episode ended")
-                return None, None, True
+                return None, None, True, 1, None
             
             actions = [{"action": HabitatSimActions.TURN_LEFT}]
-            outputs = self.envs.step(actions)
-            obs, _, dones, _ = [list(x) for x in zip(*outputs)]
+            step_data = self._safe_env_step(actions, context="action observation refresh turn-left")
+            if step_data is None:
+                return None, None, True, 1, None
+            obs, _, dones, _ = step_data
             if dones[0]:
                 print("[WARN] Episode ended")
-                return None, None, True
+                return None, None, True, 1, None
             obs = obs[0]
         
         # 获取最新保存的观察信息
@@ -1469,7 +1629,7 @@ class VLMNavigationController(BaseNavigationController):
         # 保存子任务信息
         subtask_info = {
             "subtask_id": self.subtask_count,
-            "next_waypoint_destination": self.current_subtask.get('next_waypoint_destination', ''),
+            "next_waypoint": self._get_next_waypoint_field(self.current_subtask),
             "subtask_instruction": self.current_subtask.get('subtask_instruction', ''),
             "start_step": self.current_step,
             "timestamp": datetime.now().isoformat()
@@ -1501,14 +1661,14 @@ class VLMNavigationController(BaseNavigationController):
 
         action_subtask_instruction = self._sanitize_subtask_instruction_text(
             self.current_subtask.get('subtask_instruction', ''),
-            self.current_subtask.get('next_waypoint_destination', ''),
+            self._get_next_waypoint_field(self.current_subtask),
             self.current_subtask.get('next_waypoint_direction', ''),
             keep_view_prefix=False,
         )
 
         # 调用VLM决策（save_dir使call_api在发送时保存压缩图片+prompt）
         result = self.action_executor.decide_action(
-            next_waypoint_destination=self.current_subtask.get('next_waypoint_destination', ''),
+            next_waypoint_destination=self._get_next_waypoint_field(self.current_subtask),
             subtask_instruction=action_subtask_instruction,
             first_person_image=fp_image,
             action_mapping=ACTION_MAPPING,
@@ -1631,6 +1791,10 @@ class VLMNavigationController(BaseNavigationController):
         subtask_steps = 0
 
         while True:
+            if self._episode_done_cached():
+                print('[WARN] Episode already done before action execution')
+                return 'complete'
+
             if self._all_action_directions_blocked(threshold_m=0.5):
                 if not self.enable_auto_retreat:
                     print(
@@ -1660,6 +1824,10 @@ class VLMNavigationController(BaseNavigationController):
 
                 if action_id is not None:
                     break
+
+                if self._episode_done_cached():
+                    print('[WARN] Episode already done while preparing the next action')
+                    return 'complete'
 
                 if retry < max_retries - 1:
                     wait = (retry + 1) * 2
@@ -1792,9 +1960,28 @@ class VLMNavigationController(BaseNavigationController):
 
         while not navigation_complete:
             if controller_mode == 'thinking':
+                if not self._has_budget_for_thinking_cycle():
+                    remaining_steps = self._get_remaining_episode_steps()
+                    print(
+                        f"[WARN] Only {remaining_steps} step(s) remain; "
+                        f"skip {thinking_mode} lookaround and stop the episode gracefully."
+                    )
+                    self.latest_thinking_cycle_info = {
+                        'mode': thinking_mode,
+                        'reason': 'insufficient_steps_for_lookaround',
+                        'remaining_steps': remaining_steps,
+                    }
+                    break
+
                 controller_mode, _response, _prompt = self._run_thinking_controller(mode=thinking_mode)
                 if controller_mode == 'failed':
                     cycle_reason = str(getattr(self, 'latest_thinking_cycle_info', {}).get('reason', '') or '')
+                    if cycle_reason in {'insufficient_steps_for_lookaround', 'episode_done_during_lookaround'}:
+                        print(
+                            f"[WARN] Stop {thinking_mode} because the episode budget ended during lookaround; "
+                            "finalize with current metrics instead of treating it as a planner error."
+                        )
+                        break
                     if thinking_mode == 'initial':
                         failure_reason = 'initial_lookaround_failed' if cycle_reason == 'lookaround_failed' else 'initial_subtask_failed'
                     else:
@@ -1847,14 +2034,16 @@ class VLMNavigationController(BaseNavigationController):
             except Exception:
                 env_metrics = {}
 
-        final_result = self._save_navigation_result(navigation_complete, total_steps, env_metrics)
+        env_success = env_metrics.get('success') if isinstance(env_metrics, dict) else None
+        final_success = bool(env_success) if env_success is not None else bool(navigation_complete)
+        final_result = self._save_navigation_result(final_success, total_steps, env_metrics)
 
         print("\n" + "=" * 60)
-        print(f"{'OK' if navigation_complete else 'FAIL'} | steps={total_steps} | subtasks={self.subtask_count}")
+        print(f"{'OK' if final_success else 'FAIL'} | steps={total_steps} | subtasks={self.subtask_count}")
         print(f"{'=' * 60}")
 
         return {
-            'success': navigation_complete,
+            'success': final_success,
             'total_steps': total_steps,
             'subtask_count': self.subtask_count,
             'detected_classes': list(self.detected_classes),
@@ -1867,16 +2056,11 @@ class VLMNavigationController(BaseNavigationController):
         保存导航结果到log/目录
         
         VLN-CE关键评估指标说明：
-        - distance_to_goal: 停止时智能体与目标点的距离(米)，越小越好
-        - success: 成功率，智能体是否在3米内停止(0或1)
-        - spl: Success weighted by Path Length，成功率与路径效率的综合指标
-               公式: success * (最短路径长度 / 实际路径长度)
-               范围[0,1]，越高表示既成功又高效
-        - path_length: 智能体实际行走的路径长度(米)
-        - oracle_success: 预言成功率，整个轨迹中是否曾经到达过目标3米内(0或1)
-                         用于评估智能体是否找到过目标但错过了停止
-        - oracle_navigation_error: 轨迹中与目标点的最小距离
-        - oracle_spl: 基于oracle_success的spl指标
+        - NE: 停止时智能体与目标点的距离(米)，对应 distance_to_goal，越小越好
+        - SR: 成功率，智能体是否在3米内停止(0或1)，对应 success
+        - SPL: Success weighted by Path Length，成功率与路径效率的综合指标
+        - OSR: Oracle Success Rate，轨迹中是否曾到达过目标3米内，对应 oracle_success
+        - nDTW: 轨迹与GT路径的一致性，范围[0,1]，越高越好
         
         Args:
             success: 是否完成任务
@@ -1906,6 +2090,7 @@ class VLMNavigationController(BaseNavigationController):
             'success': int(check_inf_nan(metrics_source.get('success', 0))),
             'spl': float(check_inf_nan(metrics_source.get('spl', 0.0))),
             'distance_to_goal': float(check_inf_nan(metrics_source.get('distance_to_goal', -1.0))),
+            'ndtw': float(check_inf_nan(metrics_source.get('ndtw', metrics_source.get('nDTW', 0.0)))),
             'path_length': float(check_inf_nan(metrics_source.get('path_length', 0.0))),
             
             # Oracle指标（带数据验证）
@@ -1921,9 +2106,17 @@ class VLMNavigationController(BaseNavigationController):
             # thinking/action counts removed - no longer tracking in memory
             'timestamp': datetime.now().isoformat()
         }
-        
+
+        result['sr'] = result['success']
+        result['osr'] = result['oracle_success']
+        result['ne'] = result['distance_to_goal']
+
         # 打印关键指标（便于实时监控）
-        print(f"\nEpisode {self.current_episode_id}: succ={result['success']} spl={result['spl']:.4f} dtg={result['distance_to_goal']:.3f}m pl={result['path_length']:.3f}m oracle={result['oracle_success']}")
+        print(
+            f"\n[Eval] Episode {self.current_episode_id}: "
+            f"NE={result['ne']:.3f}m OSR={result['osr']} SR={result['sr']} "
+            f"SPL={result['spl']:.4f} nDTW={result['ndtw']:.4f}"
+        )
         
         return self.save_manager.save_result(result)
     
@@ -1942,7 +2135,7 @@ class VLMNavigationController(BaseNavigationController):
         else:
             title = f"Subtask #{self.subtask_count}{attempt_letter}"
         
-        dest = response.get('next_waypoint_destination', 'N/A')
+        dest = self._get_next_waypoint_field(response) or 'N/A'
         instr = response.get('subtask_instruction', 'N/A')[:80]
         print(f"  {title}: {dest} | {instr}")
     

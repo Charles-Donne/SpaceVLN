@@ -14,8 +14,8 @@ from vlnce_baselines.vlm.prompts.prompts import (
 class LLMPlanner(BaseAPIClient):
     """LLM规划器 - 负责子任务生成和验证"""
     
-    REQUIRED_FIELDS_INITIAL = ['current_waypoint', 'next_waypoint_direction', 'next_waypoint_destination', 'subtask_instruction']
-    REQUIRED_FIELDS_VERIFY = ['current_waypoint', 'next_waypoint_direction', 'next_waypoint_destination', 'subtask_instruction']
+    REQUIRED_FIELDS_INITIAL = ['current_waypoint', 'next_waypoint_direction', 'next_waypoint', 'subtask_instruction']
+    REQUIRED_FIELDS_VERIFY = ['current_waypoint', 'next_waypoint_direction', 'next_waypoint', 'subtask_instruction']
     
     def __init__(self, config_path: str = "vlnce_baselines/config/api/vlm_api_config.yaml", 
                  action_space: str = None):
@@ -40,6 +40,14 @@ class LLMPlanner(BaseAPIClient):
     
     def validate_response(self, response: Dict, mode: str = 'initial') -> bool:
         """验证响应字段"""
+        if not response:
+            return False
+
+        if 'next_waypoint' not in response and response.get('next_waypoint_destination') is not None:
+            response['next_waypoint'] = response.get('next_waypoint_destination')
+        if 'subtask_landmark' not in response and response.get('next_waypoint_landmark') is not None:
+            response['subtask_landmark'] = response.get('next_waypoint_landmark')
+
         required = self.REQUIRED_FIELDS_INITIAL if mode == 'initial' else self.REQUIRED_FIELDS_VERIFY
         
         # 验证基础字段
@@ -152,7 +160,7 @@ class LLMPlanner(BaseAPIClient):
             return None, False
         
         # 获取当前子任务信息
-        subtask_destination = current_subtask.get('next_waypoint_destination', 'Unknown')
+        subtask_destination = current_subtask.get('next_waypoint', current_subtask.get('next_waypoint_destination', 'Unknown'))
         subtask_instruction = current_subtask.get('subtask_instruction', 'Unknown')
         # 格式化检测到的landmark信息
         landmarks_str = None

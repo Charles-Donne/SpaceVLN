@@ -8,24 +8,11 @@ SpaceVLN 结果分析脚本
     python analyze_results.py --path data/vlm_navigation --save
     
 指标说明:
-1. Distance to Goal: 智能体最后位置与目标点的测地线距离(geodesic distance)
-   - 来源: Habitat DistanceToGoal measure
-   - 计算: sim.geodesic_distance(agent_position, goal_positions)
-   
-2. Success: 是否在SUCCESS_DISTANCE(3米)内成功到达
-   - 来源: Habitat Success measure  
-   - 计算: distance_to_goal < SUCCESS_DISTANCE
-   
-3. SPL (Success weighted by Path Length):
-   - 公式: SPL = success * (shortest_path_length / max(actual_path_length, shortest_path_length))
-   - 如果成功但绕路，SPL会降低
-   - 如果失败，SPL = 0
-   
-4. Oracle Success: 整个轨迹中是否曾经进入过3米内
-   - 计算: min(所有step的distance_to_goal) < SUCCESS_DISTANCE
-   
-5. Oracle Navigation Error: 轨迹中与目标的最小距离
-   - 计算: min(所有step的distance_to_goal)
+1. NE: Navigation Error，最终距离目标的测地线距离，越低越好
+2. OSR: Oracle Success Rate，轨迹中是否曾进入目标阈值范围
+3. SR: Success Rate，最终停止位置是否成功
+4. SPL: Success weighted by Path Length
+5. nDTW: 轨迹与GT路径的一致性，越高越好
 """
 import os
 import argparse
@@ -33,7 +20,6 @@ import json
 import math
 import csv
 from typing import List, Dict, Any
-from datetime import datetime
 
 
 def check_inf_nan(value):
@@ -42,6 +28,14 @@ def check_inf_nan(value):
         if math.isinf(value) or math.isnan(value):
             return 0
     return value
+
+
+def get_metric(result: Dict[str, Any], *keys: str, default: Any):
+    """按优先级读取指标，兼容新旧字段名。"""
+    for key in keys:
+        if key in result and result[key] is not None:
+            return result[key]
+    return default
 
 
 def load_results(results_dir: str) -> List[Dict[str, Any]]:
@@ -89,56 +83,26 @@ def compute_metrics(results: List[Dict]) -> Dict[str, Any]:
     
     n = len(results)
     
-    # 提取所有指标（带数据验证）
-    success_list = [check_inf_nan(r.get('success', 0)) for r in results]
-    spl_list = [check_inf_nan(r.get('spl', 0.0)) for r in results]
-    dtg_list = [check_inf_nan(r.get('distance_to_goal', -1)) for r in results]
-    path_length_list = [check_inf_nan(r.get('path_length', 0.0)) for r in results]
-    steps_list = [check_inf_nan(r.get('total_steps', 0)) for r in results]
-    
-    oracle_success_list = [check_inf_nan(r.get('oracle_success', 0)) for r in results]
-    oracle_error_list = [check_inf_nan(r.get('oracle_navigation_error', float('inf'))) for r in results]
-    oracle_spl_list = [check_inf_nan(r.get('oracle_spl', 0.0)) for r in results]
-    
-    subtask_list = [check_inf_nan(r.get('subtask_count', 0)) for r in results]
-    
-    # 过滤有效值（距离 >= 0）
-    valid_dtg = [d for d in dtg_list if d >= 0]
-    valid_oracle_error = [e for e in oracle_error_list if e != float('inf') and e >= 0]
-    
-    # 计算成功率
-    success_count = sum(success_list)
-    success_rate = success_count / n if n > 0 else 0.0
-    
-    oracle_success_count = sum(oracle_success_list)
-    oracle_success_rate = oracle_success_count / n if n > 0 else 0.0
-    
-    # 计算平均SPL
+    ne_list = [check_inf_nan(get_metric(r, 'ne', 'distance_to_goal', default=-1.0)) for r in results]
+    osr_list = [check_inf_nan(get_metric(r, 'osr', 'oracle_success', default=0)) for r in results]
+    sr_list = [check_inf_nan(get_metric(r, 'sr', 'success', default=0)) for r in results]
+    spl_list = [check_inf_nan(get_metric(r, 'spl', default=0.0)) for r in results]
+    ndtw_list = [check_inf_nan(get_metric(r, 'ndtw', 'nDTW', default=0.0)) for r in results]
+
+    valid_ne = [value for value in ne_list if value >= 0]
+    sr_count = sum(sr_list)
+    osr_count = sum(osr_list)
     avg_spl = sum(spl_list) / n if n > 0 else 0.0
-    avg_oracle_spl = sum(oracle_spl_list) / n if n > 0 else 0.0
-    
-    # 计算平均距离
-    avg_dtg = sum(valid_dtg) / len(valid_dtg) if valid_dtg else -1
-    avg_oracle_error = sum(valid_oracle_error) / len(valid_oracle_error) if valid_oracle_error else -1
-    
-    # 计算平均路径长度和步数
-    avg_path_length = sum(path_length_list) / n if n > 0 else 0.0
-    avg_steps = sum(steps_list) / n if n > 0 else 0.0
-    avg_subtasks = sum(subtask_list) / n if n > 0 else 0.0
-    
+
     metrics = {
         'total_episodes': n,
-        'success_count': success_count,
-        'success_rate': success_rate,
-        'oracle_success_count': oracle_success_count,
-        'oracle_success_rate': oracle_success_rate,
+        'avg_ne': sum(valid_ne) / len(valid_ne) if valid_ne else -1.0,
+        'osr_count': osr_count,
+        'avg_osr': osr_count / n if n > 0 else 0.0,
+        'sr_count': sr_count,
+        'avg_sr': sr_count / n if n > 0 else 0.0,
         'avg_spl': avg_spl,
-        'avg_oracle_spl': avg_oracle_spl,
-        'avg_distance_to_goal': avg_dtg,
-        'avg_oracle_navigation_error': avg_oracle_error,
-        'avg_path_length': avg_path_length,
-        'avg_steps': avg_steps,
-        'avg_subtasks': avg_subtasks,
+        'avg_ndtw': sum(ndtw_list) / n if n > 0 else 0.0,
         'detailed_results': results  # 保留详细数据用于调试
     }
     
@@ -152,21 +116,13 @@ def print_summary(metrics: Dict[str, Any]):
     print("\n" + "="*80)
     print("📊 SpaceVLN 评估结果汇总")
     print("="*80)
-    
-    print(f"\n🎯 核心指标:")
-    print(f"  Success rate:       {metrics['success_count']}/{n} ({metrics['success_rate']:.3f})")
-    print(f"  Oracle success rate: {metrics['oracle_success_count']}/{n} ({metrics['oracle_success_rate']:.3f})")
-    print(f"  SPL:                {metrics['avg_spl']:.3f}")
-    print(f"  Oracle SPL:         {metrics['avg_oracle_spl']:.3f}")
-    
-    print(f"\n📏 距离指标:")
-    print(f"  Distance to goal:           {metrics['avg_distance_to_goal']:.3f}m")
-    print(f"  Oracle navigation error:    {metrics['avg_oracle_navigation_error']:.3f}m")
-    print(f"  Path length:                {metrics['avg_path_length']:.3f}m")
-    
-    print(f"\n⚙️  执行统计:")
-    print(f"  Average steps:     {metrics['avg_steps']:.1f}")
-    print(f"  Average subtasks:  {metrics['avg_subtasks']:.1f}")
+
+    print(f"\n🎯 统一指标:")
+    print(f"  NE:    {metrics['avg_ne']:.3f}m")
+    print(f"  OSR:   {metrics['osr_count']}/{n} ({metrics['avg_osr']:.3f})")
+    print(f"  SR:    {metrics['sr_count']}/{n} ({metrics['avg_sr']:.3f})")
+    print(f"  SPL:   {metrics['avg_spl']:.3f}")
+    print(f"  nDTW:  {metrics['avg_ndtw']:.3f}")
     
     print(f"\n{'='*80}")
 
@@ -178,48 +134,46 @@ def print_debug_info(metrics: Dict[str, Any]):
     
     results = metrics['detailed_results']
     print(f"\nEpisode详情:")
-    print(f"{'ID':<6} {'Success':<8} {'DTG(m)':<10} {'SPL':<8} {'Path(m)':<10} {'Steps':<6}")
-    print(f"{'-'*60}")
+    print(f"{'ID':<6} {'NE(m)':<10} {'OSR':<6} {'SR':<6} {'SPL':<8} {'nDTW':<8}")
+    print(f"{'-'*56}")
     
     for r in results:
         ep_id = r.get('episode_id', '?')
-        success = r.get('success', 0)
-        dtg = r.get('distance_to_goal', -1)
-        spl = r.get('spl', 0.0)
-        path = r.get('path_length', 0.0)
-        steps = r.get('total_steps', 0)
+        ne = check_inf_nan(get_metric(r, 'ne', 'distance_to_goal', default=-1.0))
+        osr = check_inf_nan(get_metric(r, 'osr', 'oracle_success', default=0))
+        sr = check_inf_nan(get_metric(r, 'sr', 'success', default=0))
+        spl = check_inf_nan(get_metric(r, 'spl', default=0.0))
+        ndtw = check_inf_nan(get_metric(r, 'ndtw', 'nDTW', default=0.0))
         
-        print(f"{ep_id:<6} {success:<8} {dtg:<10.3f} {spl:<8.4f} {path:<10.3f} {steps:<6}")
+        print(f"{ep_id:<6} {ne:<10.3f} {osr:<6} {sr:<6} {spl:<8.4f} {ndtw:<8.4f}")
     
     # 检查指标异常
     print(f"\n⚠️  异常检测:")
     for r in results:
         ep_id = r.get('episode_id', '?')
-        success = r.get('success', 0)
-        dtg = r.get('distance_to_goal', -1)
-        spl = r.get('spl', 0.0)
-        oracle_success = r.get('oracle_success', 0)
-        oracle_error = r.get('oracle_navigation_error', float('inf'))
-        
-        # 检查1: Success=1但DTG>3米 
-        if success == 1 and dtg > 3.0:
-            print(f"  ❌ Episode {ep_id}: Success=1 但 DTG={dtg:.3f}m > 3m (不应该成功)")
-        
-        # 检查2: Success=0但DTG<3米
-        if success == 0 and 0 <= dtg < 3.0:
-            print(f"  ⚠️  Episode {ep_id}: Success=0 但 DTG={dtg:.3f}m < 3m (应该成功)")
-        
-        # 检查3: SPL计算异常
-        if success == 0 and spl > 0:
-            print(f"  ❌ Episode {ep_id}: Success=0 但 SPL={spl:.4f} > 0 (不应该有SPL)")
-        
-        # 检查4: Oracle异常
-        if oracle_success == 1 and oracle_error > 3.0:
-            print(f"  ❌ Episode {ep_id}: Oracle Success=1 但 Oracle Error={oracle_error:.3f}m > 3m")
-        
-        # 检查5: 最终距离异常（DTG应该是停止时的距离）
-        if dtg < 0:
-            print(f"  ⚠️  Episode {ep_id}: DTG={dtg} < 0 (距离数据无效)")
+        ne = check_inf_nan(get_metric(r, 'ne', 'distance_to_goal', default=-1.0))
+        osr = check_inf_nan(get_metric(r, 'osr', 'oracle_success', default=0))
+        sr = check_inf_nan(get_metric(r, 'sr', 'success', default=0))
+        spl = check_inf_nan(get_metric(r, 'spl', default=0.0))
+        ndtw = check_inf_nan(get_metric(r, 'ndtw', 'nDTW', default=0.0))
+
+        if sr == 1 and ne > 3.0:
+            print(f"  ❌ Episode {ep_id}: SR=1 但 NE={ne:.3f}m > 3m")
+
+        if sr == 0 and 0 <= ne < 3.0:
+            print(f"  ⚠️  Episode {ep_id}: SR=0 但 NE={ne:.3f}m < 3m")
+
+        if sr == 0 and spl > 0:
+            print(f"  ❌ Episode {ep_id}: SR=0 但 SPL={spl:.4f} > 0")
+
+        if osr < sr:
+            print(f"  ❌ Episode {ep_id}: OSR={osr} < SR={sr}，这在定义上不成立")
+
+        if not 0.0 <= ndtw <= 1.0:
+            print(f"  ⚠️  Episode {ep_id}: nDTW={ndtw:.4f} 超出[0,1]范围")
+
+        if ne < 0:
+            print(f"  ⚠️  Episode {ep_id}: NE={ne} < 0 (距离数据无效)")
     
     print(f"{'='*80}")
 
@@ -233,20 +187,12 @@ def save_summary(metrics: Dict[str, Any], output_path: str):
 📊 SpaceVLN 评估结果汇总
 ================================================================================
 
-🎯 核心指标:
-  Success rate:       {metrics['success_count']}/{n} ({metrics['success_rate']:.3f})
-  Oracle success rate: {metrics['oracle_success_count']}/{n} ({metrics['oracle_success_rate']:.3f})
-  SPL:                {metrics['avg_spl']:.3f}
-  Oracle SPL:         {metrics['avg_oracle_spl']:.3f}
-
-📏 距离指标:
-  Distance to goal:           {metrics['avg_distance_to_goal']:.3f}m
-  Oracle navigation error:    {metrics['avg_oracle_navigation_error']:.3f}m
-  Path length:                {metrics['avg_path_length']:.3f}m
-
-⚙️  执行统计:
-  Average steps:     {metrics['avg_steps']:.1f}
-  Average subtasks:  {metrics['avg_subtasks']:.1f}
+🎯 统一指标:
+  NE:    {metrics['avg_ne']:.3f}m
+  OSR:   {metrics['osr_count']}/{n} ({metrics['avg_osr']:.3f})
+  SR:    {metrics['sr_count']}/{n} ({metrics['avg_sr']:.3f})
+  SPL:   {metrics['avg_spl']:.3f}
+  nDTW:  {metrics['avg_ndtw']:.3f}
 
 ================================================================================
 
@@ -277,18 +223,11 @@ def save_episode_tables(results: List[Dict[str, Any]], metrics: Dict[str, Any], 
     sorted_results = sorted(results, key=lambda item: int(item.get("episode_id", -1)))
     headers = [
         "episode_id",
-        "success",
-        "spl",
-        "distance_to_goal",
-        "path_length",
-        "total_steps",
-        "subtask_count",
-        "oracle_success",
-        "oracle_navigation_error",
-        "oracle_spl",
-        "success_rate",
-        "instruction",
-        "timestamp",
+        "NE",
+        "OSR",
+        "SR",
+        "SPL",
+        "nDTW",
     ]
 
     with open(csv_path, "w", encoding="utf-8", newline="") as f:
@@ -297,74 +236,51 @@ def save_episode_tables(results: List[Dict[str, Any]], metrics: Dict[str, Any], 
         for item in sorted_results:
             writer.writerow({
                 "episode_id": item.get("episode_id", ""),
-                "success": item.get("success", 0),
-                "spl": _format_metric_value(check_inf_nan(item.get("spl", 0.0)), 4),
-                "distance_to_goal": _format_metric_value(check_inf_nan(item.get("distance_to_goal", -1.0)), 3),
-                "path_length": _format_metric_value(check_inf_nan(item.get("path_length", 0.0)), 3),
-                "total_steps": item.get("total_steps", 0),
-                "subtask_count": item.get("subtask_count", 0),
-                "oracle_success": item.get("oracle_success", 0),
-                "oracle_navigation_error": _format_metric_value(check_inf_nan(item.get("oracle_navigation_error", -1.0)), 3),
-                "oracle_spl": _format_metric_value(check_inf_nan(item.get("oracle_spl", 0.0)), 4),
-                "success_rate": "",
-                "instruction": item.get("instruction", ""),
-                "timestamp": item.get("timestamp", ""),
+                "NE": _format_metric_value(check_inf_nan(get_metric(item, "ne", "distance_to_goal", default=-1.0)), 3),
+                "OSR": str(int(check_inf_nan(get_metric(item, "osr", "oracle_success", default=0)))),
+                "SR": str(int(check_inf_nan(get_metric(item, "sr", "success", default=0)))),
+                "SPL": _format_metric_value(check_inf_nan(get_metric(item, "spl", default=0.0)), 4),
+                "nDTW": _format_metric_value(check_inf_nan(get_metric(item, "ndtw", "nDTW", default=0.0)), 4),
             })
         writer.writerow({
-            "episode_id": "TOTAL",
-            "success": f"{metrics['success_count']}/{metrics['total_episodes']}",
-            "spl": _format_metric_value(metrics["avg_spl"], 4),
-            "distance_to_goal": _format_metric_value(metrics["avg_distance_to_goal"], 3),
-            "path_length": _format_metric_value(metrics["avg_path_length"], 3),
-            "total_steps": _format_metric_value(metrics["avg_steps"], 1),
-            "subtask_count": _format_metric_value(metrics["avg_subtasks"], 1),
-            "oracle_success": f"{metrics['oracle_success_count']}/{metrics['total_episodes']}",
-            "oracle_navigation_error": _format_metric_value(metrics["avg_oracle_navigation_error"], 3),
-            "oracle_spl": _format_metric_value(metrics["avg_oracle_spl"], 4),
-            "success_rate": _format_metric_value(metrics["success_rate"], 4),
-            "instruction": "best result kept per episode",
-            "timestamp": datetime.now().isoformat(),
+            "episode_id": "AVERAGE",
+            "NE": _format_metric_value(metrics["avg_ne"], 3),
+            "OSR": _format_metric_value(metrics["avg_osr"], 4),
+            "SR": _format_metric_value(metrics["avg_sr"], 4),
+            "SPL": _format_metric_value(metrics["avg_spl"], 4),
+            "nDTW": _format_metric_value(metrics["avg_ndtw"], 4),
         })
 
     md_lines = [
         "# Episode Results",
         "",
-        "| Episode | Success | SPL | DTG(m) | Path(m) | Steps | Subtasks | Oracle | OracleErr(m) | Oracle SPL |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| Episode | NE(m) | OSR | SR | SPL | nDTW |",
+        "| --- | --- | --- | --- | --- | --- |",
     ]
     for item in sorted_results:
         md_lines.append(
-            "| {episode} | {success} | {spl} | {dtg} | {path} | {steps} | {subtasks} | {oracle_success} | {oracle_err} | {oracle_spl} |".format(
+            "| {episode} | {ne} | {osr} | {sr} | {spl} | {ndtw} |".format(
                 episode=item.get("episode_id", ""),
-                success=item.get("success", 0),
-                spl=_format_metric_value(check_inf_nan(item.get("spl", 0.0)), 4),
-                dtg=_format_metric_value(check_inf_nan(item.get("distance_to_goal", -1.0)), 3),
-                path=_format_metric_value(check_inf_nan(item.get("path_length", 0.0)), 3),
-                steps=item.get("total_steps", 0),
-                subtasks=item.get("subtask_count", 0),
-                oracle_success=item.get("oracle_success", 0),
-                oracle_err=_format_metric_value(check_inf_nan(item.get("oracle_navigation_error", -1.0)), 3),
-                oracle_spl=_format_metric_value(check_inf_nan(item.get("oracle_spl", 0.0)), 4),
+                ne=_format_metric_value(check_inf_nan(get_metric(item, "ne", "distance_to_goal", default=-1.0)), 3),
+                osr=str(int(check_inf_nan(get_metric(item, "osr", "oracle_success", default=0)))),
+                sr=str(int(check_inf_nan(get_metric(item, "sr", "success", default=0)))),
+                spl=_format_metric_value(check_inf_nan(get_metric(item, "spl", default=0.0)), 4),
+                ndtw=_format_metric_value(check_inf_nan(get_metric(item, "ndtw", "nDTW", default=0.0)), 4),
             )
         )
     md_lines.extend([
         "",
-        "## Summary",
+        "## Average",
         "",
-        "| Total Episodes | Success Rate | Avg SPL | Avg DTG(m) | Avg Path(m) | Avg Steps | Avg Subtasks | Oracle Success Rate | Avg Oracle SPL |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-        "| {total} | {success_count}/{total} ({success_rate}) | {avg_spl} | {avg_dtg} | {avg_path} | {avg_steps} | {avg_subtasks} | {oracle_count}/{total} ({oracle_rate}) | {avg_oracle_spl} |".format(
+        "| Episodes | NE(m) | OSR | SR | SPL | nDTW |",
+        "| --- | --- | --- | --- | --- | --- |",
+        "| {total} | {avg_ne} | {avg_osr} | {avg_sr} | {avg_spl} | {avg_ndtw} |".format(
             total=metrics["total_episodes"],
-            success_count=metrics["success_count"],
-            success_rate=_format_metric_value(metrics["success_rate"], 4),
+            avg_ne=_format_metric_value(metrics["avg_ne"], 3),
+            avg_osr=_format_metric_value(metrics["avg_osr"], 4),
+            avg_sr=_format_metric_value(metrics["avg_sr"], 4),
             avg_spl=_format_metric_value(metrics["avg_spl"], 4),
-            avg_dtg=_format_metric_value(metrics["avg_distance_to_goal"], 3),
-            avg_path=_format_metric_value(metrics["avg_path_length"], 3),
-            avg_steps=_format_metric_value(metrics["avg_steps"], 1),
-            avg_subtasks=_format_metric_value(metrics["avg_subtasks"], 1),
-            oracle_count=metrics["oracle_success_count"],
-            oracle_rate=_format_metric_value(metrics["oracle_success_rate"], 4),
-            avg_oracle_spl=_format_metric_value(metrics["avg_oracle_spl"], 4),
+            avg_ndtw=_format_metric_value(metrics["avg_ndtw"], 4),
         ),
         "",
         "> Note: repeated evaluation of the same episode keeps only the better result in `log/episode_XXX.json`.",

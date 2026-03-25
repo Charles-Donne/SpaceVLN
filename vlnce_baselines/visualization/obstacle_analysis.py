@@ -1,4 +1,4 @@
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -34,6 +34,10 @@ PANORAMA_DIRECTIONS = {
     "angle_300": -30,
     "angle_330": -60,
 }
+
+DEFAULT_RAYCAST_FOOTPRINT_RADIUS_PX = 3
+DEFAULT_RAYCAST_FOOTPRINT_SAMPLE_COUNT = 9
+DEFAULT_RAYCAST_FOOTPRINT_PERCENTILE = 60.0
 
 
 def build_rotated_obstacle_mask(
@@ -220,6 +224,42 @@ def raycast_on_rotated_map(
     return max_distance_m + 0.1
 
 
+def _build_footprint_start_offsets(
+    radius_px: int,
+    sample_count: Optional[int] = None,
+) -> List[Tuple[int, int]]:
+    radius_px = max(0, int(radius_px))
+    if radius_px <= 0:
+        return [(0, 0)]
+
+    candidate_offsets: List[Tuple[int, int]] = []
+    for dy in range(-radius_px, radius_px + 1):
+        for dx in range(-radius_px, radius_px + 1):
+            if dx * dx + dy * dy > radius_px * radius_px:
+                continue
+            candidate_offsets.append((dx, dy))
+
+    candidate_offsets.sort(key=lambda item: item[0] * item[0] + item[1] * item[1])
+    if len(candidate_offsets) <= 1:
+        return candidate_offsets
+
+    center = (0, 0)
+    other_offsets = [offset for offset in candidate_offsets if offset != center]
+    target_sample_count = max(
+        1,
+        int(sample_count or DEFAULT_RAYCAST_FOOTPRINT_SAMPLE_COUNT),
+    )
+    extra_needed = max(0, min(len(other_offsets), target_sample_count - 1))
+    if extra_needed <= 0:
+        return [center]
+
+    rng = np.random.default_rng()
+    selected_indices = rng.choice(len(other_offsets), size=extra_needed, replace=False)
+    sampled_offsets = [other_offsets[int(idx)] for idx in np.atleast_1d(selected_indices).tolist()]
+    sampled_offsets.sort(key=lambda item: item[0] * item[0] + item[1] * item[1])
+    return [center] + sampled_offsets
+
+
 def format_distance(distance_m: Optional[float]) -> str:
     if distance_m is None:
         return "Unknown"
@@ -235,24 +275,48 @@ def calculate_distances_for_directions(
     directions: Dict[str, float],
     center_x: int = 240,
     center_y: int = 240,
+    footprint_radius_px: int = DEFAULT_RAYCAST_FOOTPRINT_RADIUS_PX,
+    footprint_sample_count: int = DEFAULT_RAYCAST_FOOTPRINT_SAMPLE_COUNT,
+    footprint_percentile: float = DEFAULT_RAYCAST_FOOTPRINT_PERCENTILE,
 ) -> Dict[str, str]:
     if obstacle_mask_rotated.dtype != bool:
         obstacle_mask_rotated = obstacle_mask_rotated > 127
 
+    start_offsets = _build_footprint_start_offsets(
+        radius_px=footprint_radius_px,
+        sample_count=footprint_sample_count,
+    )
     distances: Dict[str, str] = {}
     for key, angle in directions.items():
-        ray_distances = []
-        for offset in (-5, -2.5, 0, 2.5, 5):
-            dist_m = raycast_on_rotated_map(
-                obstacle_mask_rotated,
-                center_x,
-                center_y,
-                angle + offset,
-            )
-            if dist_m is not None:
-                ray_distances.append(dist_m)
+        footprint_distances = []
+        for start_dx, start_dy in start_offsets:
+            start_x = int(center_x + start_dx)
+            start_y = int(center_y + start_dy)
+            if not (
+                0 <= start_x < obstacle_mask_rotated.shape[1] and
+                0 <= start_y < obstacle_mask_rotated.shape[0]
+            ):
+                continue
 
-        distances[key] = format_distance(float(np.median(ray_distances))) if ray_distances else "Unknown"
+            ray_distances = []
+            for offset in (-5, -2.5, 0, 2.5, 5):
+                dist_m = raycast_on_rotated_map(
+                    obstacle_mask_rotated,
+                    start_x,
+                    start_y,
+                    angle + offset,
+                )
+                if dist_m is not None:
+                    ray_distances.append(dist_m)
+
+            if ray_distances:
+                footprint_distances.append(float(np.median(ray_distances)))
+
+        if footprint_distances:
+            percentile = float(np.clip(footprint_percentile, 0.0, 100.0))
+            distances[key] = format_distance(float(np.percentile(footprint_distances, percentile)))
+        else:
+            distances[key] = "Unknown"
     return distances
 
 

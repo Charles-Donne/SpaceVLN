@@ -59,6 +59,16 @@ class ObservationCollector:
         self.maps_dir = os.path.join(episode_dir, "maps")
         os.makedirs(self.maps_dir, exist_ok=True)
         self.video_frames = []
+
+    @staticmethod
+    def _safe_overlay_text(text: Optional[str], fallback: str) -> str:
+        """Keep overlay text ASCII-safe for OpenCV rendering."""
+        try:
+            safe_text = str(text or "").encode('ascii', 'ignore').decode('ascii')
+        except Exception:
+            safe_text = ""
+        safe_text = safe_text.strip()
+        return safe_text if safe_text else fallback
     
     def save_direction_image(self, rgb: np.ndarray, direction_idx: int, 
                              prefix: str = "observe") -> str:
@@ -205,11 +215,13 @@ class ObservationCollector:
         max_width = w - 20
         
         # 第1行：Step + Distance + Action
-        line1 = f"Step: {step}  |  Distance: {distance:.2f}m  |  Action: {action}"
+        action_safe = self._safe_overlay_text(action, "[Action]")
+        line1 = f"Step: {step}  |  Distance: {distance:.2f}m  |  Action: {action_safe}"
         cv2.putText(text_area, line1, (10, 25), font, font_scale, color, thickness)
         
         # 第2行：Instruction（可能需要截断）
-        instr_text = f"Instruction: {instruction}"
+        instruction_safe = self._safe_overlay_text(instruction, "[Instruction]")
+        instr_text = f"Instruction: {instruction_safe}"
         if len(instr_text) > 100:
             instr_text = instr_text[:100] + "..."
         # 自动换行处理
@@ -221,7 +233,8 @@ class ObservationCollector:
         
         # 第3行：Subtask（如果有）
         if current_subtask:
-            subtask_text = f"Subtask: {current_subtask}"
+            subtask_safe = self._safe_overlay_text(current_subtask, "[Subtask]")
+            subtask_text = f"Subtask: {subtask_safe}"
             if len(subtask_text) > 80:
                 subtask_text = subtask_text[:80] + "..."
             cv2.putText(text_area, subtask_text, (10, y), font, font_scale * 0.9, 

@@ -52,6 +52,16 @@ class NavigationVisualizer:
         self.visualization_dir = os.path.join(episode_dir, "visualization")
         os.makedirs(self.visualization_dir, exist_ok=True)
         self.video_frames = []
+
+    @staticmethod
+    def _safe_overlay_text(text: Optional[str], fallback: str) -> str:
+        """Keep overlay text ASCII-safe for OpenCV rendering."""
+        try:
+            safe_text = str(text or "").encode('ascii', 'ignore').decode('ascii')
+        except Exception:
+            safe_text = ""
+        safe_text = safe_text.strip()
+        return safe_text if safe_text else fallback
     
     def save_step_visualization(self,
                                 observations: Dict,
@@ -165,18 +175,14 @@ class NavigationVisualizer:
         y_offset = 25
         
         # 第1行：步数、距离、动作（青色高亮）
-        metrics_text = f"Step: {step} | Distance: {distance:.2f}m | Action: {action}"
+        action_safe = self._safe_overlay_text(action, "[Action]")
+        metrics_text = f"Step: {step} | Distance: {distance:.2f}m | Action: {action_safe}"
         cv2.putText(text_area, metrics_text, (10, y_offset), font, font_scale, (0, 255, 255), thickness)
         y_offset += 30
         
         # 第2-3行：全局指令（白色，最多2行）
         # 处理中文字符：先编码为ASCII可表示的形式
-        try:
-            instruction_safe = instruction.encode('ascii', 'ignore').decode('ascii')
-            if not instruction_safe.strip():  # 如果全是中文，用原文但不显示
-                instruction_safe = "[Non-ASCII Instruction]"
-        except:
-            instruction_safe = "[Instruction]"
+        instruction_safe = self._safe_overlay_text(instruction, "[Instruction]")
         
         instruction_lines = self._wrap_text(instruction_safe, w - 20, font, font_scale)
         for line in instruction_lines[:2]:
@@ -186,12 +192,7 @@ class NavigationVisualizer:
         # 第4行：当前子任务（绿色，最多1行）
         if current_subtask:
             y_offset += 5
-            try:
-                subtask_safe = current_subtask.encode('ascii', 'ignore').decode('ascii')
-                if not subtask_safe.strip():
-                    subtask_safe = "[Non-ASCII Subtask]"
-            except:
-                subtask_safe = "[Subtask]"
+            subtask_safe = self._safe_overlay_text(current_subtask, "[Subtask]")
             
             subtask_text = f"Subtask: {subtask_safe}"
             subtask_lines = self._wrap_text(subtask_text, w - 20, font, font_scale)

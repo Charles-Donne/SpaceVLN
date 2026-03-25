@@ -89,6 +89,7 @@ class BaseNavigationController:
         self.latest_obs = None
         self.latest_info = None
         self.latest_done = False
+        self.latest_lookaround_end_reason = ""
         self.latest_depth_meters = None
         self.latest_global_map = None
         self.latest_local_map = None
@@ -322,6 +323,80 @@ class BaseNavigationController:
         
         print(f"Instruction: {self.current_instruction[:100]}{'...' if len(self.current_instruction) > 100 else ''}")
 
+    def _episode_done_cached(self) -> bool:
+        """Return whether the current episode has already terminated locally."""
+        if bool(getattr(self, 'latest_done', False)):
+            return True
+        info = getattr(self, 'latest_info', None)
+        return bool(isinstance(info, dict) and info.get('done', False))
+
+    def _terminal_step_result(self) -> Dict[str, Any]:
+        """Build a consistent terminal result when a step is skipped after done."""
+        info = dict(self.latest_info) if isinstance(self.latest_info, dict) else {}
+        info['done'] = True
+        return {
+            'obs': self.latest_obs,
+            'reward': 0.0,
+            'done': True,
+            'info': info,
+            'detected_classes': list(self.detected_classes),
+        }
+
+    def _cache_env_step_outcome(
+        self,
+        obs: List[Any],
+        dones: List[Any],
+        infos: List[Any],
+    ) -> Dict[str, Any]:
+        """Cache the latest env transition and normalize the info payload."""
+        if obs:
+            self.latest_obs = obs[0]
+
+        done_flag = bool(dones[0]) if dones else False
+        self.latest_done = done_flag
+
+        cached_info: Dict[str, Any] = {}
+        if infos and infos[0] is not None:
+            if isinstance(infos[0], dict):
+                cached_info = dict(infos[0])
+            else:
+                try:
+                    cached_info = dict(infos[0])
+                except Exception:
+                    cached_info = {"raw_info": infos[0]}
+        cached_info['done'] = done_flag
+        self.latest_info = cached_info
+
+        if infos:
+            infos[0] = cached_info
+        return cached_info
+
+    def _safe_env_step(
+        self,
+        actions: List[Any],
+        *,
+        context: str,
+    ) -> Optional[Tuple[List[Any], List[Any], List[Any], List[Any]]]:
+        """Step the vector env only when the episode is still active."""
+        if self._episode_done_cached():
+            print(f"[WARN] Episode already done, skip {context}")
+            return None
+
+        try:
+            outputs = self.envs.step(actions)
+        except AssertionError as exc:
+            self.latest_done = True
+            self.latest_lookaround_end_reason = "episode_done"
+            if not isinstance(self.latest_info, dict):
+                self.latest_info = {}
+            self.latest_info['done'] = True
+            print(f"[WARN] Episode already done during {context}: {exc}")
+            return None
+
+        obs, rewards, dones, infos = [list(x) for x in zip(*outputs)]
+        self._cache_env_step_outcome(obs, dones, infos)
+        return obs, rewards, dones, infos
+
     def _store_latest_map_paths(self, paths: Optional[Dict[str, Any]]) -> None:
         if not paths:
             return
@@ -515,8 +590,12 @@ class BaseNavigationController:
         
         for step in range(12):
             actions = [{"action": HabitatSimActions.TURN_LEFT}]
-            outputs = self.envs.step(actions)
-            obs, _, dones, _ = [list(x) for x in zip(*outputs)]
+            step_data = self._safe_env_step(actions, context=f"lookaround scan {step + 1}/12")
+            if step_data is None:
+                print(" [WARN] Episode ended early")
+                self.current_step = step
+                return
+            obs, _, dones, _ = step_data
             
             if dones[0]:
                 print(" [WARN] Episode ended early")
@@ -559,6 +638,7 @@ class BaseNavigationController:
         from habitat.sims.habitat_simulator.actions import HabitatSimActions
 
         debug_save_renderings = bool(getattr(self.config.MAP, 'DEBUG_SAVE_RENDERINGS', True))
+        self.latest_lookaround_end_reason = ""
         lookaround_images: List[np.ndarray] = []
         lookaround_depths: List[Optional[np.ndarray]] = []
         final_map_state = None
@@ -570,10 +650,19 @@ class BaseNavigationController:
             self.current_step += 1
             look_step = self.current_step
 
-            outputs = self.envs.step([{"action": HabitatSimActions.TURN_LEFT}])
-            obs, _, dones, infos = [list(x) for x in zip(*outputs)]
+            step_data = self._safe_env_step(
+                [{"action": HabitatSimActions.TURN_LEFT}],
+                context=f"lookaround step {look_index}/12",
+            )
+            if step_data is None:
+                self.current_step = max(0, self.current_step - 1)
+                self.latest_lookaround_end_reason = "episode_done"
+                print(f"[WARN] Episode ended at lookaround step {look_index}/12")
+                return None
+            obs, _, dones, infos = step_data
 
             if dones[0]:
+                self.latest_lookaround_end_reason = "episode_done"
                 print(f"[WARN] Episode ended at lookaround step {look_index}/12")
                 return None
 
@@ -613,6 +702,7 @@ class BaseNavigationController:
         self._update_obstacle_distances_12_directions(lookaround_depths)
 
         if len(lookaround_images) < 12:
+            self.latest_lookaround_end_reason = "incomplete"
             print(f"[WARN] Lookaround incomplete: {len(lookaround_images)}/12 images")
             return None
 
@@ -650,17 +740,21 @@ class BaseNavigationController:
             phase: 文件命名阶段
             enable_landmark_detection: 是否启用landmark检测（False时仅检测mapping_classes）
         """
+        if self._episode_done_cached():
+            print(f"[WARN] Episode already done, skip {self._action_name(action)}")
+            return self._terminal_step_result()
+
         # ⚠️ 关键修复：在使用current_step之前先累加，避免覆盖环视最后一步
         self.current_step += 1
         
         print(f"[{self.current_step}]{self._action_name(action)}", end=" ")
         
-        outputs = self.envs.step([action])
-        obs, rewards, dones, infos = [list(x) for x in zip(*outputs)]
-        
-        # 保存done标志和info（用于finish_episode检查）
-        self.latest_done = dones[0]
-        self.latest_info = infos[0]
+        step_data = self._safe_env_step([action], context=f"{self._action_name(action)} step")
+        if step_data is None:
+            self.current_step = max(0, self.current_step - 1)
+            print(" → Episode已结束，跳过")
+            return self._terminal_step_result()
+        obs, rewards, dones, infos = step_data
         
         if dones[0]:
             print(" → Episode结束")
@@ -904,34 +998,34 @@ class BaseNavigationController:
         final_metrics = {}
         
         # 检查episode是否已经结束（避免在已done的episode上调用step）
-        episode_already_done = False
-        if hasattr(self, 'latest_info') and self.latest_info:
-            episode_already_done = self.latest_info.get('done', False)
-        
-        # 额外检查：如果latest_done标志存在且为True，也认为episode已结束
-        if hasattr(self, 'latest_done') and self.latest_done:
-            episode_already_done = True
+        episode_already_done = self._episode_done_cached()
         
         if stop_action and not episode_already_done:
             # print("\n🛑 执行STOP动作以完成Episode...")
             try:
                 # 调用STOP动作 (action_id = 0)
-                outputs = self.envs.step([0])
-                # 🔑 关键修复：与step()方法保持一致的解包方式
-                observations, rewards, dones, infos = [list(x) for x in zip(*outputs)]
+                step_data = self._safe_env_step([0], context="final STOP")
+                if step_data is None:
+                    print("\n[WARN] Episode already ended before STOP")
+                    print("   Using last step metrics")
+                    if hasattr(self, 'latest_info') and self.latest_info:
+                        final_metrics = self.latest_info.copy()
+                    step_data = None
+                if step_data is not None:
+                    observations, rewards, dones, infos = step_data
                 
-                # 获取最终指标
-                if infos and len(infos) > 0:
-                    final_metrics = infos[0]
-                    dtg = final_metrics.get('distance_to_goal', -1)
-                    success_flag = final_metrics.get('success', 0)
-                    print(f"DTG: {dtg:.3f}m | Success: {success_flag} | SPL: {final_metrics.get('spl', 0.0):.4f}")
-                    
-                    # 数据验证
-                    if success_flag == 1 and dtg > 3.0:
-                        print(f"   [WARN] Anomaly: Success=1 but DTG={dtg:.3f}m > 3m")
-                    elif success_flag == 0 and 0 <= dtg < 3.0:
-                        print(f"   [WARN] DTG={dtg:.3f}m < 3m but Success=0")
+                    # 获取最终指标
+                    if infos and len(infos) > 0:
+                        final_metrics = infos[0]
+                        dtg = final_metrics.get('distance_to_goal', -1)
+                        success_flag = final_metrics.get('success', 0)
+                        print(f"DTG: {dtg:.3f}m | Success: {success_flag} | SPL: {final_metrics.get('spl', 0.0):.4f}")
+                        
+                        # 数据验证
+                        if success_flag == 1 and dtg > 3.0:
+                            print(f"   [WARN] Anomaly: Success=1 but DTG={dtg:.3f}m > 3m")
+                        elif success_flag == 0 and 0 <= dtg < 3.0:
+                            print(f"   [WARN] DTG={dtg:.3f}m < 3m but Success=0")
             except AssertionError as e:
                 # Episode已经结束，无法调用STOP
                 print(f"\n[WARN] Episode already ended, cannot STOP: {e}")

@@ -198,14 +198,15 @@ def run_single_episode(
                 print(f"⚠️  清理环境时出错: {cleanup_error}")
 
 
-def maybe_generate_report(args: argparse.Namespace, config) -> None:
+def maybe_generate_report(args: argparse.Namespace, config, verbose: bool = True) -> None:
     project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
     analyze_script = os.path.join(project_root, "analyze_results.py")
     results_dir = args.results_dir or config.RESULTS_DIR
     if not os.path.exists(analyze_script) or not results_dir:
         return
 
-    print("\n📊 生成详细评估报告...")
+    if verbose:
+        print("\n📊 生成详细评估报告...")
     try:
         result = subprocess.run(
             [sys.executable, analyze_script, "--path", results_dir, "--save"],
@@ -214,7 +215,10 @@ def maybe_generate_report(args: argparse.Namespace, config) -> None:
             timeout=30,
         )
         if result.returncode == 0:
-            print(result.stdout)
+            if verbose:
+                print(result.stdout)
+            else:
+                print(f"📄 评估报告已更新: {os.path.join(results_dir, 'summary.txt')}")
         else:
             print(f"⚠️  分析脚本执行失败: {result.stderr}")
     except Exception as exc:
@@ -277,6 +281,9 @@ def run_navigation_from_args(args: argparse.Namespace) -> int:
             )
         )
 
-    print_batch_summary(results_summary, args, config)
-    maybe_generate_report(args, config)
+    if len(episode_ids) > 1:
+        print_batch_summary(results_summary, args, config)
+        maybe_generate_report(args, config, verbose=True)
+    else:
+        maybe_generate_report(args, config, verbose=False)
     return 0

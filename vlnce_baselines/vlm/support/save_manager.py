@@ -90,14 +90,24 @@ class SaveManager:
 
     def _result_rank_key(self, result: Optional[Dict]) -> tuple:
         if not result:
-            return (-1, float("-inf"), float("-inf"), float("-inf"), float("-inf"), float("-inf"), float("-inf"))
+            return (
+                -1,
+                float("-inf"),
+                float("-inf"),
+                float("-inf"),
+                float("-inf"),
+                float("-inf"),
+                float("-inf"),
+                float("-inf"),
+            )
 
-        success = self._safe_int(result.get('success', 0), 0)
+        success = self._safe_int(result.get('sr', result.get('success', 0)), 0)
         spl = self._safe_float(result.get('spl', 0.0), 0.0)
-        oracle_success = self._safe_int(result.get('oracle_success', 0), 0)
+        ndtw = self._safe_float(result.get('ndtw', result.get('nDTW', 0.0)), 0.0)
+        oracle_success = self._safe_int(result.get('osr', result.get('oracle_success', 0)), 0)
         oracle_spl = self._safe_float(result.get('oracle_spl', 0.0), 0.0)
 
-        dtg = self._safe_float(result.get('distance_to_goal', float('inf')), float('inf'))
+        dtg = self._safe_float(result.get('ne', result.get('distance_to_goal', float('inf'))), float('inf'))
         if dtg < 0:
             dtg = float('inf')
         path_length = self._safe_float(result.get('path_length', float('inf')), float('inf'))
@@ -107,10 +117,11 @@ class SaveManager:
         if total_steps < 0:
             total_steps = float('inf')
 
-        # 排序规则：success > SPL > DTG更小 > oracle success > oracle SPL > path更短 > steps更少
+        # 排序规则：SR > SPL > nDTW > NE更小 > OSR > oracle SPL > path更短 > steps更少
         return (
             success,
             spl,
+            ndtw,
             -dtg,
             oracle_success,
             oracle_spl,
@@ -309,10 +320,16 @@ class SaveManager:
             'instruction': result.get('instruction', ''),
             'total_steps': result.get('total_steps', 0),
             'subtask_count': result.get('subtask_count', 0),
-            
-            # 核心导航指标（用于analyze_results.py）
-            'success': result.get('success', 0),
+
+            # 统一评估指标命名
+            'ne': result.get('ne', result.get('distance_to_goal', -1)),
+            'osr': result.get('osr', result.get('oracle_success', 0)),
+            'sr': result.get('sr', result.get('success', 0)),
             'spl': result.get('spl', 0.0),
+            'ndtw': result.get('ndtw', result.get('nDTW', 0.0)),
+            
+            # 兼容旧分析脚本/调试逻辑的原始字段
+            'success': result.get('success', 0),
             'distance_to_goal': result.get('distance_to_goal', -1),
             'path_length': result.get('path_length', 0.0),
             
@@ -346,9 +363,6 @@ class SaveManager:
         else:
             print(f"  Best:   {result_path} (kept existing better result)")
             print(f"  Log:    {log_path} (not replaced)")
-        print(f"  Steps: {result.get('total_steps', 0)} | Subtasks: {result.get('subtask_count', 0)}")
-        print(f"  Success: {result.get('success', 0)} | SPL: {result.get('spl', 0.0):.4f}")
-        print(f"  Distance to Goal: {result.get('distance_to_goal', -1):.3f}m")
         print(f"{'='*60}")
         
         return log_path
