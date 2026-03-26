@@ -33,7 +33,7 @@ class LLMPlanner(BaseAPIClient):
         self.action_space = action_space or "MOVE_FORWARD (0.25m), TURN_LEFT (30°), TURN_RIGHT (30°), STOP"
         
         # 方向观察图压缩（节省token），global_map保持全分辨率（需要细节）
-        self.set_compression_config(enabled=True, max_size=512, quality=75)
+        self.set_compression_config(enabled=True, max_size=448, quality=75)
         
         # print(f"✓ LLM Planner initialized")
         print(f"  LLMPlanner: {self.config.model}")
@@ -137,6 +137,7 @@ class LLMPlanner(BaseAPIClient):
                          detected_landmarks: List[str] = None,
                          waypoint_summary: str = None,
                          obstacle_distances: Dict[str, str] = None,
+                         verify_replan_prompt_notice: str = None,
                          save_dir: str = None) -> Tuple[Optional[Dict], bool]:
         """
         验证子任务完成并规划下一步
@@ -151,6 +152,7 @@ class LLMPlanner(BaseAPIClient):
             detected_landmarks: 已检测到的landmark类别列表 - 可选
             waypoint_summary: 路径点历史记录 - 可选
             obstacle_distances: 预计算的障碍物距离字典 {'front': 'X.XXm', 'left_30': ..., ...}
+            verify_replan_prompt_notice: 本次verify/replan的顶部附加提示 - 可选
             
         Returns:
             (response字典, is_completed标志)
@@ -183,7 +185,8 @@ class LLMPlanner(BaseAPIClient):
             subtask_instruction,
             self.action_space,
             detected_landmarks=landmarks_str,
-            waypoint_summary=waypoint_summary
+            waypoint_summary=waypoint_summary,
+            verify_replan_prompt_notice=verify_replan_prompt_notice,
         )
         
         # 组合图像：当前位置12方向 + 全局地图

@@ -16,6 +16,8 @@ import numpy as np
 from vlnce_baselines.config.core.params.spatial import (
     CURRENT_AREA_OVERLAP_THRESHOLD_M as CFG_CURRENT_AREA_OVERLAP_THRESHOLD_M,
     THINKING_DETECTION_GROUP_MAX_VIEWS as CFG_THINKING_DETECTION_GROUP_MAX_VIEWS,
+    THINKING_DETECTION_OBJECT_TOTAL_MAX_VIEWS as CFG_THINKING_DETECTION_OBJECT_TOTAL_MAX_VIEWS,
+    THINKING_DETECTION_TRANSITION_TOTAL_MAX_VIEWS as CFG_THINKING_DETECTION_TRANSITION_TOTAL_MAX_VIEWS,
     THINKING_DETECTION_TOPK as CFG_THINKING_DETECTION_TOPK,
     THINKING_SAME_OBJECT_BEARING_THRESHOLD_DEG as CFG_THINKING_SAME_OBJECT_BEARING_THRESHOLD_DEG,
     THINKING_SAME_OBJECT_DISTANCE_RATIO as CFG_THINKING_SAME_OBJECT_DISTANCE_RATIO,
@@ -24,10 +26,17 @@ from vlnce_baselines.config.core.params.spatial import (
     WAYPOINT_VISIBILITY_RADIUS_M as CFG_WAYPOINT_VISIBILITY_RADIUS_M,
     WAYPOINT_VISIBILITY_SAMPLES as CFG_WAYPOINT_VISIBILITY_SAMPLES,
 )
+from vlnce_baselines.config.core.params.landmarks import (
+    LANDMARK_EDGE_DEPTH_KEYWORDS as CFG_LANDMARK_EDGE_DEPTH_KEYWORDS,
+)
 from vlnce_baselines.visualization.landmark_overlay import (
     LandmarkStripLine,
     LandmarkStripSegment,
     render_landmark_strip,
+)
+from vlnce_baselines.visualization.landmark_selection import (
+    _build_outer_ring_sampling_mask,
+    _sample_random_mask_coords,
 )
 from vlnce_baselines.utils.spatial_formatter import snap_relative_bearing
 from vlnce_baselines.vlm.support.navigation_config import DIRECTION_CONFIG
@@ -39,6 +48,8 @@ class ThinkingViewRenderer:
 
     THINKING_DETECTION_TOPK = CFG_THINKING_DETECTION_TOPK
     THINKING_DETECTION_GROUP_MAX_VIEWS = CFG_THINKING_DETECTION_GROUP_MAX_VIEWS
+    THINKING_DETECTION_TRANSITION_TOTAL_MAX_VIEWS = CFG_THINKING_DETECTION_TRANSITION_TOTAL_MAX_VIEWS
+    THINKING_DETECTION_OBJECT_TOTAL_MAX_VIEWS = CFG_THINKING_DETECTION_OBJECT_TOTAL_MAX_VIEWS
     CURRENT_AREA_OVERLAP_THRESHOLD_M = CFG_CURRENT_AREA_OVERLAP_THRESHOLD_M
     VIEW_HFOV_DEG = CFG_THINKING_VIEW_HFOV_DEG
     WAYPOINT_VISIBILITY_RADIUS_M = CFG_WAYPOINT_VISIBILITY_RADIUS_M
@@ -46,6 +57,13 @@ class ThinkingViewRenderer:
     SAME_OBJECT_BEARING_THRESHOLD_DEG = CFG_THINKING_SAME_OBJECT_BEARING_THRESHOLD_DEG
     SAME_OBJECT_DISTANCE_THRESHOLD_M = CFG_THINKING_SAME_OBJECT_DISTANCE_THRESHOLD_M
     SAME_OBJECT_DISTANCE_RATIO = CFG_THINKING_SAME_OBJECT_DISTANCE_RATIO
+    TRANSITION_DETECTION_KEYWORDS = tuple(
+        list(
+            str(keyword).strip().lower()
+            for keyword in CFG_LANDMARK_EDGE_DEPTH_KEYWORDS
+            if str(keyword).strip()
+        ) + ["entryway"]
+    )
 
     @staticmethod
     def _is_known_area_label(area_label: str) -> bool:
@@ -631,6 +649,43 @@ class ThinkingViewRenderer:
         except ValueError:
             return " ".join(parts).strip(), 0.0
 
+    @staticmethod
+    def _normalize_detection_name(name: str) -> str:
+        return " ".join(str(name or "").strip().lower().split())
+
+    @classmethod
+    def _is_transition_like_detection(cls, name: str) -> bool:
+        normalized_name = cls._normalize_detection_name(name)
+        if not normalized_name:
+            return False
+        normalized_text = f" {normalized_name.replace('-', ' ').replace('/', ' ')} "
+        tokens = set(normalized_text.split())
+        for keyword in cls.TRANSITION_DETECTION_KEYWORDS:
+            keyword_text = str(keyword).strip().lower()
+            if not keyword_text:
+                continue
+            keyword_tokens = keyword_text.split()
+            if len(keyword_tokens) == 1:
+                if keyword_tokens[0] in tokens:
+                    return True
+                continue
+            if f" {' '.join(keyword_tokens)} " in normalized_text:
+                return True
+        return False
+
+    @classmethod
+    def _cross_view_detection_family_key(cls, name: str) -> str:
+        normalized_name = cls._normalize_detection_name(name)
+        if cls._is_transition_like_detection(normalized_name):
+            return "__transition_like__"
+        return normalized_name or "__unknown__"
+
+    @classmethod
+    def _cross_view_total_limit(cls, name: str) -> int:
+        if cls._is_transition_like_detection(name):
+            return int(max(1, cls.THINKING_DETECTION_TRANSITION_TOTAL_MAX_VIEWS))
+        return int(max(1, cls.THINKING_DETECTION_OBJECT_TOTAL_MAX_VIEWS))
+
     @classmethod
     def _estimate_detection_distance_m(
         cls,
@@ -655,10 +710,17 @@ class ThinkingViewRenderer:
         if getattr(detections, "mask", None) is not None and det_idx < len(detections.mask):
             det_mask = np.asarray(detections.mask[det_idx]).astype(bool)
             if det_mask.shape[:2] == depth_meters.shape[:2]:
-                mask_region = det_mask[y1:y2, x1:x2]
-                masked_depths = depth_region[np.logical_and(mask_region, depth_region > 0.05)]
-                if masked_depths.size > 0:
-                    valid_depths = masked_depths
+                sample_mask = _build_outer_ring_sampling_mask(
+                    det_mask,
+                    depth_meters,
+                    min_depth=0.05,
+                )
+                ys, xs = _sample_random_mask_coords(sample_mask)
+                if ys.size > 0:
+                    sampled_depths = depth_meters[ys, xs].astype(np.float32)
+                    sampled_depths = sampled_depths[np.isfinite(sampled_depths) & (sampled_depths > 0.05)]
+                    if sampled_depths.size > 0:
+                        valid_depths = sampled_depths
 
         if valid_depths.size == 0:
             return None
@@ -809,7 +871,16 @@ class ThinkingViewRenderer:
         )
 
         keep_by_view: Dict[int, List[int]] = {}
+        kept_family_counts: Dict[str, int] = {}
         for group in groups[:max(1, int(topk))]:
+            group_name = str(group.get("name", "unknown"))
+            family_key = cls._cross_view_detection_family_key(group_name)
+            family_kept_count = int(kept_family_counts.get(family_key, 0))
+            family_limit = cls._cross_view_total_limit(group_name)
+            remaining_family_budget = max(0, family_limit - family_kept_count)
+            if remaining_family_budget <= 0:
+                continue
+
             members = sorted(
                 group.get("members", []),
                 key=lambda item: (
@@ -820,6 +891,10 @@ class ThinkingViewRenderer:
             )
             used_views = set()
             kept_count = 0
+            # Preserve the original same-object grouping and per-group 3-view cap.
+            # Only the 12-view detection retention budget changes here:
+            # transition-like detections can occupy up to 4 views, regular objects up to 2.
+            group_limit = min(int(max(1, cls.THINKING_DETECTION_GROUP_MAX_VIEWS)), remaining_family_budget)
             for member in members:
                 view_idx = int(member.get("view_idx", -1))
                 det_idx = int(member.get("det_idx", -1))
@@ -828,8 +903,10 @@ class ThinkingViewRenderer:
                 keep_by_view.setdefault(view_idx, []).append(det_idx)
                 used_views.add(view_idx)
                 kept_count += 1
-                if kept_count >= cls.THINKING_DETECTION_GROUP_MAX_VIEWS:
+                if kept_count >= group_limit:
                     break
+            if kept_count > 0:
+                kept_family_counts[family_key] = family_kept_count + kept_count
         return keep_by_view
 
     @classmethod

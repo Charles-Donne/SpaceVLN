@@ -15,6 +15,81 @@ from vlnce_baselines.config.core.constants import (
     landmark_instance_topk,
     local_map_landmark_topk,
 )
+from vlnce_baselines.config.core.params.actions import (
+    ACTION_SUBTASK_AUTOCOMPLETE_OPEN_DISTANCE_M,
+    ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M,
+)
+
+MASK_OUTER_RING_EDGE_BUFFER_PX = 2.0
+MASK_OUTER_RING_MAX_WIDTH_PX = 8.0
+MASK_OUTER_RING_RANDOM_SAMPLE_COUNT = 24
+
+
+def _build_outer_ring_sampling_mask(
+    mask_2d: np.ndarray,
+    depth_img: np.ndarray,
+    min_depth: float = 0.02,
+    edge_buffer_px: float = MASK_OUTER_RING_EDGE_BUFFER_PX,
+    outer_ring_max_width_px: float = MASK_OUTER_RING_MAX_WIDTH_PX,
+) -> Optional[np.ndarray]:
+    """Build a mask-local sampling band that stays in the outer region but away from exact edges."""
+    if mask_2d is None or depth_img is None:
+        return None
+
+    if mask_2d.shape != depth_img.shape:
+        mask_2d = cv2.resize(
+            mask_2d.astype(np.float32),
+            (depth_img.shape[1], depth_img.shape[0]),
+            interpolation=cv2.INTER_NEAREST,
+        )
+
+    mask_bool = np.asarray(mask_2d > 0.5, dtype=bool)
+    valid_mask = mask_bool & np.isfinite(depth_img) & (depth_img > float(min_depth))
+    if not np.any(valid_mask):
+        return None
+
+    distance_to_edge = cv2.distanceTransform(mask_bool.astype(np.uint8), cv2.DIST_L2, 5)
+    max_distance_px = float(distance_to_edge.max()) if np.any(mask_bool) else 0.0
+    buffer_px = float(max(1.0, edge_buffer_px))
+    band_limit_px = float(
+        min(
+            max(float(outer_ring_max_width_px), buffer_px + 1.0),
+            max(buffer_px + 1.0, max_distance_px * 0.45),
+        )
+    )
+
+    sample_mask = valid_mask & (distance_to_edge >= buffer_px)
+    if max_distance_px > buffer_px + 1.0:
+        sample_mask &= (distance_to_edge <= band_limit_px)
+
+    if np.any(sample_mask):
+        return sample_mask
+
+    relaxed_mask = valid_mask & (distance_to_edge >= max(1.0, buffer_px * 0.5))
+    if np.any(relaxed_mask):
+        return relaxed_mask
+
+    return valid_mask
+
+
+def _sample_random_mask_coords(
+    sample_mask: Optional[np.ndarray],
+    sample_count: int = MASK_OUTER_RING_RANDOM_SAMPLE_COUNT,
+) -> Tuple[np.ndarray, np.ndarray]:
+    if sample_mask is None:
+        return np.asarray([], dtype=np.int32), np.asarray([], dtype=np.int32)
+
+    ys, xs = np.nonzero(sample_mask)
+    if ys.size == 0:
+        return ys.astype(np.int32), xs.astype(np.int32)
+
+    target_count = max(1, int(sample_count or MASK_OUTER_RING_RANDOM_SAMPLE_COUNT))
+    if ys.size > target_count:
+        rng = np.random.default_rng()
+        chosen = rng.choice(ys.size, size=target_count, replace=False)
+        ys = ys[chosen]
+        xs = xs[chosen]
+    return ys.astype(np.int32), xs.astype(np.int32)
 
 def _candidate_distance_m(candidate: Dict[str, Any]) -> float:
     if candidate.get("det_rel_xy") is not None:
@@ -328,11 +403,15 @@ def _estimate_mask_rel_xy(owner,
             return None, profile
         return None
 
-    ys, xs = np.nonzero(sample_mask)
-    if sample_stride > 1 and ys.size > sample_stride:
-        ys = ys[::sample_stride]
-        xs = xs[::sample_stride]
-
+    sample_count = max(
+        MASK_OUTER_RING_RANDOM_SAMPLE_COUNT,
+        max(1, int(sample_stride or 1)) * 6,
+    )
+    ys, xs = _sample_random_mask_coords(sample_mask, sample_count=sample_count)
+    if ys.size == 0:
+        if return_profile:
+            return None, profile
+        return None
     depth_vals = depth_img[ys, xs].astype(np.float32)
     if depth_vals.size == 0:
         return None
@@ -370,51 +449,30 @@ def _analyze_mask_depth_profile(
     if mask_2d is None or depth_img is None:
         return profile
 
-    if mask_2d.shape != depth_img.shape:
-        mask_2d = cv2.resize(
-            mask_2d.astype(np.float32),
-            (depth_img.shape[1], depth_img.shape[0]),
-            interpolation=cv2.INTER_NEAREST,
-        )
-
-    mask_bool = mask_2d > 0.5
-    valid_mask = mask_bool & np.isfinite(depth_img) & (depth_img > 0.02)
-    if not np.any(valid_mask):
+    sample_mask = _build_outer_ring_sampling_mask(
+        mask_2d,
+        depth_img,
+        min_depth=0.02,
+    )
+    if sample_mask is None or not np.any(sample_mask):
         return profile
 
-    sample_mask = valid_mask
-    is_opening_like = False
+    landmark_text = str(landmark_name or "").strip().lower()
+    is_opening_like = bool(
+        landmark_text and
+        any(keyword in landmark_text for keyword in landmark_edge_depth_keywords)
+    )
     used_edge_geometry = False
     edge_median = None
     interior_median = None
     opening_gap_m = None
     opening_gap_threshold = None
-
-    if mask_bool.sum() >= 36:
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-        interior_mask = cv2.erode(mask_bool.astype(np.uint8), kernel, iterations=1) > 0
-        interior_valid = interior_mask & valid_mask
-        edge_valid = valid_mask & (~interior_mask)
-
-        if np.count_nonzero(interior_valid) >= 24 and np.count_nonzero(edge_valid) >= 24:
-            edge_depth = depth_img[edge_valid].astype(np.float32)
-            interior_depth = depth_img[interior_valid].astype(np.float32)
-            edge_median = float(np.median(edge_depth))
-            interior_median = float(np.median(interior_depth))
-            opening_gap_m = float(interior_median - edge_median)
-            opening_gap_threshold = float(max(0.6, 0.35 * max(edge_median, 0.1)))
-            landmark_text = str(landmark_name or "").strip().lower()
-            keyword_forced_edge = (
-                landmark_text and
-                any(keyword in landmark_text for keyword in landmark_edge_depth_keywords) and
-                opening_gap_m >= float(landmark_edge_depth_min_gap_m)
-            )
-            is_opening_like = bool(keyword_forced_edge or opening_gap_m >= opening_gap_threshold)
-            if is_opening_like:
-                # Opening-like structures (doorways / hallways) are often much deeper
-                # in the center than at the frame edges, so use edge geometry instead.
-                sample_mask = edge_valid
-                used_edge_geometry = True
+    ys, xs = _sample_random_mask_coords(sample_mask, sample_count=MASK_OUTER_RING_RANDOM_SAMPLE_COUNT)
+    if ys.size > 0:
+        sampled_depth = depth_img[ys, xs].astype(np.float32)
+        if sampled_depth.size > 0:
+            # Keep legacy field names for downstream compatibility.
+            edge_median = float(np.median(sampled_depth))
 
     profile.update({
         "sample_mask": sample_mask,
@@ -493,7 +551,11 @@ def _project_landmark_instances_from_detections(owner,
             "opening_gap_m": depth_profile.get("opening_gap_m"),
             "edge_depth_median": depth_profile.get("edge_depth_median"),
             "interior_depth_median": depth_profile.get("interior_depth_median"),
-            "stop_distance_m": 0.5 if bool(depth_profile.get("is_opening_like", False)) else 1.0,
+            "stop_distance_m": (
+                float(ACTION_SUBTASK_AUTOCOMPLETE_OPEN_DISTANCE_M)
+                if bool(depth_profile.get("is_opening_like", False))
+                else float(ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M)
+            ),
             "observation_count": 1,
             "weight_sum": max(float(confidence), 1e-3),
         })
@@ -614,8 +676,8 @@ def _merge_landmark_instances_world(owner,
             else:
                 refreshed["opening_gap_m"] = max(float(old_gap), float(new_gap))
             refreshed["stop_distance_m"] = min(
-                float(old.get("stop_distance_m", 1.0)),
-                float(inst.get("stop_distance_m", 1.0)),
+                float(old.get("stop_distance_m", ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M)),
+                float(inst.get("stop_distance_m", ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M)),
             )
             refreshed["observation_count"] = int(old.get("observation_count", 1)) + int(inst.get("observation_count", 1))
             refreshed["weight_sum"] = total_weight

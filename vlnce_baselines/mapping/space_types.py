@@ -14,7 +14,7 @@ COMMON_SPACE_TYPE_LIBRARY: List[Tuple[str, Sequence[str]]] = [
     ("dining room", ("dining room", "dining area", "breakfast room")),
     ("office", ("office", "study", "workspace", "work room")),
     ("laundry room", ("laundry room", "laundry", "utility room")),
-    ("entryway", ("entryway", "entry", "entrance", "foyer", "entry hall")),
+    ("entryway", ("entryway", "entry", "entrance", "doorway", "door way", "foyer", "entry hall")),
     ("stairs", ("stairs", "stair", "stairway", "staircase", "landing")),
     ("hallway", ("hallway", "hall", "corridor", "passage", "passageway")),
     ("closet", ("closet", "wardrobe")),

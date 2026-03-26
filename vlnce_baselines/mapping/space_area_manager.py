@@ -5,6 +5,7 @@ Persistent space-area manager built on top of the world semantic map.
 from collections import deque
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
+import cv2
 import numpy as np
 
 from vlnce_baselines.config.core.params.spatial import (
@@ -12,7 +13,9 @@ from vlnce_baselines.config.core.params.spatial import (
     SPACE_AREA_CURRENT_WAYPOINT_MAX_DISTANCE_M,
     SPACE_AREA_MAX_CONNECTED_AREAS,
     SPACE_AREA_MAX_CONNECTION_DISTANCE_M,
+    SPACE_AREA_NARROW_PASSAGE_CLEARANCE_M,
     SPACE_AREA_MAX_SAME_TYPE_WAYPOINT_MERGE_DISTANCE_M,
+    SPACE_AREA_SAME_TYPE_MERGE_MIN_CLEARANCE_M,
     SPACE_AREA_SAMPLE_PIXELS_PER_AREA,
 )
 from vlnce_baselines.mapping.space_types import (
@@ -31,6 +34,8 @@ class SpaceAreaManager:
     MAX_SAME_TYPE_WAYPOINT_MERGE_DISTANCE_M = SPACE_AREA_MAX_SAME_TYPE_WAYPOINT_MERGE_DISTANCE_M
     SAMPLE_PIXELS_PER_AREA = SPACE_AREA_SAMPLE_PIXELS_PER_AREA
     CURRENT_AREA_WAYPOINT_MAX_DISTANCE_M = SPACE_AREA_CURRENT_WAYPOINT_MAX_DISTANCE_M
+    NARROW_PASSAGE_CLEARANCE_M = SPACE_AREA_NARROW_PASSAGE_CLEARANCE_M
+    SAME_TYPE_MERGE_MIN_CLEARANCE_M = SPACE_AREA_SAME_TYPE_MERGE_MIN_CLEARANCE_M
     MIN_RENDERABLE_AREA_PIXELS = 24
     MIN_SEED_AREA_RADIUS_M = 0.60
 
@@ -67,14 +72,27 @@ class SpaceAreaManager:
             crop_offset=crop_offset,
         )
         if not world_pixels:
-            self._set_unknown_current_area()
-            return "Unknown"
+            # Keep a minimal seed area at the waypoint pose so the parsed label
+            # remains part of the managed area graph and can merge only with the
+            # same normalized space category later.
+            world_pixels = {(int(pixel_y), int(pixel_x))}
 
         projector = self._build_projector(full_map, full_pose, crop_offset)
         obstacle_mask = (
             np.asarray(full_map[0] > 0.5, dtype=bool)
             if full_map is not None and projector is not None
             else None
+        )
+        clearance_map = (
+            self._build_clearance_map(obstacle_mask)
+            if obstacle_mask is not None
+            else None
+        )
+        world_pixels = self._filter_area_pixels_for_space_type(
+            world_pixels=world_pixels,
+            space_type=space_type,
+            projector=projector,
+            clearance_map=clearance_map,
         )
 
         overlapping_records = [
@@ -86,6 +104,7 @@ class SpaceAreaManager:
                 new_center_world_px=(int(pixel_y), int(pixel_x)),
                 projector=projector,
                 obstacle_mask=obstacle_mask,
+                clearance_map=clearance_map,
             )
         ]
 
@@ -117,6 +136,7 @@ class SpaceAreaManager:
             self._consolidate_same_type_records(
                 obstacle_mask=obstacle_mask,
                 projector=projector,
+                clearance_map=clearance_map,
             )
             return self._resolve_label_alias(str(merged_record["label"]))
 
@@ -145,6 +165,7 @@ class SpaceAreaManager:
         self._consolidate_same_type_records(
             obstacle_mask=obstacle_mask,
             projector=projector,
+            clearance_map=clearance_map,
         )
         return self._resolve_label_alias(label)
 
@@ -164,6 +185,7 @@ class SpaceAreaManager:
         self._consolidate_same_type_records(
             obstacle_mask=obstacle_mask,
             projector=self._build_projector(full_map, full_pose, crop_offset),
+            clearance_map=self._build_clearance_map(obstacle_mask),
         )
         self._maintain_current_area_with_pose(
             full_map=full_map,
@@ -238,6 +260,7 @@ class SpaceAreaManager:
         self,
         obstacle_mask: Optional[np.ndarray] = None,
         projector: Optional[RotatedMapProjector] = None,
+        clearance_map: Optional[np.ndarray] = None,
     ) -> None:
         """Merge any same-type area records that now overlap or touch."""
         self._normalize_space_area_records()
@@ -254,17 +277,37 @@ class SpaceAreaManager:
                         or self._pixel_sets_are_adjacent(record.get("pixels", set()), other.get("pixels", set()))
                     )
                     if (
-                        not should_merge
+                        should_merge
                         and obstacle_mask is not None
                         and projector is not None
-                    ):
-                        should_merge = self._records_have_waypoint_connection(
+                        and self._same_type_records_should_stay_distinct(
                             record_a=record,
                             record_b=other,
                             obstacle_mask=obstacle_mask,
                             projector=projector,
-                            max_distance_m=self.MAX_SAME_TYPE_WAYPOINT_MERGE_DISTANCE_M,
+                            clearance_map=clearance_map,
                         )
+                    ):
+                        should_merge = False
+                    if (
+                        not should_merge
+                        and obstacle_mask is not None
+                        and projector is not None
+                    ):
+                        if not self._same_type_records_should_stay_distinct(
+                            record_a=record,
+                            record_b=other,
+                            obstacle_mask=obstacle_mask,
+                            projector=projector,
+                            clearance_map=clearance_map,
+                        ):
+                            should_merge = self._records_have_waypoint_connection(
+                                record_a=record,
+                                record_b=other,
+                                obstacle_mask=obstacle_mask,
+                                projector=projector,
+                                max_distance_m=self.MAX_SAME_TYPE_WAYPOINT_MERGE_DISTANCE_M,
+                            )
                     if not should_merge:
                         continue
                     primary, secondary = sorted(
@@ -385,21 +428,58 @@ class SpaceAreaManager:
         new_center_world_px: Tuple[int, int],
         projector: Optional[RotatedMapProjector],
         obstacle_mask: Optional[np.ndarray],
+        clearance_map: Optional[np.ndarray] = None,
     ) -> bool:
+        candidate_record = {
+            "space_type": str(existing_record.get("space_type", "Unknown") or "Unknown"),
+            "space_key": str(existing_record.get("space_key", "")),
+            "center_world_px": tuple(new_center_world_px),
+            "pixels": set(new_pixels),
+            "waypoint_points": {tuple(new_center_world_px)},
+        }
         existing_pixels = existing_record.get("pixels", set())
         if self._pixel_sets_overlap(existing_pixels, new_pixels):
+            if (
+                projector is not None
+                and obstacle_mask is not None
+                and self._same_type_records_should_stay_distinct(
+                    record_a=existing_record,
+                    record_b=candidate_record,
+                    obstacle_mask=obstacle_mask,
+                    projector=projector,
+                    clearance_map=clearance_map,
+                )
+            ):
+                return False
             return True
         if self._pixel_sets_are_adjacent(existing_pixels, new_pixels):
+            if (
+                projector is not None
+                and obstacle_mask is not None
+                and self._same_type_records_should_stay_distinct(
+                    record_a=existing_record,
+                    record_b=candidate_record,
+                    obstacle_mask=obstacle_mask,
+                    projector=projector,
+                    clearance_map=clearance_map,
+                )
+            ):
+                return False
             return True
         if projector is None or obstacle_mask is None:
+            return False
+        if self._same_type_records_should_stay_distinct(
+            record_a=existing_record,
+            record_b=candidate_record,
+            obstacle_mask=obstacle_mask,
+            projector=projector,
+            clearance_map=clearance_map,
+        ):
             return False
 
         return self._records_have_waypoint_connection(
             record_a=existing_record,
-            record_b={
-                "center_world_px": new_center_world_px,
-                "waypoint_points": {tuple(new_center_world_px)},
-            },
+            record_b=candidate_record,
             obstacle_mask=obstacle_mask,
             projector=projector,
             max_distance_m=self.MAX_SAME_TYPE_WAYPOINT_MERGE_DISTANCE_M,
@@ -435,6 +515,62 @@ class SpaceAreaManager:
             crop_offset=crop_offset,
             agent_orientation_deg=float(full_pose[2]),
         )
+
+    @staticmethod
+    def _build_clearance_map(obstacle_mask: Optional[np.ndarray]) -> Optional[np.ndarray]:
+        if obstacle_mask is None:
+            return None
+        free_mask = np.asarray(~obstacle_mask, dtype=np.uint8)
+        if free_mask.size == 0:
+            return None
+        return cv2.distanceTransform(free_mask, cv2.DIST_L2, 5)
+
+    def _world_pixel_clearance_px(
+        self,
+        pixel_y: int,
+        pixel_x: int,
+        projector: Optional[RotatedMapProjector],
+        clearance_map: Optional[np.ndarray],
+    ) -> Optional[float]:
+        if projector is None or clearance_map is None:
+            return None
+        rotated = projector.world_to_rotated_pixel(float(pixel_y), float(pixel_x))
+        if rotated is None:
+            return None
+        row = int(round(rotated[0]))
+        col = int(round(rotated[1]))
+        if not (0 <= row < clearance_map.shape[0] and 0 <= col < clearance_map.shape[1]):
+            return None
+        return float(clearance_map[row, col])
+
+    def _filter_area_pixels_for_space_type(
+        self,
+        world_pixels: Set[Tuple[int, int]],
+        space_type: str,
+        projector: Optional[RotatedMapProjector],
+        clearance_map: Optional[np.ndarray],
+    ) -> Set[Tuple[int, int]]:
+        if (
+            not world_pixels
+            or projector is None
+            or clearance_map is None
+            or str(space_type or "Unknown") in self.CONNECTOR_SPACE_TYPES
+        ):
+            return set(world_pixels)
+
+        min_clearance_px = (self.NARROW_PASSAGE_CLEARANCE_M * 100.0) / float(self.resolution)
+        filtered_pixels: Set[Tuple[int, int]] = set()
+        for pixel_y, pixel_x in world_pixels:
+            clearance_px = self._world_pixel_clearance_px(
+                pixel_y=int(pixel_y),
+                pixel_x=int(pixel_x),
+                projector=projector,
+                clearance_map=clearance_map,
+            )
+            if clearance_px is None or clearance_px >= min_clearance_px:
+                filtered_pixels.add((int(pixel_y), int(pixel_x)))
+
+        return filtered_pixels if filtered_pixels else set(world_pixels)
 
     def _find_space_area_start(
         self,
@@ -714,7 +850,13 @@ class SpaceAreaManager:
                         (record for record in self.space_area_records if int(record["id"]) == area_id),
                         None,
                     )
-                    if current_record is not None:
+                    if current_record is not None and self._record_has_nearby_area_waypoint(
+                        record=current_record,
+                        pixel_y=curr_py,
+                        pixel_x=curr_px,
+                        waypoint_positions=waypoint_positions,
+                        waypoint_area_labels=waypoint_area_labels,
+                    ):
                         self._set_current_area_from_record(current_record)
                         return
 
@@ -724,7 +866,7 @@ class SpaceAreaManager:
             waypoint_positions=waypoint_positions,
             waypoint_area_labels=waypoint_area_labels,
             containment_pixel=(probe_py, probe_px),
-            require_nearby_waypoint=False,
+            require_nearby_waypoint=True,
         )
         if containing_record is not None:
             self._set_current_area_from_record(containing_record)
@@ -764,7 +906,7 @@ class SpaceAreaManager:
             waypoint_positions=waypoint_positions,
             waypoint_area_labels=waypoint_area_labels,
             containment_pixel=(probe_py, probe_px),
-            require_nearby_waypoint=False,
+            require_nearby_waypoint=True,
         )
         if containing_record is not None:
             self._set_current_area_from_record(containing_record)
@@ -830,7 +972,6 @@ class SpaceAreaManager:
             self.CURRENT_AREA_WAYPOINT_MAX_DISTANCE_M * 100.0
         ) / float(self.resolution)
         area_labels = list(waypoint_area_labels or [])
-        record_pixels = set(record.get("pixels", set()) or [])
 
         for index, waypoint_pos in enumerate(waypoint_positions):
             if waypoint_pos is None:
@@ -842,9 +983,6 @@ class SpaceAreaManager:
                 continue
 
             wp_py, wp_px = int(waypoint_pos[0]), int(waypoint_pos[1])
-            if (wp_py, wp_px) not in record_pixels:
-                continue
-
             distance_px = float(np.hypot(float(pixel_y) - float(wp_py), float(pixel_x) - float(wp_px)))
             if distance_px <= max_distance_px + 1e-6:
                 return True
@@ -1063,6 +1201,134 @@ class SpaceAreaManager:
                     return True
         return False
 
+    def _same_type_records_should_stay_distinct(
+        self,
+        record_a: Dict[str, Any],
+        record_b: Dict[str, Any],
+        obstacle_mask: np.ndarray,
+        projector: RotatedMapProjector,
+        clearance_map: Optional[np.ndarray],
+    ) -> bool:
+        if str(record_a.get("space_key", "")) != str(record_b.get("space_key", "")):
+            return False
+
+        space_type = str(record_a.get("space_type", "Unknown") or "Unknown")
+        if space_type in self.CONNECTOR_SPACE_TYPES:
+            return False
+
+        if self._records_share_connector_bridge(
+            record_a=record_a,
+            record_b=record_b,
+            obstacle_mask=obstacle_mask,
+            projector=projector,
+        ):
+            return True
+
+        return not self._records_have_broad_open_connection(
+            record_a=record_a,
+            record_b=record_b,
+            obstacle_mask=obstacle_mask,
+            projector=projector,
+            clearance_map=clearance_map,
+            max_distance_m=self.MAX_SAME_TYPE_WAYPOINT_MERGE_DISTANCE_M,
+            min_clearance_m=self.SAME_TYPE_MERGE_MIN_CLEARANCE_M,
+        )
+
+    def _records_share_connector_bridge(
+        self,
+        record_a: Dict[str, Any],
+        record_b: Dict[str, Any],
+        obstacle_mask: np.ndarray,
+        projector: RotatedMapProjector,
+    ) -> bool:
+        for connector_record in self.space_area_records:
+            if connector_record is record_a or connector_record is record_b:
+                continue
+            if str(connector_record.get("space_type", "")) not in self.CONNECTOR_SPACE_TYPES:
+                continue
+            if not self._records_touch_or_connect(
+                record_a,
+                connector_record,
+                obstacle_mask=obstacle_mask,
+                projector=projector,
+            ):
+                continue
+            if self._records_touch_or_connect(
+                record_b,
+                connector_record,
+                obstacle_mask=obstacle_mask,
+                projector=projector,
+            ):
+                return True
+        return False
+
+    def _records_touch_or_connect(
+        self,
+        record_a: Dict[str, Any],
+        record_b: Dict[str, Any],
+        obstacle_mask: np.ndarray,
+        projector: RotatedMapProjector,
+    ) -> bool:
+        if self._records_are_adjacent(record_a, record_b):
+            return True
+        return self._records_have_clear_connection(
+            record_a=record_a,
+            record_b=record_b,
+            obstacle_mask=obstacle_mask,
+            projector=projector,
+        )
+
+    def _record_connection_points(
+        self,
+        record: Dict[str, Any],
+    ) -> List[Tuple[int, int]]:
+        points: List[Tuple[int, int]] = []
+        seen: Set[Tuple[int, int]] = set()
+        for candidate in self._record_waypoint_points(record) + self._sample_record_pixels(record):
+            point = (int(candidate[0]), int(candidate[1]))
+            if point in seen:
+                continue
+            seen.add(point)
+            points.append(point)
+        return points
+
+    def _records_have_broad_open_connection(
+        self,
+        record_a: Dict[str, Any],
+        record_b: Dict[str, Any],
+        obstacle_mask: np.ndarray,
+        projector: RotatedMapProjector,
+        clearance_map: Optional[np.ndarray],
+        max_distance_m: float,
+        min_clearance_m: float,
+    ) -> bool:
+        if clearance_map is None:
+            return False
+
+        max_distance_px = (float(max_distance_m) * 100.0) / float(self.resolution)
+        min_clearance_px = (float(min_clearance_m) * 100.0) / float(self.resolution)
+        points_a = self._record_connection_points(record_a)
+        points_b = self._record_connection_points(record_b)
+        for start_world in points_a:
+            for end_world in points_b:
+                if float(np.hypot(
+                    float(start_world[0]) - float(end_world[0]),
+                    float(start_world[1]) - float(end_world[1]),
+                )) > max_distance_px + 1e-6:
+                    continue
+                min_path_clearance_px = self._world_line_min_clearance_px(
+                    clearance_map=clearance_map,
+                    obstacle_mask=obstacle_mask,
+                    projector=projector,
+                    start_world=start_world,
+                    end_world=end_world,
+                )
+                if min_path_clearance_px is None:
+                    continue
+                if min_path_clearance_px >= min_clearance_px:
+                    return True
+        return False
+
     @staticmethod
     def _record_waypoint_points(record: Dict[str, Any]) -> List[Tuple[int, int]]:
         waypoint_points = list(record.get("waypoint_points", set()) or [])
@@ -1165,6 +1431,33 @@ class SpaceAreaManager:
                 return False
         return True
 
+    @staticmethod
+    def _line_min_clearance_px(
+        clearance_map: np.ndarray,
+        obstacle_mask: np.ndarray,
+        start_row: float,
+        start_col: float,
+        end_row: float,
+        end_col: float,
+    ) -> Optional[float]:
+        steps = max(int(np.ceil(max(abs(end_row - start_row), abs(end_col - start_col)))), 1)
+        rows = np.linspace(start_row, end_row, steps + 1)
+        cols = np.linspace(start_col, end_col, steps + 1)
+        height, width = obstacle_mask.shape
+        min_clearance_px: Optional[float] = None
+
+        for idx in range(0, steps + 1):
+            row = int(round(rows[idx]))
+            col = int(round(cols[idx]))
+            if not (0 <= row < height and 0 <= col < width):
+                return None
+            if bool(obstacle_mask[row, col]):
+                return None
+            clearance_px = float(clearance_map[row, col])
+            if min_clearance_px is None or clearance_px < min_clearance_px:
+                min_clearance_px = clearance_px
+        return min_clearance_px
+
     def _world_line_is_clear(
         self,
         obstacle_mask: np.ndarray,
@@ -1177,6 +1470,27 @@ class SpaceAreaManager:
         if start_rot is None or end_rot is None:
             return False
         return self._line_is_clear(
+            obstacle_mask=obstacle_mask,
+            start_row=float(start_rot[0]),
+            start_col=float(start_rot[1]),
+            end_row=float(end_rot[0]),
+            end_col=float(end_rot[1]),
+        )
+
+    def _world_line_min_clearance_px(
+        self,
+        clearance_map: np.ndarray,
+        obstacle_mask: np.ndarray,
+        projector: RotatedMapProjector,
+        start_world: Tuple[int, int],
+        end_world: Tuple[int, int],
+    ) -> Optional[float]:
+        start_rot = projector.world_to_rotated_pixel(float(start_world[0]), float(start_world[1]))
+        end_rot = projector.world_to_rotated_pixel(float(end_world[0]), float(end_world[1]))
+        if start_rot is None or end_rot is None:
+            return None
+        return self._line_min_clearance_px(
+            clearance_map=clearance_map,
             obstacle_mask=obstacle_mask,
             start_row=float(start_rot[0]),
             start_col=float(start_rot[1]),

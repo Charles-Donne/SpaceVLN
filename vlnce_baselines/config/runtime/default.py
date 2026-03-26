@@ -63,7 +63,10 @@ _C.MAP.ENABLE_ADAPTIVE_ZOOM = True     # 是否启用自适应缩放（内容较
 _C.MAP.DEBUG_SAVE_RENDERINGS = True    # 默认开启debug渲染；关闭后只保存推理真正需要的最小可视化
 _C.MAP.ENABLE_AUTO_RETREAT = False      # 是否启用卡住时自动转身后退重规划
 _C.MAP.AUTO_RETREAT_STOP_EARLY_IF_REVERSE_BLOCKED = False  # 自动回退时，反向也阻挡是否提前停止
-_C.MAP.FINAL_DESTINATION_MATCH_AUTOSTOP_STREAK = 3  # 连续多少次thinking检测到waypoint_chain末尾与destination一致时自动停止任务
+_C.MAP.ACTION_STAGNATION_REPLAN_STREAK = 3  # 连续多少个底层MOVE_FORWARD没推进时触发rethinking
+_C.MAP.ACTION_STAGNATION_MAX_MOVEMENT_M = 0.25  # 底层MOVE“没动”阈值上限（实际使用时还会与单步距离的20%取较小值）
+_C.MAP.FINAL_DESTINATION_MATCH_AUTOSTOP_STREAK = 3  # 连续多少次thinking检测到waypoint_chain末尾与destination一致时，才允许进入终点稳定区自动停止判定
+_C.MAP.FINAL_DESTINATION_MATCH_AUTOSTOP_RADIUS_M = 1.0  # 以第一次终点匹配位置为圆心，连续命中都需留在半径1m内（约直径2m）才自动停止任务
 
 
 

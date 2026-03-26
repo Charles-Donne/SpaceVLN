@@ -54,6 +54,64 @@ def build_landmark_turn_hint(bearing_deg: float, is_visible: bool = False) -> st
     return f" -> TURN LEFT {abs(snapped)}deg then move forward"
 
 
+def _clean_area_label(area_label: str) -> str:
+    clean_area = str(area_label or "Unknown").strip() or "Unknown"
+    if " [links:" in clean_area:
+        clean_area = clean_area.split(" [links:", 1)[0].strip()
+    return clean_area or "Unknown"
+
+
+def _clean_waypoint_description(description: str) -> str:
+    return str(
+        strip_space_type_variant_suffixes(description) or description or ""
+    ).strip()
+
+
+def _split_waypoint_description(description: str) -> Tuple[str, str]:
+    clean_desc = _clean_waypoint_description(description)
+    if not clean_desc:
+        return "", ""
+    if " - " in clean_desc:
+        space_text, local_text = clean_desc.split(" - ", 1)
+        return space_text.strip(), local_text.strip()
+    return clean_desc, ""
+
+
+def _trim_local_place_prefix(local_text: str) -> str:
+    clean_text = str(local_text or "").strip()
+    lowered = clean_text.lower()
+    for prefix in ("near ", "by ", "at "):
+        if lowered.startswith(prefix):
+            trimmed = clean_text[len(prefix):].strip()
+            if trimmed:
+                return trimmed
+    return clean_text
+
+
+def _format_space_waypoint_chain_member(
+    waypoint_token: str,
+    waypoint_description: str = "",
+    is_current: bool = False,
+) -> str:
+    if is_current:
+        return "Current"
+
+    clean_desc = _clean_waypoint_description(waypoint_description)
+    _space_text, local_text = _split_waypoint_description(clean_desc)
+    member_label = _trim_local_place_prefix(local_text) or clean_desc or "waypoint"
+    if waypoint_token:
+        return f"{waypoint_token}: {member_label}"
+    return member_label
+
+
+def _format_space_waypoint_chain_group(area_label: str, member_labels: Sequence[str]) -> str:
+    clean_area = _clean_area_label(area_label)
+    members = [str(item).strip() for item in member_labels if str(item).strip()]
+    if not members:
+        return clean_area
+    return f"{clean_area} ({' -> '.join(members)})"
+
+
 def build_waypoint_summary(
     waypoint_positions: Sequence[Tuple[int, int]],
     waypoint_ids: Sequence[int],
@@ -81,8 +139,8 @@ def build_waypoint_summary(
 
     empty_area_chain_line = None
     if include_area_chain:
-        current_area_display = str(current_space_area_label or "Unknown").strip() or "Unknown"
-        empty_area_chain_line = f"Space Waypoint Chain: Current({current_area_display})"
+        current_area_display = _clean_area_label(current_space_area_label)
+        empty_area_chain_line = f"Space Waypoint Chain: {current_area_display} (Current)"
 
     if not waypoint_ids:
         lines = list(header_lines)
@@ -111,7 +169,7 @@ def build_waypoint_summary(
     node_lines: List[str] = []
     for index in visible_indices:
         wp_id = waypoint_ids[index]
-        wp_desc = str(strip_space_type_variant_suffixes(waypoint_descriptions[index]) or waypoint_descriptions[index] or "").strip()
+        wp_desc = _clean_waypoint_description(waypoint_descriptions[index] if index < len(waypoint_descriptions) else "")
         wp_py, wp_px = waypoint_positions[index]
         is_last = last_visible_index is not None and index == last_visible_index
         suffix = ""
@@ -137,7 +195,7 @@ def build_waypoint_summary(
 
         area_label = ""
         if waypoint_area_labels and index < len(waypoint_area_labels):
-            area_label = waypoint_area_labels[index]
+            area_label = _clean_area_label(waypoint_area_labels[index])
         area_note = f" | area={area_label}" if area_label else ""
         reachability_note = _build_waypoint_reachability_note(
             waypoint_index=index,
@@ -158,15 +216,20 @@ def build_waypoint_summary(
 
     visible_waypoint_ids = [waypoint_ids[index] for index in visible_indices]
     visible_waypoint_positions = [waypoint_positions[index] for index in visible_indices]
+    visible_waypoint_descriptions = [
+        waypoint_descriptions[index] if index < len(waypoint_descriptions) else ""
+        for index in visible_indices
+    ]
     visible_waypoint_area_labels = (
-        [waypoint_area_labels[index] for index in visible_indices]
+        [_clean_area_label(waypoint_area_labels[index]) for index in visible_indices]
         if waypoint_area_labels else []
     )
 
-    current_area_display = str(current_space_area_label or "Unknown").strip() or "Unknown"
+    current_area_display = _clean_area_label(current_space_area_label)
     waypoint_area_path_line = _build_waypoint_area_path_line(
         visible_waypoint_ids=visible_waypoint_ids,
         visible_waypoint_positions=visible_waypoint_positions,
+        visible_waypoint_descriptions=visible_waypoint_descriptions,
         visible_waypoint_area_labels=visible_waypoint_area_labels,
         current_pose=current_pose,
         resolution_cm=resolution_cm,
@@ -266,7 +329,7 @@ def _has_clear_path_to_waypoint(
 
 
 def _format_waypoint_area_ref(waypoint_id: int, area_label: str) -> str:
-    clean_area = str(area_label or "Unknown").strip() or "Unknown"
+    clean_area = _clean_area_label(area_label)
     return f"Space WP#{int(waypoint_id)}({clean_area})"
 
 
@@ -316,14 +379,14 @@ def _build_waypoint_reachability_note(
         if next_clear_path is False:
             continue
         next_waypoint_id = int(waypoint_ids[next_index]) if next_index < len(waypoint_ids) else int(next_index + 1)
-        next_area = (
-            str(waypoint_area_labels[next_index]).strip()
+        next_area = _clean_area_label(
+            waypoint_area_labels[next_index]
             if next_index < len(waypoint_area_labels) else "Unknown"
-        ) or "Unknown"
+        )
         return f"blocked to current position; reach via {_format_waypoint_area_ref(next_waypoint_id, next_area)}"
 
     if current_pose is not None:
-        current_area_display = str(current_space_area_label or "Unknown").strip() or "Unknown"
+        current_area_display = _clean_area_label(current_space_area_label)
         return f"blocked to current position; reach via Current({current_area_display})"
     return "blocked to current position"
 
@@ -366,6 +429,7 @@ def _format_turn_step(turn_delta_deg: float) -> str:
 def _build_waypoint_area_path_line(
     visible_waypoint_ids: Sequence[int],
     visible_waypoint_positions: Sequence[Tuple[int, int]],
+    visible_waypoint_descriptions: Sequence[str],
     visible_waypoint_area_labels: Sequence[str],
     current_pose: Optional[Sequence[float]],
     resolution_cm: float,
@@ -378,15 +442,20 @@ def _build_waypoint_area_path_line(
 
     node_entries: List[Dict[str, Any]] = []
     for index, wp_id in enumerate(visible_waypoint_ids):
-        area_label = (
-            str(visible_waypoint_area_labels[index]).strip()
+        area_label = _clean_area_label(
+            visible_waypoint_area_labels[index]
             if index < len(visible_waypoint_area_labels) else "Unknown"
-        ) or "Unknown"
+        )
+        waypoint_desc = (
+            visible_waypoint_descriptions[index]
+            if index < len(visible_waypoint_descriptions) else ""
+        )
         node_entries.append({
             "area_label": area_label,
             "token": f"WP#{int(wp_id)}",
             "point": visible_waypoint_positions[index],
             "is_current": False,
+            "description": waypoint_desc,
         })
 
     if current_pose is not None:
@@ -397,6 +466,7 @@ def _build_waypoint_area_path_line(
             "token": "Current",
             "point": (curr_py, curr_px),
             "is_current": True,
+            "description": "",
         })
     elif node_entries:
         node_entries.append({
@@ -404,61 +474,57 @@ def _build_waypoint_area_path_line(
             "token": "Current",
             "point": None,
             "is_current": True,
+            "description": "",
         })
 
     if not node_entries:
-        return "Space Waypoint Chain: Current(Unknown)" if include_area_chain else None
+        return "Space Waypoint Chain: Unknown (Current)" if include_area_chain else None
 
     grouped_entries: List[Dict[str, Any]] = []
-    for node_index, entry in enumerate(node_entries):
-        area_label = str(entry.get("area_label", "Unknown") or "Unknown").strip() or "Unknown"
-        if (
-            grouped_entries
-            and area_label != "Unknown"
-            and area_label == grouped_entries[-1]["area_label"]
-        ):
-            grouped_entries[-1]["tokens"].append(str(entry.get("token", "")))
-            if entry.get("point") is not None:
-                grouped_entries[-1]["last_point"] = entry.get("point")
-            grouped_entries[-1]["has_current"] = (
-                grouped_entries[-1]["has_current"] or bool(entry.get("is_current", False))
-            )
+    for entry in node_entries:
+        area_label = _clean_area_label(str(entry.get("area_label", "Unknown") or "Unknown"))
+        point = entry.get("point")
+        if grouped_entries and area_label == grouped_entries[-1]["area_label"]:
+            grouped_entries[-1]["members"].append(entry)
+            if grouped_entries[-1]["first_point"] is None and point is not None:
+                grouped_entries[-1]["first_point"] = point
+            if point is not None:
+                grouped_entries[-1]["last_point"] = point
             continue
 
         grouped_entries.append({
             "area_label": area_label,
-            "tokens": [str(entry.get("token", ""))],
-            "first_point": entry.get("point"),
-            "last_point": entry.get("point"),
-            "has_current": bool(entry.get("is_current", False)),
-            "start_node_index": int(node_index),
+            "members": [entry],
+            "first_point": point,
+            "last_point": point,
         })
 
     def _format_group(entry: Dict[str, Any]) -> str:
-        area_label = str(entry.get("area_label", "Unknown") or "Unknown").strip() or "Unknown"
-        tokens = [token for token in entry.get("tokens", []) if token]
-        token_chain = "->".join(tokens)
-        if area_label == "Unknown" and tokens == ["Current"]:
-            return "Current(Unknown)"
-        if not token_chain:
-            return area_label
-        return f"{area_label} ({token_chain})"
+        member_labels = [
+            _format_space_waypoint_chain_member(
+                waypoint_token=str(member.get("token", "")),
+                waypoint_description=str(member.get("description", "") or ""),
+                is_current=bool(member.get("is_current", False)),
+            )
+            for member in entry.get("members", [])
+        ]
+        return _format_space_waypoint_chain_group(
+            area_label=str(entry.get("area_label", "Unknown") or "Unknown"),
+            member_labels=member_labels,
+        )
 
     if len(grouped_entries) == 1:
         return "Space Waypoint Chain: " + _format_group(grouped_entries[0])
 
     parts: List[str] = [_format_group(grouped_entries[0])]
     for index in range(1, len(grouped_entries)):
-        prev_entry = grouped_entries[index - 1]
-        curr_entry = grouped_entries[index]
-        prev_point = prev_entry.get("last_point")
-        curr_point = curr_entry.get("first_point")
-        prev_group_start = int(prev_entry.get("start_node_index", max(index - 1, 0)))
-        prev_group_len = len(prev_entry.get("tokens", []))
-        prev_group_end = prev_group_start + max(prev_group_len - 1, 0)
+        prev_group = grouped_entries[index - 1]
+        curr_group = grouped_entries[index]
+        prev_point = prev_group.get("last_point")
+        curr_point = curr_group.get("first_point")
 
-        if prev_group_end >= 1 and prev_group_end < len(node_entries) and prev_point is not None and curr_point is not None:
-            prior_point = node_entries[prev_group_end - 1].get("point")
+        if include_path and index >= 2 and prev_point is not None and curr_point is not None:
+            prior_point = grouped_entries[index - 2].get("last_point")
             if prior_point is not None:
                 previous_heading_deg = _segment_heading_deg(
                     start_point=prior_point,
@@ -474,16 +540,20 @@ def _build_waypoint_area_path_line(
                 turn_text = _format_turn_step(turn_delta_deg)
                 if turn_text:
                     parts.append(turn_text)
-        if prev_point is not None and curr_point is not None:
+
+        if include_path and prev_point is not None and curr_point is not None:
             distance_m = _segment_distance_m(
                 start_point=prev_point,
                 end_point=curr_point,
                 resolution_cm=resolution_cm,
             )
-            parts.append(f" move {distance_m:.1f}m to ")
+            if distance_m < 0.05:
+                parts.append(" -> ")
+            else:
+                parts.append(f" move {distance_m:.1f}m to ")
         else:
             parts.append(" -> ")
-        parts.append(_format_group(curr_entry))
+        parts.append(_format_group(curr_group))
 
     return "Space Waypoint Chain: " + "".join(parts)
 

@@ -70,6 +70,9 @@ class VLMNavigationController(BaseNavigationController):
     AUTO_RETREAT_STOP_EARLY_IF_REVERSE_BLOCKED = False
     THINKING_LOOKAROUND_STEPS = 12
     FINAL_DESTINATION_MATCH_AUTOSTOP_STREAK = 3
+    FINAL_DESTINATION_MATCH_AUTOSTOP_RADIUS_M = 1.0
+    ACTION_STAGNATION_REPLAN_STREAK = 3
+    ACTION_STAGNATION_MAX_MOVEMENT_M = 0.25
     
     def __init__(self, config: Config,
                  config_path: str = "vlnce_baselines/config/api/vlm_api_config.yaml"):
@@ -110,6 +113,36 @@ class VLMNavigationController(BaseNavigationController):
                 ) or self.FINAL_DESTINATION_MATCH_AUTOSTOP_STREAK
             ),
         )
+        self.final_destination_match_autostop_radius_m = max(
+            0.0,
+            float(
+                getattr(
+                    config.MAP,
+                    "FINAL_DESTINATION_MATCH_AUTOSTOP_RADIUS_M",
+                    self.FINAL_DESTINATION_MATCH_AUTOSTOP_RADIUS_M,
+                ) or self.FINAL_DESTINATION_MATCH_AUTOSTOP_RADIUS_M
+            ),
+        )
+        self.action_stagnation_replan_streak = max(
+            1,
+            int(
+                getattr(
+                    config.MAP,
+                    "ACTION_STAGNATION_REPLAN_STREAK",
+                    self.ACTION_STAGNATION_REPLAN_STREAK,
+                ) or self.ACTION_STAGNATION_REPLAN_STREAK
+            ),
+        )
+        self.action_stagnation_max_movement_m = max(
+            0.0,
+            float(
+                getattr(
+                    config.MAP,
+                    "ACTION_STAGNATION_MAX_MOVEMENT_M",
+                    self.ACTION_STAGNATION_MAX_MOVEMENT_M,
+                ) or self.ACTION_STAGNATION_MAX_MOVEMENT_M
+            ),
+        )
         
         # 初始化LLM规划器
         try:
@@ -135,6 +168,9 @@ class VLMNavigationController(BaseNavigationController):
         self.latest_thinking_cycle_info = {}
         self.thinking_view_renderer = ThinkingViewRenderer()
         self.final_goal_destination_match_streak = 0
+        self.final_goal_destination_match_anchor_xy = None
+        self.action_stagnation_streak = 0
+        self.verify_replan_prompt_notice = ""
         
         # 初始化管理器
         self.save_manager = None  # 在reset_episode时初始化
@@ -181,6 +217,61 @@ class VLMNavigationController(BaseNavigationController):
         else:
             self.progress_summary = f"{self.progress_summary}, {note}"
 
+    def _get_low_level_stagnation_threshold_m(self) -> float:
+        """Use a strict no-move threshold for low-level forward steps."""
+        configured_threshold_m = max(0.0, float(self.action_stagnation_max_movement_m or 0.0))
+        step_scaled_threshold_m = max(0.0, float(self.move_distance or 0.0) * 0.2)
+        if step_scaled_threshold_m <= 0.0:
+            return configured_threshold_m
+        if configured_threshold_m <= 0.0:
+            return step_scaled_threshold_m
+        return min(configured_threshold_m, step_scaled_threshold_m)
+
+    @staticmethod
+    def _build_stagnation_verify_notice() -> str:
+        return (
+            "You just tried to go straight three low-level MOVE_FORWARD steps without actually moving, "
+            "so an obstacle is likely blocking the front route. In the next plan, do not choose the "
+            "front-facing sector (Left 30deg / Front / Right 30deg); choose a clearer obstacle-free "
+            "direction that still advances toward the destination."
+        )
+
+    def _update_action_stagnation_streak(
+        self,
+        action_name: Optional[str],
+        actual_meters: float,
+    ) -> bool:
+        action_name_upper = str(action_name or "").upper()
+        if action_name_upper != "MOVE_FORWARD":
+            if self.action_stagnation_streak > 0:
+                print(
+                    "[ActionStagnation] "
+                    f"{action_name_upper or 'NON_FORWARD'} broke the forward-stall streak; "
+                    "reset stagnation streak"
+                )
+            self.action_stagnation_streak = 0
+            return False
+
+        stagnation_threshold_m = self._get_low_level_stagnation_threshold_m()
+        if float(actual_meters) <= stagnation_threshold_m:
+            self.action_stagnation_streak += 1
+            print(
+                "[ActionStagnation] "
+                f"low-level MOVE_FORWARD moved only {float(actual_meters):.2f}m "
+                f"(no-move threshold {stagnation_threshold_m:.2f}m) | "
+                f"streak {self.action_stagnation_streak}/{self.action_stagnation_replan_streak}"
+            )
+        else:
+            if self.action_stagnation_streak > 0:
+                print(
+                    "[ActionStagnation] "
+                    f"Low-level MOVE_FORWARD recovered with {float(actual_meters):.2f}m movement; "
+                    "reset stagnation streak"
+                )
+            self.action_stagnation_streak = 0
+
+        return self.action_stagnation_streak >= self.action_stagnation_replan_streak
+
     @staticmethod
     def _get_next_waypoint_field(payload: Optional[Dict[str, Any]]) -> str:
         if not payload:
@@ -219,11 +310,36 @@ class VLMNavigationController(BaseNavigationController):
         object_norm = self._normalize_landmark_candidate(object_text)
         return room_norm or None, object_norm or None
 
+    def _get_current_subtask_autocomplete_candidates(self) -> List[str]:
+        """Only allow proximity auto-stop when subtask_landmark is the destination landmark itself."""
+        _dest_room, dest_object = self._parse_subtask_destination()
+        dest_object_norm = self._normalize_landmark_candidate(dest_object)
+        subtask_landmark_norm = self._normalize_landmark_candidate(
+            self._get_subtask_landmark_field(getattr(self, 'current_subtask', None))
+        )
+        if not dest_object_norm or not subtask_landmark_norm:
+            return []
+
+        destination_aligned = (
+            subtask_landmark_norm == dest_object_norm or
+            subtask_landmark_norm in dest_object_norm or
+            dest_object_norm in subtask_landmark_norm
+        )
+        if not destination_aligned:
+            return []
+
+        candidates: List[str] = []
+        for raw_candidate in (subtask_landmark_norm, dest_object_norm):
+            normalized = self._normalize_landmark_candidate(raw_candidate)
+            if normalized and normalized not in candidates:
+                candidates.append(normalized)
+        return candidates
+
     def _should_autocomplete_subtask_during_action_step(
         self,
         step_landmark_entries: Sequence[Dict[str, Any]],
     ) -> Optional[Dict[str, Any]]:
-        candidate_names = self._get_current_subtask_landmark_candidates()
+        candidate_names = self._get_current_subtask_autocomplete_candidates()
         if not candidate_names:
             return None
 
@@ -509,6 +625,9 @@ class VLMNavigationController(BaseNavigationController):
         self.latest_thinking_cycle_info = {}
         self.tracked_landmark_classes = set()
         self.final_goal_destination_match_streak = 0
+        self.final_goal_destination_match_anchor_xy = None
+        self.action_stagnation_streak = 0
+        self.verify_replan_prompt_notice = ""
         self.pose_before_action = None  # 重置pose追踪
         self.last_planned_degrees = 0  # 记录计划转向角度
         self.last_planned_meters = 0   # 记录计划移动距离
@@ -577,11 +696,24 @@ class VLMNavigationController(BaseNavigationController):
         last_node = re.sub(r"\([^)]*\)", "", last_node).strip()
         return " ".join(last_node.split()) or None
 
+    @staticmethod
+    def _extract_pose_xy(pose: Optional[Sequence[float]]) -> Optional[Tuple[float, float]]:
+        if pose is None or len(pose) < 2:
+            return None
+        try:
+            return float(pose[0]), float(pose[1])
+        except (TypeError, ValueError):
+            return None
+
+    def _reset_final_goal_destination_match_state(self) -> None:
+        self.final_goal_destination_match_streak = 0
+        self.final_goal_destination_match_anchor_xy = None
+
     def _update_final_goal_destination_match_streak(
         self,
         response: Dict[str, Any],
-    ) -> Tuple[bool, Optional[str], Optional[str], int]:
-        """Track consecutive matches between final waypoint-chain endpoint and next destination."""
+    ) -> Tuple[bool, Optional[str], Optional[str], int, Optional[float], bool, bool]:
+        """Track goal-tail matches plus whether they stay inside the same finish region."""
         waypoint_chain = response.get('waypoint_chain') or response.get('waypoint_sequence') or ''
         next_destination = self._get_next_waypoint_field(response)
         last_chain_node = self._extract_last_waypoint_chain_node(waypoint_chain)
@@ -594,14 +726,50 @@ class VLMNavigationController(BaseNavigationController):
             normalized_last == normalized_destination
         )
 
+        anchor_distance_m: Optional[float] = None
+        stayed_inside_anchor_region = False
+        restarted_by_anchor_drift = False
+
         if matched:
-            self.final_goal_destination_match_streak += 1
+            current_xy = self._extract_pose_xy(self._get_agent_pose())
+            if current_xy is None:
+                self.final_goal_destination_match_streak = 1
+                self.final_goal_destination_match_anchor_xy = None
+            elif (
+                self.final_goal_destination_match_streak <= 0 or
+                self.final_goal_destination_match_anchor_xy is None
+            ):
+                self.final_goal_destination_match_streak = 1
+                self.final_goal_destination_match_anchor_xy = current_xy
+                anchor_distance_m = 0.0
+                stayed_inside_anchor_region = True
+            else:
+                anchor_x, anchor_y = self.final_goal_destination_match_anchor_xy
+                anchor_distance_m = float(np.hypot(current_xy[0] - anchor_x, current_xy[1] - anchor_y))
+                if anchor_distance_m <= self.final_destination_match_autostop_radius_m:
+                    self.final_goal_destination_match_streak += 1
+                    stayed_inside_anchor_region = True
+                else:
+                    restarted_by_anchor_drift = True
+                    self.final_goal_destination_match_streak = 1
+                    self.final_goal_destination_match_anchor_xy = current_xy
         else:
-            self.final_goal_destination_match_streak = 0
+            self._reset_final_goal_destination_match_state()
 
         response['final_waypoint_chain_goal'] = last_chain_node or ""
         response['final_waypoint_destination_match_streak'] = self.final_goal_destination_match_streak
-        return matched, last_chain_node, str(next_destination).strip() or None, self.final_goal_destination_match_streak
+        response['final_waypoint_destination_anchor_distance_m'] = anchor_distance_m
+        response['final_waypoint_destination_anchor_radius_m'] = self.final_destination_match_autostop_radius_m
+        response['final_waypoint_destination_anchor_region_stable'] = stayed_inside_anchor_region
+        return (
+            matched,
+            last_chain_node,
+            str(next_destination).strip() or None,
+            self.final_goal_destination_match_streak,
+            anchor_distance_m,
+            stayed_inside_anchor_region,
+            restarted_by_anchor_drift,
+        )
 
     @classmethod
     def _iter_landmark_source_candidates(cls, source: Optional[str]) -> List[str]:
@@ -1095,6 +1263,7 @@ class VLMNavigationController(BaseNavigationController):
         else:
             detected_landmarks = self._collect_thinking_detected_landmarks()
             waypoint_summary = self._get_waypoint_summary(include_area_chain=True)
+            verify_replan_prompt_notice = str(getattr(self, 'verify_replan_prompt_notice', '') or '').strip()
             response, prompt = self.planner.verify_and_replan(
                 instruction=self.current_instruction,
                 current_subtask=self.current_subtask,
@@ -1105,8 +1274,10 @@ class VLMNavigationController(BaseNavigationController):
                 detected_landmarks=detected_landmarks,
                 waypoint_summary=waypoint_summary,
                 obstacle_distances=obstacle_distances,
+                verify_replan_prompt_notice=verify_replan_prompt_notice,
                 save_dir=thinking_dir,
             )
+            self.verify_replan_prompt_notice = ""
 
         if not response:
             self.latest_thinking_cycle_info = {
@@ -1144,6 +1315,8 @@ class VLMNavigationController(BaseNavigationController):
         self._reset_custom_landmark_state()
         self.progress_summary = ""
         self.previous_action_reason = ""
+        self.action_stagnation_streak = 0
+        self.verify_replan_prompt_notice = ""
         self.pose_before_action = None
         self.last_planned_degrees = 0
         self.last_planned_meters = 0
@@ -1183,13 +1356,35 @@ class VLMNavigationController(BaseNavigationController):
         task_finished = bool(response.get('global_task_finish', False))
         phase_default = 'initial' if is_initial else ''
         previous_match_streak = int(getattr(self, 'final_goal_destination_match_streak', 0) or 0)
-        match_hit, last_chain_node, next_destination, match_streak = self._update_final_goal_destination_match_streak(response)
+        (
+            match_hit,
+            last_chain_node,
+            next_destination,
+            match_streak,
+            anchor_distance_m,
+            stayed_inside_anchor_region,
+            restarted_by_anchor_drift,
+        ) = self._update_final_goal_destination_match_streak(response)
 
-        if match_hit:
+        if match_hit and stayed_inside_anchor_region:
             print(
                 "[GoalRegionMatch] "
                 f"waypoint_chain tail='{last_chain_node}' matches destination='{next_destination}' "
-                f"| streak={match_streak}/{self.final_destination_match_autostop_streak}"
+                f"| streak={match_streak}/{self.final_destination_match_autostop_streak} "
+                f"| anchor_distance={float(anchor_distance_m or 0.0):.2f}/{self.final_destination_match_autostop_radius_m:.2f}m"
+            )
+        elif match_hit and restarted_by_anchor_drift:
+            print(
+                "[GoalRegionMatch] "
+                f"waypoint_chain tail='{last_chain_node}' still matches destination='{next_destination}', "
+                f"but the agent moved {float(anchor_distance_m or 0.0):.2f}m away from the first matched pose "
+                f"(limit {self.final_destination_match_autostop_radius_m:.2f}m); restart stable-goal streak from 1"
+            )
+        elif match_hit:
+            print(
+                "[GoalRegionMatch] "
+                f"waypoint_chain tail='{last_chain_node}' matches destination='{next_destination}', "
+                "but current pose was unavailable so the spatial stable-goal window could not be verified yet"
             )
         elif previous_match_streak > 0 and self.final_goal_destination_match_streak == 0:
             print("[GoalRegionMatch] streak reset (final waypoint tail no longer matches destination)")
@@ -1197,15 +1392,18 @@ class VLMNavigationController(BaseNavigationController):
         auto_finish_by_streak = (
             not task_finished and
             match_hit and
+            stayed_inside_anchor_region and
             match_streak >= int(self.final_destination_match_autostop_streak)
         )
         if auto_finish_by_streak:
             task_finished = True
             response['global_task_finish'] = True
             response['auto_task_finish_by_destination_streak'] = True
+            response['auto_task_finish_by_goal_region_stability'] = True
             print(
                 "[AutoTaskComplete] "
-                f"final waypoint tail matched next destination for {match_streak} consecutive thinking cycles; "
+                f"final waypoint tail matched next destination for {match_streak} consecutive thinking cycles "
+                f"and all matched poses stayed within {self.final_destination_match_autostop_radius_m:.2f}m of the first matched pose; "
                 "stop the task even though the planner did not set global_task_finish."
             )
 
@@ -1795,26 +1993,6 @@ class VLMNavigationController(BaseNavigationController):
                 print('[WARN] Episode already done before action execution')
                 return 'complete'
 
-            if self._all_action_directions_blocked(threshold_m=0.5):
-                if not self.enable_auto_retreat:
-                    print(
-                        '[AutoRetreat] FRONT/LEFT30/RIGHT30 all blocked (<0.5m), '
-                        'but auto-retreat is disabled in config; hand control back to the thinking controller.'
-                    )
-                    return 'thinking'
-
-                retreated_m, retreat_done = self._execute_auto_retreat(retreat_distance_m=1.0)
-
-                if retreat_done:
-                    print('[WARN] Episode done during automatic retreat')
-                    return 'complete'
-
-                print(
-                    f"[AutoRetreat] Finished turn-around move ({retreated_m:.2f}m). "
-                    f"Hand control back to the thinking controller."
-                )
-                return 'thinking'
-
             max_retries = 3
             action_id = None
             vlm_response = None
@@ -1849,6 +2027,9 @@ class VLMNavigationController(BaseNavigationController):
 
             subtask_steps += 1
             force_replan_after_action = subtask_steps >= max_subtask_steps
+            replan_for_stagnation = False
+            stagnation_actual_meters = None
+            stagnation_threshold_m = self._get_low_level_stagnation_threshold_m()
 
             if self.pose_before_action is None:
                 self.pose_before_action = self._get_agent_pose()
@@ -1856,7 +2037,13 @@ class VLMNavigationController(BaseNavigationController):
             auto_completed_subtask = None
 
             for i in range(repeat_count):
+                pose_before_low_level = self._get_agent_pose()
                 result = self.step_with_vlm(action_id, action_name=action_name, save_vis=True)
+                pose_after_low_level = self._get_agent_pose()
+                low_level_actual_meters = float(np.hypot(
+                    pose_after_low_level[0] - pose_before_low_level[0],
+                    pose_after_low_level[1] - pose_before_low_level[1],
+                ))
 
                 if repeat_count > 1:
                     print(f"  [Step {self.current_step}] {action_name} ({i + 1}/{repeat_count})")
@@ -1883,10 +2070,19 @@ class VLMNavigationController(BaseNavigationController):
                         '[AutoSubtaskComplete] '
                         f"{auto_completed_subtask['name']} ({landmark_kind}) reached within "
                         f"{auto_completed_subtask['distance_m']:.2f}m "
-                        f"(threshold {float(auto_completed_subtask.get('stop_distance_m', 1.0)):.2f}m) "
+                        f"(threshold {float(auto_completed_subtask.get('stop_distance_m', self.ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M)):.2f}m) "
                         f"on action step {self.current_step}; "
                         'return control to the thinking controller.'
                     )
+                    break
+
+                replan_for_stagnation = self._update_action_stagnation_streak(
+                    action_name,
+                    low_level_actual_meters,
+                )
+                if str(action_name or "").upper() == 'MOVE_FORWARD':
+                    stagnation_actual_meters = low_level_actual_meters
+                if replan_for_stagnation:
                     break
 
             if hasattr(self, 'last_action_name') and self.last_action_name:
@@ -1930,14 +2126,38 @@ class VLMNavigationController(BaseNavigationController):
                 self._append_progress_note(
                     f"had reached {auto_completed_subtask['name']} ({landmark_kind}) within "
                     f"{auto_completed_subtask['distance_m']:.2f}m "
-                    f"(auto-stop threshold {float(auto_completed_subtask.get('stop_distance_m', 1.0)):.2f}m), "
+                    f"(auto-stop threshold {float(auto_completed_subtask.get('stop_distance_m', self.ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M)):.2f}m), "
                     'so ended the current subtask and triggered replan'
                 )
                 self.previous_action_reason = (
                     f"Displayed destination landmark {auto_completed_subtask['name']} ({landmark_kind}) was within "
                     f"{auto_completed_subtask['distance_m']:.2f}m "
-                    f"(threshold {float(auto_completed_subtask.get('stop_distance_m', 1.0)):.2f}m), "
+                    f"(threshold {float(auto_completed_subtask.get('stop_distance_m', self.ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M)):.2f}m), "
                     'so the system ended the current subtask and started thinking'
+                )
+                return 'thinking'
+
+            if replan_for_stagnation:
+                latest_actual_meters = (
+                    float(stagnation_actual_meters)
+                    if stagnation_actual_meters is not None
+                    else 0.0
+                )
+                self.verify_replan_prompt_notice = self._build_stagnation_verify_notice()
+                self._append_progress_note(
+                    f"tried low-level MOVE_FORWARD {self.action_stagnation_streak} consecutive times but the latest move was only "
+                    f"{latest_actual_meters:.2f}m "
+                    f"(no-move threshold {stagnation_threshold_m:.2f}m), so triggered replan"
+                )
+                self.previous_action_reason = (
+                    f"The agent made {self.action_stagnation_streak} consecutive low-level MOVE_FORWARD steps with actual movement <= "
+                    f"{stagnation_threshold_m:.2f}m "
+                    f"(latest actual movement {latest_actual_meters:.2f}m), so the system treated the front route as blocked and started thinking."
+                )
+                print(
+                    "[Replan] Triggered by action stagnation: "
+                    f"{self.action_stagnation_streak} consecutive low-level MOVE_FORWARD steps moved <= "
+                    f"{stagnation_threshold_m:.2f}m"
                 )
                 return 'thinking'
 

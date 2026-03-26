@@ -4,6 +4,10 @@ import cv2
 import numpy as np
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from vlnce_baselines.config.core.params.actions import (
+    ACTION_SUBTASK_AUTOCOMPLETE_OPEN_DISTANCE_M,
+    ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M,
+)
 from vlnce_baselines.utils.spatial_formatter import format_relative_direction
 from vlnce_baselines.visualization.landmark_overlay import (
     LandmarkDrawItem,
@@ -235,11 +239,13 @@ def render_detection_bbox(owner,
             normalized["edge_depth_median"] = candidate.get("edge_depth_median", normalized.get("edge_depth_median"))
             normalized["interior_depth_median"] = candidate.get("interior_depth_median", normalized.get("interior_depth_median"))
             normalized["stop_distance_m"] = min(
-                float(_float_or_none(normalized.get("stop_distance_m")) or 1.0),
-                float(_float_or_none(candidate.get("stop_distance_m")) or 1.0),
+                float(_float_or_none(normalized.get("stop_distance_m")) or ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M),
+                float(_float_or_none(candidate.get("stop_distance_m")) or ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M),
             )
         else:
-            normalized["stop_distance_m"] = float(_float_or_none(normalized.get("stop_distance_m")) or 1.0)
+            normalized["stop_distance_m"] = float(
+                _float_or_none(normalized.get("stop_distance_m")) or ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M
+            )
         return normalized
 
     def _build_landmark_strip(selected_entries: List[Dict[str, Any]]) -> Tuple[Optional[np.ndarray], List[Dict[str, Any]]]:
@@ -344,7 +350,11 @@ def render_detection_bbox(owner,
             "opening_gap_m": det_depth_profile.get("opening_gap_m"),
             "edge_depth_median": det_depth_profile.get("edge_depth_median"),
             "interior_depth_median": det_depth_profile.get("interior_depth_median"),
-            "stop_distance_m": 0.5 if bool(det_depth_profile.get("is_opening_like", False)) else 1.0,
+            "stop_distance_m": (
+                float(ACTION_SUBTASK_AUTOCOMPLETE_OPEN_DISTANCE_M)
+                if bool(det_depth_profile.get("is_opening_like", False))
+                else float(ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M)
+            ),
         })
 
     deduped_candidates = owner._dedupe_detection_candidates(
@@ -550,7 +560,7 @@ def render_detection_bbox(owner,
                 "opening_gap_m": candidate.get("opening_gap_m"),
                 "edge_depth_median": candidate.get("edge_depth_median"),
                 "interior_depth_median": candidate.get("interior_depth_median"),
-                "stop_distance_m": float(candidate.get("stop_distance_m", 1.0)),
+                "stop_distance_m": float(candidate.get("stop_distance_m", ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M)),
             }
             visible_entries_meta.append(visible_entry)
             selected_topk_entries.append(dict(visible_entry))
