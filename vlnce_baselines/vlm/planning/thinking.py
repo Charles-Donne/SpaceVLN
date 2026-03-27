@@ -3,6 +3,7 @@ LLM规划模块
 ===========
 高层规划：分析环境生成子任务
 """
+import re
 from typing import Dict, List, Tuple, Optional
 from vlnce_baselines.vlm.api.api_client import APIConfig, BaseAPIClient
 from vlnce_baselines.vlm.prompts.prompts import (
@@ -59,6 +60,38 @@ class LLMPlanner(BaseAPIClient):
             return False
 
         return True
+
+    @staticmethod
+    def _extract_image_index(direction_text: Optional[str]) -> Optional[int]:
+        match = re.search(r'IMAGE\s*(\d+)', str(direction_text or ''), re.IGNORECASE)
+        if not match:
+            return None
+        try:
+            return int(match.group(1))
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _direction_is_available(
+        cls,
+        chosen_direction: Optional[str],
+        direction_names: Optional[List[str]],
+    ) -> bool:
+        chosen_index = cls._extract_image_index(chosen_direction)
+        if chosen_index is None:
+            return True
+
+        available_indices = {
+            image_idx
+            for image_idx in (
+                cls._extract_image_index(direction_name)
+                for direction_name in list(direction_names or [])
+            )
+            if image_idx is not None
+        }
+        if not available_indices:
+            return True
+        return chosen_index in available_indices
     
     def generate_initial_subtask(self,
                                 instruction: str,
@@ -116,7 +149,13 @@ class LLMPlanner(BaseAPIClient):
                                      no_compress_indices=no_compress)
             
             if response and self.validate_response(response, mode='initial'):
-                return response, prompt
+                if not self._direction_is_available(response.get('next_waypoint_direction'), direction_names):
+                    print(
+                        "  [WARN] LLM Planning chose an unavailable direction: "
+                        f"{response.get('next_waypoint_direction', '')}"
+                    )
+                else:
+                    return response, prompt
             
             if retry < max_retries - 1:
                 wait = (retry + 1) * 2  # 2s, 4s 递增等待
@@ -187,6 +226,7 @@ class LLMPlanner(BaseAPIClient):
             detected_landmarks=landmarks_str,
             waypoint_summary=waypoint_summary,
             verify_replan_prompt_notice=verify_replan_prompt_notice,
+            direction_names=direction_names,
         )
         
         # 组合图像：当前位置12方向 + 全局地图
@@ -203,7 +243,13 @@ class LLMPlanner(BaseAPIClient):
                                      no_compress_indices=no_compress)
             
             if response and self.validate_response(response, mode='verify'):
-                return response, prompt
+                if not self._direction_is_available(response.get('next_waypoint_direction'), direction_names):
+                    print(
+                        "  [WARN] LLM Verify chose an unavailable direction: "
+                        f"{response.get('next_waypoint_direction', '')}"
+                    )
+                else:
+                    return response, prompt
             
             if retry < max_retries - 1:
                 wait = (retry + 1) * 2

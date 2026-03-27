@@ -38,6 +38,7 @@ PANORAMA_DIRECTIONS = {
 DEFAULT_RAYCAST_FOOTPRINT_RADIUS_PX = 3
 DEFAULT_RAYCAST_FOOTPRINT_SAMPLE_COUNT = 9
 DEFAULT_RAYCAST_FOOTPRINT_PERCENTILE = 60.0
+DEFAULT_DEPTH_REGION_SAMPLE_COUNT = 96
 
 
 def build_rotated_obstacle_mask(
@@ -344,6 +345,61 @@ def _parse_distance_text_m(distance_text: Optional[str]) -> Optional[float]:
     if ">" in text:
         return number + 0.1
     return number
+
+
+def sample_depth_distance_from_region(
+    depth_meters: np.ndarray,
+    center_x_ratio: float = 0.5,
+    width_ratio: float = 0.24,
+    row_start_ratio: float = 0.35,
+    row_end_ratio: float = 0.90,
+    max_distance_m: float = 5.0,
+    sample_count: int = DEFAULT_DEPTH_REGION_SAMPLE_COUNT,
+    sample_percentile: float = 20.0,
+    min_depth_m: float = 0.02,
+) -> Optional[float]:
+    """Estimate a depth distance by randomly sampling a rectangular image region."""
+    depth = _prepare_depth_array(depth_meters)
+    if depth is None:
+        return None
+
+    height, width = depth.shape
+    if height <= 0 or width <= 0:
+        return None
+
+    center_x_ratio = float(np.clip(center_x_ratio, 0.0, 1.0))
+    width_ratio = float(np.clip(width_ratio, 1e-3, 1.0))
+    half_width_ratio = 0.5 * width_ratio
+
+    row_start = max(0, min(height - 1, int(round(height * float(row_start_ratio)))))
+    row_end = max(row_start + 1, min(height, int(round(height * float(row_end_ratio)))))
+    col_start = max(0, min(width - 1, int(round(width * (center_x_ratio - half_width_ratio)))))
+    col_end = max(col_start + 1, min(width, int(round(width * (center_x_ratio + half_width_ratio)))))
+
+    region = depth[row_start:row_end, col_start:col_end]
+    valid_mask = np.isfinite(region) & (region > float(min_depth_m))
+    if not np.any(valid_mask):
+        return None
+
+    ys, xs = np.where(valid_mask)
+    sample_total = int(max(1, sample_count))
+    if ys.size > sample_total:
+        rng = np.random.default_rng()
+        chosen = rng.choice(ys.size, size=sample_total, replace=False)
+        ys = ys[chosen]
+        xs = xs[chosen]
+
+    sampled_depths = region[ys, xs].astype(np.float32)
+    sampled_depths = sampled_depths[np.isfinite(sampled_depths) & (sampled_depths > float(min_depth_m))]
+    if sampled_depths.size == 0:
+        return None
+
+    clipped = sampled_depths[sampled_depths <= float(max_distance_m)]
+    if clipped.size == 0:
+        return float(max_distance_m) + 0.1
+
+    percentile = float(np.clip(sample_percentile, 0.0, 100.0))
+    return float(np.percentile(clipped, percentile))
 
 
 def sample_depth_distance_for_angle(

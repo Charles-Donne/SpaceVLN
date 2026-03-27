@@ -42,6 +42,29 @@ def format_relative_direction(bearing_deg: float) -> str:
     return f"{side} {magnitude:.0f}deg"
 
 
+def _counterclockwise_direction_sort_key(bearing_deg: float) -> Tuple[int, float]:
+    """Sort bearings in counterclockwise 12-view order starting from Front."""
+    snapped = snap_relative_bearing(bearing_deg)
+    if abs(snapped) >= 165.0:
+        snapped = 180
+    direction_order = {
+        0: 0,
+        -30: 1,
+        -60: 2,
+        -90: 3,
+        -120: 4,
+        -150: 5,
+        180: 6,
+        150: 7,
+        120: 8,
+        90: 9,
+        60: 10,
+        30: 11,
+    }
+    direction_rank = direction_order.get(int(snapped), 12)
+    return direction_rank, abs(normalize_relative_bearing(bearing_deg) - float(snapped))
+
+
 def build_landmark_turn_hint(bearing_deg: float, is_visible: bool = False) -> str:
     """Produce the short action-side hint used for visible/off-screen landmarks."""
     snapped = snap_relative_bearing(bearing_deg)
@@ -164,17 +187,46 @@ def build_waypoint_summary(
 
     visible_indices = list(range(len(waypoint_ids)))
     last_visible_index = visible_indices[-1] if visible_indices else None
+    display_indices = list(visible_indices)
+    if current_pose is not None:
+        display_indices.sort(
+            key=lambda index: (
+                _counterclockwise_direction_sort_key(
+                    float(current_pose[2]) - math.degrees(
+                        math.atan2(
+                            (
+                                float(waypoint_positions[index][0]) * float(resolution_cm) / 100.0
+                                - float(current_pose[1])
+                            ),
+                            (
+                                float(waypoint_positions[index][1]) * float(resolution_cm) / 100.0
+                                - float(current_pose[0])
+                            ),
+                        )
+                    )
+                ),
+                float(waypoint_distances_m[index]) if waypoint_distances_m[index] is not None else float("inf"),
+                int(waypoint_ids[index]) if index < len(waypoint_ids) else int(index),
+            )
+        )
 
     all_area_labels = list(waypoint_area_labels or [])
     node_lines: List[str] = []
-    for index in visible_indices:
+    for index in display_indices:
         wp_id = waypoint_ids[index]
         wp_desc = _clean_waypoint_description(waypoint_descriptions[index] if index < len(waypoint_descriptions) else "")
         wp_py, wp_px = waypoint_positions[index]
         is_last = last_visible_index is not None and index == last_visible_index
-        suffix = ""
+        suffix_notes: List[str] = []
+        if index == 0:
+            suffix_notes.append("TASK INITIAL POSITION")
         if is_last:
-            suffix = "  <- LAST VISITED / CURRENT AREA" if last_waypoint_overlaps_current else "  <- LAST VISITED (came from here)"
+            suffix_notes.append(
+                "LAST VISITED / CURRENT AREA"
+                if last_waypoint_overlaps_current else
+                "LAST VISITED (came from here)"
+            )
+        suffix = f"  <- {' | '.join(suffix_notes)}" if suffix_notes else ""
 
         distance_m = None
         relative_bearing_deg = None

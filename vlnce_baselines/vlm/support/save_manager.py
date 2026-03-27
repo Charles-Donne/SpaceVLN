@@ -101,13 +101,13 @@ class SaveManager:
                 float("-inf"),
             )
 
-        success = self._safe_int(result.get('sr', result.get('success', 0)), 0)
+        success = self._safe_int(result.get('sr', 0), 0)
         spl = self._safe_float(result.get('spl', 0.0), 0.0)
-        ndtw = self._safe_float(result.get('ndtw', result.get('nDTW', 0.0)), 0.0)
-        oracle_success = self._safe_int(result.get('osr', result.get('oracle_success', 0)), 0)
+        ndtw = self._safe_float(result.get('ndtw', 0.0), 0.0)
+        oracle_success = self._safe_int(result.get('osr', 0), 0)
         oracle_spl = self._safe_float(result.get('oracle_spl', 0.0), 0.0)
 
-        dtg = self._safe_float(result.get('ne', result.get('distance_to_goal', float('inf'))), float('inf'))
+        dtg = self._safe_float(result.get('ne', float('inf')), float('inf'))
         if dtg < 0:
             dtg = float('inf')
         path_length = self._safe_float(result.get('path_length', float('inf')), float('inf'))
@@ -299,7 +299,7 @@ class SaveManager:
         保存最终结果，并维护按episode的最佳结果:
         1. episode_xxx/records/result_latest.json (本次运行结果)
         2. episode_xxx/records/result.json (该episode当前最佳结果)
-        3. log/episode_xxx.json (该episode当前最佳结果，用于analyze_results.py分析)
+        3. log/episode_xxx.json (该episode当前最佳结果，供结果报告程序使用)
         """
         latest_result_path = os.path.join(self.records_dir, "result_latest.json")
         with open(latest_result_path, 'w', encoding='utf-8') as f:
@@ -309,32 +309,30 @@ class SaveManager:
         result_path = os.path.join(self.records_dir, "result.json")
         existing_best_result = self._load_json_if_exists(result_path)
 
-        # 保存到log/目录（用于结果分析，保持每个episode只保留最佳结果）
         log_dir = os.path.join(self.dump_dir, "log")
         os.makedirs(log_dir, exist_ok=True)
         log_path = os.path.join(log_dir, f"episode_{self.episode_id}.json")
 
-        # 提取关键指标用于分析
         log_result = {
             'episode_id': result['episode_id'],
             'instruction': result.get('instruction', ''),
             'total_steps': result.get('total_steps', 0),
             'subtask_count': result.get('subtask_count', 0),
+            'episode_duration_s': result.get('episode_duration_s', 0.0),
 
-            # 统一评估指标命名
-            'ne': result.get('ne', result.get('distance_to_goal', -1)),
-            'osr': result.get('osr', result.get('oracle_success', 0)),
-            'sr': result.get('sr', result.get('success', 0)),
+            'ne': result.get('ne', -1),
+            'osr': result.get('osr', 0),
+            'sr': result.get('sr', 0),
             'spl': result.get('spl', 0.0),
-            'ndtw': result.get('ndtw', result.get('nDTW', 0.0)),
-            
-            # 兼容旧分析脚本/调试逻辑的原始字段
-            'success': result.get('success', 0),
-            'distance_to_goal': result.get('distance_to_goal', -1),
+            'ndtw': result.get('ndtw', 0.0),
+
+            'thinking_api_count': (result.get('thinking_api_summary') or {}).get('count', 0),
+            'thinking_api_avg_duration_s': (result.get('thinking_api_summary') or {}).get('avg_duration_s', 0.0),
+            'thinking_api_total_duration_s': (result.get('thinking_api_summary') or {}).get('total_duration_s', 0.0),
+            'action_api_count': (result.get('action_api_summary') or {}).get('count', 0),
+            'action_api_avg_duration_s': (result.get('action_api_summary') or {}).get('avg_duration_s', 0.0),
+            'action_api_total_duration_s': (result.get('action_api_summary') or {}).get('total_duration_s', 0.0),
             'path_length': result.get('path_length', 0.0),
-            
-            # Oracle指标
-            'oracle_success': result.get('oracle_success', 0),
             'oracle_navigation_error': result.get('oracle_navigation_error', float('inf')),
             'oracle_spl': result.get('oracle_spl', 0.0),
             'timestamp': result.get('timestamp', datetime.now().isoformat()),

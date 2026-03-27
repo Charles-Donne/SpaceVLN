@@ -8,14 +8,13 @@ batch execution, and summary/report generation into reusable helpers.
 import argparse
 import os
 import random
-import subprocess
-import sys
 import time
 from typing import Any, Dict, List, Tuple
 
 from vlnce_baselines.config import ConfigHelper, get_config
 from vlnce_baselines.vlm.api.api_client import resolve_api_config_path
 from vlnce_baselines.controllers.vlm_navigation_controller import VLMNavigationController
+from vlnce_baselines.runtime.results_report import generate_results_report
 
 
 MIN_EPISODE_ID = 1
@@ -199,30 +198,24 @@ def run_single_episode(
 
 
 def maybe_generate_report(args: argparse.Namespace, config, verbose: bool = True) -> None:
-    project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-    analyze_script = os.path.join(project_root, "analyze_results.py")
     results_dir = args.results_dir or config.RESULTS_DIR
-    if not os.path.exists(analyze_script) or not results_dir:
+    if not results_dir:
         return
 
-    if verbose:
-        print("\n📊 生成详细评估报告...")
     try:
-        result = subprocess.run(
-            [sys.executable, analyze_script, "--path", results_dir, "--save"],
-            capture_output=True,
-            text=True,
-            timeout=30,
+        report = generate_results_report(
+            results_dir,
+            save=True,
+            debug=False,
+            verbose=verbose,
         )
-        if result.returncode == 0:
-            if verbose:
-                print(result.stdout)
-            else:
-                print(f"📄 评估报告已更新: {os.path.join(results_dir, 'summary.txt')}")
-        else:
-            print(f"⚠️  分析脚本执行失败: {result.stderr}")
+        if not verbose:
+            summary_path = report.get("saved_paths", {}).get("summary", os.path.join(results_dir, "summary.txt"))
+            print(f"📄 评估报告已更新: {summary_path}")
+    except FileNotFoundError:
+        return
     except Exception as exc:
-        print(f"⚠️  无法运行分析脚本: {exc}")
+        print(f"⚠️  无法生成评估报告: {exc}")
 
 
 def print_batch_summary(results_summary: List[Dict[str, Any]], args: argparse.Namespace, config) -> None:

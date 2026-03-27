@@ -18,6 +18,8 @@ from vlnce_baselines.mapping import Semantic_Mapping, SemanticMapper, SemanticPr
 from vlnce_baselines.visualization import MapVisualizer
 from vlnce_baselines.visualization.obstacle_analysis import (
     calculate_obstacle_distances_from_depth,
+    format_distance,
+    sample_depth_distance_from_region,
 )
 from vlnce_baselines.config.core import ConfigHelper, create_category_config
 from vlnce_baselines.env.env_utils import construct_envs
@@ -901,44 +903,40 @@ class BaseNavigationController:
         )
 
     def _update_obstacle_distances_12_directions(self, lookaround_depths: Optional[List[np.ndarray]] = None):
-        """Update 12-view obstacle distances from depth, with map fallback when needed."""
+        """Update 12-view obstacle distances from depth, with per-view map fallback only when depth is unknown."""
+        depth_views = list(lookaround_depths or [])
+        map_fallback = {}
         try:
-            depth_views = lookaround_depths or []
-            if len(depth_views) < 12:
-                raise ValueError("Lookaround depths incomplete")
-
-            map_fallback = {}
             if self.mapper is not None and self.visualizer is not None:
                 map_state = self.mapper.get_map_state()
                 map_fallback = self.visualizer.calculate_obstacle_distances_12_directions_from_full_map(
                     map_state.get('full_map'),
                 )
-
-            distances = {}
-            for step_idx, angle in enumerate(range(0, 360, 30), start=1):
-                depth_meters = depth_views[step_idx - 1]
-                front_distance = calculate_obstacle_distances_from_depth(
-                    depth_meters,
-                    hfov_deg=float(self.config.MAP.HFOV),
-                    directions={"front": 0.0},
-                    angle_band_deg=5.0,
-                    fallback_distances={
-                        "front": map_fallback.get(f'angle_{angle}', ">2.0m open")
-                    },
-                ).get("front", "Unknown")
-                distances[f'angle_{angle}'] = front_distance
-            self.latest_obstacle_distances_12 = distances
         except Exception:
+            map_fallback = {}
+        distances = {}
+        for step_idx, angle in enumerate(range(0, 360, 30), start=1):
+            depth_meters = depth_views[step_idx - 1] if step_idx - 1 < len(depth_views) else None
             try:
-                map_state = self.mapper.get_map_state() if self.mapper is not None else {}
-                fallback = self.visualizer.calculate_obstacle_distances_12_directions_from_full_map(
-                    map_state.get('full_map'),
-                ) if self.visualizer is not None else {}
+                distance_m = sample_depth_distance_from_region(
+                    depth_meters,
+                    center_x_ratio=0.5,
+                    width_ratio=0.26,
+                    row_start_ratio=0.38,
+                    row_end_ratio=0.92,
+                    max_distance_m=5.0,
+                    sample_count=96,
+                    sample_percentile=20.0,
+                )
             except Exception:
-                fallback = {}
-            self.latest_obstacle_distances_12 = {
-                f'angle_{i}': fallback.get(f'angle_{i}', '>2.0m open') for i in range(0, 360, 30)
-            }
+                distance_m = None
+            dist_key = f'angle_{angle}'
+            distances[dist_key] = (
+                format_distance(distance_m)
+                if distance_m is not None else
+                map_fallback.get(dist_key, "Unknown")
+            )
+        self.latest_obstacle_distances_12 = distances
 
     def _update_obstacle_distances(self):
         """Update action-view obstacle distances from current depth, with map fallback."""

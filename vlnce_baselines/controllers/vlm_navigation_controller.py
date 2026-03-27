@@ -19,6 +19,7 @@ import os
 import re
 import cv2
 import json
+import time
 import numpy as np
 import torch
 from typing import Dict, Any, List, Tuple, Optional, Sequence
@@ -73,6 +74,8 @@ class VLMNavigationController(BaseNavigationController):
     FINAL_DESTINATION_MATCH_AUTOSTOP_RADIUS_M = 1.0
     ACTION_STAGNATION_REPLAN_STREAK = 3
     ACTION_STAGNATION_MAX_MOVEMENT_M = 0.25
+    STUCK_RETREAT_DISTANCE_M = 1.0
+    STUCK_RETREAT_FORBIDDEN_VIEW_IDS = (7,)
     
     def __init__(self, config: Config,
                  config_path: str = "vlnce_baselines/config/api/vlm_api_config.yaml"):
@@ -171,6 +174,10 @@ class VLMNavigationController(BaseNavigationController):
         self.final_goal_destination_match_anchor_xy = None
         self.action_stagnation_streak = 0
         self.verify_replan_prompt_notice = ""
+        self.pending_verify_view_restriction = None
+        self.episode_wall_start_time = None
+        self.thinking_api_call_records = []
+        self.action_api_call_records = []
         
         # 初始化管理器
         self.save_manager = None  # 在reset_episode时初始化
@@ -217,6 +224,82 @@ class VLMNavigationController(BaseNavigationController):
         else:
             self.progress_summary = f"{self.progress_summary}, {note}"
 
+    @staticmethod
+    def _round_duration_s(duration_s: float) -> float:
+        try:
+            return round(max(0.0, float(duration_s)), 4)
+        except (TypeError, ValueError):
+            return 0.0
+
+    @classmethod
+    def _summarize_api_timing_records(cls, records: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+        durations = [
+            float(item.get("duration_s", 0.0))
+            for item in list(records or [])
+            if item is not None
+        ]
+        count = len(durations)
+        success_count = sum(1 for item in list(records or []) if bool(item.get("success", False)))
+        failure_count = max(0, count - success_count)
+        total_duration_s = sum(durations)
+        avg_duration_s = total_duration_s / count if count > 0 else 0.0
+        min_duration_s = min(durations) if durations else 0.0
+        max_duration_s = max(durations) if durations else 0.0
+        return {
+            "count": int(count),
+            "success_count": int(success_count),
+            "failure_count": int(failure_count),
+            "total_duration_s": cls._round_duration_s(total_duration_s),
+            "avg_duration_s": cls._round_duration_s(avg_duration_s),
+            "min_duration_s": cls._round_duration_s(min_duration_s),
+            "max_duration_s": cls._round_duration_s(max_duration_s),
+        }
+
+    def _record_thinking_api_call(
+        self,
+        *,
+        mode: str,
+        phase: str,
+        duration_s: float,
+        success: bool,
+        next_waypoint: Optional[str] = None,
+    ) -> None:
+        record = {
+            "index": len(self.thinking_api_call_records) + 1,
+            "mode": str(mode or ""),
+            "phase": str(phase or ""),
+            "step": int(getattr(self, "current_step", 0) or 0),
+            "subtask_count": int(getattr(self, "subtask_count", 0) or 0),
+            "subtask_attempt": int(getattr(self, "subtask_attempt", 0) or 0),
+            "success": bool(success),
+            "duration_s": self._round_duration_s(duration_s),
+            "next_waypoint": str(next_waypoint or ""),
+        }
+        self.thinking_api_call_records.append(record)
+
+    def _record_action_api_call(
+        self,
+        *,
+        duration_s: float,
+        success: bool,
+        action_name: Optional[str] = None,
+    ) -> None:
+        attempt_letter = chr(ord('a') + int(getattr(self, 'subtask_attempt', 0) or 0))
+        record = {
+            "index": len(self.action_api_call_records) + 1,
+            "step": int(getattr(self, "current_step", 0) or 0) + 1,
+            "subtask_id": f"{int(getattr(self, 'subtask_count', 0) or 0)}{attempt_letter}",
+            "success": bool(success),
+            "duration_s": self._round_duration_s(duration_s),
+            "action": str(action_name or ""),
+        }
+        self.action_api_call_records.append(record)
+
+    def _get_episode_duration_s(self) -> float:
+        if self.episode_wall_start_time is None:
+            return 0.0
+        return self._round_duration_s(time.perf_counter() - float(self.episode_wall_start_time))
+
     def _get_low_level_stagnation_threshold_m(self) -> float:
         """Use a strict no-move threshold for low-level forward steps."""
         configured_threshold_m = max(0.0, float(self.action_stagnation_max_movement_m or 0.0))
@@ -228,12 +311,85 @@ class VLMNavigationController(BaseNavigationController):
         return min(configured_threshold_m, step_scaled_threshold_m)
 
     @staticmethod
-    def _build_stagnation_verify_notice() -> str:
+    def _extract_direction_image_id(direction_name: Optional[str]) -> Optional[int]:
+        match = re.search(r'IMAGE\s*(\d+)', str(direction_name or ""), re.IGNORECASE)
+        if not match:
+            return None
+        try:
+            return int(match.group(1))
+        except (TypeError, ValueError):
+            return None
+
+    def _consume_pending_verify_view_restriction(
+        self,
+        image_paths: List[str],
+        direction_names: List[str],
+    ) -> Tuple[List[str], List[str], Dict[str, Any]]:
+        restriction = dict(getattr(self, "pending_verify_view_restriction", None) or {})
+        self.pending_verify_view_restriction = None
+        if not restriction:
+            return image_paths, direction_names, {}
+
+        forbidden_view_ids = {
+            int(view_id)
+            for view_id in restriction.get("forbidden_view_ids", ()) or ()
+        }
+        if not forbidden_view_ids:
+            return image_paths, direction_names, {}
+
+        filtered_pairs: List[Tuple[str, str]] = []
+        removed_names: List[str] = []
+        for image_path, direction_name in zip(image_paths, direction_names):
+            image_id = self._extract_direction_image_id(direction_name)
+            if image_id is not None and image_id in forbidden_view_ids:
+                removed_names.append(str(direction_name))
+                continue
+            filtered_pairs.append((image_path, direction_name))
+
+        if not filtered_pairs:
+            return image_paths, direction_names, {}
+
+        filtered_paths = [item[0] for item in filtered_pairs]
+        filtered_names = [item[1] for item in filtered_pairs]
+        if removed_names:
+            print(
+                "[VerifyViews] Omit forbidden rear view after stuck retreat: "
+                + ", ".join(removed_names)
+            )
+        return filtered_paths, filtered_names, {
+            "forbidden_view_ids": sorted(forbidden_view_ids),
+            "removed_direction_names": removed_names,
+        }
+
+    def _build_stagnation_verify_notice(
+        self,
+        actual_retreat_m: float = 0.0,
+        retreat_distance_m: Optional[float] = None,
+    ) -> str:
+        target_retreat_m = float(retreat_distance_m or self.STUCK_RETREAT_DISTANCE_M)
+        if float(actual_retreat_m) >= max(0.75 * target_retreat_m, target_retreat_m - 0.2):
+            retreat_text = (
+                f"The system automatically turned around 180deg and moved about {target_retreat_m:.1f}m "
+                "away from the blocked route."
+            )
+        elif float(actual_retreat_m) > 0.0:
+            retreat_text = (
+                f"The system automatically turned around 180deg and tried to move about {target_retreat_m:.1f}m "
+                f"away from the blocked route (actual movement {float(actual_retreat_m):.2f}m)."
+            )
+        else:
+            retreat_text = (
+                f"The system automatically turned around 180deg and attempted a {target_retreat_m:.1f}m retreat, "
+                "but movement was still very limited."
+            )
+
         return (
-            "You just tried to go straight three low-level MOVE_FORWARD steps without actually moving, "
-            "so an obstacle is likely blocking the front route. In the next plan, do not choose the "
-            "front-facing sector (Left 30deg / Front / Right 30deg); choose a clearer obstacle-free "
-            "direction that still advances toward the destination."
+            "You just got stuck after three low-level MOVE_FORWARD steps with almost no movement, "
+            "so the previous route is treated as blocked. "
+            f"{retreat_text} "
+            "The rear back view now points back toward that blocked route, so that back direction is forbidden for this replan. "
+            "The back view (IMAGE 7: Back 180deg) is intentionally not provided. "
+            "Choose only among the provided non-back views, and do not pick any backtracking direction."
         )
 
     def _update_action_stagnation_streak(
@@ -497,18 +653,15 @@ class VLMNavigationController(BaseNavigationController):
         )
 
     def _execute_auto_retreat(self, retreat_distance_m: float = 1.0) -> Tuple[float, bool]:
-        """Turn around, move 1m away, then hand off directly to thinking/lookaround."""
+        """Turn around, move away from a stuck route, then hand off to thinking/lookaround."""
         turn_steps = max(1, round(180.0 / float(self.turn_angle)))
         move_steps = max(1, round(float(retreat_distance_m) / float(self.move_distance)))
         retreated_m = 0.0
         episode_done = False
-        reverse_path_blocked = False
-        reverse_block_warning_printed = False
-        stop_early_if_reverse_blocked = bool(self.auto_retreat_stop_early_if_reverse_blocked)
 
         print(
-            f"\n[AutoRetreat] FRONT/LEFT30/RIGHT30 all blocked (<0.5m). "
-            f"Turn around and move {retreat_distance_m:.2f}m, then start thinking/lookaround."
+            f"\n[AutoRetreat] Action stagnation detected. "
+            f"Turn around 180deg and move {retreat_distance_m:.2f}m before replan."
         )
 
         for _ in range(turn_steps):
@@ -526,21 +679,6 @@ class VLMNavigationController(BaseNavigationController):
         for _ in range(move_steps):
             if episode_done:
                 break
-            if self._is_obstacle_distance_blocked(
-                getattr(self, 'latest_obstacle_distances', {}).get('front'),
-                threshold_m=0.5,
-            ):
-                reverse_path_blocked = True
-                if stop_early_if_reverse_blocked:
-                    print("  [AutoRetreat] Reverse path is also blocked after turning around; stop retreat early.")
-                    break
-                if not reverse_block_warning_printed:
-                    print(
-                        "  [AutoRetreat] Reverse path is also blocked after turning around, "
-                        "but early-stop is disabled; keep retreat attempts."
-                    )
-                    reverse_block_warning_printed = True
-
             pose_before_step = self._get_agent_pose()
             result = self.step_with_vlm(
                 HabitatSimActions.MOVE_FORWARD,
@@ -563,37 +701,20 @@ class VLMNavigationController(BaseNavigationController):
                 episode_done = True
                 break
 
-        if retreated_m > 0:
+        if retreated_m > 0.0:
             self._append_progress_note(
-                f"Had encountered obstacles on front/left30/right30 (<0.5m), then turned around, moved {retreated_m:.2f}m, and triggered replan"
+                f"got stuck after repeated forward steps, then turned around and retreated {retreated_m:.2f}m before replanning"
             )
             self.previous_action_reason = (
-                f"Front, Left 30deg, and Right 30deg were all blocked under 0.5m, "
-                f"so the system turned around, moved {retreated_m:.2f}m, and started rethinking from the new heading."
-            )
-        elif reverse_path_blocked and stop_early_if_reverse_blocked:
-            self._append_progress_note(
-                "Had encountered obstacles on front/left30/right30 (<0.5m), then turned around but the reverse path was also blocked, and triggered replan"
-            )
-            self.previous_action_reason = (
-                "Front, Left 30deg, and Right 30deg were all blocked under 0.5m, "
-                "so the system turned around, found the reverse path blocked too, and triggered rethinking."
-            )
-        elif reverse_path_blocked:
-            self._append_progress_note(
-                "Had encountered obstacles on front/left30/right30 (<0.5m), then turned around, kept retreat attempts even though the reverse path still looked blocked, and triggered replan"
-            )
-            self.previous_action_reason = (
-                "Front, Left 30deg, and Right 30deg were all blocked under 0.5m, "
-                "so the system turned around, kept retreat attempts with reverse-block early-stop disabled, and then triggered rethinking."
+                f"The agent was stuck after repeated low-level MOVE_FORWARD steps, so the system turned around 180deg, "
+                f"retreated {retreated_m:.2f}m, and restarted thinking from the new heading."
             )
         else:
             self._append_progress_note(
-                "Had encountered obstacles on front/left30/right30 (<0.5m), then turned around and triggered replan"
+                "got stuck after repeated forward steps, then turned around and triggered replan"
             )
             self.previous_action_reason = (
-                "Front, Left 30deg, and Right 30deg were all blocked under 0.5m, "
-                "so the system turned around and triggered rethinking."
+                "The agent was stuck after repeated low-level MOVE_FORWARD steps, so the system turned around 180deg and restarted thinking."
             )
 
         self.pose_before_action = self._get_agent_pose()
@@ -628,6 +749,10 @@ class VLMNavigationController(BaseNavigationController):
         self.final_goal_destination_match_anchor_xy = None
         self.action_stagnation_streak = 0
         self.verify_replan_prompt_notice = ""
+        self.pending_verify_view_restriction = None
+        self.episode_wall_start_time = None
+        self.thinking_api_call_records = []
+        self.action_api_call_records = []
         self.pose_before_action = None  # 重置pose追踪
         self.last_planned_degrees = 0  # 记录计划转向角度
         self.last_planned_meters = 0   # 记录计划移动距离
@@ -990,7 +1115,7 @@ class VLMNavigationController(BaseNavigationController):
         return cleaned
 
     def _sanitize_current_waypoint_text(self, waypoint_text: Optional[str]) -> Optional[str]:
-        """Keep current_waypoint in compact `Space Type - nearby objects` form."""
+        """Keep current_waypoint compact, preferably in `[space]'s [landmark]` form."""
         if waypoint_text is None:
             return None
 
@@ -1019,6 +1144,64 @@ class VLMNavigationController(BaseNavigationController):
             return f"{base} - {nearby_part}".strip()
         return base.strip()
 
+    @staticmethod
+    def _sanitize_next_waypoint_text(next_waypoint_text: Optional[str]) -> Optional[str]:
+        """Keep next_waypoint in single `[space]'s [landmark]` form."""
+        if next_waypoint_text is None:
+            return None
+
+        cleaned = strip_space_type_variant_suffixes(str(next_waypoint_text)).strip()
+        if not cleaned:
+            return cleaned
+
+        cleaned = cleaned.replace("’", "'").replace("`", "'")
+        cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,;:-")
+        if "'s" not in cleaned:
+            return cleaned
+
+        space_part, local_part = cleaned.split("'s", 1)
+        space_part = space_part.strip(" ,;:-")
+        local_part = local_part.strip(" ,;:-")
+        if not space_part or not local_part:
+            return cleaned
+
+        raw_candidates = [
+            part.strip(" ,;:-")
+            for part in re.split(r"\s*[\/|]\s*", local_part)
+            if part.strip(" ,;:-")
+        ]
+        if not raw_candidates:
+            return f"{space_part}'s {local_part}".strip()
+
+        generic_tokens = {
+            "area",
+            "corner",
+            "end",
+            "part",
+            "place",
+            "section",
+            "side",
+            "spot",
+            "zone",
+        }
+
+        def _candidate_score(candidate: str) -> Tuple[int, int, int]:
+            normalized = re.sub(r"[^a-z0-9\s-]", " ", candidate.lower())
+            words = [word for word in normalized.split() if word]
+            informative_words = [word for word in words if word not in generic_tokens]
+            return (
+                len(informative_words),
+                len(words),
+                len(candidate),
+            )
+
+        chosen_local_part = max(raw_candidates, key=_candidate_score).strip(" ,;:-")
+        chosen_local_part = re.sub(r"\s+", " ", chosen_local_part).strip()
+        if not chosen_local_part:
+            chosen_local_part = local_part
+
+        return f"{space_part}'s {chosen_local_part}".strip()
+
     def _sanitize_planner_response(self, response: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """Normalize planner outputs while keeping the full view-prefixed instruction."""
         if not response:
@@ -1045,6 +1228,9 @@ class VLMNavigationController(BaseNavigationController):
                 response[key] = strip_space_type_variant_suffixes(response.get(key))
         response["current_waypoint"] = self._sanitize_current_waypoint_text(
             response.get("current_waypoint")
+        )
+        response["next_waypoint"] = self._sanitize_next_waypoint_text(
+            response.get("next_waypoint")
         )
         response["subtask_instruction"] = self._sanitize_subtask_instruction_text(
             response.get("subtask_instruction"),
@@ -1247,9 +1433,16 @@ class VLMNavigationController(BaseNavigationController):
             'left_30': 'Unknown',
             'right_30': 'Unknown',
         })
+        verify_view_restriction_info: Dict[str, Any] = {}
+        if mode_key == "verify":
+            image_paths, direction_names, verify_view_restriction_info = self._consume_pending_verify_view_restriction(
+                image_paths,
+                direction_names,
+            )
 
         detected_landmarks: List[str] = []
         waypoint_summary: Optional[str] = None
+        thinking_api_start_time = time.perf_counter()
         if mode_key == "initial":
             response, prompt = self.planner.generate_initial_subtask(
                 instruction=self.current_instruction,
@@ -1278,6 +1471,14 @@ class VLMNavigationController(BaseNavigationController):
                 save_dir=thinking_dir,
             )
             self.verify_replan_prompt_notice = ""
+        thinking_api_duration_s = time.perf_counter() - thinking_api_start_time
+        self._record_thinking_api_call(
+            mode=mode_key,
+            phase=phase,
+            duration_s=thinking_api_duration_s,
+            success=bool(response),
+            next_waypoint=self._get_next_waypoint_field(response) if response else "",
+        )
 
         if not response:
             self.latest_thinking_cycle_info = {
@@ -1304,6 +1505,7 @@ class VLMNavigationController(BaseNavigationController):
             "thinking_dir": thinking_dir,
             "detected_landmarks": detected_landmarks,
             "waypoint_summary": waypoint_summary,
+            "verify_view_restriction": verify_view_restriction_info,
         }
         self.latest_thinking_cycle_info = dict(cycle_info)
         return response, prompt, cycle_info
@@ -1865,6 +2067,7 @@ class VLMNavigationController(BaseNavigationController):
         )
 
         # 调用VLM决策（save_dir使call_api在发送时保存压缩图片+prompt）
+        action_api_start_time = time.perf_counter()
         result = self.action_executor.decide_action(
             next_waypoint_destination=self._get_next_waypoint_field(self.current_subtask),
             subtask_instruction=action_subtask_instruction,
@@ -1880,6 +2083,7 @@ class VLMNavigationController(BaseNavigationController):
             landmark_map_info=action_landmark_map_info,
             save_dir=action_save_dir
         )
+        action_api_duration_s = time.perf_counter() - action_api_start_time
         
         if len(result) == 7:
             action_id, action_name, _, response, degrees, meters, prompt = result  # 忽略updated_progress
@@ -1891,6 +2095,12 @@ class VLMNavigationController(BaseNavigationController):
             action_id, action_name, _, response = result  # 忽略updated_progress
             degrees, meters = 0, 0
             prompt = None
+
+        self._record_action_api_call(
+            duration_s=action_api_duration_s,
+            success=bool(action_id is not None),
+            action_name=action_name,
+        )
         
         if action_id is None:
             print("[ERR] VLM decision failed")
@@ -2143,21 +2353,35 @@ class VLMNavigationController(BaseNavigationController):
                     if stagnation_actual_meters is not None
                     else 0.0
                 )
-                self.verify_replan_prompt_notice = self._build_stagnation_verify_notice()
+                retreated_m, retreat_episode_done = self._execute_auto_retreat(
+                    retreat_distance_m=self.STUCK_RETREAT_DISTANCE_M,
+                )
+                if retreat_episode_done:
+                    print('[WARN] Episode done during stuck retreat')
+                    return 'complete'
+                self.verify_replan_prompt_notice = self._build_stagnation_verify_notice(
+                    actual_retreat_m=retreated_m,
+                    retreat_distance_m=self.STUCK_RETREAT_DISTANCE_M,
+                )
+                self.pending_verify_view_restriction = {
+                    "forbidden_view_ids": list(self.STUCK_RETREAT_FORBIDDEN_VIEW_IDS),
+                    "reason": "stuck_retreat",
+                }
                 self._append_progress_note(
                     f"tried low-level MOVE_FORWARD {self.action_stagnation_streak} consecutive times but the latest move was only "
                     f"{latest_actual_meters:.2f}m "
-                    f"(no-move threshold {stagnation_threshold_m:.2f}m), so triggered replan"
+                    f"(no-move threshold {stagnation_threshold_m:.2f}m), then turned around and retreated {retreated_m:.2f}m before replanning"
                 )
                 self.previous_action_reason = (
                     f"The agent made {self.action_stagnation_streak} consecutive low-level MOVE_FORWARD steps with actual movement <= "
                     f"{stagnation_threshold_m:.2f}m "
-                    f"(latest actual movement {latest_actual_meters:.2f}m), so the system treated the front route as blocked and started thinking."
+                    f"(latest actual movement {latest_actual_meters:.2f}m), so the system treated that route as blocked, turned around 180deg, "
+                    f"retreated {retreated_m:.2f}m, and started thinking again without allowing the rear backtracking view."
                 )
                 print(
                     "[Replan] Triggered by action stagnation: "
                     f"{self.action_stagnation_streak} consecutive low-level MOVE_FORWARD steps moved <= "
-                    f"{stagnation_threshold_m:.2f}m"
+                    f"{stagnation_threshold_m:.2f}m | auto-retreat {retreated_m:.2f}m"
                 )
                 return 'thinking'
 
@@ -2168,6 +2392,9 @@ class VLMNavigationController(BaseNavigationController):
     def run_vlm_navigation(self, max_subtask_steps: int = 5) -> Dict[str, Any]:
         """Run the top-level scheduler over the thinking controller and action controller."""
         max_steps = self.config.TASK_CONFIG.ENVIRONMENT.MAX_EPISODE_STEPS
+        self.episode_wall_start_time = time.perf_counter()
+        self.thinking_api_call_records = []
+        self.action_api_call_records = []
 
         print("\n" + "=" * 60)
         print(f"VLM Navigation | max_steps={max_steps} | subtask_steps={max_subtask_steps}")
@@ -2257,6 +2484,15 @@ class VLMNavigationController(BaseNavigationController):
         env_success = env_metrics.get('success') if isinstance(env_metrics, dict) else None
         final_success = bool(env_success) if env_success is not None else bool(navigation_complete)
         final_result = self._save_navigation_result(final_success, total_steps, env_metrics)
+        episode_duration_s = self._get_episode_duration_s()
+        thinking_api_summary = self._summarize_api_timing_records(self.thinking_api_call_records)
+        action_api_summary = self._summarize_api_timing_records(self.action_api_call_records)
+
+        print(
+            f"[Timing] Episode={episode_duration_s:.2f}s | "
+            f"Thinking calls={thinking_api_summary['count']} avg={thinking_api_summary['avg_duration_s']:.2f}s | "
+            f"Action calls={action_api_summary['count']} avg={action_api_summary['avg_duration_s']:.2f}s"
+        )
 
         print("\n" + "=" * 60)
         print(f"{'OK' if final_success else 'FAIL'} | steps={total_steps} | subtasks={self.subtask_count}")
@@ -2267,6 +2503,7 @@ class VLMNavigationController(BaseNavigationController):
             'total_steps': total_steps,
             'subtask_count': self.subtask_count,
             'detected_classes': list(self.detected_classes),
+            'episode_duration_s': episode_duration_s,
             'gif_path': gif_path,
             'result_file': final_result
         }
@@ -2298,6 +2535,12 @@ class VLMNavigationController(BaseNavigationController):
         
         # 优先使用env_metrics，回退到latest_info
         metrics_source = env_metrics if env_metrics else (self.latest_info if self.latest_info else {})
+        episode_duration_s = self._get_episode_duration_s()
+        thinking_api_summary = self._summarize_api_timing_records(self.thinking_api_call_records)
+        action_api_summary = self._summarize_api_timing_records(self.action_api_call_records)
+        all_api_summary = self._summarize_api_timing_records(
+            list(self.thinking_api_call_records) + list(self.action_api_call_records)
+        )
         
         # 提取并验证核心指标
         result = {
@@ -2305,6 +2548,7 @@ class VLMNavigationController(BaseNavigationController):
             'instruction': self.current_instruction,
             'total_steps': total_steps,
             'subtask_count': self.subtask_count,
+            'episode_duration_s': episode_duration_s,
             
             # 核心导航指标（带数据验证）
             'success': int(check_inf_nan(metrics_source.get('success', 0))),
@@ -2323,7 +2567,11 @@ class VLMNavigationController(BaseNavigationController):
             
             # 导航历史
             'subtask_history': self.subtask_history,
-            # thinking/action counts removed - no longer tracking in memory
+            'thinking_api_calls': list(self.thinking_api_call_records),
+            'action_api_calls': list(self.action_api_call_records),
+            'thinking_api_summary': thinking_api_summary,
+            'action_api_summary': action_api_summary,
+            'api_summary': all_api_summary,
             'timestamp': datetime.now().isoformat()
         }
 
@@ -2336,6 +2584,11 @@ class VLMNavigationController(BaseNavigationController):
             f"\n[Eval] Episode {self.current_episode_id}: "
             f"NE={result['ne']:.3f}m OSR={result['osr']} SR={result['sr']} "
             f"SPL={result['spl']:.4f} nDTW={result['ndtw']:.4f}"
+        )
+        print(
+            f"[Timing] total={episode_duration_s:.2f}s | "
+            f"thinking avg={thinking_api_summary['avg_duration_s']:.2f}s ({thinking_api_summary['count']} calls) | "
+            f"action avg={action_api_summary['avg_duration_s']:.2f}s ({action_api_summary['count']} calls)"
         )
         
         return self.save_manager.save_result(result)

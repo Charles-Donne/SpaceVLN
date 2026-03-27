@@ -188,6 +188,23 @@ def render_detection_bbox(owner,
             pass
         return default
 
+    def _candidate_depth_distance_and_angle(
+        candidate: Optional[Dict[str, Any]],
+    ) -> Tuple[Optional[float], Optional[float]]:
+        if not candidate:
+            return None, None
+        det_rel_xy = candidate.get("det_rel_xy")
+        if det_rel_xy is None:
+            return None, None
+        try:
+            forward_m = float(det_rel_xy[0])
+            right_m = float(det_rel_xy[1])
+        except (TypeError, ValueError, IndexError):
+            return None, None
+        distance_m = float(np.hypot(forward_m, right_m))
+        angle_deg = float(np.degrees(np.arctan2(right_m, forward_m))) if distance_m > 1e-6 else 0.0
+        return distance_m, angle_deg
+
     def _normalize_selected_world_entry(
         inst: Dict[str, Any],
         source: str,
@@ -416,10 +433,15 @@ def render_detection_bbox(owner,
                 except (TypeError, ValueError):
                     display_idx = None
 
-            shown_dist_m = _float_or_none(matched_inst.get("distance_m"))
-            shown_angle_deg = _float_or_none(matched_inst.get("angle_deg"))
+            depth_dist_m, depth_angle_deg = _candidate_depth_distance_and_angle(candidate)
+            shown_dist_m = depth_dist_m
+            shown_angle_deg = depth_angle_deg
+            if shown_dist_m is None:
+                shown_dist_m = _float_or_none(matched_inst.get("distance_m"))
             if shown_dist_m is None:
                 shown_dist_m = _float_or_none(selected_inst.get("distance_m"))
+            if shown_angle_deg is None:
+                shown_angle_deg = _float_or_none(matched_inst.get("angle_deg"))
             if shown_angle_deg is None:
                 shown_angle_deg = _float_or_none(selected_inst.get("angle_deg"))
 
@@ -521,8 +543,9 @@ def render_detection_bbox(owner,
             row1 = ""
             display_id = int(selection_rank) + 1
             inst_prefix = f"#{display_id} "
-            shown_dist_m = map_dist_m
-            shown_angle_deg = map_angle_deg
+            depth_dist_m, depth_angle_deg = _candidate_depth_distance_and_angle(candidate)
+            shown_dist_m = depth_dist_m if depth_dist_m is not None else map_dist_m
+            shown_angle_deg = depth_angle_deg if depth_angle_deg is not None else map_angle_deg
             if shown_dist_m is not None and shown_angle_deg is not None:
                 row1 = f"{inst_prefix}{shown_dist_m:.1f}m {format_relative_direction(shown_angle_deg)}"
             elif shown_dist_m is not None:

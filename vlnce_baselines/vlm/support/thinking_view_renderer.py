@@ -62,7 +62,7 @@ class ThinkingViewRenderer:
             str(keyword).strip().lower()
             for keyword in CFG_LANDMARK_EDGE_DEPTH_KEYWORDS
             if str(keyword).strip()
-        ) + ["entryway"]
+        ) + ["entryway", "hallway", "corridor", "doorway", "entrance"]
     )
 
     @staticmethod
@@ -236,6 +236,7 @@ class ThinkingViewRenderer:
                 "snapped_relative_bearing_deg": snapped_relative_bearing_deg,
                 "view_angle_deg": view_angle_deg,
                 "is_last_visited": index == len(waypoint_ids) - 1,
+                "is_task_initial_position": index == 0,
             })
 
         current_area_text = str(current_space_area_label or "Unknown").strip() or "Unknown"
@@ -449,6 +450,24 @@ class ThinkingViewRenderer:
             )
         return assignments
 
+    @staticmethod
+    def _distance_sort_value(distance_m: Optional[float]) -> float:
+        try:
+            value = float(distance_m)
+        except (TypeError, ValueError):
+            return float("inf")
+        return value if np.isfinite(value) else float("inf")
+
+    @staticmethod
+    def _distance_text(distance_m: Optional[float]) -> str:
+        try:
+            value = float(distance_m)
+        except (TypeError, ValueError):
+            return "unknown"
+        if not np.isfinite(value):
+            return "unknown"
+        return f"{value:.1f}m"
+
     @classmethod
     def _build_bottom_strip_lines(
         cls,
@@ -470,19 +489,19 @@ class ThinkingViewRenderer:
                 continue
             seen_name_indices[name] = seen_name_indices.get(name, 0) + 1
             suffix = f" #{seen_name_indices[name]}" if same_name_counts.get(name, 0) > 1 else ""
-            distance_m = float(entry.get("distance_m", 1e9))
+            distance_m = entry.get("distance_m")
             confidence = float(entry.get("confidence", 0.0))
-            sort_key = (distance_m, 0.0, -confidence)
+            sort_key = (cls._distance_sort_value(distance_m), 0.0, -confidence)
             lines.append(
                 LandmarkStripLine(
-                    distance_m=distance_m,
+                    distance_m=cls._distance_sort_value(distance_m),
                     confidence=confidence,
                     priority=0,
                     sort_key=sort_key,
                     segments=(
                         LandmarkStripSegment("landmark: ", prefix_color),
                         LandmarkStripSegment(cls._short_text(f"{name}{suffix}", max_len=30), value_color),
-                        LandmarkStripSegment(f"  {distance_m:.1f}m", value_color),
+                        LandmarkStripSegment(f"  {cls._distance_text(distance_m)}", value_color),
                         LandmarkStripSegment("  conf: ", prefix_color),
                         LandmarkStripSegment(f"{confidence:.3f}", value_color),
                     ),
@@ -491,11 +510,11 @@ class ThinkingViewRenderer:
 
         for entry in waypoint_entries:
             if bool(entry.get("is_current_area")):
-                distance_m = float(entry.get("distance_m", 0.0))
-                sort_key = (distance_m, 1.0, 0.0)
+                distance_m = entry.get("distance_m", 0.0)
+                sort_key = (cls._distance_sort_value(distance_m), 1.0, 0.0)
                 lines.append(
                     LandmarkStripLine(
-                        distance_m=distance_m,
+                        distance_m=cls._distance_sort_value(distance_m),
                         confidence=0.0,
                         priority=1,
                         sort_key=sort_key,
@@ -507,20 +526,25 @@ class ThinkingViewRenderer:
                 )
                 continue
 
-            note = " (came from here)" if bool(entry.get("is_last_visited")) else ""
+            note_parts: List[str] = []
+            if bool(entry.get("is_last_visited")):
+                note_parts.append("came from here")
+            if bool(entry.get("is_task_initial_position")):
+                note_parts.append("TASK INITIAL POSITION")
+            note = f"  <- {' | '.join(note_parts)}" if note_parts else ""
             waypoint_text = f"WP#{int(entry.get('id', 0))} {entry.get('label', 'Unknown')}".strip()
-            distance_m = float(entry.get("distance_m", 1e9))
-            sort_key = (distance_m, 1.0, 0.0)
+            distance_m = entry.get("distance_m")
+            sort_key = (cls._distance_sort_value(distance_m), 1.0, 0.0)
             lines.append(
                 LandmarkStripLine(
-                    distance_m=distance_m,
+                    distance_m=cls._distance_sort_value(distance_m),
                     confidence=0.0,
                     priority=1,
                     sort_key=sort_key,
                     segments=(
-                        LandmarkStripSegment("waypoint area: ", prefix_color),
+                        LandmarkStripSegment("space waypoint: ", prefix_color),
                         LandmarkStripSegment(cls._short_text(waypoint_text, max_len=34), value_color),
-                        LandmarkStripSegment(f"  {distance_m:.1f}m", value_color),
+                        LandmarkStripSegment(f"  {cls._distance_text(distance_m)}", value_color),
                         LandmarkStripSegment(note, prefix_color),
                     ),
                 )
@@ -634,6 +658,19 @@ class ThinkingViewRenderer:
             ),
             [labels[idx] for idx in keep if 0 <= idx < len(labels)],
         )
+
+    @classmethod
+    def _remove_transition_like_detections(cls, detections, labels: List[str]):
+        if detections is None or getattr(detections, "xyxy", None) is None:
+            return detections, labels or []
+
+        keep_indices: List[int] = []
+        for idx, label_text in enumerate(labels or []):
+            name, _confidence = cls._parse_detection_label(label_text)
+            if cls._is_transition_like_detection(name):
+                continue
+            keep_indices.append(int(idx))
+        return cls._filter_detection_payload(detections, labels or [], keep_indices)
 
     @staticmethod
     def _parse_detection_label(label: str) -> Tuple[str, float]:
@@ -984,6 +1021,10 @@ class ThinkingViewRenderer:
             dets_view, labels_view = None, []
             if landmark_classes:
                 dets_view, labels_view, _ = detect_landmarks_fn(image, landmark_classes)
+                dets_view, labels_view = self._remove_transition_like_detections(
+                    dets_view,
+                    labels_view,
+                )
             view_payloads.append((dets_view, labels_view, image, depth_meters, angle, direction_name))
 
         keep_by_view = self._select_grouped_detection_indices(view_payloads, topk=detection_topk)
@@ -1009,9 +1050,10 @@ class ThinkingViewRenderer:
             image = draw_distance_fn(image, dist_str)
 
             _h, width = image.shape[:2]
+            top_text = f"{direction_name} | Obstacle: {dist_str}"
             top_label = self._build_text_strip(
                 width,
-                direction_name,
+                top_text,
                 height=28,
                 font_scale=0.68,
                 font_thickness=1,
