@@ -175,6 +175,7 @@ class LLMPlanner(BaseAPIClient):
                          local_map_image: str = None,
                          detected_landmarks: List[str] = None,
                          waypoint_summary: str = None,
+                         previous_subtask_landmark_summary: str = None,
                          obstacle_distances: Dict[str, str] = None,
                          verify_replan_prompt_notice: str = None,
                          save_dir: str = None) -> Tuple[Optional[Dict], bool]:
@@ -190,6 +191,7 @@ class LLMPlanner(BaseAPIClient):
             local_map_image: 更新后的局部语义地图路径（仅调试保留，不传给thinking模型）
             detected_landmarks: 已检测到的landmark类别列表 - 可选
             waypoint_summary: 路径点历史记录 - 可选
+            previous_subtask_landmark_summary: 上一子任务landmark最终观测摘要 - 可选
             obstacle_distances: 预计算的障碍物距离字典 {'front': 'X.XXm', 'left_30': ..., ...}
             verify_replan_prompt_notice: 本次verify/replan的顶部附加提示 - 可选
             
@@ -225,6 +227,7 @@ class LLMPlanner(BaseAPIClient):
             self.action_space,
             detected_landmarks=landmarks_str,
             waypoint_summary=waypoint_summary,
+            previous_subtask_landmark_summary=previous_subtask_landmark_summary,
             verify_replan_prompt_notice=verify_replan_prompt_notice,
             direction_names=direction_names,
         )

@@ -31,6 +31,7 @@ from habitat.sims.habitat_simulator.actions import HabitatSimActions
 from vlnce_baselines.utils.spatial_formatter import (
     build_action_landmark_map_info,
     build_waypoint_summary,
+    format_relative_direction,
 )
 from vlnce_baselines.controllers.base_navigation_controller import BaseNavigationController
 from vlnce_baselines.mapping.space_types import strip_space_type_variant_suffixes
@@ -178,6 +179,7 @@ class VLMNavigationController(BaseNavigationController):
         self.episode_wall_start_time = None
         self.thinking_api_call_records = []
         self.action_api_call_records = []
+        self.previous_subtask_landmark_final_info = None
         
         # 初始化管理器
         self.save_manager = None  # 在reset_episode时初始化
@@ -573,6 +575,110 @@ class VLMNavigationController(BaseNavigationController):
                 candidates.append(normalized)
         return candidates
 
+    def _get_current_subtask_landmark_display_name(self) -> str:
+        payload = getattr(self, 'current_subtask', None) or {}
+        for raw_candidate in (
+            self._get_subtask_landmark_field(payload),
+            self._get_next_waypoint_field(payload),
+            getattr(self, 'target_landmark', None),
+        ):
+            cleaned = strip_space_type_variant_suffixes(str(raw_candidate or "")).strip()
+            if not cleaned:
+                continue
+            if "'s " in cleaned and raw_candidate == self._get_next_waypoint_field(payload):
+                cleaned = cleaned.split("'s ", 1)[1].strip()
+            cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,;:-")
+            if cleaned:
+                return cleaned
+        return "Unknown"
+
+    @staticmethod
+    def _safe_float(value: Optional[Any]) -> Optional[float]:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _select_previous_subtask_landmark_final_entry(self) -> Optional[Tuple[int, Dict[str, Any]]]:
+        candidate_names = list(self._get_current_subtask_landmark_candidates())
+        display_name = self._get_current_subtask_landmark_display_name()
+        display_name_norm = self._normalize_landmark_candidate(display_name)
+        if display_name_norm and display_name_norm not in candidate_names:
+            candidate_names.append(display_name_norm)
+        if not candidate_names:
+            return None
+
+        def _match_sort_key(entry: Dict[str, Any]) -> Tuple[float, float, float, str]:
+            distance_m = self._safe_float(entry.get("distance_m"))
+            confidence = self._safe_float(entry.get("confidence")) or 0.0
+            angle_deg = self._safe_float(entry.get("angle_deg"))
+            return (
+                distance_m if distance_m is not None else float("inf"),
+                -float(confidence),
+                abs(angle_deg) if angle_deg is not None else float("inf"),
+                str(entry.get("name", "")),
+            )
+
+        entry_sources = [
+            getattr(self, "current_step_action_landmark_topk_entries", {}) or {},
+            getattr(self, "current_step_landmark_entries", {}) or {},
+        ]
+        for source in entry_sources:
+            for step_idx in sorted(source.keys(), reverse=True):
+                entries = list(source.get(step_idx, []) or [])
+                matches = [
+                    entry
+                    for entry in entries
+                    if self._landmark_matches_current_subtask_destination(
+                        entry.get("name"),
+                        candidate_names=candidate_names,
+                    )
+                ]
+                if matches:
+                    matches.sort(key=_match_sort_key)
+                    return int(step_idx), dict(matches[0])
+        return None
+
+    def _build_previous_subtask_landmark_summary(self) -> str:
+        display_name = self._get_current_subtask_landmark_display_name()
+        selected = self._select_previous_subtask_landmark_final_entry()
+
+        info = {
+            "name": display_name or "Unknown",
+            "final_distance_m": None,
+            "final_direction": "Unknown",
+            "final_angle_deg": None,
+            "final_step": None,
+            "matched": False,
+        }
+        if selected is not None:
+            step_idx, entry = selected
+            matched_name = str(entry.get("name") or "").strip()
+            if matched_name and (not display_name or display_name == "Unknown"):
+                info["name"] = matched_name
+            distance_m = self._safe_float(entry.get("distance_m"))
+            angle_deg = self._safe_float(entry.get("angle_deg"))
+            info.update(
+                {
+                    "final_distance_m": distance_m,
+                    "final_direction": format_relative_direction(angle_deg) if angle_deg is not None else "Unknown",
+                    "final_angle_deg": angle_deg,
+                    "final_step": int(step_idx),
+                    "matched": True,
+                }
+            )
+
+        self.previous_subtask_landmark_final_info = dict(info)
+        distance_text = (
+            f"{float(info['final_distance_m']):.2f}m"
+            if info["final_distance_m"] is not None
+            else "Unknown"
+        )
+        return (
+            f"Landmark [{info['name']}] | final distance: {distance_text} | "
+            f"direction: {info['final_direction']}"
+        )
+
     def _landmark_matches_current_subtask_destination(
         self,
         name: Optional[str],
@@ -753,6 +859,7 @@ class VLMNavigationController(BaseNavigationController):
         self.episode_wall_start_time = None
         self.thinking_api_call_records = []
         self.action_api_call_records = []
+        self.previous_subtask_landmark_final_info = None
         self.pose_before_action = None  # 重置pose追踪
         self.last_planned_degrees = 0  # 记录计划转向角度
         self.last_planned_meters = 0   # 记录计划移动距离
@@ -1442,6 +1549,7 @@ class VLMNavigationController(BaseNavigationController):
 
         detected_landmarks: List[str] = []
         waypoint_summary: Optional[str] = None
+        previous_subtask_landmark_summary: Optional[str] = None
         thinking_api_start_time = time.perf_counter()
         if mode_key == "initial":
             response, prompt = self.planner.generate_initial_subtask(
@@ -1456,6 +1564,7 @@ class VLMNavigationController(BaseNavigationController):
         else:
             detected_landmarks = self._collect_thinking_detected_landmarks()
             waypoint_summary = self._get_waypoint_summary(include_area_chain=True)
+            previous_subtask_landmark_summary = self._build_previous_subtask_landmark_summary()
             verify_replan_prompt_notice = str(getattr(self, 'verify_replan_prompt_notice', '') or '').strip()
             response, prompt = self.planner.verify_and_replan(
                 instruction=self.current_instruction,
@@ -1466,6 +1575,7 @@ class VLMNavigationController(BaseNavigationController):
                 local_map_image=None,
                 detected_landmarks=detected_landmarks,
                 waypoint_summary=waypoint_summary,
+                previous_subtask_landmark_summary=previous_subtask_landmark_summary,
                 obstacle_distances=obstacle_distances,
                 verify_replan_prompt_notice=verify_replan_prompt_notice,
                 save_dir=thinking_dir,
@@ -1488,6 +1598,8 @@ class VLMNavigationController(BaseNavigationController):
                 "reason": "planner_failed",
                 "detected_landmarks": detected_landmarks,
                 "waypoint_summary": waypoint_summary,
+                "previous_subtask_landmark_summary": previous_subtask_landmark_summary,
+                "previous_subtask_landmark_final_info": dict(getattr(self, "previous_subtask_landmark_final_info", {}) or {}),
             }
             if mode_key == "initial":
                 print("[ERR] LLM Planning failed")
@@ -1505,6 +1617,8 @@ class VLMNavigationController(BaseNavigationController):
             "thinking_dir": thinking_dir,
             "detected_landmarks": detected_landmarks,
             "waypoint_summary": waypoint_summary,
+            "previous_subtask_landmark_summary": previous_subtask_landmark_summary,
+            "previous_subtask_landmark_final_info": dict(getattr(self, "previous_subtask_landmark_final_info", {}) or {}),
             "verify_view_restriction": verify_view_restriction_info,
         }
         self.latest_thinking_cycle_info = dict(cycle_info)
@@ -1523,6 +1637,7 @@ class VLMNavigationController(BaseNavigationController):
         self.last_planned_degrees = 0
         self.last_planned_meters = 0
         self.last_action_name = ""
+        self.previous_subtask_landmark_final_info = None
 
     def _record_current_position_from_thinking_response(self, response: Dict[str, Any]) -> None:
         """Store the planner-localized position for later verification/debug use."""
