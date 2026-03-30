@@ -85,8 +85,7 @@ def _sample_random_mask_coords(
 
     target_count = max(1, int(sample_count or MASK_OUTER_RING_RANDOM_SAMPLE_COUNT))
     if ys.size > target_count:
-        rng = np.random.default_rng()
-        chosen = rng.choice(ys.size, size=target_count, replace=False)
+        chosen = np.linspace(0, ys.size - 1, num=target_count, dtype=np.int64)
         ys = ys[chosen]
         xs = xs[chosen]
     return ys.astype(np.int32), xs.astype(np.int32)

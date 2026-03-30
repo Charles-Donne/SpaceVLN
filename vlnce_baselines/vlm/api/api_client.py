@@ -12,7 +12,9 @@ import time
 import io
 import requests
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
+import numpy as np
 
 from vlnce_baselines.config.core.params.api import (
     DEFAULT_IMAGE_COMPRESSION_ENABLED,
@@ -193,6 +195,146 @@ class BaseAPIClient(ABC):
     def set_request_artifact_saving(self, enabled: bool = False):
         """Control whether prompt/image request artifacts are written to disk."""
         self.save_request_artifacts = bool(enabled)
+
+    @staticmethod
+    def _mime_from_path(path: str) -> str:
+        suffix = os.path.splitext(str(path or ""))[1].lower()
+        if suffix in {".jpg", ".jpeg"}:
+            return "image/jpeg"
+        if suffix == ".webp":
+            return "image/webp"
+        return "image/png"
+
+    @staticmethod
+    def _replace_suffix(filename: str, suffix: str) -> str:
+        stem, _ext = os.path.splitext(str(filename or "img"))
+        normalized_suffix = str(suffix or "").strip() or ".png"
+        if not normalized_suffix.startswith("."):
+            normalized_suffix = f".{normalized_suffix}"
+        return f"{stem}{normalized_suffix}"
+
+    def _derive_artifact_filename(
+        self,
+        image_input: Any,
+        idx: int,
+        compress: bool,
+    ) -> str:
+        if isinstance(image_input, dict):
+            artifact_name = str(image_input.get("artifact_name") or "").strip()
+            if artifact_name:
+                return artifact_name
+            base_name = str(image_input.get("name") or f"img_{idx:02d}").strip() or f"img_{idx:02d}"
+            return self._replace_suffix(base_name, ".jpg" if compress else ".png")
+
+        img_path = str(image_input)
+        parent_dir = os.path.basename(os.path.dirname(img_path))
+        if parent_dir == 'directions':
+            basename = os.path.basename(img_path)
+            angle_match = re.search(r'(\d{3})\.(?:png|jpg|jpeg)$', basename, re.IGNORECASE)
+            if angle_match:
+                return f"direction_{angle_match.group(1)}{'.jpg' if compress else '.png'}"
+            return f"img_{idx:02d}{'.jpg' if compress else '.png'}"
+        if parent_dir == 'global_map':
+            return f"global_map{'.jpg' if compress else '.png'}"
+        if parent_dir == 'local_map':
+            return f"local_map{'.jpg' if compress else '.png'}"
+        if parent_dir == 'detection':
+            return f"detection{'.jpg' if compress else '.png'}"
+        if parent_dir == 'rgb':
+            return f"rgb{'.jpg' if compress else '.png'}"
+
+        basename = os.path.basename(img_path) or f"img_{idx:02d}"
+        return self._replace_suffix(basename, ".jpg" if compress else os.path.splitext(basename)[1] or ".png")
+
+    @staticmethod
+    def _encode_image_array_bytes(
+        image_array: np.ndarray,
+        compress: bool = True,
+        max_size: int = 384,
+        quality: int = 80,
+        color_space: str = "bgr",
+    ) -> Tuple[bytes, str]:
+        from PIL import Image
+
+        array = np.asarray(image_array)
+        if array.ndim == 2:
+            pil_image = Image.fromarray(array.astype(np.uint8), mode="L")
+        else:
+            if array.shape[-1] == 4:
+                if str(color_space).lower() == "bgra":
+                    array = array[..., [2, 1, 0, 3]]
+                pil_image = Image.fromarray(array.astype(np.uint8), mode="RGBA")
+            else:
+                if str(color_space).lower() == "bgr":
+                    array = array[..., ::-1]
+                pil_image = Image.fromarray(array.astype(np.uint8), mode="RGB")
+
+        if compress:
+            if max(pil_image.size) > max_size:
+                ratio = max_size / max(pil_image.size)
+                new_size = (int(pil_image.size[0] * ratio), int(pil_image.size[1] * ratio))
+                pil_image = pil_image.resize(new_size, Image.LANCZOS)
+            buffer = io.BytesIO()
+            pil_image.convert('RGB').save(buffer, 'JPEG', quality=quality, optimize=True)
+            return buffer.getvalue(), "image/jpeg"
+
+        buffer = io.BytesIO()
+        if pil_image.mode not in ("RGB", "RGBA", "L"):
+            pil_image = pil_image.convert("RGB")
+        pil_image.save(buffer, 'PNG', optimize=True)
+        return buffer.getvalue(), "image/png"
+
+    def _load_image_input_bytes(
+        self,
+        image_input: Any,
+        compress: bool = True,
+        max_size: int = 384,
+        quality: int = 80,
+    ) -> Tuple[bytes, str]:
+        if isinstance(image_input, dict):
+            if image_input.get("image_array") is not None:
+                return self._encode_image_array_bytes(
+                    image_array=image_input.get("image_array"),
+                    compress=compress,
+                    max_size=max_size,
+                    quality=quality,
+                    color_space=str(image_input.get("color_space") or "bgr"),
+                )
+            if image_input.get("image_bytes") is not None:
+                image_bytes = bytes(image_input.get("image_bytes") or b"")
+                if not compress:
+                    mime_type = str(image_input.get("mime_type") or "image/png")
+                    return image_bytes, mime_type
+                from PIL import Image
+                img = Image.open(io.BytesIO(image_bytes))
+                if max(img.size) > max_size:
+                    ratio = max_size / max(img.size)
+                    new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
+                    img = img.resize(new_size, Image.LANCZOS)
+                buffer = io.BytesIO()
+                img.convert('RGB').save(buffer, 'JPEG', quality=quality, optimize=True)
+                return buffer.getvalue(), "image/jpeg"
+            if image_input.get("path") is not None:
+                image_input = image_input.get("path")
+            else:
+                raise ValueError("Unsupported image input dict: missing image_array/image_bytes/path")
+
+        image_path = str(image_input)
+        if not compress:
+            with open(image_path, "rb") as f:
+                return f.read(), self._mime_from_path(image_path)
+
+        from PIL import Image
+
+        img = Image.open(image_path)
+        if max(img.size) > max_size:
+            ratio = max_size / max(img.size)
+            new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
+            img = img.resize(new_size, Image.LANCZOS)
+
+        buffer = io.BytesIO()
+        img.convert('RGB').save(buffer, 'JPEG', quality=quality, optimize=True)
+        return buffer.getvalue(), "image/jpeg"
     
     @staticmethod
     def compress_image(image_path: str, max_size: int = 384, quality: int = 80) -> str:
@@ -357,7 +499,7 @@ class BaseAPIClient(ABC):
         except Exception as e:
             print(f"  [WARN] Save failed: {e}")
     
-    def build_message_content(self, text: str, image_paths: List[str], save_dir: str = None,
+    def build_message_content(self, text: str, image_paths: List[Any], save_dir: str = None,
                               no_compress_indices: set = None) -> List[Dict]:
         """构建消息内容，可选保存压缩后的图片（即模型实际看到的版本）
         
@@ -376,11 +518,11 @@ class BaseAPIClient(ABC):
             with open(os.path.join(save_dir, "prompt.txt"), 'w', encoding='utf-8') as f:
                 f.write(text)
         
-        for idx, img_path in enumerate(image_paths):
+        for idx, image_input in enumerate(image_paths):
             skip_compress = no_compress_indices is not None and idx in no_compress_indices
             compress = False if skip_compress else self.compress_images
-            image_bytes = self._load_image_bytes(
-                img_path,
+            image_bytes, mime_type = self._load_image_input_bytes(
+                image_input,
                 compress=compress,
                 max_size=self.compression_max_size,
                 quality=self.compression_quality,
@@ -388,35 +530,18 @@ class BaseAPIClient(ABC):
             img_base64 = base64.b64encode(image_bytes).decode("utf-8")
             content.append({
                 "type": "image_url",
-                "image_url": {"url": f"data:image/jpeg;base64,{img_base64}"}
+                "image_url": {"url": f"data:{mime_type};base64,{img_base64}"}
             })
             
             if should_save_artifacts:
-                parent_dir = os.path.basename(os.path.dirname(img_path))
-                if parent_dir == 'directions':
-                    basename = os.path.basename(img_path)
-                    angle_match = re.search(r'(\d{3})\.png$', basename)
-                    if angle_match:
-                        img_filename = f"direction_{angle_match.group(1)}.png"
-                    else:
-                        img_filename = f"img_{idx:02d}.png"
-                elif parent_dir == 'global_map':
-                    img_filename = "global_map.png"
-                elif parent_dir == 'local_map':
-                    img_filename = "local_map.png"
-                elif parent_dir == 'detection':
-                    img_filename = "detection.png"
-                elif parent_dir == 'rgb':
-                    img_filename = "rgb.png"
-                else:
-                    img_filename = f"img_{idx:02d}.png"
+                img_filename = self._derive_artifact_filename(image_input, idx=idx, compress=compress)
                 save_path = os.path.join(save_dir, img_filename)
                 with open(save_path, 'wb') as f:
                     f.write(image_bytes)
         
         return content
     
-    def call_api(self, prompt: str, image_paths: List[str], save_dir: str = None,
+    def call_api(self, prompt: str, image_paths: List[Any], save_dir: str = None,
                  no_compress_indices: set = None) -> Optional[Dict]:
         """调用API（带计时和速度统计）
         

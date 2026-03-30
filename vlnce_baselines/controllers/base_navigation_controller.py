@@ -102,6 +102,7 @@ class BaseNavigationController:
         self.latest_depth_meters = None
         self.latest_global_map = None
         self.latest_local_map = None
+        self.latest_action_detection_vis = None
         self.latest_lookaround_images: List[np.ndarray] = []
         self.latest_lookaround_depths: List[np.ndarray] = []
         self.latest_lookaround_phase = ""
@@ -276,7 +277,9 @@ class BaseNavigationController:
         depth_raw = depth_obs[:, :, 0] if depth_obs.ndim == 3 else depth_obs
         min_depth = self.config.TASK_CONFIG.SIMULATOR.DEPTH_SENSOR.MIN_DEPTH
         max_depth = self.config.TASK_CONFIG.SIMULATOR.DEPTH_SENSOR.MAX_DEPTH
-        valid_mask = (depth_raw > 0.0) & (depth_raw < 0.99)
+        # Habitat depth is clipped to [MIN_DEPTH, MAX_DEPTH] before normalization.
+        # So normalized 0.0 means "at the min-depth clip", not "invalid / missing".
+        valid_mask = np.isfinite(depth_raw) & (depth_raw >= 0.0) & (depth_raw <= 1.0)
         return np.where(
             valid_mask,
             min_depth + depth_raw * (max_depth - min_depth),
@@ -739,13 +742,16 @@ class BaseNavigationController:
                     masks=None,
                     landmark_classes=list(self.landmark_classes) if enable_landmark_detection else [],
                 )
-                self._on_lookaround_step(
-                    phase=phase,
-                    look_index=look_index,
-                    look_step=look_step,
-                    obs=obs[0],
-                    info=infos[0] if infos and len(infos) > 0 else {},
-                )
+
+            # Always expose every real lookaround env step to the navigation visualizer,
+            # even when debug map/rgb render dumps are disabled.
+            self._on_lookaround_step(
+                phase=phase,
+                look_index=look_index,
+                look_step=look_step,
+                obs=obs[0],
+                info=infos[0] if infos and len(infos) > 0 else {},
+            )
 
         self.latest_obs = obs[0]
         self._update_obstacle_distances_12_directions(lookaround_depths)
@@ -976,6 +982,7 @@ class BaseNavigationController:
                     row_start_ratio=0.38,
                     row_end_ratio=0.92,
                     max_distance_m=5.0,
+                    sensor_min_depth_m=float(self.config.TASK_CONFIG.SIMULATOR.DEPTH_SENSOR.MIN_DEPTH),
                     sample_count=96,
                     sample_percentile=20.0,
                 )
@@ -1002,6 +1009,7 @@ class BaseNavigationController:
                 getattr(self, 'latest_depth_meters', None),
                 hfov_deg=float(self.config.MAP.HFOV),
                 angle_band_deg=5.0,
+                sensor_min_depth_m=float(self.config.TASK_CONFIG.SIMULATOR.DEPTH_SENSOR.MIN_DEPTH),
                 fallback_distances=map_fallback,
             )
         except Exception:
@@ -1056,8 +1064,11 @@ class BaseNavigationController:
                 if step_data is not None:
                     self.final_stop_was_executed = True
                     _observations, _rewards, _dones, infos = step_data
+                    if _observations and len(_observations) > 0:
+                        self.latest_obs = _observations[0]
                     if infos and len(infos) > 0:
                         final_metrics = infos[0]
+                        self.latest_info = infos[0]
             except AssertionError:
                 self.final_stop_skipped_due_to_done = True
                 if hasattr(self, 'latest_info') and self.latest_info:

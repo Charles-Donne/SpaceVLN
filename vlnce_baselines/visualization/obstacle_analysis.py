@@ -39,6 +39,47 @@ DEFAULT_RAYCAST_FOOTPRINT_RADIUS_PX = 3
 DEFAULT_RAYCAST_FOOTPRINT_SAMPLE_COUNT = 9
 DEFAULT_RAYCAST_FOOTPRINT_PERCENTILE = 60.0
 DEFAULT_DEPTH_REGION_SAMPLE_COUNT = 96
+DEFAULT_SENSOR_MIN_DEPTH_M = 0.5
+DEFAULT_NEAR_CLIP_TOLERANCE_M = 0.03
+DEFAULT_NEAR_CLIP_RATIO = 0.18
+DEFAULT_NEAR_CLIP_MIN_COUNT = 6
+DEFAULT_BLOCKED_PROXY_EPS_M = 0.01
+
+
+def _deterministic_sample_indices(total_count: int, target_count: int) -> np.ndarray:
+    total = int(max(0, total_count))
+    target = int(max(1, target_count))
+    if total <= 0:
+        return np.asarray([], dtype=np.int64)
+    if total <= target:
+        return np.arange(total, dtype=np.int64)
+    return np.linspace(0, total - 1, num=target, dtype=np.int64)
+
+
+def _ultra_close_proxy_distance(
+    depth_values: np.ndarray,
+    sensor_min_depth_m: float = DEFAULT_SENSOR_MIN_DEPTH_M,
+    near_clip_tolerance_m: float = DEFAULT_NEAR_CLIP_TOLERANCE_M,
+    near_clip_ratio: float = DEFAULT_NEAR_CLIP_RATIO,
+    near_clip_min_count: int = DEFAULT_NEAR_CLIP_MIN_COUNT,
+    blocked_proxy_eps_m: float = DEFAULT_BLOCKED_PROXY_EPS_M,
+) -> Optional[float]:
+    samples = np.asarray(depth_values, dtype=np.float32)
+    samples = samples[np.isfinite(samples)]
+    if samples.size == 0:
+        return None
+
+    near_mask = samples <= float(sensor_min_depth_m) + float(near_clip_tolerance_m)
+    near_count = int(np.count_nonzero(near_mask))
+    if near_count <= 0:
+        return None
+
+    if near_count < min(int(max(1, near_clip_min_count)), int(samples.size)):
+        return None
+    if (near_count / float(samples.size)) < float(max(0.0, min(1.0, near_clip_ratio))):
+        return None
+
+    return max(0.0, float(sensor_min_depth_m) - float(blocked_proxy_eps_m))
 
 
 def build_rotated_obstacle_mask(
@@ -254,8 +295,7 @@ def _build_footprint_start_offsets(
     if extra_needed <= 0:
         return [center]
 
-    rng = np.random.default_rng()
-    selected_indices = rng.choice(len(other_offsets), size=extra_needed, replace=False)
+    selected_indices = _deterministic_sample_indices(len(other_offsets), extra_needed)
     sampled_offsets = [other_offsets[int(idx)] for idx in np.atleast_1d(selected_indices).tolist()]
     sampled_offsets.sort(key=lambda item: item[0] * item[0] + item[1] * item[1])
     return [center] + sampled_offsets
@@ -354,6 +394,7 @@ def sample_depth_distance_from_region(
     row_start_ratio: float = 0.35,
     row_end_ratio: float = 0.90,
     max_distance_m: float = 5.0,
+    sensor_min_depth_m: float = DEFAULT_SENSOR_MIN_DEPTH_M,
     sample_count: int = DEFAULT_DEPTH_REGION_SAMPLE_COUNT,
     sample_percentile: float = 20.0,
     min_depth_m: float = 0.02,
@@ -376,6 +417,7 @@ def sample_depth_distance_from_region(
     row_bands = [
         (float(row_start_ratio), float(row_end_ratio)),
         (max(float(row_start_ratio), 0.55), 0.98),
+        (max(float(row_start_ratio), 0.78), 0.995),
     ]
     sample_total = int(max(1, sample_count))
     percentile = float(np.clip(sample_percentile, 0.0, 100.0))
@@ -389,20 +431,24 @@ def sample_depth_distance_from_region(
         if not np.any(valid_mask):
             continue
 
-        ys, xs = np.where(valid_mask)
-        if ys.size > sample_total:
-            rng = np.random.default_rng()
-            chosen = rng.choice(ys.size, size=sample_total, replace=False)
-            ys = ys[chosen]
-            xs = xs[chosen]
-
-        sampled_depths = region[ys, xs].astype(np.float32)
+        sampled_depths = region[valid_mask].astype(np.float32)
+        if sampled_depths.size > sample_total:
+            chosen = _deterministic_sample_indices(sampled_depths.size, sample_total)
+            sampled_depths = sampled_depths[chosen]
         sampled_depths = sampled_depths[np.isfinite(sampled_depths) & (sampled_depths > float(min_depth_m))]
         if sampled_depths.size == 0:
             continue
 
         clipped = sampled_depths[sampled_depths <= float(max_distance_m)]
         candidate = float(max_distance_m) + 0.1 if clipped.size == 0 else float(np.percentile(clipped, percentile))
+        ultra_close_proxy = _ultra_close_proxy_distance(
+            sampled_depths,
+            sensor_min_depth_m=sensor_min_depth_m,
+            near_clip_ratio=0.14 if band_start_ratio >= 0.75 else DEFAULT_NEAR_CLIP_RATIO,
+            near_clip_min_count=4 if band_start_ratio >= 0.75 else DEFAULT_NEAR_CLIP_MIN_COUNT,
+        )
+        if ultra_close_proxy is not None:
+            candidate = min(candidate, ultra_close_proxy)
         if best_distance is None or candidate < best_distance:
             best_distance = candidate
 
@@ -414,6 +460,7 @@ def sample_depth_distance_for_angle(
     angle_deg: float,
     hfov_deg: float = 79.0,
     max_distance_m: float = 5.0,
+    sensor_min_depth_m: float = DEFAULT_SENSOR_MIN_DEPTH_M,
     row_start_ratio: float = 0.30,
     row_end_ratio: float = 0.90,
     angle_band_deg: float = 5.0,
@@ -437,6 +484,7 @@ def sample_depth_distance_for_angle(
     row_bands = [
         (float(row_start_ratio), float(row_end_ratio)),
         (max(float(row_start_ratio), 0.55), 0.98),
+        (max(float(row_start_ratio), 0.78), 0.995),
     ]
     best_distance = None
     for row_start_ratio_i, row_end_ratio_i in row_bands:
@@ -462,6 +510,14 @@ def sample_depth_distance_for_angle(
 
             clipped = valid[valid <= max_distance_m]
             candidate = max_distance_m + 0.1 if clipped.size == 0 else float(np.percentile(clipped, sample_percentile))
+            ultra_close_proxy = _ultra_close_proxy_distance(
+                valid,
+                sensor_min_depth_m=sensor_min_depth_m,
+                near_clip_ratio=0.12 if row_start_ratio_i >= 0.75 else DEFAULT_NEAR_CLIP_RATIO,
+                near_clip_min_count=4 if row_start_ratio_i >= 0.75 else DEFAULT_NEAR_CLIP_MIN_COUNT,
+            )
+            if ultra_close_proxy is not None:
+                candidate = min(candidate, ultra_close_proxy)
             if best_distance is None or candidate < best_distance:
                 best_distance = candidate
 
@@ -474,6 +530,7 @@ def calculate_obstacle_distances_from_depth(
     directions: Optional[Dict[str, float]] = None,
     max_distance_m: float = 5.0,
     angle_band_deg: float = 5.0,
+    sensor_min_depth_m: float = DEFAULT_SENSOR_MIN_DEPTH_M,
     fallback_distances: Optional[Dict[str, str]] = None,
     default_distance: str = ">2.0m open",
     conservative_map_distance_m: float = 1.5,
@@ -487,6 +544,7 @@ def calculate_obstacle_distances_from_depth(
             angle_deg=angle_deg,
             hfov_deg=hfov_deg,
             max_distance_m=max_distance_m,
+            sensor_min_depth_m=sensor_min_depth_m,
             angle_band_deg=angle_band_deg,
         )
         fallback_text = (fallback_distances or {}).get(key, default_distance)

@@ -4,7 +4,7 @@ VLM动作执行模块
 低层动作决策：基于视觉和地图输出具体动作
 """
 import os
-from typing import Dict, Tuple, Optional
+from typing import Any, Dict, Tuple, Optional
 from vlnce_baselines.config.core.params.actions import VALID_MOVE_METERS, VALID_TURN_DEGREES
 from vlnce_baselines.config.core.params.api import (
     ACTION_IMAGE_COMPRESSION_MAX_SIZE,
@@ -247,11 +247,11 @@ class ActionExecutor(BaseAPIClient):
     def decide_action(self,
                      next_waypoint_destination: str,
                      subtask_instruction: str,
-                     first_person_image: str,
+                     first_person_image: Any,
                      action_mapping: Dict[str, int],
                      progress_summary: str = "",
                      waypoint_summary: str = "",
-                     detection_image: str = None,
+                     detection_image: Any = None,
                      local_map_image: str = None,
                      detected_landmarks: str = None,
                      previous_action_reason: str = "",
@@ -304,9 +304,14 @@ class ActionExecutor(BaseAPIClient):
         
         # 只发Detection图（节省token，local map已移除）
         images = []
-        
-        if detection_image and os.path.exists(detection_image):
-            images.append(detection_image)
+        action_image_input = detection_image if detection_image is not None else first_person_image
+        if isinstance(action_image_input, str):
+            if action_image_input and os.path.exists(action_image_input):
+                images.append(action_image_input)
+            else:
+                print(f"  [WARN] No detection image found")
+        elif action_image_input is not None:
+            images.append(action_image_input)
         else:
             print(f"  [WARN] No detection image found")
         

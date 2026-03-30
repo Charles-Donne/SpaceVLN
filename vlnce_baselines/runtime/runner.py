@@ -6,6 +6,7 @@ batch execution, and summary/report generation into reusable helpers.
 """
 
 import argparse
+import json
 import os
 import random
 import time
@@ -56,6 +57,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="Episode最大总步数（覆盖配置文件，默认使用配置文件值）",
+    )
+    parser.add_argument(
+        "--skip-existing-sr1",
+        action="store_true",
+        help="跳过结果目录中已有最佳结果且 SR=1 的 episode",
     )
     parser.add_argument("--auto", action="store_true", help="全自动运行（无需确认）")
     return parser
@@ -120,6 +126,75 @@ def resolve_episode_ids(args: argparse.Namespace) -> List[int]:
     print(f"\n📋 连续运行 episodes {start_id} 到 {end_id}")
     print(f"📊 Episodes: {episode_ids}")
     return episode_ids
+
+
+def _load_json_if_exists(path: str) -> Dict[str, Any]:
+    if not path or not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _result_has_sr1(result: Dict[str, Any]) -> bool:
+    if not isinstance(result, dict) or not result:
+        return False
+
+    sr_value = result.get("sr", None)
+    if sr_value is None and "success" in result:
+        sr_value = 1 if bool(result.get("success")) else 0
+
+    try:
+        return int(sr_value) == 1
+    except (TypeError, ValueError):
+        return False
+
+
+def _episode_has_existing_sr1(results_dir: str, episode_id: int) -> bool:
+    episode_dir = os.path.join(results_dir, f"episode_{int(episode_id)}")
+    candidate_paths = [
+        os.path.join(results_dir, "log", f"episode_{int(episode_id)}.json"),
+        os.path.join(episode_dir, "records", "result.json"),
+        os.path.join(episode_dir, "records", "result_latest.json"),
+    ]
+
+    for path in candidate_paths:
+        if _result_has_sr1(_load_json_if_exists(path)):
+            return True
+    return False
+
+
+def filter_episode_ids(args: argparse.Namespace, config, episode_ids: List[int]) -> List[int]:
+    if not args.skip_existing_sr1:
+        return episode_ids
+
+    results_dir = os.path.abspath(args.results_dir or config.RESULTS_DIR or "")
+    if not results_dir:
+        print("\n⚠️  未提供结果目录，无法启用 skip-existing-sr1，继续运行全部 episodes")
+        return episode_ids
+
+    kept_episode_ids: List[int] = []
+    skipped_episode_ids: List[int] = []
+    for episode_id in episode_ids:
+        if _episode_has_existing_sr1(results_dir, episode_id):
+            skipped_episode_ids.append(int(episode_id))
+        else:
+            kept_episode_ids.append(int(episode_id))
+
+    print(
+        f"\n🧹 skip-existing-sr1: 跳过 {len(skipped_episode_ids)} 个已 SR=1 的 episodes，"
+        f"保留 {len(kept_episode_ids)} 个待运行 episodes"
+    )
+    if skipped_episode_ids:
+        preview = skipped_episode_ids[:20]
+        preview_text = ",".join(str(item) for item in preview)
+        suffix = " ..." if len(skipped_episode_ids) > len(preview) else ""
+        print(f"⏭️  已跳过: {preview_text}{suffix}")
+
+    return kept_episode_ids
 
 
 def build_episode_config(base_config, args: argparse.Namespace, episode_id: int):
@@ -257,8 +332,13 @@ def print_batch_summary(results_summary: List[Dict[str, Any]], args: argparse.Na
 def run_navigation_from_args(args: argparse.Namespace) -> int:
     config = load_runtime_config(args)
     episode_ids = resolve_episode_ids(args)
+    episode_ids = filter_episode_ids(args, config, episode_ids)
 
     if not episode_ids:
+        if args.skip_existing_sr1:
+            print("\n✅ 没有需要运行的 episodes：目标范围内都已有 SR=1 最佳结果")
+            maybe_generate_report(args, config, verbose=False)
+            return 0
         print("\n❌ 错误: 没有可运行的episodes")
         return 1
 

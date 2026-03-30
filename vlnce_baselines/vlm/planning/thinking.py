@@ -4,7 +4,7 @@ LLM规划模块
 高层规划：分析环境生成子任务
 """
 import re
-from typing import Dict, List, Tuple, Optional
+from typing import Any, Dict, List, Tuple, Optional
 from vlnce_baselines.vlm.api.api_client import APIConfig, BaseAPIClient
 from vlnce_baselines.vlm.prompts.prompts import (
     get_initial_planning_prompt,
@@ -95,7 +95,7 @@ class LLMPlanner(BaseAPIClient):
     
     def generate_initial_subtask(self,
                                 instruction: str,
-                                observation_images: List[str],
+                                observation_images: List[Any],
                                 direction_names: List[str],
                                 global_map_image: str,
                                 local_map_image: str = None,
@@ -169,7 +169,7 @@ class LLMPlanner(BaseAPIClient):
     def verify_and_replan(self,
                          instruction: str,
                          current_subtask: Dict,
-                         observation_images: List[str],
+                         observation_images: List[Any],
                          direction_names: List[str],
                          global_map_image: str,
                          local_map_image: str = None,
@@ -205,11 +205,6 @@ class LLMPlanner(BaseAPIClient):
         # 获取当前子任务信息
         subtask_destination = current_subtask.get('next_waypoint', current_subtask.get('next_waypoint_destination', 'Unknown'))
         subtask_instruction = current_subtask.get('subtask_instruction', 'Unknown')
-        # 格式化检测到的landmark信息
-        landmarks_str = None
-        if detected_landmarks:
-            landmarks_str = f"Detected landmarks: {', '.join(sorted(detected_landmarks))}"
-        
         # 使用预计算的距离（如果没有则设为Unknown）
         if not obstacle_distances:
             obstacle_distances = {
@@ -225,7 +220,7 @@ class LLMPlanner(BaseAPIClient):
             subtask_destination,
             subtask_instruction,
             self.action_space,
-            detected_landmarks=landmarks_str,
+            detected_landmarks=None,
             waypoint_summary=waypoint_summary,
             previous_subtask_landmark_summary=previous_subtask_landmark_summary,
             verify_replan_prompt_notice=verify_replan_prompt_notice,

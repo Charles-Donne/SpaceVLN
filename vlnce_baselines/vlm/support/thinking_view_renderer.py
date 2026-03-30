@@ -1092,9 +1092,60 @@ class ThinkingViewRenderer:
         detection_topk: int = THINKING_DETECTION_TOPK,
     ) -> Tuple[List[str], List[str]]:
         os.makedirs(directions_dir, exist_ok=True)
-
+        rendered_views = self.render_direction_views(
+            phase=phase,
+            lookaround_images=lookaround_images,
+            lookaround_depths=lookaround_depths,
+            landmark_classes=landmark_classes,
+            detect_landmarks_fn=detect_landmarks_fn,
+            render_detection_fn=render_detection_fn,
+            draw_distance_fn=draw_distance_fn,
+            distance_lookup=distance_lookup,
+            waypoint_info=waypoint_info,
+            waypoint_area_labels=waypoint_area_labels,
+            current_pose=current_pose,
+            resolution_cm=resolution_cm,
+            current_space_area_label=current_space_area_label,
+            full_map=full_map,
+            crop_offset=crop_offset,
+            waypoint_angle_deg=waypoint_angle_deg,
+            draw_waypoints_fn=draw_waypoints_fn,
+            detection_topk=detection_topk,
+        )
         direction_paths: List[str] = []
         direction_names: List[str] = []
+        for view in rendered_views:
+            angle = int(view["angle"])
+            labeled_image = view["image"]
+            direction_filename = f"{phase}_direction_{angle:03d}.png"
+            direction_path = os.path.join(directions_dir, direction_filename)
+            cv2.imwrite(direction_path, labeled_image)
+            direction_paths.append(direction_path)
+            direction_names.append(str(view["direction_name"]))
+        return direction_paths, direction_names
+
+    def render_direction_views(
+        self,
+        phase: str,
+        lookaround_images: List[np.ndarray],
+        lookaround_depths: List[Optional[np.ndarray]],
+        landmark_classes: Optional[List[str]],
+        detect_landmarks_fn: Callable[[np.ndarray, List[str]], Tuple[Any, List[str], Any]],
+        render_detection_fn: Callable[[np.ndarray, Any, List[str], Optional[np.ndarray]], Tuple[np.ndarray, List[Tuple[str, float]], Any, Any]],
+        draw_distance_fn: Callable[[np.ndarray, str], np.ndarray],
+        distance_lookup: Dict[str, str],
+        waypoint_info: Optional[tuple],
+        waypoint_area_labels: Optional[List[str]],
+        current_pose: Optional[np.ndarray],
+        resolution_cm: float,
+        current_space_area_label: str,
+        full_map: Optional[np.ndarray],
+        crop_offset: Optional[Tuple[int, int]],
+        waypoint_angle_deg: Optional[float],
+        draw_waypoints_fn: Callable[[np.ndarray, Dict[str, Any]], np.ndarray],
+        detection_topk: int = THINKING_DETECTION_TOPK,
+    ) -> List[Dict[str, Any]]:
+        rendered_views: List[Dict[str, Any]] = []
         view_payloads: List[Tuple[Any, List[str], np.ndarray, Optional[np.ndarray], float, str]] = []
         waypoint_entries = self._build_waypoint_view_entries(
             waypoint_info=waypoint_info,
@@ -1189,11 +1240,11 @@ class ThinkingViewRenderer:
             else:
                 labeled_image = np.vstack([top_label, image])
 
-            direction_filename = f"{phase}_direction_{angle:03d}.png"
-            direction_path = os.path.join(directions_dir, direction_filename)
-            cv2.imwrite(direction_path, labeled_image)
+            rendered_views.append({
+                "phase": str(phase),
+                "angle": int(angle),
+                "direction_name": str(direction_name),
+                "image": labeled_image,
+            })
 
-            direction_paths.append(direction_path)
-            direction_names.append(direction_name)
-
-        return direction_paths, direction_names
+        return rendered_views

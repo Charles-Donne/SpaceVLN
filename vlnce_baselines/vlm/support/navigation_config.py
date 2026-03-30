@@ -23,7 +23,7 @@ VLM导航系统配置常量
 
 # 12个方向的配置（每个方向对应一个step）
 DIRECTION_CONFIG = [
-    {"step": 12, "angle": 0, "name": "IMAGE 1: Front 0deg"},           # 初始朝向
+    {"step": 12, "angle": 0, "name": "IMAGE 1: Front 0deg"},           # 左转360°后回到Front的帧
     {"step": 1, "angle": 30, "name": "IMAGE 2: Left 30deg"},           # 左转30°
     {"step": 2, "angle": 60, "name": "IMAGE 3: Left 60deg"},           # 左转60°
     {"step": 3, "angle": 90, "name": "IMAGE 4: Left 90deg"},           # 左转90°

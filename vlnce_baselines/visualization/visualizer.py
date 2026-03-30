@@ -498,7 +498,7 @@ class MapVisualizer:
             "render_local_map": debug_mode,
             "save_local_map": debug_mode,
             "render_detection": debug_mode or is_action,
-            "save_detection": debug_mode or is_action,
+            "save_detection": False,
         }
         if render_policy:
             policy.update({key: bool(value) for key, value in render_policy.items()})
@@ -599,7 +599,7 @@ class MapVisualizer:
     def _create_episode_directories(self, episode_id: int):
         """为特定episode创建保存目录"""
         episode_dir = os.path.join(self.results_dir, f'episode_{episode_id}')
-        dirs = ['rgb', 'global_map', 'local_map', 'detection']
+        dirs = ['rgb', 'global_map', 'local_map']
         for dir_name in dirs:
             os.makedirs(os.path.join(episode_dir, dir_name), exist_ok=True)
         return episode_dir
@@ -642,6 +642,7 @@ class MapVisualizer:
         hfov: float = 79.0,
         fallback_distances: Optional[Dict[str, str]] = None,
         angle_band_deg: float = 5.0,
+        sensor_min_depth_m: float = 0.5,
     ) -> Dict[str, str]:
         """Estimate front-view obstacle distances from the current depth frame with fallback."""
         return scan_obstacle_distances_from_depth(
@@ -649,6 +650,7 @@ class MapVisualizer:
             hfov_deg=hfov,
             directions=ACTION_VIEW_DIRECTIONS,
             angle_band_deg=angle_band_deg,
+            sensor_min_depth_m=sensor_min_depth_m,
             fallback_distances=fallback_distances,
         )
 
@@ -687,10 +689,10 @@ class MapVisualizer:
         Returns:
             距离字典 {
                 'angle_0': "X.XXm",    # IMAGE 1: Front (0°)
-                'angle_30': "X.XXm",   # IMAGE 2: Right (30°)
-                'angle_60': "X.XXm",   # IMAGE 3: Right (60°)
+                'angle_30': "X.XXm",   # IMAGE 2: Left (30°)
+                'angle_60': "X.XXm",   # IMAGE 3: Left (60°)
                 ...
-                'angle_330': "X.XXm"   # IMAGE 12: Left (330°)
+                'angle_330': "X.XXm"   # IMAGE 12: Right (30°)
             }
         """
         return scan_obstacle_distances_12_directions(
@@ -911,6 +913,7 @@ class MapVisualizer:
                 detection_vis = self.draw_distance_on_action_view(detection_vis, obstacle_distances)
                 if controller is not None:
                     controller.latest_obstacle_distances = obstacle_distances
+                    controller.latest_action_detection_vis = detection_vis.copy()
 
                 if landmark_strip is not None:
                     detection_vis = np.vstack([detection_vis, landmark_strip])
@@ -921,6 +924,7 @@ class MapVisualizer:
             else:
                 paths['detection'] = None
                 if controller is not None:
+                    controller.latest_action_detection_vis = None
                     controller.latest_visible_landmark_entries = []
                     controller.latest_action_landmark_topk_entries = []
 

@@ -358,9 +358,9 @@ class VLMNavigationController(BaseNavigationController):
 
     def _consume_pending_verify_view_restriction(
         self,
-        image_paths: List[str],
+        image_paths: List[Any],
         direction_names: List[str],
-    ) -> Tuple[List[str], List[str], Dict[str, Any]]:
+    ) -> Tuple[List[Any], List[str], Dict[str, Any]]:
         restriction = dict(getattr(self, "pending_verify_view_restriction", None) or {})
         self.pending_verify_view_restriction = None
         if not restriction:
@@ -373,7 +373,7 @@ class VLMNavigationController(BaseNavigationController):
         if not forbidden_view_ids:
             return image_paths, direction_names, {}
 
-        filtered_pairs: List[Tuple[str, str]] = []
+        filtered_pairs: List[Tuple[Any, str]] = []
         removed_names: List[str] = []
         for image_path, direction_name in zip(image_paths, direction_names):
             image_id = self._extract_direction_image_id(direction_name)
@@ -1524,7 +1524,7 @@ class VLMNavigationController(BaseNavigationController):
             subtask_id=phase
         )
     
-    def _collect_lookaround_direction_views(self, phase: str = "initial") -> Tuple[List[str], List[str]]:
+    def _collect_lookaround_direction_views(self, phase: str = "initial") -> Tuple[List[Any], List[str]]:
         """Run the shared lookaround scan, then render the 12 thinking views for the VLM."""
         scan_state = self._capture_lookaround_scan(
             phase=phase,
@@ -1549,7 +1549,6 @@ class VLMNavigationController(BaseNavigationController):
                 _, orig_wp_ids, wp_descriptions = self.mapper.get_waypoints()
                 waypoint_info = (wp_positions, wp_ids, wp_descriptions)
         
-        directions_dir = os.path.join(self.config.RESULTS_DIR, f"episode_{self.current_episode_id}", "directions")
         def _render_thinking_detection(
             image: np.ndarray,
             detections,
@@ -1571,8 +1570,7 @@ class VLMNavigationController(BaseNavigationController):
                 return_visible_entries=True,
             )
 
-        direction_paths, direction_names = self.thinking_view_renderer.save_direction_views(
-            directions_dir=directions_dir,
+        rendered_views = self.thinking_view_renderer.render_direction_views(
             phase=phase,
             lookaround_images=lookaround_images,
             lookaround_depths=lookaround_depths,
@@ -1591,10 +1589,20 @@ class VLMNavigationController(BaseNavigationController):
             waypoint_angle_deg=last_waypoint_angle_deg,
             draw_waypoints_fn=self._draw_waypoints_on_view,
         )
-        
-        # print(f"  12方向独立视图已保存")
-        
-        return direction_paths, direction_names
+
+        direction_inputs: List[Any] = []
+        direction_names: List[str] = []
+        for view in rendered_views:
+            angle = int(view.get("angle", 0))
+            direction_names.append(str(view.get("direction_name", "")))
+            direction_inputs.append({
+                "image_array": view.get("image"),
+                "color_space": "bgr",
+                "artifact_name": f"direction_{angle:03d}.jpg",
+                "name": f"direction_{angle:03d}",
+            })
+
+        return direction_inputs, direction_names
 
     def run_lookaround_and_update_state(self, phase: str) -> Dict[str, Any]:
         """Unified lookaround entry used by initial / verify thinking cycles."""
@@ -1984,69 +1992,8 @@ class VLMNavigationController(BaseNavigationController):
         )
 
     def _refresh_cached_lookaround_direction_views(self, phase: str) -> bool:
-        """Re-render cached 12 views after planning updates so current area/waypoint area stay in sync."""
-        if (
-            not self.latest_lookaround_images or
-            not self.latest_lookaround_depths or
-            self.latest_lookaround_phase != phase or
-            len(self.latest_lookaround_images) < 12 or
-            len(self.latest_lookaround_depths) < 12
-        ):
-            return False
-
-        if not hasattr(self, 'mapper') or self.mapper is None:
-            return False
-
-        map_state = self.mapper.get_map_state()
-        waypoint_info = None
-        wp_positions, wp_ids, wp_descriptions = self.mapper.get_waypoints()
-        if wp_positions and wp_ids:
-            waypoint_info = (wp_positions, wp_ids, wp_descriptions)
-
-        directions_dir = os.path.join(self.config.RESULTS_DIR, f"episode_{self.current_episode_id}", 'directions')
-
-        def _render_thinking_detection(
-            image: np.ndarray,
-            detections,
-            labels: List[str],
-            depth_meters: Optional[np.ndarray],
-        ):
-            return self.visualizer.render_detection_bbox(
-                image,
-                detections,
-                labels,
-                landmark_classes=self.landmark_classes,
-                depth_meters=depth_meters,
-                hfov=self.config.MAP.HFOV,
-                landmark_dist_map=None,
-                landmark_dist_map_multi=None,
-                show_action_partitions=False,
-                append_bottom_strip=False,
-                controller=None,
-                return_visible_entries=True,
-            )
-
-        self.thinking_view_renderer.save_direction_views(
-            directions_dir=directions_dir,
-            phase=phase,
-            lookaround_images=[img.copy() for img in self.latest_lookaround_images],
-            lookaround_depths=[depth.copy() if depth is not None else None for depth in self.latest_lookaround_depths],
-            landmark_classes=self.landmark_classes,
-            detect_landmarks_fn=self._detect_landmarks_for_visualization,
-            render_detection_fn=_render_thinking_detection,
-            draw_distance_fn=self.visualizer.draw_distance_on_view,
-            distance_lookup=self.latest_obstacle_distances_12,
-            waypoint_info=waypoint_info,
-            waypoint_area_labels=map_state.get('waypoint_area_labels', []),
-            current_pose=map_state.get('full_pose'),
-            resolution_cm=float(getattr(self.mapper, 'resolution', 5)),
-            current_space_area_label=str(map_state.get('current_space_area_label', 'Unknown') or 'Unknown'),
-            full_map=map_state.get('full_map'),
-            crop_offset=map_state.get('crop_offset'),
-            waypoint_angle_deg=None,
-            draw_waypoints_fn=self._draw_waypoints_on_view,
-        )
-        return True
+        """Direction-view disk refresh is disabled; keep only model-input artifacts."""
+        return False
 
     def auto_rotate_to_waypoint(self, waypoint_direction: str) -> Tuple[bool, List[Dict]]:
         """
@@ -2145,25 +2092,28 @@ class VLMNavigationController(BaseNavigationController):
         if self.latest_obs is not None:
             obs = self.latest_obs
         else:
-            # 如果没有缓存，执行一次右转再左转回来获取观察
-            actions = [{"action": HabitatSimActions.TURN_RIGHT}]
-            step_data = self._safe_env_step(actions, context="action observation refresh turn-right")
-            if step_data is None:
+            # 如果没有缓存，仍通过统一执行器做一次右转再左转回来；
+            # 这样真实 Habitat 动作会正确计步、更新地图并保存 navigation visualization。
+            refresh_right = self.step_with_vlm(
+                HabitatSimActions.TURN_RIGHT,
+                action_name="OBS_REFRESH_TURN_RIGHT",
+                save_vis=True,
+                enable_landmark_detection=False,
+            )
+            if refresh_right.get('done', False):
+                print("[WARN] Episode ended during observation refresh turn-right")
                 return None, None, True, 1, None
-            obs, _, dones, _ = step_data
-            if dones[0]:
-                print("[WARN] Episode ended")
+
+            refresh_left = self.step_with_vlm(
+                HabitatSimActions.TURN_LEFT,
+                action_name="OBS_REFRESH_TURN_LEFT",
+                save_vis=True,
+                enable_landmark_detection=False,
+            )
+            if refresh_left.get('done', False):
+                print("[WARN] Episode ended during observation refresh turn-left")
                 return None, None, True, 1, None
-            
-            actions = [{"action": HabitatSimActions.TURN_LEFT}]
-            step_data = self._safe_env_step(actions, context="action observation refresh turn-left")
-            if step_data is None:
-                return None, None, True, 1, None
-            obs, _, dones, _ = step_data
-            if dones[0]:
-                print("[WARN] Episode ended")
-                return None, None, True, 1, None
-            obs = obs[0]
+            obs = refresh_left.get('obs') or self.latest_obs
         
         # 获取最新保存的观察信息
         # 上一步已保存的文件（如果current_step=13，则读取step_0012的地图）
@@ -2197,20 +2147,8 @@ class VLMNavigationController(BaseNavigationController):
         # 最后回退到initial
         possible_phases.append("initial")
         
-        # 查找detection图像（使用相同的回退逻辑）
         detection_image = None
-        detection_step = None  # 记录找到的detection图像对应的step
-        for phase in possible_phases:
-            candidate = os.path.join(self.episode_dir, 'detection', f'step_{last_step:04d}_{phase}.png')
-            if os.path.exists(candidate):
-                detection_image = candidate
-                detection_step = last_step
-                break
-        if not detection_image:
-            print(f"  [WARN] Detection image not found for step {last_step}")
-        else:
-            detection_image = self.visualizer.prepare_action_image_with_enhancements(
-                detection_image, None, self.latest_obstacle_distances, self.classes, use_floor=False, use_distance=False)
+        detection_step = last_step
         
         # 获取detection图像对应的landmark类别
         # 使用找到的detection图像对应的step
@@ -2258,6 +2196,26 @@ class VLMNavigationController(BaseNavigationController):
             self.current_step + 1,
             create=True,
         )
+
+        detection_image = None
+        detection_vis = getattr(self, 'latest_action_detection_vis', None)
+        if detection_vis is not None:
+            detection_image = {
+                "image_array": detection_vis,
+                "color_space": "bgr",
+                "artifact_name": "action_view.jpg",
+                "name": f"action_view_step_{last_step:04d}",
+            }
+        elif self.latest_obs is not None and 'rgb' in self.latest_obs:
+            rgb_bgr = cv2.cvtColor(self.latest_obs['rgb'], cv2.COLOR_RGB2BGR)
+            detection_image = {
+                "image_array": rgb_bgr,
+                "color_space": "bgr",
+                "artifact_name": "action_view.jpg",
+                "name": f"action_view_step_{last_step:04d}",
+            }
+        else:
+            print(f"  [WARN] Action input image not available for step {last_step}")
 
         waypoint_summary = self._get_waypoint_summary(
             include_area_chain=False,
@@ -2729,14 +2687,37 @@ class VLMNavigationController(BaseNavigationController):
             if valid_dtgs:
                 print(f'\nDTG: min={min(valid_dtgs):.2f}m final={valid_dtgs[-1]:.2f}m')
 
-        gif_path = None
-        if self.nav_visualizer and self._should_save_navigation_gif():
-            gif_path = self.nav_visualizer.save_gif(fps=2)
-
         final_metrics = self.finish_episode(
             success=navigation_complete,
             stop_action=True
         )
+
+        if self.final_stop_was_executed and self.nav_visualizer and self.latest_obs is not None:
+            subtask_text = None
+            if self.current_subtask:
+                subtask_text = self.current_subtask.get('subtask_instruction', '')
+
+            distance = 0.0
+            if self.latest_info:
+                distance = self.latest_info.get('distance_to_goal', 0.0)
+
+            attempt_letter = chr(ord('a') + self.subtask_attempt)
+            subtask_id = f"{self.subtask_count}{attempt_letter}"
+            self.nav_visualizer.save_step_visualization(
+                observations=self.latest_obs,
+                info=self.latest_info or {},
+                step=self.current_step,
+                instruction=self.current_instruction,
+                current_subtask=subtask_text,
+                distance=distance,
+                action="STOP",
+                subtask_id=subtask_id,
+            )
+
+        gif_path = None
+        if self.nav_visualizer and self._should_save_navigation_gif():
+            gif_path = self.nav_visualizer.save_gif(fps=2)
+
         total_steps = self.current_step
 
         env_metrics = final_metrics if final_metrics else {}
