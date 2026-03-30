@@ -167,9 +167,9 @@ def run_single_episode(
         result = controller.run_vlm_navigation(max_subtask_steps=args.max_subtask_steps)
         total_steps = result.get("total_steps", result.get("steps", 0))
 
-        print(f"\n{'='*80}")
-        print(f"{'✅' if result['success'] else '❌'} Episode {episode_id} 完成 | 成功: {result['success']} | 步数: {total_steps}")
-        print(f"{'='*80}")
+        print(
+            f"[Episode] id={episode_id} success={result['success']} steps={total_steps}"
+        )
         return {
             "episode_id": episode_id,
             "success": result["success"],

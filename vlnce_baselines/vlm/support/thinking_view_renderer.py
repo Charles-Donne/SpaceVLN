@@ -38,7 +38,11 @@ from vlnce_baselines.visualization.landmark_selection import (
     _build_outer_ring_sampling_mask,
     _sample_random_mask_coords,
 )
-from vlnce_baselines.utils.spatial_formatter import snap_relative_bearing
+from vlnce_baselines.utils.spatial_formatter import (
+    resolve_display_current_area,
+    select_display_waypoint_indices,
+    snap_relative_bearing,
+)
 from vlnce_baselines.vlm.support.navigation_config import DIRECTION_CONFIG
 from vlnce_baselines.visualization.map_projection import RotatedMapProjector
 
@@ -62,12 +66,31 @@ class ThinkingViewRenderer:
             str(keyword).strip().lower()
             for keyword in CFG_LANDMARK_EDGE_DEPTH_KEYWORDS
             if str(keyword).strip()
-        ) + ["entryway", "hallway", "corridor", "doorway", "entrance"]
+        ) + ["hallway"]
     )
 
     @staticmethod
     def _is_known_area_label(area_label: str) -> bool:
         return str(area_label or "").strip().lower() not in {"", "unknown"}
+
+    @staticmethod
+    def _split_area_label_links(area_label: str) -> Tuple[str, List[str]]:
+        text = str(area_label or "").strip()
+        if not text:
+            return "", []
+
+        lower_text = text.lower()
+        marker = " [links:"
+        marker_idx = lower_text.find(marker)
+        if marker_idx < 0:
+            return text, []
+
+        clean_text = text[:marker_idx].strip() or text
+        link_text = text[marker_idx + len(marker):].strip()
+        if link_text.endswith("]"):
+            link_text = link_text[:-1].strip()
+        links = [item.strip() for item in link_text.split(",") if item.strip()]
+        return clean_text, links
 
     @staticmethod
     def _build_text_strip(
@@ -164,19 +187,25 @@ class ThinkingViewRenderer:
         current_pose: Optional[np.ndarray],
         resolution_cm: float,
         current_space_area_label: str,
+        full_map: Optional[np.ndarray],
+        crop_offset: Optional[Tuple[int, int]],
     ) -> List[Dict[str, Any]]:
         if current_pose is None:
             return []
 
         if not waypoint_info:
             current_area_text = str(current_space_area_label or "Unknown").strip() or "Unknown"
-            if not cls._is_known_area_label(current_area_text):
+            clean_current_area_text, connected_area_labels = cls._split_area_label_links(current_area_text)
+            if not cls._is_known_area_label(clean_current_area_text):
                 return []
             return [{
                 "id": 0,
-                "label": cls._short_text(current_area_text, max_len=34),
-                "description": current_area_text,
+                "label": cls._short_text(clean_current_area_text, max_len=34),
+                "display_text": clean_current_area_text,
+                "description": clean_current_area_text,
                 "area_label": current_area_text,
+                "clean_area_label": clean_current_area_text,
+                "connected_area_labels": connected_area_labels,
                 "distance_m": 0.0,
                 "relative_bearing_deg": 0.0,
                 "snapped_relative_bearing_deg": 0.0,
@@ -188,13 +217,17 @@ class ThinkingViewRenderer:
         waypoint_positions, waypoint_ids, waypoint_descriptions = waypoint_info
         if not waypoint_ids:
             current_area_text = str(current_space_area_label or "Unknown").strip() or "Unknown"
-            if not cls._is_known_area_label(current_area_text):
+            clean_current_area_text, connected_area_labels = cls._split_area_label_links(current_area_text)
+            if not cls._is_known_area_label(clean_current_area_text):
                 return []
             return [{
                 "id": 0,
-                "label": cls._short_text(current_area_text, max_len=34),
-                "description": current_area_text,
+                "label": cls._short_text(clean_current_area_text, max_len=34),
+                "display_text": clean_current_area_text,
+                "description": clean_current_area_text,
                 "area_label": current_area_text,
+                "clean_area_label": clean_current_area_text,
+                "connected_area_labels": connected_area_labels,
                 "distance_m": 0.0,
                 "relative_bearing_deg": 0.0,
                 "snapped_relative_bearing_deg": 0.0,
@@ -205,11 +238,32 @@ class ThinkingViewRenderer:
 
         curr_x_m, curr_y_m, curr_orientation_deg = [float(v) for v in current_pose[:3]]
         area_labels = list(waypoint_area_labels or [])
+        resolved_current_area_text, current_area_anchor_index = resolve_display_current_area(
+            waypoint_positions=waypoint_positions,
+            waypoint_area_labels=area_labels,
+            current_pose=current_pose,
+            resolution_cm=resolution_cm,
+            current_space_area_label=current_space_area_label,
+            full_map=full_map,
+            crop_offset=crop_offset,
+        )
+        display_indices = select_display_waypoint_indices(
+            waypoint_positions=waypoint_positions,
+            waypoint_ids=waypoint_ids,
+            waypoint_descriptions=waypoint_descriptions,
+            waypoint_area_labels=area_labels,
+            current_pose=current_pose,
+            resolution_cm=resolution_cm,
+            full_map=full_map,
+            crop_offset=crop_offset,
+        )
+        last_displayed_index = display_indices[-1] if display_indices else None
         entries: List[Dict[str, Any]] = []
 
-        for index, (wp_id, wp_desc, (wp_py, wp_px)) in enumerate(
-            zip(waypoint_ids, waypoint_descriptions, waypoint_positions)
-        ):
+        for index in display_indices:
+            wp_id = waypoint_ids[index]
+            wp_desc = waypoint_descriptions[index]
+            wp_py, wp_px = waypoint_positions[index]
             wp_x_m = float(wp_px) * float(resolution_cm) / 100.0
             wp_y_m = float(wp_py) * float(resolution_cm) / 100.0
             dx = wp_x_m - curr_x_m
@@ -221,42 +275,58 @@ class ThinkingViewRenderer:
             view_angle_deg = cls._normalize_angle_deg(-snapped_relative_bearing_deg)
 
             area_label = str(area_labels[index] if index < len(area_labels) else "").strip()
+            clean_area_label, connected_area_labels = cls._split_area_label_links(area_label)
             description = str(wp_desc or "").strip()
-            label_text = area_label or description.split(" - ", 1)[0].strip() or f"WP#{wp_id}"
+            display_text = description or clean_area_label or f"WP#{wp_id}"
 
             entries.append({
                 "id": int(wp_id),
-                "label": cls._short_text(label_text, max_len=34),
+                "label": cls._short_text(display_text, max_len=34),
+                "display_text": display_text,
                 "description": description,
                 "area_label": area_label,
+                "clean_area_label": clean_area_label,
+                "connected_area_labels": connected_area_labels,
                 "world_py": int(wp_py),
                 "world_px": int(wp_px),
                 "distance_m": distance_m,
                 "relative_bearing_deg": relative_bearing_deg,
                 "snapped_relative_bearing_deg": snapped_relative_bearing_deg,
                 "view_angle_deg": view_angle_deg,
-                "is_last_visited": index == len(waypoint_ids) - 1,
+                "is_last_visited": index == last_displayed_index,
                 "is_task_initial_position": index == 0,
             })
 
-        current_area_text = str(current_space_area_label or "Unknown").strip() or "Unknown"
+        current_area_text = str(resolved_current_area_text or current_space_area_label or "Unknown").strip() or "Unknown"
+        clean_current_area_text, connected_current_area_labels = cls._split_area_label_links(current_area_text)
         current_area_view_angle = 0.0
         current_area_relative_bearing = 0.0
         current_area_snapped_bearing = 0.0
-        if entries:
+        if current_area_anchor_index is not None and current_area_anchor_index < len(waypoint_positions):
+            anchor_py, anchor_px = waypoint_positions[current_area_anchor_index]
+            anchor_x_m = float(anchor_px) * float(resolution_cm) / 100.0
+            anchor_y_m = float(anchor_py) * float(resolution_cm) / 100.0
+            dx = anchor_x_m - curr_x_m
+            dy = anchor_y_m - curr_y_m
+            absolute_angle_deg = float(math.degrees(math.atan2(dy, dx)))
+            current_area_relative_bearing = float(curr_orientation_deg - absolute_angle_deg)
+            current_area_snapped_bearing = float(snap_relative_bearing(current_area_relative_bearing))
+            current_area_view_angle = cls._normalize_angle_deg(-current_area_snapped_bearing)
+        elif entries:
             last_entry = entries[-1]
             current_area_view_angle = float(last_entry["view_angle_deg"])
             current_area_relative_bearing = float(last_entry["relative_bearing_deg"])
             current_area_snapped_bearing = float(last_entry.get("snapped_relative_bearing_deg", 0.0))
-            if float(last_entry["distance_m"]) <= cls.CURRENT_AREA_OVERLAP_THRESHOLD_M:
-                entries.pop()
 
-        if cls._is_known_area_label(current_area_text):
+        if cls._is_known_area_label(clean_current_area_text) and (current_area_anchor_index is not None or not waypoint_ids):
             entries.append({
                 "id": 0,
-                "label": cls._short_text(current_area_text, max_len=34),
-                "description": current_area_text,
+                "label": cls._short_text(clean_current_area_text, max_len=34),
+                "display_text": clean_current_area_text,
+                "description": clean_current_area_text,
                 "area_label": current_area_text,
+                "clean_area_label": clean_current_area_text,
+                "connected_area_labels": connected_current_area_labels,
                 "distance_m": 0.0,
                 "relative_bearing_deg": current_area_relative_bearing,
                 "snapped_relative_bearing_deg": current_area_snapped_bearing,
@@ -511,6 +581,26 @@ class ThinkingViewRenderer:
         for entry in waypoint_entries:
             if bool(entry.get("is_current_area")):
                 distance_m = entry.get("distance_m", 0.0)
+                connected_area_labels = [
+                    str(label).strip()
+                    for label in list(entry.get("connected_area_labels") or [])
+                    if str(label).strip()
+                ]
+                display_text = str(
+                    entry.get("display_text")
+                    or entry.get("clean_area_label")
+                    or entry.get("label")
+                    or "Unknown"
+                ).strip() or "Unknown"
+                segments = [
+                    LandmarkStripSegment("your current area: ", prefix_color),
+                    LandmarkStripSegment(display_text, value_color),
+                ]
+                if connected_area_labels:
+                    segments.extend((
+                        LandmarkStripSegment("  connects: ", prefix_color),
+                        LandmarkStripSegment(", ".join(connected_area_labels), value_color),
+                    ))
                 sort_key = (cls._distance_sort_value(distance_m), 1.0, 0.0)
                 lines.append(
                     LandmarkStripLine(
@@ -518,35 +608,51 @@ class ThinkingViewRenderer:
                         confidence=0.0,
                         priority=1,
                         sort_key=sort_key,
-                        segments=(
-                            LandmarkStripSegment("your current area: ", prefix_color),
-                            LandmarkStripSegment(cls._short_text(entry.get("label", "Unknown"), max_len=34), value_color),
-                        ),
+                        segments=tuple(segments),
                     )
                 )
                 continue
 
             note_parts: List[str] = []
-            if bool(entry.get("is_last_visited")):
-                note_parts.append("came from here")
+            if bool(entry.get("is_last_visited")) and not bool(entry.get("is_task_initial_position")):
+                note_parts.append("LAST POSITION")
             if bool(entry.get("is_task_initial_position")):
-                note_parts.append("TASK INITIAL POSITION")
+                note_parts.append("INITIAL POSITION")
             note = f"  <- {' | '.join(note_parts)}" if note_parts else ""
-            waypoint_text = f"WP#{int(entry.get('id', 0))} {entry.get('label', 'Unknown')}".strip()
+            connected_area_labels = [
+                str(label).strip()
+                for label in list(entry.get("connected_area_labels") or [])
+                if str(label).strip()
+            ]
+            waypoint_display_text = str(
+                entry.get("display_text")
+                or entry.get("description")
+                or entry.get("clean_area_label")
+                or entry.get("label")
+                or "Unknown"
+            ).strip() or "Unknown"
+            waypoint_text = f"WP#{int(entry.get('id', 0))} {waypoint_display_text}".strip()
             distance_m = entry.get("distance_m")
             sort_key = (cls._distance_sort_value(distance_m), 1.0, 0.0)
+            segments = [
+                LandmarkStripSegment("space waypoint: ", prefix_color),
+                LandmarkStripSegment(waypoint_text, value_color),
+                LandmarkStripSegment(f"  {cls._distance_text(distance_m)}", value_color),
+            ]
+            if connected_area_labels:
+                segments.extend((
+                    LandmarkStripSegment("  connects: ", prefix_color),
+                    LandmarkStripSegment(", ".join(connected_area_labels), value_color),
+                ))
+            if note:
+                segments.append(LandmarkStripSegment(note, prefix_color))
             lines.append(
                 LandmarkStripLine(
                     distance_m=cls._distance_sort_value(distance_m),
                     confidence=0.0,
                     priority=1,
                     sort_key=sort_key,
-                    segments=(
-                        LandmarkStripSegment("space waypoint: ", prefix_color),
-                        LandmarkStripSegment(cls._short_text(waypoint_text, max_len=34), value_color),
-                        LandmarkStripSegment(f"  {cls._distance_text(distance_m)}", value_color),
-                        LandmarkStripSegment(note, prefix_color),
-                    ),
+                    segments=tuple(segments),
                 )
             )
 
@@ -996,6 +1102,8 @@ class ThinkingViewRenderer:
             current_pose=current_pose,
             resolution_cm=resolution_cm,
             current_space_area_label=current_space_area_label,
+            full_map=full_map,
+            crop_offset=crop_offset,
         )
         view_angles = [float(config["angle"]) for config in DIRECTION_CONFIG]
         waypoint_entries = self._apply_waypoint_visibility(

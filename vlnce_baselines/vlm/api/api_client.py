@@ -9,6 +9,7 @@ import base64
 import json
 import re
 import time
+import io
 import requests
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional
@@ -158,6 +159,7 @@ class BaseAPIClient(ABC):
         self.compress_images = DEFAULT_IMAGE_COMPRESSION_ENABLED
         self.compression_max_size = DEFAULT_IMAGE_COMPRESSION_MAX_SIZE
         self.compression_quality = DEFAULT_IMAGE_COMPRESSION_QUALITY
+        self.save_request_artifacts = False
 
     def _apply_reasoning_disabled_defaults(self, payload: Dict) -> Dict:
         """Best-effort disable provider-side thinking/reasoning by default."""
@@ -187,6 +189,10 @@ class BaseAPIClient(ABC):
         self.compress_images = enabled
         self.compression_max_size = max_size
         self.compression_quality = quality
+
+    def set_request_artifact_saving(self, enabled: bool = False):
+        """Control whether prompt/image request artifacts are written to disk."""
+        self.save_request_artifacts = bool(enabled)
     
     @staticmethod
     def compress_image(image_path: str, max_size: int = 384, quality: int = 80) -> str:
@@ -228,6 +234,25 @@ class BaseAPIClient(ABC):
         except Exception as e:
             print(f"[WARN] Image compression failed: {e}, using original")
             return image_path
+
+    @staticmethod
+    def _load_image_bytes(image_path: str, compress: bool = True, max_size: int = 384, quality: int = 80) -> bytes:
+        """Load image bytes, compressing in memory when requested."""
+        if not compress:
+            with open(image_path, "rb") as f:
+                return f.read()
+
+        from PIL import Image
+
+        img = Image.open(image_path)
+        if max(img.size) > max_size:
+            ratio = max_size / max(img.size)
+            new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
+            img = img.resize(new_size, Image.LANCZOS)
+
+        buffer = io.BytesIO()
+        img.convert('RGB').save(buffer, 'JPEG', quality=quality, optimize=True)
+        return buffer.getvalue()
     
     def encode_image_base64(self, image_path: str, compress: bool = None) -> str:
         """
@@ -245,30 +270,15 @@ class BaseAPIClient(ABC):
         # 确定是否压缩
         should_compress = compress if compress is not None else self.compress_images
         
-        # 处理图片
-        if should_compress:
-            compressed_path = self.compress_image(
-                image_path, 
-                max_size=self.compression_max_size,
-                quality=self.compression_quality
-            )
-            with open(compressed_path, "rb") as f:
-                result = base64.b64encode(f.read()).decode("utf-8")
-            
-            # 清理临时文件（如果不是原始文件）
-            if compressed_path != image_path:
-                try:
-                    os.remove(compressed_path)
-                except:
-                    pass
-            return result
-        else:
-            # 不压缩，直接编码
-            file_size = os.path.getsize(image_path)
-            if file_size > 5 * 1024 * 1024:  # 5MB
-                print(f"[WARN] Large image: {os.path.basename(image_path)} ({file_size / 1024 / 1024:.2f}MB)")
-            with open(image_path, "rb") as f:
-                return base64.b64encode(f.read()).decode("utf-8")
+        image_bytes = self._load_image_bytes(
+            image_path,
+            compress=should_compress,
+            max_size=self.compression_max_size,
+            quality=self.compression_quality,
+        )
+        if not should_compress and len(image_bytes) > 5 * 1024 * 1024:
+            print(f"[WARN] Large image: {os.path.basename(image_path)} ({len(image_bytes) / 1024 / 1024:.2f}MB)")
+        return base64.b64encode(image_bytes).decode("utf-8")
     
     @staticmethod
     def clean_json_response(text: str) -> str:
@@ -282,14 +292,36 @@ class BaseAPIClient(ABC):
         """提取JSON对象"""
         match = re.search(r'\{[\s\S]*\}', text)
         return match.group(0) if match else None
+
+    @staticmethod
+    def extract_json_objects(text: str) -> List[Dict]:
+        """Extract every decodable top-level JSON object from a noisy response."""
+        decoder = json.JSONDecoder()
+        results: List[Dict] = []
+        text = str(text or "")
+        length = len(text)
+        for start_idx, ch in enumerate(text):
+            if ch != "{":
+                continue
+            try:
+                parsed, end_idx = decoder.raw_decode(text[start_idx:])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                results.append(parsed)
+        return results
     
     def parse_json_response(self, response_text: str) -> Optional[Dict]:
         """解析JSON响应"""
+        cleaned = self.clean_json_response(response_text)
         try:
-            cleaned = self.clean_json_response(response_text)
             return json.loads(cleaned)
         except json.JSONDecodeError:
-            json_str = self.extract_json_object(response_text)
+            json_candidates = self.extract_json_objects(cleaned)
+            if json_candidates:
+                return json_candidates[-1]
+
+            json_str = self.extract_json_object(cleaned)
             if json_str:
                 try:
                     return json.loads(json_str)
@@ -336,32 +368,33 @@ class BaseAPIClient(ABC):
             no_compress_indices: 不压缩的图片索引集合（如 {4} 表示第5张图不压缩）
         """
         content = [{"type": "text", "text": text}]
+        should_save_artifacts = bool(save_dir and self.save_request_artifacts)
         
         # 如果需要保存，先创建目录
-        if save_dir:
+        if should_save_artifacts:
             os.makedirs(save_dir, exist_ok=True)
-            # 保存prompt
             with open(os.path.join(save_dir, "prompt.txt"), 'w', encoding='utf-8') as f:
                 f.write(text)
         
         for idx, img_path in enumerate(image_paths):
-            # 指定索引跳过压缩（如 global_map 需要保持原始分辨率）
             skip_compress = no_compress_indices is not None and idx in no_compress_indices
-            img_base64 = self.encode_image_base64(img_path, compress=(False if skip_compress else None))
+            compress = False if skip_compress else self.compress_images
+            image_bytes = self._load_image_bytes(
+                img_path,
+                compress=compress,
+                max_size=self.compression_max_size,
+                quality=self.compression_quality,
+            )
+            img_base64 = base64.b64encode(image_bytes).decode("utf-8")
             content.append({
                 "type": "image_url",
                 "image_url": {"url": f"data:image/jpeg;base64,{img_base64}"}
             })
             
-            # 保存压缩后的图片（模型实际看到的版本）
-            # 从路径提取语义名称: directions/xxx -> direction_000.png, global_map/xxx -> global_map.png
-            if save_dir:
+            if should_save_artifacts:
                 parent_dir = os.path.basename(os.path.dirname(img_path))
                 if parent_dir == 'directions':
-                    # directions/initial_direction_030.png -> direction_030.png
                     basename = os.path.basename(img_path)
-                    # 提取角度部分: initial_direction_030.png -> 030
-                    import re
                     angle_match = re.search(r'(\d{3})\.png$', basename)
                     if angle_match:
                         img_filename = f"direction_{angle_match.group(1)}.png"
@@ -379,7 +412,7 @@ class BaseAPIClient(ABC):
                     img_filename = f"img_{idx:02d}.png"
                 save_path = os.path.join(save_dir, img_filename)
                 with open(save_path, 'wb') as f:
-                    f.write(base64.b64decode(img_base64))
+                    f.write(image_bytes)
         
         return content
     

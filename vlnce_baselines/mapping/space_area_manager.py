@@ -11,10 +11,12 @@ import numpy as np
 from vlnce_baselines.config.core.params.spatial import (
     SPACE_AREA_CONNECTOR_TYPES,
     SPACE_AREA_CURRENT_WAYPOINT_MAX_DISTANCE_M,
+    SPACE_AREA_CURRENT_INITIAL_WAYPOINT_MAX_DISTANCE_M,
     SPACE_AREA_MAX_CONNECTED_AREAS,
     SPACE_AREA_MAX_CONNECTION_DISTANCE_M,
     SPACE_AREA_NARROW_PASSAGE_CLEARANCE_M,
     SPACE_AREA_MAX_SAME_TYPE_WAYPOINT_MERGE_DISTANCE_M,
+    SPACE_AREA_SAME_TYPE_CONNECTOR_SPLIT_DISTANCE_M,
     SPACE_AREA_SAME_TYPE_MERGE_MIN_CLEARANCE_M,
     SPACE_AREA_SAMPLE_PIXELS_PER_AREA,
 )
@@ -32,8 +34,10 @@ class SpaceAreaManager:
     MAX_CONNECTED_AREAS = SPACE_AREA_MAX_CONNECTED_AREAS
     MAX_CONNECTION_DISTANCE_M = SPACE_AREA_MAX_CONNECTION_DISTANCE_M
     MAX_SAME_TYPE_WAYPOINT_MERGE_DISTANCE_M = SPACE_AREA_MAX_SAME_TYPE_WAYPOINT_MERGE_DISTANCE_M
+    SAME_TYPE_CONNECTOR_SPLIT_DISTANCE_M = SPACE_AREA_SAME_TYPE_CONNECTOR_SPLIT_DISTANCE_M
     SAMPLE_PIXELS_PER_AREA = SPACE_AREA_SAMPLE_PIXELS_PER_AREA
     CURRENT_AREA_WAYPOINT_MAX_DISTANCE_M = SPACE_AREA_CURRENT_WAYPOINT_MAX_DISTANCE_M
+    CURRENT_AREA_INITIAL_WAYPOINT_MAX_DISTANCE_M = SPACE_AREA_CURRENT_INITIAL_WAYPOINT_MAX_DISTANCE_M
     NARROW_PASSAGE_CLEARANCE_M = SPACE_AREA_NARROW_PASSAGE_CLEARANCE_M
     SAME_TYPE_MERGE_MIN_CLEARANCE_M = SPACE_AREA_SAME_TYPE_MERGE_MIN_CLEARANCE_M
     MIN_RENDERABLE_AREA_PIXELS = 24
@@ -839,37 +843,21 @@ class SpaceAreaManager:
             full_pose=full_pose,
             crop_offset=crop_offset,
         )
-        rotated = projector.world_to_rotated_pixel(probe_py, probe_px)
-        if rotated is not None:
-            row = int(round(rotated[0]))
-            col = int(round(rotated[1]))
-            if 0 <= row < layer.shape[0] and 0 <= col < layer.shape[1]:
-                area_id = int(layer[row, col])
-                if area_id > 0:
-                    current_record = next(
-                        (record for record in self.space_area_records if int(record["id"]) == area_id),
-                        None,
-                    )
-                    if current_record is not None and self._record_has_nearby_area_waypoint(
-                        record=current_record,
-                        pixel_y=curr_py,
-                        pixel_x=curr_px,
-                        waypoint_positions=waypoint_positions,
-                        waypoint_area_labels=waypoint_area_labels,
-                    ):
-                        self._set_current_area_from_record(current_record)
-                        return
-
-        containing_record = self._find_current_record_from_waypoints(
+        current_record = self._resolve_current_space_area_record(
             pixel_y=curr_py,
             pixel_x=curr_px,
+            probe_py=probe_py,
+            probe_px=probe_px,
             waypoint_positions=waypoint_positions,
             waypoint_area_labels=waypoint_area_labels,
-            containment_pixel=(probe_py, probe_px),
-            require_nearby_waypoint=True,
+            full_map=full_map,
+            full_pose=full_pose,
+            crop_offset=crop_offset,
+            layer=layer,
+            projector=projector,
         )
-        if containing_record is not None:
-            self._set_current_area_from_record(containing_record)
+        if current_record is not None:
+            self._set_current_area_from_record(current_record)
             return
 
         self._set_unknown_current_area()
@@ -900,16 +888,19 @@ class SpaceAreaManager:
             crop_offset=crop_offset,
         )
 
-        containing_record = self._find_current_record_from_waypoints(
+        current_record = self._resolve_current_space_area_record(
             pixel_y=curr_py,
             pixel_x=curr_px,
+            probe_py=probe_py,
+            probe_px=probe_px,
             waypoint_positions=waypoint_positions,
             waypoint_area_labels=waypoint_area_labels,
-            containment_pixel=(probe_py, probe_px),
-            require_nearby_waypoint=True,
+            full_map=full_map,
+            full_pose=full_pose,
+            crop_offset=crop_offset,
         )
-        if containing_record is not None:
-            self._set_current_area_from_record(containing_record)
+        if current_record is not None:
+            self._set_current_area_from_record(current_record)
             return
 
         self._set_unknown_current_area()
@@ -932,6 +923,9 @@ class SpaceAreaManager:
         waypoint_positions: Optional[Sequence[Tuple[int, int]]] = None,
         waypoint_area_labels: Optional[Sequence[str]] = None,
         containment_pixel: Optional[Tuple[int, int]] = None,
+        full_map: Optional[np.ndarray] = None,
+        full_pose: Optional[Sequence[float]] = None,
+        crop_offset: Optional[Tuple[int, int]] = None,
         require_nearby_waypoint: bool = True,
     ) -> Optional[Dict[str, Any]]:
         if containment_pixel is None:
@@ -949,9 +943,119 @@ class SpaceAreaManager:
             pixel_x=pixel_x,
             waypoint_positions=waypoint_positions,
             waypoint_area_labels=waypoint_area_labels,
+            full_map=full_map,
+            full_pose=full_pose,
+            crop_offset=crop_offset,
         ):
             return containing_record
         return None
+
+    def _resolve_current_space_area_record(
+        self,
+        pixel_y: int,
+        pixel_x: int,
+        probe_py: int,
+        probe_px: int,
+        waypoint_positions: Optional[Sequence[Tuple[int, int]]] = None,
+        waypoint_area_labels: Optional[Sequence[str]] = None,
+        full_map: Optional[np.ndarray] = None,
+        full_pose: Optional[Sequence[float]] = None,
+        crop_offset: Optional[Tuple[int, int]] = None,
+        layer: Optional[np.ndarray] = None,
+        projector: Optional[RotatedMapProjector] = None,
+    ) -> Optional[Dict[str, Any]]:
+        record_map = self._build_record_label_map()
+
+        sticky_record = self._record_from_label_map(self.current_space_area_label, record_map)
+        if sticky_record is not None and self._record_has_nearby_area_waypoint(
+            record=sticky_record,
+            pixel_y=probe_py,
+            pixel_x=probe_px,
+            waypoint_positions=waypoint_positions,
+            waypoint_area_labels=waypoint_area_labels,
+            full_map=full_map,
+            full_pose=full_pose,
+            crop_offset=crop_offset,
+        ):
+            return sticky_record
+
+        if layer is not None and projector is not None:
+            rotated = projector.world_to_rotated_pixel(probe_py, probe_px)
+            if rotated is not None:
+                row = int(round(rotated[0]))
+                col = int(round(rotated[1]))
+                if 0 <= row < layer.shape[0] and 0 <= col < layer.shape[1]:
+                    area_id = int(layer[row, col])
+                    if area_id > 0:
+                        layer_record = next(
+                            (record for record in self.space_area_records if int(record["id"]) == area_id),
+                            None,
+                        )
+                        if layer_record is not None and self._record_has_nearby_area_waypoint(
+                            record=layer_record,
+                            pixel_y=probe_py,
+                            pixel_x=probe_px,
+                            waypoint_positions=waypoint_positions,
+                            waypoint_area_labels=waypoint_area_labels,
+                            full_map=full_map,
+                            full_pose=full_pose,
+                            crop_offset=crop_offset,
+                        ):
+                            return layer_record
+
+        containing_record = self._find_current_record_from_waypoints(
+            pixel_y=pixel_y,
+            pixel_x=pixel_x,
+            waypoint_positions=waypoint_positions,
+            waypoint_area_labels=waypoint_area_labels,
+            containment_pixel=(probe_py, probe_px),
+            full_map=full_map,
+            full_pose=full_pose,
+            crop_offset=crop_offset,
+            require_nearby_waypoint=True,
+        )
+        if containing_record is not None:
+            return containing_record
+
+        fallback_record = self._find_record_from_nearby_waypoint(
+            pixel_y=probe_py,
+            pixel_x=probe_px,
+            waypoint_positions=waypoint_positions,
+            waypoint_area_labels=waypoint_area_labels,
+            full_map=full_map,
+            full_pose=full_pose,
+            crop_offset=crop_offset,
+            record_map=record_map,
+        )
+        if fallback_record is not None:
+            return fallback_record
+
+        return self._find_record_from_nearby_record_waypoints(
+            pixel_y=probe_py,
+            pixel_x=probe_px,
+            waypoint_positions=waypoint_positions,
+            full_map=full_map,
+            full_pose=full_pose,
+            crop_offset=crop_offset,
+        )
+
+    def _build_record_label_map(self) -> Dict[str, Dict[str, Any]]:
+        record_map: Dict[str, Dict[str, Any]] = {}
+        for record in self.space_area_records:
+            resolved_label = self._resolve_label_alias(str(record.get("label", "")).strip())
+            if resolved_label and resolved_label != "Unknown":
+                record_map[resolved_label] = record
+        return record_map
+
+    def _record_from_label_map(
+        self,
+        label: str,
+        record_map: Dict[str, Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        resolved_label = self._resolve_label_alias(str(label or "").strip())
+        if not resolved_label or resolved_label == "Unknown":
+            return None
+        return record_map.get(resolved_label)
 
     def _record_has_nearby_area_waypoint(
         self,
@@ -960,6 +1064,9 @@ class SpaceAreaManager:
         pixel_x: int,
         waypoint_positions: Optional[Sequence[Tuple[int, int]]],
         waypoint_area_labels: Optional[Sequence[str]],
+        full_map: Optional[np.ndarray],
+        full_pose: Optional[Sequence[float]],
+        crop_offset: Optional[Tuple[int, int]],
     ) -> bool:
         if not waypoint_positions:
             return False
@@ -968,9 +1075,12 @@ class SpaceAreaManager:
         if not record_label:
             return False
 
-        max_distance_px = (
-            self.CURRENT_AREA_WAYPOINT_MAX_DISTANCE_M * 100.0
-        ) / float(self.resolution)
+        projector = self._build_projector(full_map, full_pose, crop_offset)
+        obstacle_mask = (
+            np.asarray(full_map[0] > 0.5, dtype=bool)
+            if full_map is not None and projector is not None
+            else None
+        )
         area_labels = list(waypoint_area_labels or [])
 
         for index, waypoint_pos in enumerate(waypoint_positions):
@@ -984,9 +1094,157 @@ class SpaceAreaManager:
 
             wp_py, wp_px = int(waypoint_pos[0]), int(waypoint_pos[1])
             distance_px = float(np.hypot(float(pixel_y) - float(wp_py), float(pixel_x) - float(wp_px)))
-            if distance_px <= max_distance_px + 1e-6:
-                return True
+            max_distance_m = (
+                self.CURRENT_AREA_INITIAL_WAYPOINT_MAX_DISTANCE_M
+                if int(index) == 0 else
+                self.CURRENT_AREA_WAYPOINT_MAX_DISTANCE_M
+            )
+            max_distance_px = (float(max_distance_m) * 100.0) / float(self.resolution)
+            if distance_px > max_distance_px + 1e-6:
+                continue
+            if obstacle_mask is not None and projector is not None:
+                if not self._world_line_is_clear(
+                    obstacle_mask=obstacle_mask,
+                    projector=projector,
+                    start_world=(int(pixel_y), int(pixel_x)),
+                    end_world=(wp_py, wp_px),
+                ):
+                    continue
+            return True
         return False
+
+    def _find_record_from_nearby_waypoint(
+        self,
+        pixel_y: int,
+        pixel_x: int,
+        waypoint_positions: Optional[Sequence[Tuple[int, int]]],
+        waypoint_area_labels: Optional[Sequence[str]],
+        full_map: Optional[np.ndarray],
+        full_pose: Optional[Sequence[float]],
+        crop_offset: Optional[Tuple[int, int]],
+        record_map: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        if not waypoint_positions:
+            return None
+
+        projector = self._build_projector(full_map, full_pose, crop_offset)
+        obstacle_mask = (
+            np.asarray(full_map[0] > 0.5, dtype=bool)
+            if full_map is not None and projector is not None
+            else None
+        )
+        area_labels = list(waypoint_area_labels or [])
+        record_label_map = record_map or self._build_record_label_map()
+        candidates: List[Tuple[float, int, Dict[str, Any]]] = []
+
+        for index, waypoint_pos in enumerate(waypoint_positions):
+            if waypoint_pos is None:
+                continue
+            waypoint_label = self._resolve_label_alias(
+                str(area_labels[index]).strip() if index < len(area_labels) else ""
+            )
+            if not waypoint_label or waypoint_label == "Unknown":
+                continue
+            record = self._record_from_label_map(waypoint_label, record_label_map)
+            if record is None:
+                continue
+
+            wp_py, wp_px = int(waypoint_pos[0]), int(waypoint_pos[1])
+            distance_px = float(np.hypot(float(pixel_y) - float(wp_py), float(pixel_x) - float(wp_px)))
+            max_distance_m = (
+                self.CURRENT_AREA_INITIAL_WAYPOINT_MAX_DISTANCE_M
+                if int(index) == 0 else
+                self.CURRENT_AREA_WAYPOINT_MAX_DISTANCE_M
+            )
+            max_distance_px = (float(max_distance_m) * 100.0) / float(self.resolution)
+            if distance_px > max_distance_px + 1e-6:
+                continue
+
+            if obstacle_mask is not None and projector is not None:
+                if not self._world_line_is_clear(
+                    obstacle_mask=obstacle_mask,
+                    projector=projector,
+                    start_world=(int(pixel_y), int(pixel_x)),
+                    end_world=(wp_py, wp_px),
+                ):
+                    continue
+
+            candidates.append((distance_px, int(index), record))
+
+        if not candidates:
+            return None
+
+        candidates.sort(
+            key=lambda item: (
+                float(item[0]),
+                0 if int(item[1]) != 0 else 1,
+                str(item[2].get("label", "")),
+            )
+        )
+        return candidates[0][2]
+
+    def _find_record_from_nearby_record_waypoints(
+        self,
+        pixel_y: int,
+        pixel_x: int,
+        waypoint_positions: Optional[Sequence[Tuple[int, int]]],
+        full_map: Optional[np.ndarray],
+        full_pose: Optional[Sequence[float]],
+        crop_offset: Optional[Tuple[int, int]],
+    ) -> Optional[Dict[str, Any]]:
+        if not self.space_area_records:
+            return None
+
+        projector = self._build_projector(full_map, full_pose, crop_offset)
+        obstacle_mask = (
+            np.asarray(full_map[0] > 0.5, dtype=bool)
+            if full_map is not None and projector is not None
+            else None
+        )
+        initial_waypoint = None
+        if waypoint_positions and waypoint_positions[0] is not None:
+            initial_waypoint = (int(waypoint_positions[0][0]), int(waypoint_positions[0][1]))
+
+        candidates: List[Tuple[float, int, Dict[str, Any]]] = []
+        for record in self.space_area_records:
+            best_match: Optional[Tuple[float, int]] = None
+            for waypoint_point in self._record_waypoint_points(record):
+                point = (int(waypoint_point[0]), int(waypoint_point[1]))
+                distance_px = float(np.hypot(float(pixel_y) - float(point[0]), float(pixel_x) - float(point[1])))
+                is_initial_point = int(initial_waypoint == point)
+                max_distance_m = (
+                    self.CURRENT_AREA_INITIAL_WAYPOINT_MAX_DISTANCE_M
+                    if is_initial_point else
+                    self.CURRENT_AREA_WAYPOINT_MAX_DISTANCE_M
+                )
+                max_distance_px = (float(max_distance_m) * 100.0) / float(self.resolution)
+                if distance_px > max_distance_px + 1e-6:
+                    continue
+                if obstacle_mask is not None and projector is not None:
+                    if not self._world_line_is_clear(
+                        obstacle_mask=obstacle_mask,
+                        projector=projector,
+                        start_world=(int(pixel_y), int(pixel_x)),
+                        end_world=point,
+                    ):
+                        continue
+                candidate = (distance_px, is_initial_point)
+                if best_match is None or candidate < best_match:
+                    best_match = candidate
+            if best_match is not None:
+                candidates.append((best_match[0], best_match[1], record))
+
+        if not candidates:
+            return None
+
+        candidates.sort(
+            key=lambda item: (
+                float(item[0]),
+                int(item[1]),
+                str(item[2].get("label", "")),
+            )
+        )
+        return candidates[0][2]
 
     def _set_current_area_from_record(self, record: Dict[str, Any]) -> None:
         self.current_space_area_label = str(record.get("label", "Unknown") or "Unknown")
@@ -1216,15 +1474,11 @@ class SpaceAreaManager:
         if space_type in self.CONNECTOR_SPACE_TYPES:
             return False
 
-        if self._records_share_connector_bridge(
-            record_a=record_a,
-            record_b=record_b,
-            obstacle_mask=obstacle_mask,
-            projector=projector,
-        ):
-            return True
-
-        return not self._records_have_broad_open_connection(
+        # Revisited same-type areas should merge once they have a broad, open,
+        # obstacle-free connection again, even if both records also touch the
+        # same hallway / entry connector. The connector bridge should only keep
+        # them distinct when there is no sufficiently open same-type passage.
+        if self._records_have_broad_open_connection(
             record_a=record_a,
             record_b=record_b,
             obstacle_mask=obstacle_mask,
@@ -1232,7 +1486,30 @@ class SpaceAreaManager:
             clearance_map=clearance_map,
             max_distance_m=self.MAX_SAME_TYPE_WAYPOINT_MERGE_DISTANCE_M,
             min_clearance_m=self.SAME_TYPE_MERGE_MIN_CLEARANCE_M,
-        )
+        ):
+            return False
+
+        # Same-type areas should merge by default. Keep distinct variants only
+        # when a connector genuinely separates them and the two sides are not
+        # just nearby fragments of the same room.
+        if not self._records_share_connector_bridge(
+            record_a=record_a,
+            record_b=record_b,
+            obstacle_mask=obstacle_mask,
+            projector=projector,
+        ):
+            return False
+
+        if self._records_have_waypoint_connection(
+            record_a=record_a,
+            record_b=record_b,
+            obstacle_mask=obstacle_mask,
+            projector=projector,
+            max_distance_m=self.SAME_TYPE_CONNECTOR_SPLIT_DISTANCE_M,
+        ):
+            return False
+
+        return True
 
     def _records_share_connector_bridge(
         self,

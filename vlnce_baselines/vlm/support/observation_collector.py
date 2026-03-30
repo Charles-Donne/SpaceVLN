@@ -319,7 +319,6 @@ class ObservationCollector:
             imageio.mimsave(output_path, frames_rgb, duration=duration, loop=0)
             
             if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-                print(f"✅ GIF saved: {output_path} ({len(self.video_frames)} frames, {fps} fps)")
                 return output_path
             else:
                 print("✗ GIF file creation failed")

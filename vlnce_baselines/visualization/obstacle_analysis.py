@@ -358,7 +358,7 @@ def sample_depth_distance_from_region(
     sample_percentile: float = 20.0,
     min_depth_m: float = 0.02,
 ) -> Optional[float]:
-    """Estimate a depth distance by randomly sampling a rectangular image region."""
+    """Estimate a depth distance by sampling a central region plus a lower band."""
     depth = _prepare_depth_array(depth_meters)
     if depth is None:
         return None
@@ -371,35 +371,42 @@ def sample_depth_distance_from_region(
     width_ratio = float(np.clip(width_ratio, 1e-3, 1.0))
     half_width_ratio = 0.5 * width_ratio
 
-    row_start = max(0, min(height - 1, int(round(height * float(row_start_ratio)))))
-    row_end = max(row_start + 1, min(height, int(round(height * float(row_end_ratio)))))
     col_start = max(0, min(width - 1, int(round(width * (center_x_ratio - half_width_ratio)))))
     col_end = max(col_start + 1, min(width, int(round(width * (center_x_ratio + half_width_ratio)))))
-
-    region = depth[row_start:row_end, col_start:col_end]
-    valid_mask = np.isfinite(region) & (region > float(min_depth_m))
-    if not np.any(valid_mask):
-        return None
-
-    ys, xs = np.where(valid_mask)
+    row_bands = [
+        (float(row_start_ratio), float(row_end_ratio)),
+        (max(float(row_start_ratio), 0.55), 0.98),
+    ]
     sample_total = int(max(1, sample_count))
-    if ys.size > sample_total:
-        rng = np.random.default_rng()
-        chosen = rng.choice(ys.size, size=sample_total, replace=False)
-        ys = ys[chosen]
-        xs = xs[chosen]
-
-    sampled_depths = region[ys, xs].astype(np.float32)
-    sampled_depths = sampled_depths[np.isfinite(sampled_depths) & (sampled_depths > float(min_depth_m))]
-    if sampled_depths.size == 0:
-        return None
-
-    clipped = sampled_depths[sampled_depths <= float(max_distance_m)]
-    if clipped.size == 0:
-        return float(max_distance_m) + 0.1
-
     percentile = float(np.clip(sample_percentile, 0.0, 100.0))
-    return float(np.percentile(clipped, percentile))
+    best_distance = None
+
+    for band_start_ratio, band_end_ratio in row_bands:
+        row_start = max(0, min(height - 1, int(round(height * band_start_ratio))))
+        row_end = max(row_start + 1, min(height, int(round(height * band_end_ratio))))
+        region = depth[row_start:row_end, col_start:col_end]
+        valid_mask = np.isfinite(region) & (region > float(min_depth_m))
+        if not np.any(valid_mask):
+            continue
+
+        ys, xs = np.where(valid_mask)
+        if ys.size > sample_total:
+            rng = np.random.default_rng()
+            chosen = rng.choice(ys.size, size=sample_total, replace=False)
+            ys = ys[chosen]
+            xs = xs[chosen]
+
+        sampled_depths = region[ys, xs].astype(np.float32)
+        sampled_depths = sampled_depths[np.isfinite(sampled_depths) & (sampled_depths > float(min_depth_m))]
+        if sampled_depths.size == 0:
+            continue
+
+        clipped = sampled_depths[sampled_depths <= float(max_distance_m)]
+        candidate = float(max_distance_m) + 0.1 if clipped.size == 0 else float(np.percentile(clipped, percentile))
+        if best_distance is None or candidate < best_distance:
+            best_distance = candidate
+
+    return best_distance
 
 
 def sample_depth_distance_for_angle(

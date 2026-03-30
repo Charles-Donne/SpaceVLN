@@ -1,12 +1,6 @@
-"""
-Waypoint state manager for world-map navigation history.
-"""
+"""Waypoint state manager for world-map navigation history."""
 
 from typing import List, Tuple
-
-import numpy as np
-
-from vlnce_baselines.config.core.params.spatial import WAYPOINT_REPLACE_DISTANCE_M
 
 
 class WaypointManager:
@@ -30,17 +24,7 @@ class WaypointManager:
         description: str = "",
         area_label: str = "",
     ) -> int:
-        """Append a waypoint, replacing only the immediately previous one if <2m away."""
-        distance_threshold_pixels = (WAYPOINT_REPLACE_DISTANCE_M * 100.0) / float(self.resolution)
-        if self.positions:
-            prev_y, prev_x = self.positions[-1]
-            distance = float(np.hypot(pixel_y - prev_y, pixel_x - prev_x))
-            if distance < distance_threshold_pixels:
-                self.positions.pop()
-                self.ids.pop()
-                self.descriptions.pop()
-                self.area_labels.pop()
-
+        """Append a waypoint while preserving the full chronological history."""
         self.counter += 1
         waypoint_id = self.counter
         self.positions.append((int(pixel_y), int(pixel_x)))

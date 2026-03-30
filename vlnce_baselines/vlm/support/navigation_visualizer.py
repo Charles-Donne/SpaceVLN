@@ -30,7 +30,12 @@ class NavigationVisualizer:
     """
     
     
-    def __init__(self, output_dir: str):
+    def __init__(
+        self,
+        output_dir: str,
+        save_step_images: bool = False,
+        keep_frames_for_gif: bool = True,
+    ):
         """
         初始化可视化器
         
@@ -40,7 +45,10 @@ class NavigationVisualizer:
         self.output_dir = output_dir
         self.visualization_dir = None
         self.video_frames = []
-        os.makedirs(output_dir, exist_ok=True)
+        self.save_step_images = bool(save_step_images)
+        self.keep_frames_for_gif = bool(keep_frames_for_gif)
+        if self.save_step_images or self.keep_frames_for_gif:
+            os.makedirs(output_dir, exist_ok=True)
     
     def setup_maps_dir(self, episode_dir: str):
         """
@@ -50,7 +58,8 @@ class NavigationVisualizer:
             episode_dir: Episode输出根目录
         """
         self.visualization_dir = os.path.join(episode_dir, "visualization")
-        os.makedirs(self.visualization_dir, exist_ok=True)
+        if self.save_step_images or self.keep_frames_for_gif:
+            os.makedirs(self.visualization_dir, exist_ok=True)
         self.video_frames = []
 
     @staticmethod
@@ -130,11 +139,13 @@ class NavigationVisualizer:
             filename = f"step_{step:04d}_subtask{subtask_id}.png"
         else:
             filename = f"step_{step:04d}.png"
-        filepath = os.path.join(self.visualization_dir, filename)
-        cv2.imwrite(filepath, cv2.cvtColor(combined, cv2.COLOR_RGB2BGR))
+        filepath = None
+        if self.save_step_images:
+            filepath = os.path.join(self.visualization_dir, filename)
+            cv2.imwrite(filepath, cv2.cvtColor(combined, cv2.COLOR_RGB2BGR))
         
-        # 记录到视频帧列表（保持RGB格式用于GIF）
-        self.video_frames.append(combined)
+        if self.keep_frames_for_gif:
+            self.video_frames.append(combined)
         
         return filepath
     
@@ -247,8 +258,7 @@ class NavigationVisualizer:
         Returns:
             GIF路径，失败返回None
         """
-        if not self.video_frames:
-            print("⚠️  No frames to save")
+        if not self.keep_frames_for_gif or not self.video_frames:
             return None
         
         if not HAS_IMAGEIO:
@@ -276,7 +286,6 @@ class NavigationVisualizer:
             imageio.mimsave(output_path, frames_rgb, duration=duration, loop=0)
             
             if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-                print(f"✅ GIF saved: {output_path} ({len(self.video_frames)} frames, {fps} fps)")
                 return output_path
             else:
                 print("✗ GIF file creation failed")

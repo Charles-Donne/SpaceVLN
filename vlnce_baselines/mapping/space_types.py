@@ -14,9 +14,11 @@ COMMON_SPACE_TYPE_LIBRARY: List[Tuple[str, Sequence[str]]] = [
     ("dining room", ("dining room", "dining area", "breakfast room")),
     ("office", ("office", "study", "workspace", "work room")),
     ("laundry room", ("laundry room", "laundry", "utility room")),
-    ("entryway", ("entryway", "entry", "entrance", "doorway", "door way", "foyer", "entry hall")),
     ("stairs", ("stairs", "stair", "stairway", "staircase", "landing")),
-    ("hallway", ("hallway", "hall", "corridor", "passage", "passageway")),
+    ("hallway", (
+        "hallway", "hall", "corridor", "passage", "passageway",
+        "entryway", "entry", "entrance", "doorway", "door way", "foyer", "entry hall",
+    )),
     ("closet", ("closet", "wardrobe")),
     ("pantry", ("pantry",)),
     ("mudroom", ("mudroom", "mud room")),
@@ -105,9 +107,9 @@ def normalize_space_type(text: Optional[str]) -> str:
     if exact_match:
         return exact_match
 
-    fuzzy_match = _match_alias(normalized, exact_only=False)
-    if fuzzy_match:
-        return fuzzy_match
+    wrapped_match = _match_alias_with_generic_wrapper(normalized)
+    if wrapped_match:
+        return wrapped_match
 
     return "Unknown"
 
@@ -125,6 +127,28 @@ def _match_alias(normalized: str, exact_only: bool) -> Optional[str]:
                 continue
             if f" {alias_norm} " in padded:
                 return canonical_name
+    return None
+
+
+def _match_alias_with_generic_wrapper(normalized: str) -> Optional[str]:
+    """Allow only light wrappers like `bedroom area`, but preserve custom names like `large hall`."""
+    generic_prefixes = ("area ", "space ", "zone ", "section ")
+    generic_suffixes = (" area", " space", " zone", " section")
+
+    for generic_prefix in generic_prefixes:
+        if normalized.startswith(generic_prefix):
+            candidate = normalized[len(generic_prefix):].strip()
+            exact_match = _match_alias(candidate, exact_only=True)
+            if exact_match:
+                return exact_match
+
+    for generic_suffix in generic_suffixes:
+        if normalized.endswith(generic_suffix):
+            candidate = normalized[:-len(generic_suffix)].strip()
+            exact_match = _match_alias(candidate, exact_only=True)
+            if exact_match:
+                return exact_match
+
     return None
 
 

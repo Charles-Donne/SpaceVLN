@@ -152,7 +152,10 @@ class ActionExecutor(BaseAPIClient):
             elif action_name == 'TURN_RIGHT':
                 return f"Had turned right {int(actual_degrees if actual_degrees is not None else degrees)}°"
             elif action_name == 'MOVE_FORWARD':
-                return f"Had moved forward {actual_meters if actual_meters is not None else meters:.2f}m"
+                moved_m = actual_meters if actual_meters is not None else meters
+                if float(moved_m or 0.0) <= 0.0:
+                    return "(Just started - no actions yet)"
+                return f"Had moved forward {moved_m:.2f}m"
             elif action_name == 'STOP':
                 return "Had stopped at destination"
         
@@ -217,25 +220,22 @@ class ActionExecutor(BaseAPIClient):
         
         elif action_name == 'MOVE_FORWARD':
             # 新动作是直行
+            moved_m = actual_meters if actual_meters is not None else meters
+            if float(moved_m or 0.0) <= 0.0:
+                return current_progress
             if move_match:
                 # 最后一段也是直行，累加距离
                 current_distance = float(move_match.group(1))
                 
                 # 使用实际值累加
-                if actual_meters is not None:
-                    new_distance = current_distance + actual_meters
-                else:
-                    new_distance = current_distance + meters
+                new_distance = current_distance + moved_m
                 
                 # 合并
                 segments[-1] = f"had moved forward {new_distance:.2f}m"
                 return ', '.join(segments)
             else:
                 # 最后一段是转向，开始新段
-                if actual_meters is not None:
-                    new_segment = f"then moved forward {actual_meters:.2f}m"
-                else:
-                    new_segment = f"then moved forward {meters}m"
+                new_segment = f"then moved forward {moved_m:.2f}m"
                 return f"{current_progress}, {new_segment}"
         
         elif action_name == 'STOP':

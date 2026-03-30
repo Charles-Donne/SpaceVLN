@@ -337,7 +337,12 @@ def build_landmark_strip_lines(
         ).strip() or "Unknown"
         distance_m = float(entry.get("distance_m", 1e9))
         angle_deg = float(entry.get("relative_bearing_deg", entry.get("angle_deg", 0.0)))
-        note = "  (came from here)" if bool(entry.get("is_last_visited")) else ""
+        note_parts: List[str] = []
+        if bool(entry.get("is_last_visited")) and not bool(entry.get("is_task_initial_position")):
+            note_parts.append("LAST POSITION")
+        if bool(entry.get("is_task_initial_position")):
+            note_parts.append("INITIAL POSITION")
+        note = f"  ({' | '.join(note_parts)})" if note_parts else ""
         sort_key = (1e6 + float(distance_m), 2.0, 0.0)
         line_entries.append((
             sort_key,

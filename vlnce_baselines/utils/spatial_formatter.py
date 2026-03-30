@@ -5,6 +5,9 @@ import numpy as np
 
 from vlnce_baselines.config.core.params.spatial import (
     CURRENT_AREA_OVERLAP_THRESHOLD_M,
+    SPACE_AREA_CURRENT_WAYPOINT_MAX_DISTANCE_M,
+    SPACE_AREA_CURRENT_INITIAL_WAYPOINT_MAX_DISTANCE_M,
+    WAYPOINT_REPLACE_DISTANCE_M,
     WAYPOINT_VISIBILITY_RADIUS_M,
     WAYPOINT_VISIBILITY_SAMPLES,
 )
@@ -135,6 +138,293 @@ def _format_space_waypoint_chain_group(area_label: str, member_labels: Sequence[
     return f"{clean_area} ({' -> '.join(members)})"
 
 
+def _build_current_area_initial_waypoint_note(
+    waypoint_positions: Sequence[Tuple[int, int]],
+    waypoint_ids: Sequence[int],
+    waypoint_area_labels: Optional[Sequence[str]],
+    current_pose: Optional[Sequence[float]],
+    resolution_cm: float,
+    current_space_area_label: str,
+    full_map: Optional[np.ndarray],
+    crop_offset: Optional[Tuple[int, int]],
+) -> str:
+    if not waypoint_positions or current_pose is None:
+        return ""
+
+    initial_waypoint = waypoint_positions[0]
+    if initial_waypoint is None:
+        return ""
+
+    current_area = _clean_area_label(current_space_area_label)
+    initial_area = _clean_area_label(
+        waypoint_area_labels[0] if waypoint_area_labels and len(waypoint_area_labels) > 0 else ""
+    )
+    if not current_area or current_area == "Unknown" or current_area != initial_area:
+        return ""
+
+    wp_py, wp_px = int(initial_waypoint[0]), int(initial_waypoint[1])
+    curr_x_m, curr_y_m, _ = current_pose[:3]
+    curr_py = int(round(float(curr_y_m) * 100.0 / float(resolution_cm)))
+    curr_px = int(round(float(curr_x_m) * 100.0 / float(resolution_cm)))
+    distance_m = float(np.hypot(float(curr_py) - float(wp_py), float(curr_px) - float(wp_px))) * float(resolution_cm) / 100.0
+    if distance_m > float(SPACE_AREA_CURRENT_INITIAL_WAYPOINT_MAX_DISTANCE_M) + 1e-6:
+        return ""
+
+    clear_path = _has_clear_path_to_waypoint(
+        waypoint_py=wp_py,
+        waypoint_px=wp_px,
+        current_pose=current_pose,
+        resolution_cm=resolution_cm,
+        full_map=full_map,
+        crop_offset=crop_offset,
+    )
+    if clear_path is False:
+        return ""
+
+    initial_wp_id = int(waypoint_ids[0]) if waypoint_ids else 1
+    return (
+        f" (near INITIAL POSITION Space WP#{initial_wp_id}; "
+        "leave the initial-position neighborhood and continue toward the next task-relevant space waypoint)"
+    )
+
+
+def _waypoint_distance_to_current_m(
+    waypoint_index: int,
+    waypoint_positions: Sequence[Tuple[int, int]],
+    current_pose: Optional[Sequence[float]],
+    resolution_cm: float,
+) -> Optional[float]:
+    if current_pose is None or waypoint_index >= len(waypoint_positions):
+        return None
+    wp_py, wp_px = waypoint_positions[waypoint_index]
+    wp_x_m = float(wp_px) * float(resolution_cm) / 100.0
+    wp_y_m = float(wp_py) * float(resolution_cm) / 100.0
+    curr_x_m, curr_y_m, _ = current_pose[:3]
+    return float(math.hypot(wp_x_m - float(curr_x_m), wp_y_m - float(curr_y_m)))
+
+
+def _waypoint_pair_distance_m(
+    first_point: Tuple[int, int],
+    second_point: Tuple[int, int],
+    resolution_cm: float,
+) -> float:
+    first_py, first_px = first_point
+    second_py, second_px = second_point
+    return float(
+        math.hypot(float(first_px) - float(second_px), float(first_py) - float(second_py))
+        * float(resolution_cm)
+        / 100.0
+    )
+
+
+def _waypoint_display_dedup_key(
+    waypoint_index: int,
+    waypoint_descriptions: Sequence[str],
+    waypoint_area_labels: Optional[Sequence[str]],
+) -> str:
+    area_label = _clean_area_label(
+        waypoint_area_labels[waypoint_index]
+        if waypoint_area_labels and waypoint_index < len(waypoint_area_labels) else ""
+    )
+    if area_label and area_label != "Unknown":
+        return f"area:{area_label}"
+
+    waypoint_desc = _clean_waypoint_description(
+        waypoint_descriptions[waypoint_index]
+        if waypoint_index < len(waypoint_descriptions) else ""
+    )
+    if waypoint_desc:
+        return f"desc:{waypoint_desc}"
+    return f"wp:{int(waypoint_index)}"
+
+
+def _should_skip_display_waypoint(
+    candidate_index: int,
+    newer_kept_index: int,
+    waypoint_positions: Sequence[Tuple[int, int]],
+    waypoint_descriptions: Sequence[str],
+    waypoint_area_labels: Optional[Sequence[str]],
+    resolution_cm: float,
+) -> bool:
+    if candidate_index <= 0:
+        return False
+    if candidate_index >= len(waypoint_positions) or newer_kept_index >= len(waypoint_positions):
+        return False
+    if _waypoint_pair_distance_m(
+        first_point=waypoint_positions[candidate_index],
+        second_point=waypoint_positions[newer_kept_index],
+        resolution_cm=resolution_cm,
+    ) > float(WAYPOINT_REPLACE_DISTANCE_M) + 1e-6:
+        return False
+    return _waypoint_display_dedup_key(
+        waypoint_index=candidate_index,
+        waypoint_descriptions=waypoint_descriptions,
+        waypoint_area_labels=waypoint_area_labels,
+    ) == _waypoint_display_dedup_key(
+        waypoint_index=newer_kept_index,
+        waypoint_descriptions=waypoint_descriptions,
+        waypoint_area_labels=waypoint_area_labels,
+    )
+
+
+def _find_current_area_waypoint_anchor_index(
+    waypoint_positions: Sequence[Tuple[int, int]],
+    waypoint_area_labels: Optional[Sequence[str]],
+    current_pose: Optional[Sequence[float]],
+    resolution_cm: float,
+    current_space_area_label: str = "",
+    full_map: Optional[np.ndarray] = None,
+    crop_offset: Optional[Tuple[int, int]] = None,
+) -> Optional[int]:
+    if current_pose is None or not waypoint_positions:
+        return None
+
+    target_area_label = _clean_area_label(current_space_area_label)
+    area_labels = list(waypoint_area_labels or [])
+    matching_candidates: List[Tuple[float, int]] = []
+    fallback_candidates: List[Tuple[float, int, str]] = []
+
+    for index, waypoint_pos in enumerate(waypoint_positions):
+        if waypoint_pos is None:
+            continue
+        area_label = str(area_labels[index] if index < len(area_labels) else "").strip()
+        clean_area_label = _clean_area_label(area_label)
+        if clean_area_label == "Unknown":
+            continue
+
+        distance_m = _waypoint_distance_to_current_m(
+            waypoint_index=index,
+            waypoint_positions=waypoint_positions,
+            current_pose=current_pose,
+            resolution_cm=resolution_cm,
+        )
+        if distance_m is None:
+            continue
+        max_distance_m = (
+            float(SPACE_AREA_CURRENT_INITIAL_WAYPOINT_MAX_DISTANCE_M)
+            if int(index) == 0 else
+            float(SPACE_AREA_CURRENT_WAYPOINT_MAX_DISTANCE_M)
+        )
+        if distance_m > max_distance_m + 1e-6:
+            continue
+
+        clear_path = _has_clear_path_to_waypoint(
+            waypoint_py=int(waypoint_pos[0]),
+            waypoint_px=int(waypoint_pos[1]),
+            current_pose=current_pose,
+            resolution_cm=resolution_cm,
+            full_map=full_map,
+            crop_offset=crop_offset,
+        )
+        if clear_path is False:
+            continue
+
+        if target_area_label != "Unknown" and clean_area_label == target_area_label:
+            matching_candidates.append((float(distance_m), int(index)))
+        fallback_candidates.append((float(distance_m), int(index), area_label))
+
+    if matching_candidates:
+        matching_candidates.sort(key=lambda item: (float(item[0]), int(item[1]) == 0, int(item[1])))
+        return int(matching_candidates[0][1])
+
+    if target_area_label != "Unknown":
+        return None
+
+    if not fallback_candidates:
+        return None
+
+    fallback_candidates.sort(key=lambda item: (float(item[0]), int(item[1]) == 0, int(item[1])))
+    return int(fallback_candidates[0][1])
+
+
+def resolve_display_current_area(
+    waypoint_positions: Sequence[Tuple[int, int]],
+    waypoint_area_labels: Optional[Sequence[str]],
+    current_pose: Optional[Sequence[float]],
+    resolution_cm: float,
+    current_space_area_label: str = "",
+    full_map: Optional[np.ndarray] = None,
+    crop_offset: Optional[Tuple[int, int]] = None,
+) -> Tuple[str, Optional[int]]:
+    current_area_label = str(current_space_area_label or "").strip()
+    anchor_index = _find_current_area_waypoint_anchor_index(
+        waypoint_positions=waypoint_positions,
+        waypoint_area_labels=waypoint_area_labels,
+        current_pose=current_pose,
+        resolution_cm=resolution_cm,
+        current_space_area_label=current_space_area_label,
+        full_map=full_map,
+        crop_offset=crop_offset,
+    )
+    if anchor_index is not None and waypoint_area_labels and anchor_index < len(waypoint_area_labels):
+        anchor_label = str(waypoint_area_labels[anchor_index] or "").strip()
+        if anchor_label:
+            if _clean_area_label(current_area_label) == "Unknown":
+                return anchor_label, int(anchor_index)
+            if _clean_area_label(anchor_label) == _clean_area_label(current_area_label):
+                return anchor_label, int(anchor_index)
+    return current_area_label or "Unknown", anchor_index
+
+
+def select_display_waypoint_indices(
+    waypoint_positions: Sequence[Tuple[int, int]],
+    waypoint_ids: Sequence[int],
+    waypoint_descriptions: Sequence[str],
+    waypoint_area_labels: Optional[Sequence[str]],
+    current_pose: Optional[Sequence[float]],
+    resolution_cm: float,
+    full_map: Optional[np.ndarray],
+    crop_offset: Optional[Tuple[int, int]],
+) -> List[int]:
+    if not waypoint_ids:
+        return []
+
+    latest_anchor_index = len(waypoint_ids) - 1
+    while latest_anchor_index > 0:
+        distance_m = _waypoint_distance_to_current_m(
+            waypoint_index=latest_anchor_index,
+            waypoint_positions=waypoint_positions,
+            current_pose=current_pose,
+            resolution_cm=resolution_cm,
+        )
+        if distance_m is None or distance_m > float(CURRENT_AREA_OVERLAP_THRESHOLD_M) + 1e-6:
+            break
+        clear_path = _has_clear_path_to_waypoint(
+            waypoint_py=int(waypoint_positions[latest_anchor_index][0]),
+            waypoint_px=int(waypoint_positions[latest_anchor_index][1]),
+            current_pose=current_pose,
+            resolution_cm=resolution_cm,
+            full_map=full_map,
+            crop_offset=crop_offset,
+        )
+        if clear_path is not True:
+            break
+        latest_anchor_index -= 1
+
+    kept_reversed: List[int] = [latest_anchor_index]
+    for candidate_index in range(latest_anchor_index - 1, -1, -1):
+        if candidate_index == 0:
+            kept_reversed.append(candidate_index)
+            continue
+        if _should_skip_display_waypoint(
+            candidate_index=candidate_index,
+            newer_kept_index=kept_reversed[-1],
+            waypoint_positions=waypoint_positions,
+            waypoint_descriptions=waypoint_descriptions,
+            waypoint_area_labels=waypoint_area_labels,
+            resolution_cm=resolution_cm,
+        ):
+            continue
+        kept_reversed.append(candidate_index)
+
+    display_indices = sorted(set(kept_reversed))
+    if 0 not in display_indices:
+        display_indices.insert(0, 0)
+    if latest_anchor_index not in display_indices:
+        display_indices.append(latest_anchor_index)
+    return display_indices
+
+
 def build_waypoint_summary(
     waypoint_positions: Sequence[Tuple[int, int]],
     waypoint_ids: Sequence[int],
@@ -158,7 +448,17 @@ def build_waypoint_summary(
         if display_area_type and display_area_type != "Unknown" and display_area_type != display_area_label
         else ""
     )
-    header_lines.append(f"Your Current Area: {display_area_label}{space_type_note}")
+    current_area_initial_note = _build_current_area_initial_waypoint_note(
+        waypoint_positions=waypoint_positions,
+        waypoint_ids=waypoint_ids,
+        waypoint_area_labels=waypoint_area_labels,
+        current_pose=current_pose,
+        resolution_cm=resolution_cm,
+        current_space_area_label=current_space_area_label,
+        full_map=full_map,
+        crop_offset=crop_offset,
+    )
+    header_lines.append(f"Your Current Area: {display_area_label}{space_type_note}{current_area_initial_note}")
 
     empty_area_chain_line = None
     if include_area_chain:
@@ -172,20 +472,48 @@ def build_waypoint_summary(
         lines.append("No space waypoints recorded yet.")
         return "\n".join(lines)
 
-    waypoint_distances_m: List[Optional[float]] = []
-    last_waypoint_overlaps_current = False
-    if current_pose is not None:
-        curr_x_m, curr_y_m, _curr_orientation_deg = current_pose[:3]
-        for wp_py, wp_px in waypoint_positions:
-            wp_x_m = wp_px * resolution_cm / 100.0
-            wp_y_m = wp_py * resolution_cm / 100.0
-            waypoint_distances_m.append(math.hypot(wp_x_m - curr_x_m, wp_y_m - curr_y_m))
-        if waypoint_distances_m and waypoint_distances_m[-1] <= CURRENT_AREA_OVERLAP_THRESHOLD_M:
-            last_waypoint_overlaps_current = True
-    else:
-        waypoint_distances_m = [None] * len(waypoint_ids)
+    waypoint_distances_m = [
+        _waypoint_distance_to_current_m(
+            waypoint_index=index,
+            waypoint_positions=waypoint_positions,
+            current_pose=current_pose,
+            resolution_cm=resolution_cm,
+        )
+        for index in range(len(waypoint_ids))
+    ]
 
-    visible_indices = list(range(len(waypoint_ids)))
+    resolved_current_area_label, _current_area_anchor_index = resolve_display_current_area(
+        waypoint_positions=waypoint_positions,
+        waypoint_area_labels=waypoint_area_labels,
+        current_pose=current_pose,
+        resolution_cm=resolution_cm,
+        current_space_area_label=current_space_area_label,
+        full_map=full_map,
+        crop_offset=crop_offset,
+    )
+    display_area_label = resolved_current_area_label or display_area_label
+    current_area_initial_note = _build_current_area_initial_waypoint_note(
+        waypoint_positions=waypoint_positions,
+        waypoint_ids=waypoint_ids,
+        waypoint_area_labels=waypoint_area_labels,
+        current_pose=current_pose,
+        resolution_cm=resolution_cm,
+        current_space_area_label=display_area_label,
+        full_map=full_map,
+        crop_offset=crop_offset,
+    )
+    header_lines[0] = f"Your Current Area: {display_area_label}{space_type_note}{current_area_initial_note}"
+
+    visible_indices = select_display_waypoint_indices(
+        waypoint_positions=waypoint_positions,
+        waypoint_ids=waypoint_ids,
+        waypoint_descriptions=waypoint_descriptions,
+        waypoint_area_labels=waypoint_area_labels,
+        current_pose=current_pose,
+        resolution_cm=resolution_cm,
+        full_map=full_map,
+        crop_offset=crop_offset,
+    )
     last_visible_index = visible_indices[-1] if visible_indices else None
     display_indices = list(visible_indices)
     if current_pose is not None:
@@ -219,13 +547,9 @@ def build_waypoint_summary(
         is_last = last_visible_index is not None and index == last_visible_index
         suffix_notes: List[str] = []
         if index == 0:
-            suffix_notes.append("TASK INITIAL POSITION")
-        if is_last:
-            suffix_notes.append(
-                "LAST VISITED / CURRENT AREA"
-                if last_waypoint_overlaps_current else
-                "LAST VISITED (came from here)"
-            )
+            suffix_notes.append("INITIAL POSITION")
+        if is_last and index != 0:
+            suffix_notes.append("LAST POSITION")
         suffix = f"  <- {' | '.join(suffix_notes)}" if suffix_notes else ""
 
         distance_m = None
@@ -260,7 +584,7 @@ def build_waypoint_summary(
             full_map=full_map,
             crop_offset=crop_offset,
             visible_indices=visible_indices,
-            current_space_area_label=current_space_area_label,
+            current_space_area_label=display_area_label,
         )
         if reachability_note:
             spatial_info = f"{spatial_info} | {reachability_note}"
@@ -277,7 +601,7 @@ def build_waypoint_summary(
         if waypoint_area_labels else []
     )
 
-    current_area_display = _clean_area_label(current_space_area_label)
+    current_area_display = _clean_area_label(display_area_label)
     waypoint_area_path_line = _build_waypoint_area_path_line(
         visible_waypoint_ids=visible_waypoint_ids,
         visible_waypoint_positions=visible_waypoint_positions,

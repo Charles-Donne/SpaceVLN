@@ -94,6 +94,8 @@ def render_detection_bbox(owner,
                 current_pose=map_state.get("full_pose"),
                 resolution_cm=float(getattr(controller.mapper, "resolution", owner.resolution)),
                 current_space_area_label=str(map_state.get("current_space_area_label", "Unknown") or "Unknown"),
+                full_map=map_state.get("full_map"),
+                crop_offset=map_state.get("crop_offset"),
             )
             waypoint_entries = ThinkingViewRenderer._apply_waypoint_visibility(
                 waypoint_entries=waypoint_entries,
@@ -904,15 +906,24 @@ def prepare_action_image_with_enhancements(owner, image_path: str, mask_path: st
     if not os.path.exists(image_path):
         return image_path
 
+    if not use_floor and not use_distance:
+        return image_path
+
     image = cv2.imread(image_path)
     if image is None:
         return image_path
 
+    updated = False
     if use_floor and mask_path and os.path.exists(mask_path) and classes:
         image = owner.draw_floor_from_saved_mask(image, mask_path, classes)
+        updated = True
 
     if use_distance and distance_dict:
         image = owner.draw_distance_on_action_view(image, distance_dict)
+        updated = True
+
+    if not updated:
+        return image_path
 
     base_path = os.path.splitext(image_path)[0]
     enhanced_path = f"{base_path}_enhanced.png"

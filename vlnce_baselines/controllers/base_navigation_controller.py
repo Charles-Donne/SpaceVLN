@@ -21,6 +21,7 @@ from vlnce_baselines.visualization.obstacle_analysis import (
     format_distance,
     sample_depth_distance_from_region,
 )
+from vlnce_baselines.vlm.support.navigation_config import DIRECTION_CONFIG
 from vlnce_baselines.config.core import ConfigHelper, create_category_config
 from vlnce_baselines.env.env_utils import construct_envs
 from vlnce_baselines.utils.system import get_device
@@ -91,6 +92,12 @@ class BaseNavigationController:
         self.latest_obs = None
         self.latest_info = None
         self.latest_done = False
+        self.current_episode = None
+        self.initial_distance_to_goal = None
+        self.reference_path_length = None
+        self.final_stop_action_requested = False
+        self.final_stop_skipped_due_to_done = False
+        self.final_stop_was_executed = False
         self.latest_lookaround_end_reason = ""
         self.latest_depth_meters = None
         self.latest_global_map = None
@@ -155,18 +162,14 @@ class BaseNavigationController:
     def _print_custom_landmark_status(self, detection_enabled: bool) -> None:
         """命令行仅打印当前子任务自定义类别及其识别状态。"""
         tracked_landmarks = list(getattr(self, 'landmark_classes', []) or [])
-        if not tracked_landmarks:
-            print()
+        if not tracked_landmarks or not detection_enabled:
             return
 
-        if detection_enabled:
-            detected_landmarks = self._get_detected_custom_landmarks()
-            status_items = [
-                f"{name}=识别" if name in detected_landmarks else f"{name}=未识别"
-                for name in tracked_landmarks
-            ]
-        else:
-            status_items = [f"{name}=未检测" for name in tracked_landmarks]
+        detected_landmarks = self._get_detected_custom_landmarks()
+        status_items = [
+            f"{name}=识别" if name in detected_landmarks else f"{name}=未识别"
+            for name in tracked_landmarks
+        ]
 
         print(f"| 自定义类别: {'; '.join(status_items)}")
 
@@ -321,9 +324,53 @@ class BaseNavigationController:
         self._clear_landmark_detection_cache()
         
         current_episodes = self.envs.current_episodes()
-        self.current_instruction = current_episodes[0].instruction.instruction_text
+        self.current_episode = current_episodes[0]
+        self.current_instruction = self.current_episode.instruction.instruction_text
+        self.reference_path_length = self._estimate_episode_reference_path_length(self.current_episode)
+        self.initial_distance_to_goal = self._load_initial_distance_to_goal()
         
         print(f"Instruction: {self.current_instruction[:100]}{'...' if len(self.current_instruction) > 100 else ''}")
+
+    def _load_initial_distance_to_goal(self) -> Optional[float]:
+        try:
+            if hasattr(self.envs, 'call_at'):
+                metrics = self.envs.call_at(0, 'get_metrics')
+                if isinstance(metrics, dict):
+                    distance_to_goal = metrics.get('distance_to_goal')
+                    if (
+                        isinstance(distance_to_goal, (int, float)) and
+                        np.isfinite(distance_to_goal) and
+                        float(distance_to_goal) >= 0.0
+                    ):
+                        return float(distance_to_goal)
+        except Exception:
+            pass
+
+        if (
+            isinstance(self.reference_path_length, (int, float)) and
+            np.isfinite(self.reference_path_length) and
+            float(self.reference_path_length) > 0.0
+        ):
+            return float(self.reference_path_length)
+        return None
+
+    @staticmethod
+    def _estimate_episode_reference_path_length(episode: Any) -> Optional[float]:
+        reference_path = list(getattr(episode, 'reference_path', None) or [])
+        if len(reference_path) < 2:
+            return None
+
+        total_distance = 0.0
+        previous = None
+        for point in reference_path:
+            if point is None or len(point) < 3:
+                continue
+            current = np.asarray(point[:3], dtype=np.float32)
+            if previous is not None:
+                total_distance += float(np.linalg.norm(current - previous, ord=2))
+            previous = current
+
+        return total_distance if total_distance > 0.0 else None
 
     def _episode_done_cached(self) -> bool:
         """Return whether the current episode has already terminated locally."""
@@ -605,7 +652,7 @@ class BaseNavigationController:
                 return
             
             prev_class_count = len(self.detected_classes)
-            batch_obs = self._batch_obs(obs, save_object_detection=True, step=step)
+            batch_obs = self._batch_obs(obs, save_object_detection=False, step=step)
             poses = torch.from_numpy(np.array([item['sensor_pose'] for item in obs])).float().to(self.device)
             
             map_state = self.mapper.update_map(
@@ -895,7 +942,7 @@ class BaseNavigationController:
         return True
 
     def _run_pre_action_detection_snapshot(self, action_phase: str) -> bool:
-        """Refresh one action-phase snapshot with landmark detection before movement."""
+        """Refresh the current action-LLM frame with landmark detection before the next action call."""
         return self._refresh_step_visualization_snapshot(
             phase=action_phase,
             enable_landmark_detection=True,
@@ -915,7 +962,11 @@ class BaseNavigationController:
         except Exception:
             map_fallback = {}
         distances = {}
-        for step_idx, angle in enumerate(range(0, 360, 30), start=1):
+        for config in DIRECTION_CONFIG:
+            step_idx = int(config["step"])
+            angle = int(config["angle"])
+            # Keep 12-view obstacle text aligned with the exact rendered IMAGE:
+            # IMAGE 1 (Front 0deg) uses the step-12 depth frame, IMAGE 2 uses step-1, etc.
             depth_meters = depth_views[step_idx - 1] if step_idx - 1 < len(depth_views) else None
             try:
                 distance_m = sample_depth_distance_from_region(
@@ -984,68 +1035,44 @@ class BaseNavigationController:
         Returns:
             final_metrics: 调用STOP后的最终评估指标
         """
-        print(f"\n{'='*60}")
-        print(f"EPISODE FINISH")
-        print(f"{'='*60}")
-        print(f"Episode: {self.current_episode_id}")
-        print(f"Steps: {self.current_step} | Classes: {len(self.detected_classes)}")
-        status = "STOP" if stop_action else "MAX_STEPS"
-        print(f"Reason: {status}")
-        
-        # 🔑 关键修复：调用STOP动作以触发Habitat的Success判定
         final_metrics = {}
+        self.final_stop_action_requested = bool(stop_action)
+        self.final_stop_skipped_due_to_done = False
+        self.final_stop_was_executed = False
         
         # 检查episode是否已经结束（避免在已done的episode上调用step）
         episode_already_done = self._episode_done_cached()
         
         if stop_action and not episode_already_done:
-            # print("\n🛑 执行STOP动作以完成Episode...")
             try:
-                # 调用STOP动作 (action_id = 0)
+                self.current_step += 1
                 step_data = self._safe_env_step([0], context="final STOP")
                 if step_data is None:
-                    print("\n[WARN] Episode already ended before STOP")
-                    print("   Using last step metrics")
+                    self.current_step = max(0, self.current_step - 1)
+                    self.final_stop_skipped_due_to_done = True
                     if hasattr(self, 'latest_info') and self.latest_info:
                         final_metrics = self.latest_info.copy()
                     step_data = None
                 if step_data is not None:
-                    observations, rewards, dones, infos = step_data
-                
-                    # 获取最终指标
+                    self.final_stop_was_executed = True
+                    _observations, _rewards, _dones, infos = step_data
                     if infos and len(infos) > 0:
                         final_metrics = infos[0]
-                        dtg = final_metrics.get('distance_to_goal', -1)
-                        success_flag = final_metrics.get('success', 0)
-                        print(f"DTG: {dtg:.3f}m | Success: {success_flag} | SPL: {final_metrics.get('spl', 0.0):.4f}")
-                        
-                        # 数据验证
-                        if success_flag == 1 and dtg > 3.0:
-                            print(f"   [WARN] Anomaly: Success=1 but DTG={dtg:.3f}m > 3m")
-                        elif success_flag == 0 and 0 <= dtg < 3.0:
-                            print(f"   [WARN] DTG={dtg:.3f}m < 3m but Success=0")
-            except AssertionError as e:
-                # Episode已经结束，无法调用STOP
-                print(f"\n[WARN] Episode already ended, cannot STOP: {e}")
-                print("   Using last step metrics")
+            except AssertionError:
+                self.final_stop_skipped_due_to_done = True
                 if hasattr(self, 'latest_info') and self.latest_info:
                     final_metrics = self.latest_info.copy()
             except Exception as e:
-                print(f"   [ERR] STOP failed: {e}")
+                print(f"[ERR] STOP failed: {e}")
                 final_metrics = {}
         elif stop_action and episode_already_done:
-            print("\n[WARN] Episode already done, skip STOP")
-            print("   Using cached metrics")
-            # 使用最后一次的info作为最终指标
+            self.final_stop_skipped_due_to_done = True
             if hasattr(self, 'latest_info') and self.latest_info:
                 final_metrics = self.latest_info.copy()
         else:
-            print("MAX_STEPS reached (Success=0)")
-            # 获取当前指标（不调用STOP）
             if self.latest_info:
                 final_metrics = self.latest_info.copy()
-        
-        print(f"{'='*60}\n")
+
         return final_metrics
     
     def _concat_obs(self, obs: Observations) -> np.ndarray:
@@ -1108,7 +1135,7 @@ class BaseNavigationController:
         valid_labels = []
         valid_confidences = []
         # Landmark masks (投影到地图的额外通道，channel 3+N_mapping 开始)
-        # 仅在 save_object_detection=True 时启用landmark检测（动作前快照/动作阶段）
+        # 仅在 save_object_detection=True 时启用landmark检测（action LLM 当前朝向快照）
         landmark_masks = np.zeros((len(landmark_classes_list), self.height, self.width), dtype=np.float32)
         lm_name_to_idx = {lm.strip().lower(): idx for idx, lm in enumerate(landmark_classes_list)}
 
