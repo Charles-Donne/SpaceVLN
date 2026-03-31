@@ -625,7 +625,7 @@ class MapVisualizer:
             
         Returns:
             距离字典 {
-                'front': "X.XXm" | ">2.0m open" | "<0.5m WARNING",
+                'front': "X.XXm" | ">2.0m open" | "X.XXm WARNING",
                 'left_30': ...,
                 'right_30': ...
             }

@@ -45,6 +45,12 @@ from vlnce_baselines.config.core.params.actions import (
     ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M as CFG_AUTOCOMPLETE_SOLID_DISTANCE_M,
     ACTION_SUBTASK_AUTOCOMPLETE_TOPK as CFG_AUTOCOMPLETE_TOPK,
 )
+from vlnce_baselines.config.core.params.thresholds import (
+    EVAL_SUCCESS_DISTANCE_M,
+    LOW_LEVEL_STAGNATION_CAP_M as CFG_LOW_LEVEL_STAGNATION_CAP_M,
+    LOW_LEVEL_STAGNATION_RATIO as CFG_LOW_LEVEL_STAGNATION_RATIO,
+    OBS_BLOCKED_M,
+)
 from vlnce_baselines.vlm.support.navigation_config import ACTION_MAPPING
 from habitat_extensions.pose_utils import get_sim_location
 
@@ -74,7 +80,9 @@ class VLMNavigationController(BaseNavigationController):
     FINAL_DESTINATION_MATCH_AUTOSTOP_STREAK = 3
     FINAL_DESTINATION_MATCH_AUTOSTOP_RADIUS_M = 1.0
     ACTION_STAGNATION_REPLAN_STREAK = 3
-    ACTION_STAGNATION_MAX_MOVEMENT_M = 0.25
+    LOW_LEVEL_STAGNATION_RATIO = CFG_LOW_LEVEL_STAGNATION_RATIO
+    LOW_LEVEL_STAGNATION_CAP_M = CFG_LOW_LEVEL_STAGNATION_CAP_M
+    ACTION_STAGNATION_MAX_MOVEMENT_M = CFG_LOW_LEVEL_STAGNATION_CAP_M  # backward-compatible alias
     STUCK_RETREAT_DISTANCE_M = 1.0
     STUCK_RETREAT_FORBIDDEN_VIEW_IDS = (7,)
     
@@ -140,16 +148,31 @@ class VLMNavigationController(BaseNavigationController):
                 ) or self.ACTION_STAGNATION_REPLAN_STREAK
             ),
         )
-        self.action_stagnation_max_movement_m = max(
+        self.low_level_stagnation_ratio = max(
             0.0,
             float(
                 getattr(
                     config.MAP,
-                    "ACTION_STAGNATION_MAX_MOVEMENT_M",
-                    self.ACTION_STAGNATION_MAX_MOVEMENT_M,
-                ) or self.ACTION_STAGNATION_MAX_MOVEMENT_M
+                    "LOW_LEVEL_STAGNATION_RATIO",
+                    self.LOW_LEVEL_STAGNATION_RATIO,
+                ) or self.LOW_LEVEL_STAGNATION_RATIO
             ),
         )
+        self.low_level_stagnation_cap_m = max(
+            0.0,
+            float(
+                getattr(
+                    config.MAP,
+                    "LOW_LEVEL_STAGNATION_CAP_M",
+                    getattr(
+                        config.MAP,
+                        "ACTION_STAGNATION_MAX_MOVEMENT_M",
+                        self.LOW_LEVEL_STAGNATION_CAP_M,
+                    ),
+                ) or self.LOW_LEVEL_STAGNATION_CAP_M
+            ),
+        )
+        self.action_stagnation_max_movement_m = self.low_level_stagnation_cap_m
         
         # 初始化LLM规划器
         try:
@@ -229,11 +252,11 @@ class VLMNavigationController(BaseNavigationController):
         except (TypeError, ValueError):
             return None
 
-    def _is_obstacle_distance_blocked(self, distance_text: Optional[str], threshold_m: float = 0.5) -> bool:
+    def _is_obstacle_distance_blocked(self, distance_text: Optional[str], threshold_m: float = OBS_BLOCKED_M) -> bool:
         distance_m = self._parse_distance_text_m(distance_text)
         return distance_m is not None and distance_m < float(threshold_m)
 
-    def _all_action_directions_blocked(self, threshold_m: float = 0.5) -> bool:
+    def _all_action_directions_blocked(self, threshold_m: float = OBS_BLOCKED_M) -> bool:
         distances = getattr(self, 'latest_obstacle_distances', {}) or {}
         keys = ('left_30', 'front', 'right_30')
         return all(self._is_obstacle_distance_blocked(distances.get(key), threshold_m=threshold_m) for key in keys)
@@ -342,8 +365,11 @@ class VLMNavigationController(BaseNavigationController):
 
     def _get_low_level_stagnation_threshold_m(self) -> float:
         """Use a strict no-move threshold for low-level forward steps."""
-        configured_threshold_m = max(0.0, float(self.action_stagnation_max_movement_m or 0.0))
-        step_scaled_threshold_m = max(0.0, float(self.move_distance or 0.0) * 0.2)
+        configured_threshold_m = max(0.0, float(self.low_level_stagnation_cap_m or 0.0))
+        step_scaled_threshold_m = max(
+            0.0,
+            float(self.move_distance or 0.0) * float(self.low_level_stagnation_ratio or 0.0),
+        )
         if step_scaled_threshold_m <= 0.0:
             return configured_threshold_m
         if configured_threshold_m <= 0.0:
@@ -505,7 +531,7 @@ class VLMNavigationController(BaseNavigationController):
         }
         for side_name, record in side_records.items():
             distance_m = record.get("distance_m")
-            record["blocked"] = bool(distance_m is not None and distance_m < 0.5)
+            record["blocked"] = bool(distance_m is not None and distance_m < float(OBS_BLOCKED_M))
             record["unknown"] = distance_m is None
             record["status"] = (
                 "blocked"
@@ -733,9 +759,15 @@ class VLMNavigationController(BaseNavigationController):
 
     def _get_success_distance_m(self) -> float:
         try:
-            return float(getattr(self.config.TASK_CONFIG.TASK, 'SUCCESS_DISTANCE', 3.0) or 3.0)
+            return float(
+                getattr(
+                    self.config.TASK_CONFIG.TASK,
+                    'SUCCESS_DISTANCE',
+                    EVAL_SUCCESS_DISTANCE_M,
+                ) or EVAL_SUCCESS_DISTANCE_M
+            )
         except Exception:
-            return 3.0
+            return float(EVAL_SUCCESS_DISTANCE_M)
 
     def _parse_subtask_destination(self) -> Tuple[Optional[str], Optional[str]]:
         destination = ""
@@ -1754,6 +1786,7 @@ class VLMNavigationController(BaseNavigationController):
 
         waypoint_info = None
         last_waypoint_angle_deg = None
+        waypoint_initial_index = None
         if phase != "initial" and final_map_state is not None:
             wp_positions = final_map_state.get('waypoint_positions', [])
             wp_ids = final_map_state.get('waypoint_ids', [])
@@ -1762,6 +1795,7 @@ class VLMNavigationController(BaseNavigationController):
                     last_waypoint_angle_deg = np.degrees(final_last_waypoint_angle)
                 _, orig_wp_ids, wp_descriptions = self.mapper.get_waypoints()
                 waypoint_info = (wp_positions, wp_ids, wp_descriptions)
+                waypoint_initial_index = final_map_state.get('waypoint_initial_index')
         
         def _render_thinking_detection(
             image: np.ndarray,
@@ -1802,6 +1836,7 @@ class VLMNavigationController(BaseNavigationController):
             crop_offset=(final_map_state or {}).get('crop_offset'),
             waypoint_angle_deg=last_waypoint_angle_deg,
             draw_waypoints_fn=self._draw_waypoints_on_view,
+            initial_waypoint_index=waypoint_initial_index,
         )
 
         direction_inputs: List[Any] = []

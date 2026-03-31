@@ -1,8 +1,14 @@
+import re
 from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
 
+from vlnce_baselines.config.core.params.thresholds import (
+    OBS_BLOCKED_M,
+    OBS_OPEN_M,
+    OBS_RISKY_M,
+)
 
 ACTION_VIEW_DIRECTIONS = {
     "left_30": -30.0,
@@ -243,7 +249,7 @@ def raycast_on_rotated_map(
     start_x: int,
     start_y: int,
     angle_deg: float,
-    max_distance_m: float = 2.0,
+    max_distance_m: float = OBS_OPEN_M,
     step_size_px: float = 0.5,
     resolution_cm: int = 5,
 ) -> Optional[float]:
@@ -304,11 +310,46 @@ def _build_footprint_start_offsets(
 def format_distance(distance_m: Optional[float]) -> str:
     if distance_m is None:
         return "Unknown"
-    if distance_m > 2.0:
-        return ">2.0m open"
-    if distance_m < 0.5:
+    if distance_m > float(OBS_OPEN_M):
+        return f">{OBS_OPEN_M:.1f}m open"
+    if distance_m < float(OBS_BLOCKED_M):
         return f"{distance_m:.2f}m WARNING"
     return f"{distance_m:.2f}m"
+
+
+def parse_distance_text_m(distance_text: Optional[str]) -> Optional[float]:
+    if not distance_text:
+        return None
+    match = re.search(r"([0-9]+(?:\.[0-9]+)?)m", str(distance_text))
+    if not match:
+        return None
+    try:
+        return float(match.group(1))
+    except (TypeError, ValueError):
+        return None
+
+
+def classify_obstacle_distance_m(distance_m: Optional[float]) -> str:
+    if distance_m is None:
+        return "unknown"
+    if distance_m < float(OBS_BLOCKED_M):
+        return "blocked"
+    if distance_m < float(OBS_RISKY_M):
+        return "risky"
+    if distance_m > float(OBS_OPEN_M):
+        return "open"
+    return "passable"
+
+
+def classify_obstacle_distance_text(distance_text: Optional[str]) -> str:
+    text = str(distance_text or "").strip().lower()
+    if not text or text == "unknown":
+        return "unknown"
+    if "warning" in text:
+        return "blocked"
+    if "open" in text:
+        return "open"
+    return classify_obstacle_distance_m(parse_distance_text_m(text))
 
 
 def calculate_distances_for_directions(
@@ -370,21 +411,6 @@ def _prepare_depth_array(depth_meters: np.ndarray) -> Optional[np.ndarray]:
     if depth.ndim != 2:
         return None
     return depth
-
-
-def _parse_distance_text_m(distance_text: Optional[str]) -> Optional[float]:
-    if not distance_text:
-        return None
-    text = str(distance_text).strip().lower()
-    if not text or text == "unknown":
-        return None
-    try:
-        number = float(text.replace("warning", "").replace("open", "").replace("m", "").replace(">", "").strip())
-    except ValueError:
-        return None
-    if ">" in text:
-        return number + 0.1
-    return number
 
 
 def sample_depth_distance_from_region(
@@ -532,7 +558,7 @@ def calculate_obstacle_distances_from_depth(
     angle_band_deg: float = 5.0,
     sensor_min_depth_m: float = DEFAULT_SENSOR_MIN_DEPTH_M,
     fallback_distances: Optional[Dict[str, str]] = None,
-    default_distance: str = ">2.0m open",
+    default_distance: str = f">{OBS_OPEN_M:.1f}m open",
     conservative_map_distance_m: float = 1.5,
 ) -> Dict[str, str]:
     """Calculate lightweight action-side obstacle distances from the current depth frame."""
@@ -548,7 +574,7 @@ def calculate_obstacle_distances_from_depth(
             angle_band_deg=angle_band_deg,
         )
         fallback_text = (fallback_distances or {}).get(key, default_distance)
-        fallback_distance_m = _parse_distance_text_m(fallback_text)
+        fallback_distance_m = parse_distance_text_m(fallback_text)
         chosen_distance_m = distance_m
         if chosen_distance_m is None:
             distances[key] = fallback_text

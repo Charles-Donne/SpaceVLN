@@ -6,6 +6,8 @@ from typing import List, Optional, Union
 from habitat.config.default import Config as CN
 from habitat.config.default import get_config
 
+from vlnce_baselines.config.core.params.thresholds import EVAL_SUCCESS_DISTANCE_M
+
 
 _C = get_config()
 _C.defrost()
@@ -44,7 +46,7 @@ _C.TASK.NDTW.FDTW = True  # False: DTW
 _C.TASK.NDTW.GT_PATH = (
     "data/datasets/R2R_VLNCE_v1-2_preprocessed/{split}/{split}_gt.json"
 )
-_C.TASK.NDTW.SUCCESS_DISTANCE = 3.0
+_C.TASK.NDTW.SUCCESS_DISTANCE = EVAL_SUCCESS_DISTANCE_M
 
 # ----------------------------------------------------------------------------
 # SDTW MEASUREMENT
@@ -69,14 +71,14 @@ _C.TASK.ORACLE_NAVIGATION_ERROR.TYPE = "OracleNavigationError"
 # -----------------------------------------------------------------------------
 _C.TASK.ORACLE_SUCCESS = CN()
 _C.TASK.ORACLE_SUCCESS.TYPE = "OracleSuccess"
-_C.TASK.ORACLE_SUCCESS.SUCCESS_DISTANCE = 3.0
+_C.TASK.ORACLE_SUCCESS.SUCCESS_DISTANCE = EVAL_SUCCESS_DISTANCE_M
 
 # -----------------------------------------------------------------------------
 # ORACLE_SPL MEASUREMENT
 # -----------------------------------------------------------------------------
 _C.TASK.ORACLE_SPL = CN()
 _C.TASK.ORACLE_SPL.TYPE = "OracleSPL"
-_C.TASK.ORACLE_SPL.SUCCESS_DISTANCE = 3.0
+_C.TASK.ORACLE_SPL.SUCCESS_DISTANCE = EVAL_SUCCESS_DISTANCE_M
 
 # -----------------------------------------------------------------------------
 # STEPS_TAKEN MEASUREMENT

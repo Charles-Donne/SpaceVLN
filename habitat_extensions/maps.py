@@ -7,6 +7,8 @@ from habitat.core.utils import try_cv2_import
 from habitat.tasks.vln.vln import VLNEpisode
 from habitat.utils.visualizations import maps as habitat_maps
 
+from vlnce_baselines.config.core.params.thresholds import FLOOR_SAME_Z_M
+
 cv2 = try_cv2_import()
 
 AGENT_SPRITE = habitat_maps.AGENT_SPRITE
@@ -360,7 +362,7 @@ def draw_mp3d_nodes(
         pos = graph.nodes[node]["position"]
 
         # no obvious way to differentiate between floors. Use this for now.
-        if abs(pos[1] - starting_height) < 1.0:
+        if abs(pos[1] - starting_height) < float(FLOOR_SAME_Z_M):
             r_x, r_y = habitat_maps.to_grid(
                 pos[2], pos[0], img.shape[0:2], sim
             )

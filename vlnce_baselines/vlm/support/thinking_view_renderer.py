@@ -189,6 +189,7 @@ class ThinkingViewRenderer:
         current_space_area_label: str,
         full_map: Optional[np.ndarray],
         crop_offset: Optional[Tuple[int, int]],
+        initial_waypoint_index: Optional[int] = 0,
     ) -> List[Dict[str, Any]]:
         if current_pose is None:
             return []
@@ -294,7 +295,10 @@ class ThinkingViewRenderer:
                 "snapped_relative_bearing_deg": snapped_relative_bearing_deg,
                 "view_angle_deg": view_angle_deg,
                 "is_last_visited": index == last_displayed_index,
-                "is_task_initial_position": index == 0,
+                "is_task_initial_position": (
+                    initial_waypoint_index is not None
+                    and int(index) == int(initial_waypoint_index)
+                ),
             })
 
         current_area_text = str(resolved_current_area_text or current_space_area_label or "Unknown").strip() or "Unknown"
@@ -1089,6 +1093,7 @@ class ThinkingViewRenderer:
         crop_offset: Optional[Tuple[int, int]],
         waypoint_angle_deg: Optional[float],
         draw_waypoints_fn: Callable[[np.ndarray, Dict[str, Any]], np.ndarray],
+        initial_waypoint_index: Optional[int] = 0,
         detection_topk: int = THINKING_DETECTION_TOPK,
     ) -> Tuple[List[str], List[str]]:
         os.makedirs(directions_dir, exist_ok=True)
@@ -1110,6 +1115,7 @@ class ThinkingViewRenderer:
             crop_offset=crop_offset,
             waypoint_angle_deg=waypoint_angle_deg,
             draw_waypoints_fn=draw_waypoints_fn,
+            initial_waypoint_index=initial_waypoint_index,
             detection_topk=detection_topk,
         )
         direction_paths: List[str] = []
@@ -1143,6 +1149,7 @@ class ThinkingViewRenderer:
         crop_offset: Optional[Tuple[int, int]],
         waypoint_angle_deg: Optional[float],
         draw_waypoints_fn: Callable[[np.ndarray, Dict[str, Any]], np.ndarray],
+        initial_waypoint_index: Optional[int] = 0,
         detection_topk: int = THINKING_DETECTION_TOPK,
     ) -> List[Dict[str, Any]]:
         rendered_views: List[Dict[str, Any]] = []
@@ -1155,6 +1162,7 @@ class ThinkingViewRenderer:
             current_space_area_label=current_space_area_label,
             full_map=full_map,
             crop_offset=crop_offset,
+            initial_waypoint_index=initial_waypoint_index,
         )
         view_angles = [float(config["angle"]) for config in DIRECTION_CONFIG]
         waypoint_entries = self._apply_waypoint_visibility(

@@ -18,6 +18,11 @@ from skimage.morphology import binary_closing as _binary_closing_compat
 from skimage.morphology import disk, remove_small_objects
 
 from vlnce_baselines.config.core.constants import mapping_classes
+from vlnce_baselines.config.core.params.thresholds import (
+    FLOOR_SAME_Z_M,
+    FLOOR_SWITCH_STABLE_STEPS,
+    FLOOR_SWITCH_Z_M,
+)
 from vlnce_baselines.mapping.space_area_manager import SpaceAreaManager
 from vlnce_baselines.mapping.space_types import normalize_space_type
 from vlnce_baselines.mapping.waypoint_manager import WaypointManager
@@ -51,12 +56,12 @@ class SemanticMapper:
         self.enable_multi_floor_topology = bool(
             getattr(args, "ENABLE_MULTI_FLOOR_TOPOLOGY", True)
         )
-        self.floor_z_tolerance_m = float(getattr(args, "FLOOR_Z_TOLERANCE_M", 1.0))
+        self.floor_z_tolerance_m = float(getattr(args, "FLOOR_Z_TOLERANCE_M", FLOOR_SAME_Z_M))
         self.floor_z_switch_threshold_m = float(
-            getattr(args, "FLOOR_Z_SWITCH_THRESHOLD_M", 1.5)
+            getattr(args, "FLOOR_Z_SWITCH_THRESHOLD_M", FLOOR_SWITCH_Z_M)
         )
         self.floor_switch_stable_steps = max(
-            1, int(getattr(args, "FLOOR_SWITCH_STABLE_STEPS", 3))
+            1, int(getattr(args, "FLOOR_SWITCH_STABLE_STEPS", FLOOR_SWITCH_STABLE_STEPS))
         )
         self.stair_clear_radius_m = max(
             0.0, float(getattr(args, "STAIR_CLEAR_RADIUS_M", 0.45))

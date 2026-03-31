@@ -9,6 +9,7 @@ from vlnce_baselines.config.core.params.actions import (
     ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M,
 )
 from vlnce_baselines.utils.spatial_formatter import format_relative_direction
+from vlnce_baselines.visualization.obstacle_analysis import classify_obstacle_distance_text
 from vlnce_baselines.visualization.landmark_overlay import (
     LandmarkDrawItem,
     build_landmark_strip_lines,
@@ -162,6 +163,7 @@ def render_detection_bbox(owner,
                 current_space_area_label=str(map_state.get("current_space_area_label", "Unknown") or "Unknown"),
                 full_map=map_state.get("full_map"),
                 crop_offset=map_state.get("crop_offset"),
+                initial_waypoint_index=map_state.get("waypoint_initial_index"),
             )
             waypoint_entries = ThinkingViewRenderer._apply_waypoint_visibility(
                 waypoint_entries=waypoint_entries,
@@ -666,9 +668,10 @@ def _build_action_distance_label_boxes(
         if dist_str == 'Unknown':
             continue
 
-        if 'WARNING' in dist_str or '<0.5' in dist_str:
+        status = classify_obstacle_distance_text(dist_str)
+        if status == "blocked":
             line_length = 65 if config['key'] == 'front' else 60
-        elif '>2.0' in dist_str or 'open' in dist_str:
+        elif status == "open":
             line_length = 140 if config['key'] == 'front' else 120
         else:
             line_length = 105 if config['key'] == 'front' else 90
@@ -795,9 +798,10 @@ def draw_distance_on_view(owner, image: np.ndarray, distance_str: str) -> np.nda
     bottom_y = h - 5
     side_offset = int(w * 0.25)  # 增大两侧宽度：0.15 → 0.25
 
-    if "WARNING" in distance_str or "<0.5" in distance_str:
+    status = classify_obstacle_distance_text(distance_str)
+    if status == "blocked":
         color, line_ratio, top_shrink = (180, 105, 255), 0.15, 0.8  # 淡粉红(HotPink)：只延伸一点点，顶部收缩到0.8
-    elif ">2.0" in distance_str or "open" in distance_str:
+    elif status == "open":
         color, line_ratio, top_shrink = (0, 255, 0), 0.65, 0.3  # 绿色：降到之前黄色位置，顶部收缩到0.3（最窄）
     else:
         color, line_ratio, top_shrink = (0, 255, 255), 0.4, 0.5  # 黄色：再低一点，顶部收缩到0.5（中等）
@@ -853,10 +857,11 @@ def draw_distance_on_action_view(owner, image: np.ndarray, distance_dict: Dict[s
             continue
 
         # 根据距离确定颜色和长度（FRONT线条更长）
-        if "WARNING" in dist_str or "<0.5" in dist_str:
+        status = classify_obstacle_distance_text(dist_str)
+        if status == "blocked":
             color = (180, 105, 255)  # 淡粉红(HotPink)
             line_length = 65 if config['key'] == 'front' else 60
-        elif ">2.0" in dist_str or "open" in dist_str:
+        elif status == "open":
             color = (0, 255, 0)  # 绿色
             line_length = 140 if config['key'] == 'front' else 120
         else:

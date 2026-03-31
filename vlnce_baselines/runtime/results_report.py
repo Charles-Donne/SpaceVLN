@@ -5,6 +5,8 @@ import math
 import os
 from typing import Any, Dict, List
 
+from vlnce_baselines.config.core.params.thresholds import EVAL_SUCCESS_DISTANCE_M
+
 
 def check_inf_nan(value: Any) -> Any:
     if isinstance(value, (int, float)) and (math.isinf(value) or math.isnan(value)):
@@ -72,6 +74,7 @@ def print_summary(metrics: Dict[str, Any]) -> None:
 
 def print_debug_info(metrics: Dict[str, Any]) -> None:
     results = metrics["detailed_results"]
+    success_distance_m = float(EVAL_SUCCESS_DISTANCE_M)
     print(f"\n🔍 指标计算调试信息:")
     print(f"{'=' * 80}")
     print(f"\nEpisode详情:")
@@ -96,10 +99,10 @@ def print_debug_info(metrics: Dict[str, Any]) -> None:
         spl = check_inf_nan(item.get("spl", 0.0))
         ndtw = check_inf_nan(item.get("ndtw", 0.0))
 
-        if sr == 1 and ne > 3.0:
-            print(f"  ❌ Episode {ep_id}: SR=1 但 NE={ne:.3f}m > 3m")
-        if sr == 0 and 0 <= ne < 3.0:
-            print(f"  ⚠️  Episode {ep_id}: SR=0 但 NE={ne:.3f}m < 3m")
+        if sr == 1 and ne > success_distance_m:
+            print(f"  ❌ Episode {ep_id}: SR=1 但 NE={ne:.3f}m > {success_distance_m:g}m")
+        if sr == 0 and 0 <= ne < success_distance_m:
+            print(f"  ⚠️  Episode {ep_id}: SR=0 但 NE={ne:.3f}m < {success_distance_m:g}m")
         if sr == 0 and spl > 0:
             print(f"  ❌ Episode {ep_id}: SR=0 但 SPL={spl:.4f} > 0")
         if osr < sr:

@@ -18,9 +18,12 @@ from vlnce_baselines.mapping import Semantic_Mapping, SemanticMapper, SemanticPr
 from vlnce_baselines.visualization import MapVisualizer
 from vlnce_baselines.visualization.obstacle_analysis import (
     calculate_obstacle_distances_from_depth,
+    classify_obstacle_distance_text,
     format_distance,
+    parse_distance_text_m,
     sample_depth_distance_from_region,
 )
+from vlnce_baselines.config.core.params.thresholds import OBS_OPEN_M, OBS_RISKY_M
 from vlnce_baselines.vlm.support.navigation_config import DIRECTION_CONFIG
 from vlnce_baselines.config.core import ConfigHelper, create_category_config
 from vlnce_baselines.env.env_utils import construct_envs
@@ -612,15 +615,19 @@ class BaseNavigationController:
                 continue
 
             dist_str = distances[key]
-            if "WARNING" in dist_str or "<0.5" in dist_str:
+            status = classify_obstacle_distance_text(dist_str)
+            if status == "blocked":
                 color, y_ratio = (0, 0, 255), 0.7
-            elif ">2.0" in dist_str or "open" in dist_str:
+            elif status == "open":
                 color, y_ratio = (0, 255, 0), 0.1
             else:
                 try:
-                    dist_val = float(dist_str.replace('m', '').split()[0])
+                    dist_val = float(parse_distance_text_m(dist_str))
                     color = (0, 255, 255)
-                    y_ratio = 0.7 if dist_val < 1.0 else (0.5 if dist_val < 2.0 else 0.3)
+                    y_ratio = (
+                        0.7 if dist_val < float(OBS_RISKY_M)
+                        else (0.5 if dist_val < float(OBS_OPEN_M) else 0.3)
+                    )
                 except Exception:
                     color, y_ratio = (0, 255, 255), 0.5
 

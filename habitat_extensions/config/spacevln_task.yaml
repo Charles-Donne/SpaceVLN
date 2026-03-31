@@ -29,7 +29,7 @@ SIMULATOR:
     Sim-v1
 TASK:
   TYPE: VLN-v0
-  SUCCESS_DISTANCE: 3.0
+  SUCCESS_DISTANCE: &success_distance 3.0
   SENSORS: [
     INSTRUCTION_SENSOR,
     SENSOR_POSE_SENSOR,
@@ -52,21 +52,21 @@ TASK:
     POSITION
   ]
   SUCCESS:
-    SUCCESS_DISTANCE: 3.0
+    SUCCESS_DISTANCE: *success_distance
   SPL:
-    SUCCESS_DISTANCE: 3.0
+    SUCCESS_DISTANCE: *success_distance
   NDTW:
-    SUCCESS_DISTANCE: 3.0
+    SUCCESS_DISTANCE: *success_distance
     GT_PATH: ../data/datasets/R2R_VLNCE_v1-3_preprocessed/val_unseen_gt.json.gz
   SDTW:
-    SUCCESS_DISTANCE: 3.0
+    SUCCESS_DISTANCE: *success_distance
     GT_PATH: ../data/datasets/R2R_VLNCE_v1-3_preprocessed/val_unseen_gt.json.gz
   ORACLE_SUCCESS:
-    SUCCESS_DISTANCE: 3.0
+    SUCCESS_DISTANCE: *success_distance
   ORACLE_NAVIGATION_ERROR:
-    SUCCESS_DISTANCE: 3.0
+    SUCCESS_DISTANCE: *success_distance
   ORACLE_SPL:
-    SUCCESS_DISTANCE: 3.0
+    SUCCESS_DISTANCE: *success_distance
 DATASET:
   TYPE: VLN-CE-v1
   SPLIT: val_unseen

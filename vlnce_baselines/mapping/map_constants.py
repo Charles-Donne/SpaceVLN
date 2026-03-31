@@ -4,6 +4,12 @@
 集中管理建图相关的所有常量，避免magic numbers
 """
 
+from vlnce_baselines.config.core.params.thresholds import (
+    SEM_MAP_CAT_THRESH,
+    SEM_MAP_EXP_THRESH,
+    SEM_MAP_OBS_THRESH,
+)
+
 # ========================================
 # 地图通道配置
 # ========================================
@@ -74,9 +80,9 @@ DEFAULT_MIN_HEIGHT = -40    # 最小高度（cm）
 # 阈值配置
 # ========================================
 
-CAT_PRED_THRESHOLD = 1.0    # 语义类别预测阈值
-EXP_PRED_THRESHOLD = 1.0    # 探索区域预测阈值
-MAP_PRED_THRESHOLD = 1.0    # 地图预测阈值
+CAT_PRED_THRESHOLD = SEM_MAP_CAT_THRESH    # 语义类别预测阈值
+EXP_PRED_THRESHOLD = SEM_MAP_EXP_THRESH    # 探索区域预测阈值
+MAP_PRED_THRESHOLD = SEM_MAP_OBS_THRESH    # 地图预测阈值
 
 # ========================================
 # 渲染配置

@@ -24,6 +24,7 @@ from torch.nn import functional as F
 import habitat_extensions.pose_utils as pu
 
 from vlnce_baselines.config.core.constants import *
+from vlnce_baselines.config.core.params.thresholds import SEM_MAP_LANDMARK_THRESH
 from vlnce_baselines.mapping.map_utils import *
 import vlnce_baselines.mapping.depth_utils as du
 import vlnce_baselines.visualization.rendering as vu
@@ -1545,7 +1546,7 @@ class Semantic_Mapping(nn.Module):
             min=0.0, max=1.0)
         # landmark_classes 用更低 threshold（mask稀疏，标准threshold=5.0会全部过滤掉）
         if n_sem_total > n_mapping:
-            lm_threshold = max(self.cat_pred_threshold * 0.1, 0.5)  # 降低到10%，最低0.5
+            lm_threshold = float(SEM_MAP_LANDMARK_THRESH)
             agent_view[:, 3+n_mapping:, y1:y2, x1:x2] = torch.clamp(
                 all_height_proj[:, 1+n_mapping:, :, :] / lm_threshold,
                 min=0.0, max=1.0)

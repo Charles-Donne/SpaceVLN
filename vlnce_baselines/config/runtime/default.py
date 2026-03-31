@@ -5,6 +5,18 @@ from habitat.config.default import Config as CN
 from habitat.config.default import CONFIG_FILE_SEPARATOR
 from habitat_extensions.config.default import get_extended_config as get_task_config
 
+from vlnce_baselines.config.core.params.thresholds import (
+    EVAL_SUCCESS_DISTANCE_M,
+    FLOOR_SAME_Z_M,
+    FLOOR_SWITCH_STABLE_STEPS,
+    FLOOR_SWITCH_Z_M,
+    LOW_LEVEL_STAGNATION_CAP_M,
+    LOW_LEVEL_STAGNATION_RATIO,
+    SEM_MAP_CAT_THRESH,
+    SEM_MAP_EXP_THRESH,
+    SEM_MAP_OBS_THRESH,
+)
+
 
 # -----------------------------------------------------------------------------
 # EXPERIMENT CONFIG
@@ -47,9 +59,9 @@ _C.MAP.MAP_SIZE_CM = 2400  # 固定地图大小（24m×24m），可通过增大�
 _C.MAP.GLOBAL_DOWNSCALING = 2
 _C.MAP.VISION_RANGE = 100
 _C.MAP.DU_SCALE = 1
-_C.MAP.CAT_PRED_THRESHOLD = 5.0
-_C.MAP.EXP_PRED_THRESHOLD = 1.0
-_C.MAP.MAP_PRED_THRESHOLD = 0.5  # 降低障碍物阈值：1.0 → 0.5，更容易检测到障碍物
+_C.MAP.CAT_PRED_THRESHOLD = SEM_MAP_CAT_THRESH
+_C.MAP.EXP_PRED_THRESHOLD = SEM_MAP_EXP_THRESH
+_C.MAP.MAP_PRED_THRESHOLD = SEM_MAP_OBS_THRESH
 _C.MAP.MAX_SEM_CATEGORIES = 16
 _C.MAP.CENTER_RESET_STEPS = 25
 _C.MAP.MIN_Z = 2 # a lager min_z could lost some information on the floor, 2cm is ok
@@ -67,13 +79,15 @@ _C.MAP.SAVE_NAVIGATION_GIF = True     # 是否生成最终navigation.gif
 _C.MAP.ENABLE_AUTO_RETREAT = False      # 是否启用卡住时自动转身后退重规划
 _C.MAP.AUTO_RETREAT_STOP_EARLY_IF_REVERSE_BLOCKED = False  # 自动回退时，反向也阻挡是否提前停止
 _C.MAP.ACTION_STAGNATION_REPLAN_STREAK = 3  # 连续多少个底层MOVE_FORWARD没推进时触发rethinking
-_C.MAP.ACTION_STAGNATION_MAX_MOVEMENT_M = 0.25  # 底层MOVE“没动”阈值上限（实际使用时还会与单步距离的20%取较小值）
+_C.MAP.LOW_LEVEL_STAGNATION_RATIO = LOW_LEVEL_STAGNATION_RATIO
+_C.MAP.LOW_LEVEL_STAGNATION_CAP_M = LOW_LEVEL_STAGNATION_CAP_M
+_C.MAP.ACTION_STAGNATION_MAX_MOVEMENT_M = LOW_LEVEL_STAGNATION_CAP_M  # deprecated alias
 _C.MAP.FINAL_DESTINATION_MATCH_AUTOSTOP_STREAK = 3  # 连续多少次thinking检测到waypoint_chain末尾与destination一致时，才允许进入终点稳定区自动停止判定
 _C.MAP.FINAL_DESTINATION_MATCH_AUTOSTOP_RADIUS_M = 1.0  # 以第一次终点匹配位置为圆心，连续命中都需留在半径1m内（约直径2m）才自动停止任务
 _C.MAP.ENABLE_MULTI_FLOOR_TOPOLOGY = True  # 是否启用基于z轴的多楼层拓扑拆分
-_C.MAP.FLOOR_Z_TOLERANCE_M = 1.0  # 高度差在1m内视为同楼层
-_C.MAP.FLOOR_Z_SWITCH_THRESHOLD_M = 1.5  # 超过1.5m才允许进入新楼层候选
-_C.MAP.FLOOR_SWITCH_STABLE_STEPS = 3  # 连续多少步稳定命中新楼层高度后正式切层
+_C.MAP.FLOOR_Z_TOLERANCE_M = FLOOR_SAME_Z_M  # 高度差在该阈值内视为同楼层
+_C.MAP.FLOOR_Z_SWITCH_THRESHOLD_M = FLOOR_SWITCH_Z_M  # 超过该阈值才允许进入新楼层候选
+_C.MAP.FLOOR_SWITCH_STABLE_STEPS = FLOOR_SWITCH_STABLE_STEPS  # 连续多少步稳定命中新楼层高度后正式切层
 _C.MAP.STAIR_CLEAR_RADIUS_M = 0.45  # 楼梯连接区域周围多少米内不再保留为障碍物
 
 
@@ -86,6 +100,38 @@ _C.EVAL.SPLIT = "val_unseen"  # The split to evaluate on
 _C.EVAL.USE_CKPT_CONFIG = True
 _C.EVAL.EPISODE_COUNT = 5000
 _C.EVAL.SAVE_RESULTS = True
+_C.EVAL.SUCCESS_DISTANCE_M = EVAL_SUCCESS_DISTANCE_M
+
+
+def _sync_task_success_distance(task_config: CN) -> None:
+    if task_config is None or not hasattr(task_config, "TASK"):
+        return
+
+    was_frozen = False
+    is_frozen_fn = getattr(task_config, "is_frozen", None)
+    if callable(is_frozen_fn):
+        was_frozen = bool(is_frozen_fn())
+    if was_frozen and hasattr(task_config, "defrost"):
+        task_config.defrost()
+
+    try:
+        success_distance = float(EVAL_SUCCESS_DISTANCE_M)
+        task = task_config.TASK
+        task.SUCCESS_DISTANCE = success_distance
+        for key in (
+            "SUCCESS",
+            "SPL",
+            "NDTW",
+            "SDTW",
+            "ORACLE_SUCCESS",
+            "ORACLE_NAVIGATION_ERROR",
+            "ORACLE_SPL",
+        ):
+            if hasattr(task, key):
+                getattr(task, key).SUCCESS_DISTANCE = success_distance
+    finally:
+        if was_frozen and hasattr(task_config, "freeze"):
+            task_config.freeze()
 
 
 def purge_keys(config: CN, keys: List[str]) -> None:
@@ -127,6 +173,7 @@ def get_config(
                 config.TASK_CONFIG = get_task_config(
                     config.BASE_TASK_CONFIG_PATH
                 )
+                _sync_task_success_distance(config.TASK_CONFIG)
                 prev_task_config = config.BASE_TASK_CONFIG_PATH
 
     if opts:
