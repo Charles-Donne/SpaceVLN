@@ -48,6 +48,10 @@ class LLMPlanner(BaseAPIClient):
             response['next_waypoint'] = response.get('next_waypoint_destination')
         if 'subtask_landmark' not in response and response.get('next_waypoint_landmark') is not None:
             response['subtask_landmark'] = response.get('next_waypoint_landmark')
+        if response.get('subtask_landmark') is None:
+            response['subtask_landmark'] = ''
+        if response.get('global_task_finish') is None:
+            response['global_task_finish'] = False
 
         required = self.REQUIRED_FIELDS_INITIAL if mode == 'initial' else self.REQUIRED_FIELDS_VERIFY
         

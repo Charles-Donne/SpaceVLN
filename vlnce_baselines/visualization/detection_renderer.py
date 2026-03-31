@@ -25,6 +25,72 @@ from vlnce_baselines.config.core.constants import (
     local_map_landmark_topk,
 )
 
+
+def _prepare_depth_array(depth_meters: Optional[np.ndarray]) -> Optional[np.ndarray]:
+    if depth_meters is None:
+        return None
+    depth = np.asarray(depth_meters, dtype=np.float32)
+    if depth.ndim == 3 and depth.shape[-1] == 1:
+        depth = depth[:, :, 0]
+    if depth.ndim != 2:
+        return None
+    return depth
+
+
+def _estimate_bbox_depth_rel_xy(
+    depth_meters: Optional[np.ndarray],
+    bbox: Tuple[int, int, int, int],
+    image_width: int,
+    hfov: float,
+    min_depth_m: float = 0.05,
+) -> Optional[Tuple[float, float]]:
+    """Fallback depth estimate for visible detections when mask-based rel_xy is unavailable."""
+    depth = _prepare_depth_array(depth_meters)
+    if depth is None or image_width <= 1:
+        return None
+
+    x1, y1, x2, y2 = [int(v) for v in bbox]
+    h_img, w_img = depth.shape[:2]
+    x1 = max(0, min(x1, w_img - 1))
+    x2 = max(x1 + 1, min(x2, w_img))
+    y1 = max(0, min(y1, h_img - 1))
+    y2 = max(y1 + 1, min(y2, h_img))
+    if x2 <= x1 or y2 <= y1:
+        return None
+
+    box_h = max(1, y2 - y1)
+    row_bands = [
+        (y1 + int(round(box_h * 0.30)), y2),
+        (y1 + int(round(box_h * 0.55)), y2),
+        (y1, y2),
+    ]
+
+    sampled_depths: Optional[np.ndarray] = None
+    for band_start, band_end in row_bands:
+        band_start = max(y1, min(band_start, y2 - 1))
+        band_end = max(band_start + 1, min(band_end, y2))
+        region = depth[band_start:band_end, x1:x2]
+        valid = region[np.isfinite(region) & (region > float(min_depth_m))]
+        if valid.size > 0:
+            sampled_depths = valid.astype(np.float32)
+            break
+
+    if sampled_depths is None or sampled_depths.size == 0:
+        return None
+
+    forward_m = float(np.median(sampled_depths))
+    if not np.isfinite(forward_m) or forward_m <= float(min_depth_m):
+        return None
+
+    focal = (float(image_width) / 2.0) / np.tan(np.deg2rad(float(hfov)) / 2.0)
+    if focal <= 1e-6:
+        return None
+
+    center_x = 0.5 * (float(x1) + float(x2))
+    xc = (float(image_width) - 1.0) / 2.0
+    right_m = float(((center_x - xc) * forward_m) / float(focal))
+    return float(forward_m), float(right_m)
+
 def render_detection_bbox(owner, 
                           rgb: np.ndarray,
                           detections,  # sv.Detections object
@@ -351,6 +417,13 @@ def render_detection_bbox(owner,
                 hfov,
                 landmark_name=label_name,
                 return_profile=True,
+            )
+        if det_rel_xy is None:
+            det_rel_xy = _estimate_bbox_depth_rel_xy(
+                depth_for_match,
+                bbox=(x1, y1, x2, y2),
+                image_width=w_img,
+                hfov=hfov,
             )
         world_xy = owner._rel_xy_to_world_xy(det_rel_xy, current_pose)
 

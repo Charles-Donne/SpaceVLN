@@ -179,6 +179,7 @@ class VLMNavigationController(BaseNavigationController):
         self.final_goal_destination_match_streak = 0
         self.final_goal_destination_match_anchor_xy = None
         self.action_stagnation_streak = 0
+        self.blocked_front_controller_recovery_count = 0
         self.action_stagnation_retry_pending = False
         self.action_stagnation_retry_notice_text = ""
         self.action_stagnation_progress_warning_text = ""
@@ -250,6 +251,9 @@ class VLMNavigationController(BaseNavigationController):
         self.action_stagnation_retry_pending = False
         self.action_stagnation_retry_notice_text = ""
         self.action_stagnation_progress_warning_text = ""
+
+    def _reset_blocked_front_controller_recovery_state(self) -> None:
+        self.blocked_front_controller_recovery_count = 0
 
     def _get_action_progress_summary_for_prompt(self) -> str:
         base_summary = str(self.progress_summary or "").strip()
@@ -458,6 +462,207 @@ class VLMNavigationController(BaseNavigationController):
             f"Do not immediately turn back {reverse_text}. If FRONT is now passable and still aligned with the destination, move forward."
         )
 
+    @staticmethod
+    def _extract_side_hint(text: Optional[str]) -> Optional[str]:
+        text_norm = str(text or "").strip().lower()
+        if not text_norm:
+            return None
+        if re.search(r"\bleft\b", text_norm):
+            return "LEFT"
+        if re.search(r"\bright\b", text_norm):
+            return "RIGHT"
+        if re.search(r"\bfront\b", text_norm):
+            return "FRONT"
+        if re.search(r"\bback\b", text_norm):
+            return "BACK"
+        return None
+
+    def _get_recent_forced_avoidance_turn_side(self) -> Optional[str]:
+        for text in (
+            getattr(self, "previous_action_reason", ""),
+            getattr(self, "action_stagnation_retry_notice_text", ""),
+        ):
+            match = re.search(
+                r"forced obstacle-avoidance turn to the (left|right)",
+                str(text or ""),
+                flags=re.IGNORECASE,
+            )
+            if match:
+                return str(match.group(1)).upper()
+        return None
+
+    def _choose_blocked_front_recovery_side(self) -> Tuple[Optional[str], Dict[str, Dict[str, Any]]]:
+        obstacle_distances = getattr(self, "latest_obstacle_distances", {}) or {}
+        side_records: Dict[str, Dict[str, Any]] = {
+            "LEFT": {
+                "distance_text": obstacle_distances.get("left_30"),
+                "distance_m": self._parse_distance_text_m(obstacle_distances.get("left_30")),
+            },
+            "RIGHT": {
+                "distance_text": obstacle_distances.get("right_30"),
+                "distance_m": self._parse_distance_text_m(obstacle_distances.get("right_30")),
+            },
+        }
+        for side_name, record in side_records.items():
+            distance_m = record.get("distance_m")
+            record["blocked"] = bool(distance_m is not None and distance_m < 0.5)
+            record["unknown"] = distance_m is None
+            record["status"] = (
+                "blocked"
+                if record["blocked"]
+                else ("unknown" if record["unknown"] else "passable")
+            )
+            record["side_name"] = side_name
+
+        payload = dict(getattr(self, "current_subtask", None) or {})
+        preferred_hint = None
+        for raw_text in (
+            payload.get("next_waypoint_direction"),
+            payload.get("subtask_instruction"),
+        ):
+            hint = self._extract_side_hint(raw_text)
+            if hint in ("LEFT", "RIGHT"):
+                preferred_hint = hint
+                break
+
+        recent_avoidance_side = self._get_recent_forced_avoidance_turn_side()
+        ranked_candidates: List[Tuple[float, str]] = []
+        for side_name, record in side_records.items():
+            if record["blocked"]:
+                continue
+
+            score = 0.0
+            if preferred_hint == side_name:
+                score += 3.0
+            elif preferred_hint in ("LEFT", "RIGHT"):
+                score -= 0.5
+
+            if recent_avoidance_side == side_name:
+                score += 0.5
+            elif recent_avoidance_side in ("LEFT", "RIGHT"):
+                score -= 0.25
+
+            distance_m = record.get("distance_m")
+            if distance_m is None:
+                score -= 0.25
+            else:
+                score += min(float(distance_m), 5.0)
+
+            ranked_candidates.append((score, side_name))
+
+        ranked_candidates.sort(reverse=True)
+        if not ranked_candidates:
+            return None, side_records
+        return ranked_candidates[0][1], side_records
+
+    def _build_controller_forced_action_response(
+        self,
+        *,
+        action_name: str,
+        reasoning: str,
+        action_analysis: str,
+    ) -> Dict[str, Any]:
+        action_name_upper = str(action_name or "").upper()
+        if action_name_upper in ("TURN_LEFT", "TURN_RIGHT"):
+            action_text = f"{action_name_upper} {int(self.turn_angle)}deg"
+        elif action_name_upper == "MOVE_FORWARD":
+            action_text = f"{action_name_upper} {float(self.move_distance):g}m"
+        else:
+            action_text = "STOP"
+        return {
+            "reasoning": reasoning,
+            "action_analysis": action_analysis,
+            "action": action_text,
+            "controller_forced_recovery": True,
+        }
+
+    def _build_forced_blocked_front_recovery_action(
+        self,
+        step_landmark_entries: Optional[Sequence[Dict[str, Any]]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        current_entries = list(step_landmark_entries or [])
+        auto_completed_subtask = self._should_autocomplete_subtask_during_action_step(current_entries)
+        if auto_completed_subtask is not None:
+            landmark_kind = "opening-like" if auto_completed_subtask.get("is_opening_like") else "solid"
+            distance_m = float(auto_completed_subtask.get("distance_m", 0.0) or 0.0)
+            threshold_m = float(
+                auto_completed_subtask.get(
+                    "stop_distance_m",
+                    self.ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M,
+                )
+            )
+            response = self._build_controller_forced_action_response(
+                action_name="STOP",
+                reasoning=(
+                    f"The destination landmark {auto_completed_subtask['name']} is already within "
+                    f"{distance_m:.2f}m, which satisfies the auto-stop threshold {threshold_m:.2f}m, "
+                    "so stop instead of forcing another obstacle-recovery move."
+                ),
+                action_analysis=(
+                    f"Destination landmark {auto_completed_subtask['name']} is already reached, so stop now"
+                ),
+            )
+            return {
+                "action_id": HabitatSimActions.STOP,
+                "action_name": "STOP",
+                "response": response,
+                "degrees": 0,
+                "meters": 0.0,
+                "recovery_kind": "stop",
+                "recovery_meta": {
+                    "landmark_name": auto_completed_subtask["name"],
+                    "landmark_kind": landmark_kind,
+                    "distance_m": distance_m,
+                    "threshold_m": threshold_m,
+                },
+            }
+
+        if int(getattr(self, "blocked_front_controller_recovery_count", 0) or 0) >= 1:
+            return None
+
+        selected_side, side_records = self._choose_blocked_front_recovery_side()
+        if selected_side not in ("LEFT", "RIGHT"):
+            return None
+
+        turn_action_name = "TURN_LEFT" if selected_side == "LEFT" else "TURN_RIGHT"
+        selected_record = dict(side_records.get(selected_side, {}) or {})
+        other_side = "RIGHT" if selected_side == "LEFT" else "LEFT"
+        other_record = dict(side_records.get(other_side, {}) or {})
+        selected_distance_text = str(selected_record.get("distance_text") or "Unknown")
+        other_distance_text = str(other_record.get("distance_text") or "Unknown")
+
+        response = self._build_controller_forced_action_response(
+            action_name=turn_action_name,
+            reasoning=(
+                "A blocked-front retry is active, so straight movement into the current FRONT route is forbidden. "
+                f"{selected_side.title()} 30deg is the best controller-side recovery because it is "
+                f"{selected_record.get('status', 'passable')} ({selected_distance_text})"
+                + (
+                    f", while {other_side.title()} 30deg is {other_record.get('status', 'unknown')} ({other_distance_text})"
+                    if other_record
+                    else ""
+                )
+                + ". Use one side turn now, then let the next action call continue forward only if the new FRONT route is passable and still task-aligned."
+            ),
+            action_analysis=(
+                f"FRONT retry stayed blocked, so force {turn_action_name} toward the safer destination-side recovery path"
+            ),
+        )
+        return {
+            "action_id": HabitatSimActions.TURN_LEFT if selected_side == "LEFT" else HabitatSimActions.TURN_RIGHT,
+            "action_name": turn_action_name,
+            "response": response,
+            "degrees": int(self.turn_angle),
+            "meters": 0.0,
+            "recovery_kind": "turn",
+            "recovery_meta": {
+                "selected_side": selected_side,
+                "selected_distance_text": selected_distance_text,
+                "other_side": other_side,
+                "other_distance_text": other_distance_text,
+            },
+        }
+
     def _update_action_stagnation_streak(
         self,
         action_name: Optional[str],
@@ -492,6 +697,7 @@ class VLMNavigationController(BaseNavigationController):
                 "reset stagnation streak"
             )
         self.action_stagnation_streak = 0
+        self._reset_blocked_front_controller_recovery_state()
         return False
 
     @staticmethod
@@ -989,6 +1195,7 @@ class VLMNavigationController(BaseNavigationController):
         self.final_goal_destination_match_streak = 0
         self.final_goal_destination_match_anchor_xy = None
         self.action_stagnation_streak = 0
+        self._reset_blocked_front_controller_recovery_state()
         self._clear_action_stagnation_prompt_state()
         self.verify_replan_prompt_notice = ""
         self.pending_verify_view_restriction = None
@@ -1788,6 +1995,7 @@ class VLMNavigationController(BaseNavigationController):
         self.progress_summary = ""
         self.previous_action_reason = ""
         self.action_stagnation_streak = 0
+        self._reset_blocked_front_controller_recovery_state()
         self._clear_action_stagnation_prompt_state()
         self.verify_replan_prompt_notice = ""
         self.pose_before_action = None
@@ -2252,6 +2460,11 @@ class VLMNavigationController(BaseNavigationController):
             if self.action_stagnation_retry_pending and self.action_stagnation_retry_notice_text
             else self.previous_action_reason
         )
+        allowed_action_names = (
+            ("TURN_LEFT", "TURN_RIGHT", "STOP")
+            if self.action_stagnation_retry_pending
+            else None
+        )
 
         result = None
         action_id = None
@@ -2260,7 +2473,7 @@ class VLMNavigationController(BaseNavigationController):
         degrees = 0
         meters = 0
         prompt = None
-        max_blocked_forward_requeries = 3
+        max_blocked_forward_requeries = 1
 
         for blocked_retry_idx in range(max_blocked_forward_requeries):
             action_api_start_time = time.perf_counter()
@@ -2277,6 +2490,7 @@ class VLMNavigationController(BaseNavigationController):
                 previous_action_reason=previous_action_reason_for_prompt,
                 obstacle_distances=obstacle_distances,
                 landmark_map_info=action_landmark_map_info,
+                allowed_action_names=allowed_action_names,
                 save_dir=action_save_dir
             )
             action_api_duration_s = time.perf_counter() - action_api_start_time
@@ -2297,13 +2511,10 @@ class VLMNavigationController(BaseNavigationController):
                 action_name=action_name,
             )
 
-            if action_id is None:
-                break
-
             if self.action_stagnation_retry_pending and str(action_name or "").upper() == "MOVE_FORWARD":
                 print(
                     "[ActionStagnation] Rejected MOVE_FORWARD after blocked-front warning; "
-                    "re-query action prompt from the same current view"
+                    "controller-side recovery will take over from the same current view"
                 )
                 action_id = None
                 action_name = None
@@ -2316,7 +2527,32 @@ class VLMNavigationController(BaseNavigationController):
                 if blocked_retry_idx < max_blocked_forward_requeries - 1:
                     continue
                 print("[ERR] Action VLM kept choosing forbidden MOVE_FORWARD after a blocked-front warning")
-                return None, None, True, 1, None
+                forced_recovery = self._build_forced_blocked_front_recovery_action(
+                    step_landmark_entries=step_landmark_entries,
+                )
+                if forced_recovery is None:
+                    return None, None, True, 1, None
+                action_id = forced_recovery["action_id"]
+                action_name = forced_recovery["action_name"]
+                response = forced_recovery["response"]
+                degrees = int(forced_recovery.get("degrees", 0) or 0)
+                meters = float(forced_recovery.get("meters", 0.0) or 0.0)
+                if str(action_name or "").upper() in ("TURN_LEFT", "TURN_RIGHT"):
+                    self.blocked_front_controller_recovery_count = int(
+                        getattr(self, "blocked_front_controller_recovery_count", 0) or 0
+                    ) + 1
+                    print(
+                        "[ActionStagnation] Controller forced "
+                        f"{action_name} after forbidden blocked-front retries "
+                        f"(recovery #{self.blocked_front_controller_recovery_count})"
+                    )
+                else:
+                    self._reset_blocked_front_controller_recovery_state()
+                    print("[ActionStagnation] Controller forced STOP because the destination is already reached")
+                break
+
+            if action_id is None:
+                break
 
             break
         
@@ -2343,6 +2579,7 @@ class VLMNavigationController(BaseNavigationController):
             else:
                 self.previous_action_reason = ""
             if str(action_name or "").upper() == "STOP":
+                self._reset_blocked_front_controller_recovery_state()
                 self._clear_action_stagnation_prompt_state()
         
         # 检查是否停止
@@ -2449,6 +2686,38 @@ class VLMNavigationController(BaseNavigationController):
                     time.sleep(wait)
 
             if action_id is None:
+                if self.action_stagnation_retry_pending:
+                    print(
+                        "[ActionStagnation] Blocked-front recovery could not get a valid side action; "
+                        "end the current action stage and trigger replan"
+                    )
+                    self.action_stagnation_streak = 0
+                    self._reset_blocked_front_controller_recovery_state()
+                    if self.enable_auto_retreat:
+                        actual_retreat_m, episode_done = self._execute_auto_retreat(
+                            retreat_distance_m=self.STUCK_RETREAT_DISTANCE_M
+                        )
+                        self.verify_replan_prompt_notice = self._build_stagnation_verify_notice(
+                            actual_retreat_m=actual_retreat_m,
+                            retreat_distance_m=self.STUCK_RETREAT_DISTANCE_M,
+                        )
+                        self.pending_verify_view_restriction = {
+                            "forbidden_view_ids": list(self.STUCK_RETREAT_FORBIDDEN_VIEW_IDS),
+                        }
+                        self._clear_action_stagnation_prompt_state()
+                        if episode_done:
+                            return 'complete'
+                    else:
+                        self._append_progress_note(
+                            "front route stayed blocked after repeated blocked-front retries, so ended the current action stage and triggered replan"
+                        )
+                        self.previous_action_reason = (
+                            "The current front route stayed blocked after repeated blocked-front retries, "
+                            "so the controller stopped action execution and returned to thinking for a new route."
+                        )
+                        self._clear_action_stagnation_prompt_state()
+                    return 'thinking'
+
                 print('[ERR] VLM Action failed after all retries, skipping step')
                 continue
 

@@ -4,7 +4,7 @@ VLM动作执行模块
 低层动作决策：基于视觉和地图输出具体动作
 """
 import os
-from typing import Any, Dict, Tuple, Optional
+from typing import Any, Dict, Tuple, Optional, Sequence
 from vlnce_baselines.config.core.params.actions import VALID_MOVE_METERS, VALID_TURN_DEGREES
 from vlnce_baselines.config.core.params.api import (
     ACTION_IMAGE_COMPRESSION_MAX_SIZE,
@@ -259,6 +259,7 @@ class ActionExecutor(BaseAPIClient):
                      pose_after: tuple = None,
                      obstacle_distances: Dict[str, str] = None,
                      landmark_map_info: str = None,
+                     allowed_action_names: Optional[Sequence[str]] = None,
                      save_dir: str = None) -> Tuple[Optional[int], Optional[str], Optional[str], Optional[Dict]]:
         """
         基于第一人称视角、检测结果和局部地图决策下一步动作
@@ -299,7 +300,8 @@ class ActionExecutor(BaseAPIClient):
             waypoint_summary=waypoint_summary,
             detected_landmarks=detected_landmarks,
             previous_action_reason=previous_action_reason,
-            landmark_map_info=landmark_map_info
+            landmark_map_info=landmark_map_info,
+            allowed_action_names=allowed_action_names,
         )
         
         # 只发Detection图（节省token，local map已移除）
@@ -333,6 +335,22 @@ class ActionExecutor(BaseAPIClient):
             return None, None, None, None
 
         action_name, value = parsed_action
+        normalized_allowed_actions = None
+        if allowed_action_names:
+            normalized_allowed_actions = {
+                str(name or "").strip().upper()
+                for name in allowed_action_names
+                if str(name or "").strip()
+            }
+        if normalized_allowed_actions and action_name not in normalized_allowed_actions:
+            print(
+                f"✗ Forbidden action under current constraint: {action_name} | "
+                f"Allowed: {sorted(normalized_allowed_actions)}"
+            )
+            response["_forbidden_action_name"] = action_name
+            response["_allowed_action_names"] = sorted(normalized_allowed_actions)
+            return None, action_name, None, response, 0, 0, prompt
+
         if action_name not in action_mapping:
             print(f"✗ Invalid action: {action_name}")
             print(f"✗ Valid actions: {list(action_mapping.keys())}")

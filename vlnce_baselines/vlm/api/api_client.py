@@ -178,6 +178,22 @@ class BaseAPIClient(ABC):
             }
 
         return payload
+
+    def _supports_json_object_response_format(self) -> bool:
+        """Whether the current provider likely supports OpenAI-compatible JSON mode."""
+        base_url = str(getattr(self.config, 'base_url', '') or '').lower()
+        provider = str(getattr(self.config, 'provider', '') or '').lower()
+        return (
+            'dashscope' in base_url
+            or 'openrouter' in base_url
+            or provider in {'dashscope', 'openrouter'}
+        )
+
+    def _build_response_format(self) -> Optional[Dict[str, Any]]:
+        """Best-effort structured output request for providers that support it."""
+        if not self._supports_json_object_response_format():
+            return None
+        return {"type": "json_object"}
     
     def set_compression_config(self, enabled: bool = True, max_size: int = 384, quality: int = 80):
         """
@@ -428,6 +444,70 @@ class BaseAPIClient(ABC):
         text = re.sub(r'```json\s*', '', text)
         text = re.sub(r'```\s*$', '', text)
         return text.strip()
+
+    @staticmethod
+    def repair_truncated_json_object(text: str) -> Optional[str]:
+        """Best-effort repair for a truncated JSON object that still starts with `{`."""
+        cleaned = BaseAPIClient.clean_json_response(text)
+        start = cleaned.find('{')
+        if start < 0:
+            return None
+
+        candidate = cleaned[start:].rstrip()
+        if not candidate:
+            return None
+
+        in_string = False
+        escape = False
+        brace_depth = 0
+        bracket_depth = 0
+
+        for ch in candidate:
+            if in_string:
+                if escape:
+                    escape = False
+                elif ch == '\\':
+                    escape = True
+                elif ch == '"':
+                    in_string = False
+                continue
+
+            if ch == '"':
+                in_string = True
+            elif ch == '{':
+                brace_depth += 1
+            elif ch == '}':
+                brace_depth = max(0, brace_depth - 1)
+            elif ch == '[':
+                bracket_depth += 1
+            elif ch == ']':
+                bracket_depth = max(0, bracket_depth - 1)
+
+        repaired = re.sub(r',\s*$', '', candidate)
+        if in_string:
+            repaired += '"'
+        if bracket_depth > 0:
+            repaired += ']' * bracket_depth
+        if brace_depth > 0:
+            repaired += '}' * brace_depth
+        repaired = re.sub(r',\s*([}\]])', r'\1', repaired)
+        return repaired
+
+    @staticmethod
+    def extract_linewise_scalar_fields(text: str) -> Dict[str, Any]:
+        """Recover top-level scalar fields from malformed JSON-like output."""
+        cleaned = BaseAPIClient.clean_json_response(text)
+        pattern = re.compile(
+            r'(?m)^\s*"([A-Za-z_][A-Za-z0-9_]*)"\s*:\s*'
+            r'("(?:(?:\\.|[^"\\])*)"|true|false|null|-?\d+(?:\.\d+)?)\s*,?\s*$'
+        )
+        recovered: Dict[str, Any] = {}
+        for key, raw_value in pattern.findall(cleaned):
+            try:
+                recovered[key] = json.loads(raw_value)
+            except json.JSONDecodeError:
+                continue
+        return recovered
     
     @staticmethod
     def extract_json_object(text: str) -> Optional[str]:
@@ -469,7 +549,27 @@ class BaseAPIClient(ABC):
                     return json.loads(json_str)
                 except json.JSONDecodeError as e:
                     print(f"✗ JSON parse error: {e}")
-                    self._save_failed_response(response_text, str(e))
+
+            repaired = self.repair_truncated_json_object(cleaned)
+            if repaired:
+                try:
+                    parsed = json.loads(repaired)
+                    if isinstance(parsed, dict):
+                        print("[WARN] Recovered truncated JSON response by auto-closing the object")
+                        return parsed
+                except json.JSONDecodeError:
+                    pass
+
+            recovered_fields = self.extract_linewise_scalar_fields(cleaned)
+            if recovered_fields:
+                print(
+                    "[WARN] Recovered scalar JSON fields from malformed response: "
+                    f"{', '.join(sorted(recovered_fields.keys()))}"
+                )
+                return recovered_fields
+
+            if json_str:
+                self._save_failed_response(response_text, "Malformed JSON object")
             else:
                 print(f"✗ No JSON found in response")
                 self._save_failed_response(response_text, "No JSON object found")
@@ -567,6 +667,9 @@ class BaseAPIClient(ABC):
                 "temperature": self.config.temperature,
                 "max_tokens": self.config.max_tokens
             }
+            response_format = self._build_response_format()
+            if response_format is not None:
+                payload["response_format"] = response_format
             payload = self._apply_reasoning_disabled_defaults(payload)
             
             # 构建headers（支持OpenRouter优化）
@@ -587,6 +690,20 @@ class BaseAPIClient(ABC):
                 json=payload,
                 timeout=self.config.timeout
             )
+
+            if (
+                response.status_code in {400, 422}
+                and "response_format" in payload
+            ):
+                print("[WARN] response_format=json_object was rejected; retry without structured-output hint")
+                payload = dict(payload)
+                payload.pop("response_format", None)
+                response = requests.post(
+                    f"{self.config.base_url}/chat/completions",
+                    headers=headers,
+                    json=payload,
+                    timeout=self.config.timeout
+                )
             
             t_response = time.time()
             latency = t_response - t_start
