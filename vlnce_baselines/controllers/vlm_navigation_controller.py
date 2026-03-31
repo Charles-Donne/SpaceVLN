@@ -1079,6 +1079,7 @@ class VLMNavigationController(BaseNavigationController):
                 "display_label": str(record.get("display_label", record.get("label", ""))),
                 "space_type": str(record.get("space_type", "")),
                 "variant": int(record.get("variant", 0) or 0),
+                "floor_id": int(record.get("floor_id", map_state.get('current_floor_id', 0)) or 0),
                 "center_world_px": [int(center_world_px[0]), int(center_world_px[1])],
                 "connected_area_labels": [str(item) for item in record.get("connected_area_labels", []) or []],
             })
@@ -1086,6 +1087,12 @@ class VLMNavigationController(BaseNavigationController):
         waypoint_memory = {
             "current_space_area_label": str(map_state.get('current_space_area_label', 'Unknown') or 'Unknown'),
             "current_space_area_type": str(map_state.get('current_space_area_type', 'Unknown') or 'Unknown'),
+            "current_floor_id": int(map_state.get('current_floor_id', 0) or 0),
+            "current_floor_label": str(map_state.get('current_floor_label', 'F1') or 'F1'),
+            "current_world_z": map_state.get('current_world_z'),
+            "multi_floor_active": bool(map_state.get('multi_floor_active', False)),
+            "on_stairs_connector": bool(map_state.get('on_stairs_connector', False)),
+            "stair_connectors": list(map_state.get('stair_connectors', []) or []),
             "waypoint_positions": waypoint_positions,
             "waypoint_ids": waypoint_ids,
             "waypoint_descriptions": waypoint_descriptions,
@@ -3163,18 +3170,25 @@ class VLMNavigationController(BaseNavigationController):
         获取waypoint摘要（用于LLM提示词）
         包含每个waypoint相对当前pose的距离和方向，以及顺序拓扑chain。
         """
-        wp_pos, wp_ids, wp_descs = self.mapper.get_waypoints()
+        wp_pos, wp_ids, wp_descs = self.mapper.get_global_waypoints()
         return build_waypoint_summary(
             waypoint_positions=wp_pos,
             waypoint_ids=wp_ids,
             waypoint_descriptions=wp_descs,
-            waypoint_area_labels=self.mapper.get_waypoint_area_labels(),
+            waypoint_area_labels=self.mapper.get_global_waypoint_area_labels(),
+            waypoint_floor_ids=self.mapper.get_global_waypoint_floor_ids(),
             current_pose=self.mapper.full_pose,
             resolution_cm=self.mapper.resolution,
             current_space_area_label=getattr(self.mapper, 'current_space_area_display_label', ""),
             current_space_area_type=getattr(self.mapper, 'current_space_area_type', ""),
             full_map=getattr(self.mapper, 'full_map', None),
             crop_offset=getattr(getattr(self.mapper, 'mapping_module', None), 'full_map_crop_offset', None),
+            initial_waypoint_index=getattr(getattr(self.mapper, 'global_waypoint_manager', None), 'initial_waypoint_index', 0),
+            current_world_z=getattr(self.mapper, 'current_world_z', None),
+            current_floor_id=int(getattr(self.mapper, 'current_floor_id', 0) or 0),
+            multi_floor_active=bool(getattr(self.mapper, 'multi_floor_active', False)),
+            on_stairs_connector=bool(getattr(self.mapper, 'on_stairs_connector', False)),
+            stair_connectors=getattr(self.mapper, 'stair_connectors', []),
             include_area_chain=include_area_chain,
             include_path=include_path,
         )

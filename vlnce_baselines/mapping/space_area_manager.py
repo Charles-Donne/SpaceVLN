@@ -55,6 +55,74 @@ class SpaceAreaManager:
         self.current_space_area_label = "Unknown"
         self.current_space_area_type = "Unknown"
 
+    def export_state(self) -> Dict[str, Any]:
+        records: List[Dict[str, Any]] = []
+        for record in self.space_area_records:
+            center_world_px = record.get("center_world_px", (0, 0))
+            records.append({
+                "id": int(record.get("id", 0) or 0),
+                "label": str(record.get("label", "")),
+                "space_type": str(record.get("space_type", "Unknown") or "Unknown"),
+                "space_key": str(record.get("space_key", "")),
+                "variant": int(record.get("variant", 0) or 0),
+                "center_world_px": (int(center_world_px[0]), int(center_world_px[1])),
+                "pixels": [
+                    (int(pixel_y), int(pixel_x))
+                    for pixel_y, pixel_x in set(record.get("pixels", set()) or set())
+                ],
+                "waypoint_points": [
+                    (int(pixel_y), int(pixel_x))
+                    for pixel_y, pixel_x in set(record.get("waypoint_points", set()) or set())
+                ],
+                "description": str(record.get("description", "")),
+                "connected_area_labels": [str(item) for item in list(record.get("connected_area_labels", []) or [])],
+                "display_label": str(record.get("display_label", record.get("label", ""))),
+            })
+        return {
+            "space_area_records": records,
+            "space_area_counter": int(self.space_area_counter),
+            "label_aliases": {str(key): str(value) for key, value in self.label_aliases.items()},
+            "current_space_area_label": str(self.current_space_area_label or "Unknown"),
+            "current_space_area_type": str(self.current_space_area_type or "Unknown"),
+        }
+
+    def import_state(self, state: Optional[Dict[str, Any]]) -> None:
+        self.reset()
+        if not state:
+            return
+        self.space_area_counter = int(state.get("space_area_counter", 0) or 0)
+        self.label_aliases = {
+            str(key): str(value)
+            for key, value in dict(state.get("label_aliases", {}) or {}).items()
+        }
+        self.current_space_area_label = str(state.get("current_space_area_label", "Unknown") or "Unknown")
+        self.current_space_area_type = str(state.get("current_space_area_type", "Unknown") or "Unknown")
+        restored_records: List[Dict[str, Any]] = []
+        for raw_record in list(state.get("space_area_records", []) or []):
+            center_world_px = raw_record.get("center_world_px", (0, 0))
+            restored_records.append({
+                "id": int(raw_record.get("id", 0) or 0),
+                "label": str(raw_record.get("label", "")),
+                "space_type": str(raw_record.get("space_type", "Unknown") or "Unknown"),
+                "space_key": str(raw_record.get("space_key", "")),
+                "variant": int(raw_record.get("variant", 0) or 0),
+                "center_world_px": (int(center_world_px[0]), int(center_world_px[1])),
+                "pixels": {
+                    (int(pixel_y), int(pixel_x))
+                    for pixel_y, pixel_x in list(raw_record.get("pixels", []) or [])
+                    if pixel_y is not None and pixel_x is not None
+                },
+                "waypoint_points": {
+                    (int(pixel_y), int(pixel_x))
+                    for pixel_y, pixel_x in list(raw_record.get("waypoint_points", []) or [])
+                    if pixel_y is not None and pixel_x is not None
+                },
+                "description": str(raw_record.get("description", "")),
+                "connected_area_labels": [str(item) for item in list(raw_record.get("connected_area_labels", []) or [])],
+                "display_label": str(raw_record.get("display_label", raw_record.get("label", ""))),
+            })
+        self.space_area_records = restored_records
+
     def update_from_waypoint(
         self,
         description: str,

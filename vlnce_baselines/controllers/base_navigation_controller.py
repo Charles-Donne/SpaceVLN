@@ -660,7 +660,8 @@ class BaseNavigationController:
             
             map_state = self.mapper.update_map(
                 batch_obs, poses, step,
-                list(self.detected_classes), self.current_episode_id
+                list(self.detected_classes), self.current_episode_id,
+                observations=obs,
             )
             
             new_classes = len(self.detected_classes) - prev_class_count
@@ -723,7 +724,8 @@ class BaseNavigationController:
 
             map_state = self.mapper.update_map(
                 batch_obs, poses, look_step,
-                list(self.detected_classes), self.current_episode_id
+                list(self.detected_classes), self.current_episode_id,
+                observations=obs,
             )
             final_map_state = map_state
 
@@ -829,7 +831,8 @@ class BaseNavigationController:
         
         map_state = self.mapper.update_map(
             batch_obs, poses, self.current_step,
-            list(self.detected_classes), self.current_episode_id
+            list(self.detected_classes), self.current_episode_id,
+            observations=obs,
         )
         
         # print(f"[Controller.step] 从mapper接收轨迹: 全局={len(map_state.get('global_trajectory_points', []))}, 子任务={len(map_state.get('subtask_trajectory_points', []))}")
@@ -997,33 +1000,20 @@ class BaseNavigationController:
         self.latest_obstacle_distances_12 = distances
 
     def _update_obstacle_distances(self):
-        """Update action-view obstacle distances from current depth, with map fallback."""
+        """Update action-view obstacle distances from current depth only."""
         try:
-            map_fallback = {}
-            if self.mapper is not None and self.visualizer is not None:
-                map_state = self.mapper.get_map_state()
-                map_fallback = self.visualizer.calculate_obstacle_distances_from_full_map(
-                    map_state.get('full_map'),
-                )
             self.latest_obstacle_distances = calculate_obstacle_distances_from_depth(
                 getattr(self, 'latest_depth_meters', None),
                 hfov_deg=float(self.config.MAP.HFOV),
                 angle_band_deg=5.0,
                 sensor_min_depth_m=float(self.config.TASK_CONFIG.SIMULATOR.DEPTH_SENSOR.MIN_DEPTH),
-                fallback_distances=map_fallback,
+                fallback_distances=None,
             )
         except Exception:
-            try:
-                map_state = self.mapper.get_map_state() if self.mapper is not None else {}
-                fallback = self.visualizer.calculate_obstacle_distances_from_full_map(
-                    map_state.get('full_map'),
-                ) if self.visualizer is not None else {}
-            except Exception:
-                fallback = {}
             self.latest_obstacle_distances = {
-                'front': fallback.get('front', '>2.0m open'),
-                'left_30': fallback.get('left_30', '>2.0m open'),
-                'right_30': fallback.get('right_30', '>2.0m open'),
+                'front': 'Unknown',
+                'left_30': 'Unknown',
+                'right_30': 'Unknown',
             }
 
     @property

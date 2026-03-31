@@ -360,10 +360,7 @@ def render_detection_bbox(owner,
     action_waypoint_entries: List[Dict[str, Any]] = []
 
     if detections is None or len(detections.xyxy) == 0:
-        selected_topk_entries = [
-            _normalize_selected_world_entry(inst, source="off")
-            for inst in selected_world_landmark_instances
-        ]
+        selected_topk_entries = []
         strip, selected_topk_entries = _build_landmark_strip(selected_topk_entries)
         if controller is not None:
             controller.latest_visible_landmark_entries = []
@@ -488,9 +485,6 @@ def render_detection_bbox(owner,
             matched_uid = owner._landmark_instance_uid(selected_inst)
             matched_pair = visible_candidates_by_uid.get(matched_uid) if matched_uid is not None else None
             if matched_pair is None:
-                selected_topk_entries.append(
-                    _normalize_selected_world_entry(selected_inst, source="off")
-                )
                 continue
 
             candidate, matched_inst = matched_pair
@@ -511,14 +505,6 @@ def render_detection_bbox(owner,
             depth_dist_m, depth_angle_deg = _candidate_depth_distance_and_angle(candidate)
             shown_dist_m = depth_dist_m
             shown_angle_deg = depth_angle_deg
-            if shown_dist_m is None:
-                shown_dist_m = _float_or_none(matched_inst.get("distance_m"))
-            if shown_dist_m is None:
-                shown_dist_m = _float_or_none(selected_inst.get("distance_m"))
-            if shown_angle_deg is None:
-                shown_angle_deg = _float_or_none(matched_inst.get("angle_deg"))
-            if shown_angle_deg is None:
-                shown_angle_deg = _float_or_none(selected_inst.get("angle_deg"))
 
             same_cls_total = int(world_class_totals.get(label_name, len(landmark_dist_map_multi.get(label_name, [])) or 1))
             display_id = _entry_display_id(selected_inst, default=_entry_display_id(matched_inst))
@@ -526,25 +512,15 @@ def render_detection_bbox(owner,
 
             if shown_dist_m is not None and shown_angle_deg is not None:
                 row1 = f"{inst_prefix}{shown_dist_m:.1f}m {format_relative_direction(shown_angle_deg)}"
-            elif shown_dist_m is not None:
-                row1 = f"{inst_prefix}{shown_dist_m:.1f}m"
             else:
                 fallback_angle_deg = None
-                fallback_dist_str = None
-                fallback_dist_m = None
                 if det_rel_xy is not None:
-                    forward_m, right_m = det_rel_xy
-                    fallback_dist_m = float(np.hypot(forward_m, right_m))
-                    fallback_angle_deg = float(np.degrees(np.arctan2(right_m, forward_m)))
-                    if fallback_dist_m > 0.05:
-                        fallback_dist_str = f"{min(fallback_dist_m, 5.0):.1f}m"
+                    _forward_m, right_m = det_rel_xy
+                    fallback_angle_deg = float(np.degrees(np.arctan2(right_m, det_rel_xy[0])))
                 if fallback_angle_deg is None:
                     fallback_angle_deg = owner._candidate_angle_deg(candidate, hfov)
-                if fallback_dist_str is None:
-                    fallback_dist_str = ">5.0m"
-                shown_dist_m = fallback_dist_m if fallback_dist_m is not None else 5.1
                 shown_angle_deg = fallback_angle_deg
-                row1 = f"{inst_prefix}{fallback_dist_str} {format_relative_direction(fallback_angle_deg)}"
+                row1 = f"{inst_prefix}{format_relative_direction(fallback_angle_deg)}"
 
             detected_landmarks.append((label_name, confidence))
             matched_in_view.add(label_name)
@@ -558,8 +534,14 @@ def render_detection_bbox(owner,
                 visible_entry["instance_idx"] = int(display_idx)
             if display_id is not None:
                 visible_entry["display_id"] = int(display_id)
-            visible_entry["distance_m"] = float(shown_dist_m) if shown_dist_m is not None else float(visible_entry.get("distance_m", 1e9))
-            visible_entry["angle_deg"] = float(shown_angle_deg) if shown_angle_deg is not None else float(visible_entry.get("angle_deg", 0.0))
+            if shown_dist_m is not None:
+                visible_entry["distance_m"] = float(shown_dist_m)
+            else:
+                visible_entry.pop("distance_m", None)
+            if shown_angle_deg is not None:
+                visible_entry["angle_deg"] = float(shown_angle_deg)
+            else:
+                visible_entry.pop("angle_deg", None)
             visible_entry["class_total"] = same_cls_total
             visible_entries_meta.append(visible_entry)
             selected_topk_entries.append(visible_entry)
@@ -571,8 +553,12 @@ def render_detection_bbox(owner,
                 )
             )
     else:
-        used_map_candidates = {}
         selected_entries = deduped_candidates[:max(1, int(detection_visible_topk))]
+        same_cls_totals = {
+            str(item["name"]): sum(1 for other in selected_entries if str(other["name"]) == str(item["name"]))
+            for item in selected_entries
+        }
+        class_seen_counts: Dict[str, int] = {}
         for selection_rank, candidate in enumerate(selected_entries):
             label_name = candidate["name"]
             confidence = float(candidate["confidence"])
@@ -582,77 +568,37 @@ def render_detection_bbox(owner,
             detected_landmarks.append((label_name, confidence))
             matched_in_view.add(label_name)
 
-            same_cls_total = len(landmark_dist_map_multi.get(label_name, [])) if landmark_dist_map_multi else 1
-
-            map_dist_m = None
-            map_angle_deg = None
-            map_instance_idx = None
-            if landmark_dist_map_multi and label_name in landmark_dist_map_multi:
-                used_set = used_map_candidates.setdefault(label_name, set())
-                candidates = sorted(landmark_dist_map_multi[label_name], key=lambda x: x[0])
-                ranked_candidates = []
-                for idx_c, (dist_m_c, angle_deg_c) in enumerate(candidates):
-                    if idx_c in used_set:
-                        continue
-                    angle_rad_c = np.deg2rad(angle_deg_c)
-                    cand_rel_xy = (
-                        float(dist_m_c * np.cos(angle_rad_c)),
-                        float(dist_m_c * np.sin(angle_rad_c)),
-                    )
-                    if det_rel_xy is not None:
-                        match_cost = float(np.hypot(
-                            cand_rel_xy[0] - det_rel_xy[0],
-                            cand_rel_xy[1] - det_rel_xy[1],
-                        ))
-                    else:
-                        match_cost = float(dist_m_c)
-                    ranked_candidates.append((idx_c, dist_m_c, angle_deg_c, match_cost))
-                if ranked_candidates:
-                    ranked_candidates.sort(key=lambda item: (item[3], item[1]))
-                    map_instance_idx, map_dist_m, map_angle_deg, _ = ranked_candidates[0]
-                    used_set.add(map_instance_idx)
-            elif landmark_dist_map and label_name in landmark_dist_map:
-                map_dist_m, map_angle_deg = landmark_dist_map[label_name]
-                map_instance_idx = 0
+            same_cls_total = int(same_cls_totals.get(str(label_name), 1) or 1)
+            class_instance_idx = None
+            if same_cls_total > 1:
+                class_instance_idx = int(class_seen_counts.get(str(label_name), 0))
+                class_seen_counts[str(label_name)] = class_instance_idx + 1
 
             row1 = ""
             display_id = int(selection_rank) + 1
             inst_prefix = f"#{display_id} "
             depth_dist_m, depth_angle_deg = _candidate_depth_distance_and_angle(candidate)
-            shown_dist_m = depth_dist_m if depth_dist_m is not None else map_dist_m
-            shown_angle_deg = depth_angle_deg if depth_angle_deg is not None else map_angle_deg
+            shown_dist_m = depth_dist_m
+            shown_angle_deg = depth_angle_deg
             if shown_dist_m is not None and shown_angle_deg is not None:
                 row1 = f"{inst_prefix}{shown_dist_m:.1f}m {format_relative_direction(shown_angle_deg)}"
-            elif shown_dist_m is not None:
-                row1 = f"{inst_prefix}{shown_dist_m:.1f}m"
             else:
                 fallback_angle_deg = None
-                fallback_dist_str = None
-                fallback_dist_m = None
                 if det_rel_xy is not None:
-                    forward_m, right_m = det_rel_xy
-                    fallback_dist_m = float(np.hypot(forward_m, right_m))
-                    fallback_angle_deg = float(np.degrees(np.arctan2(right_m, forward_m)))
-                    if fallback_dist_m > 0.05:
-                        fallback_dist_str = f"{min(fallback_dist_m, 5.0):.1f}m"
+                    fallback_angle_deg = float(np.degrees(np.arctan2(det_rel_xy[1], det_rel_xy[0])))
                 if fallback_angle_deg is None:
                     fallback_angle_deg = owner._candidate_angle_deg(candidate, hfov)
-                if fallback_dist_str is None:
-                    fallback_dist_str = ">5.0m"
-                shown_dist_m = fallback_dist_m if fallback_dist_m is not None else 5.1
                 shown_angle_deg = fallback_angle_deg
-                row1 = f"{inst_prefix}{fallback_dist_str} {format_relative_direction(fallback_angle_deg)}"
+                row1 = f"{inst_prefix}{format_relative_direction(fallback_angle_deg)}"
 
             visible_entry = {
                 "name": label_name,
                 "confidence": float(confidence),
-                "distance_m": float(shown_dist_m),
-                "angle_deg": float(shown_angle_deg),
-                "instance_idx": map_instance_idx,
+                "instance_idx": class_instance_idx,
                 "display_id": display_id,
                 "selection_rank": int(selection_rank),
                 "source": "vis",
-                "class_total": int(max(same_cls_total, (map_instance_idx or 0) + 1)),
+                "class_total": int(same_cls_total),
                 "is_opening_like": bool(candidate.get("is_opening_like", False)),
                 "used_edge_geometry": bool(candidate.get("used_edge_geometry", False)),
                 "opening_gap_m": candidate.get("opening_gap_m"),
@@ -660,6 +606,10 @@ def render_detection_bbox(owner,
                 "interior_depth_median": candidate.get("interior_depth_median"),
                 "stop_distance_m": float(candidate.get("stop_distance_m", ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M)),
             }
+            if shown_dist_m is not None:
+                visible_entry["distance_m"] = float(shown_dist_m)
+            if shown_angle_deg is not None:
+                visible_entry["angle_deg"] = float(shown_angle_deg)
             visible_entries_meta.append(visible_entry)
             selected_topk_entries.append(dict(visible_entry))
             draw_items.append(

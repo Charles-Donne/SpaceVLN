@@ -147,17 +147,26 @@ def _build_current_area_initial_waypoint_note(
     current_space_area_label: str,
     full_map: Optional[np.ndarray],
     crop_offset: Optional[Tuple[int, int]],
+    initial_waypoint_index: Optional[int] = 0,
 ) -> str:
-    if not waypoint_positions or current_pose is None:
+    if (
+        not waypoint_positions
+        or current_pose is None
+        or initial_waypoint_index is None
+        or int(initial_waypoint_index) < 0
+        or int(initial_waypoint_index) >= len(waypoint_positions)
+    ):
         return ""
 
-    initial_waypoint = waypoint_positions[0]
+    initial_waypoint = waypoint_positions[int(initial_waypoint_index)]
     if initial_waypoint is None:
         return ""
 
     current_area = _clean_area_label(current_space_area_label)
     initial_area = _clean_area_label(
-        waypoint_area_labels[0] if waypoint_area_labels and len(waypoint_area_labels) > 0 else ""
+        waypoint_area_labels[int(initial_waypoint_index)]
+        if waypoint_area_labels and int(initial_waypoint_index) < len(waypoint_area_labels)
+        else ""
     )
     if not current_area or current_area == "Unknown" or current_area != initial_area:
         return ""
@@ -181,7 +190,11 @@ def _build_current_area_initial_waypoint_note(
     if clear_path is False:
         return ""
 
-    initial_wp_id = int(waypoint_ids[0]) if waypoint_ids else 1
+    initial_wp_id = (
+        int(waypoint_ids[int(initial_waypoint_index)])
+        if waypoint_ids and int(initial_waypoint_index) < len(waypoint_ids)
+        else 1
+    )
     return (
         f" (near INITIAL POSITION Space WP#{initial_wp_id}; "
         "leave the initial-position neighborhood and continue toward the next task-relevant space waypoint)"
@@ -425,17 +438,71 @@ def select_display_waypoint_indices(
     return display_indices
 
 
+def _normalize_waypoint_floor_ids(
+    waypoint_ids: Sequence[int],
+    waypoint_floor_ids: Optional[Sequence[int]],
+    current_floor_id: int,
+) -> List[int]:
+    raw_floor_ids = list(waypoint_floor_ids or [])
+    normalized = [
+        int(raw_floor_ids[index]) if index < len(raw_floor_ids) else int(current_floor_id)
+        for index in range(len(waypoint_ids))
+    ]
+    return normalized
+
+
+def _format_floor_label(floor_id: int) -> str:
+    return f"F{int(floor_id) + 1}"
+
+
+def _format_area_with_floor(
+    area_label: str,
+    floor_id: int,
+    multi_floor_active: bool,
+) -> str:
+    clean_area = _clean_area_label(area_label)
+    if not multi_floor_active:
+        return clean_area
+    return f"{clean_area} [{_format_floor_label(floor_id)}]"
+
+
+def _find_stair_connector_transition_label(
+    from_floor_id: int,
+    to_floor_id: int,
+    stair_connectors: Optional[Sequence[Dict[str, Any]]],
+) -> str:
+    start_floor = int(from_floor_id)
+    end_floor = int(to_floor_id)
+    for connector in list(stair_connectors or []):
+        connector_from = int(connector.get("from_floor_id", 0) or 0)
+        connector_to = int(connector.get("to_floor_id", 0) or 0)
+        if connector_from == start_floor and connector_to == end_floor:
+            label = str(connector.get("label", "stairs")).strip() or "stairs"
+            return f"{label}({_format_floor_label(start_floor)}->{_format_floor_label(end_floor)})"
+        if connector_from == end_floor and connector_to == start_floor:
+            label = str(connector.get("label", "stairs")).strip() or "stairs"
+            return f"{label}({_format_floor_label(start_floor)}->{_format_floor_label(end_floor)})"
+    return f"stairs({_format_floor_label(start_floor)}->{_format_floor_label(end_floor)})"
+
+
 def build_waypoint_summary(
     waypoint_positions: Sequence[Tuple[int, int]],
     waypoint_ids: Sequence[int],
     waypoint_descriptions: Sequence[str],
     waypoint_area_labels: Optional[Sequence[str]],
+    waypoint_floor_ids: Optional[Sequence[int]],
     current_pose: Optional[Sequence[float]],
     resolution_cm: float,
     current_space_area_label: str = "",
     current_space_area_type: str = "",
     full_map: Optional[np.ndarray] = None,
     crop_offset: Optional[Tuple[int, int]] = None,
+    initial_waypoint_index: Optional[int] = 0,
+    current_world_z: Optional[float] = None,
+    current_floor_id: int = 0,
+    multi_floor_active: bool = False,
+    on_stairs_connector: bool = False,
+    stair_connectors: Optional[Sequence[Dict[str, Any]]] = None,
     include_area_chain: bool = True,
     include_path: bool = True,
 ) -> str:
@@ -443,22 +510,72 @@ def build_waypoint_summary(
     header_lines: List[str] = []
     display_area_label = current_space_area_label or "Unknown"
     display_area_type = current_space_area_type or "Unknown"
+    normalized_floor_ids = _normalize_waypoint_floor_ids(
+        waypoint_ids=waypoint_ids,
+        waypoint_floor_ids=waypoint_floor_ids,
+        current_floor_id=current_floor_id,
+    )
     space_type_note = (
         f" ({display_area_type})"
         if display_area_type and display_area_type != "Unknown" and display_area_type != display_area_label
         else ""
     )
+    current_floor_global_indices = [
+        index
+        for index, floor_id in enumerate(normalized_floor_ids)
+        if int(floor_id) == int(current_floor_id)
+    ]
+    current_floor_index_map = {
+        global_index: local_index
+        for local_index, global_index in enumerate(current_floor_global_indices)
+    }
+    current_floor_positions = [waypoint_positions[index] for index in current_floor_global_indices]
+    current_floor_ids = [waypoint_ids[index] for index in current_floor_global_indices]
+    current_floor_descriptions = [
+        waypoint_descriptions[index] if index < len(waypoint_descriptions) else ""
+        for index in current_floor_global_indices
+    ]
+    current_floor_area_labels = [
+        _clean_area_label(
+            waypoint_area_labels[index]
+            if waypoint_area_labels and index < len(waypoint_area_labels) else ""
+        )
+        for index in current_floor_global_indices
+    ]
+    current_floor_initial_index = (
+        current_floor_index_map.get(int(initial_waypoint_index))
+        if initial_waypoint_index is not None
+        else None
+    )
     current_area_initial_note = _build_current_area_initial_waypoint_note(
-        waypoint_positions=waypoint_positions,
-        waypoint_ids=waypoint_ids,
-        waypoint_area_labels=waypoint_area_labels,
+        waypoint_positions=current_floor_positions,
+        waypoint_ids=current_floor_ids,
+        waypoint_area_labels=current_floor_area_labels,
         current_pose=current_pose,
         resolution_cm=resolution_cm,
         current_space_area_label=current_space_area_label,
         full_map=full_map,
         crop_offset=crop_offset,
+        initial_waypoint_index=current_floor_initial_index,
     )
-    header_lines.append(f"Your Current Area: {display_area_label}{space_type_note}{current_area_initial_note}")
+    header_lines.append(
+        f"Your Current Area: {display_area_label}{space_type_note}{current_area_initial_note}"
+    )
+    if multi_floor_active:
+        floor_line = f"Current Floor: F{int(current_floor_id) + 1}"
+        if on_stairs_connector:
+            floor_line += " | stair connector active"
+        if stair_connectors:
+            connector_bits: List[str] = []
+            for connector in list(stair_connectors or []):
+                lower = dict(connector.get("lower_landing", {}) or {})
+                upper = dict(connector.get("upper_landing", {}) or {})
+                lower_label = str(lower.get("floor_label", f"F{int(lower.get('floor_id', 0)) + 1}"))
+                upper_label = str(upper.get("floor_label", f"F{int(upper.get('floor_id', 0)) + 1}"))
+                connector_bits.append(f"{str(connector.get('label', 'stairs'))}: {lower_label}->{upper_label}")
+            if connector_bits:
+                floor_line += " | Stair Connectors: " + "; ".join(connector_bits)
+        header_lines.append(floor_line)
 
     empty_area_chain_line = None
     if include_area_chain:
@@ -472,19 +589,19 @@ def build_waypoint_summary(
         lines.append("No space waypoints recorded yet.")
         return "\n".join(lines)
 
-    waypoint_distances_m = [
+    current_floor_waypoint_distances_m = [
         _waypoint_distance_to_current_m(
             waypoint_index=index,
-            waypoint_positions=waypoint_positions,
+            waypoint_positions=current_floor_positions,
             current_pose=current_pose,
             resolution_cm=resolution_cm,
         )
-        for index in range(len(waypoint_ids))
+        for index in range(len(current_floor_ids))
     ]
 
     resolved_current_area_label, _current_area_anchor_index = resolve_display_current_area(
-        waypoint_positions=waypoint_positions,
-        waypoint_area_labels=waypoint_area_labels,
+        waypoint_positions=current_floor_positions,
+        waypoint_area_labels=current_floor_area_labels,
         current_pose=current_pose,
         resolution_cm=resolution_cm,
         current_space_area_label=current_space_area_label,
@@ -493,31 +610,39 @@ def build_waypoint_summary(
     )
     display_area_label = resolved_current_area_label or display_area_label
     current_area_initial_note = _build_current_area_initial_waypoint_note(
-        waypoint_positions=waypoint_positions,
-        waypoint_ids=waypoint_ids,
-        waypoint_area_labels=waypoint_area_labels,
+        waypoint_positions=current_floor_positions,
+        waypoint_ids=current_floor_ids,
+        waypoint_area_labels=current_floor_area_labels,
         current_pose=current_pose,
         resolution_cm=resolution_cm,
         current_space_area_label=display_area_label,
         full_map=full_map,
         crop_offset=crop_offset,
+        initial_waypoint_index=current_floor_initial_index,
     )
     header_lines[0] = f"Your Current Area: {display_area_label}{space_type_note}{current_area_initial_note}"
 
-    visible_indices = select_display_waypoint_indices(
-        waypoint_positions=waypoint_positions,
-        waypoint_ids=waypoint_ids,
-        waypoint_descriptions=waypoint_descriptions,
-        waypoint_area_labels=waypoint_area_labels,
+    current_floor_visible_local_indices = select_display_waypoint_indices(
+        waypoint_positions=current_floor_positions,
+        waypoint_ids=current_floor_ids,
+        waypoint_descriptions=current_floor_descriptions,
+        waypoint_area_labels=current_floor_area_labels,
         current_pose=current_pose,
         resolution_cm=resolution_cm,
         full_map=full_map,
         crop_offset=crop_offset,
     )
-    last_visible_index = visible_indices[-1] if visible_indices else None
-    display_indices = list(visible_indices)
+    last_visible_global_index = (
+        current_floor_global_indices[current_floor_visible_local_indices[-1]]
+        if current_floor_visible_local_indices
+        else None
+    )
+    current_floor_display_global_indices = [
+        current_floor_global_indices[index]
+        for index in current_floor_visible_local_indices
+    ]
     if current_pose is not None:
-        display_indices.sort(
+        current_floor_display_global_indices.sort(
             key=lambda index: (
                 _counterclockwise_direction_sort_key(
                     float(current_pose[2]) - math.degrees(
@@ -533,30 +658,57 @@ def build_waypoint_summary(
                         )
                     )
                 ),
-                float(waypoint_distances_m[index]) if waypoint_distances_m[index] is not None else float("inf"),
+                float(
+                    current_floor_waypoint_distances_m[current_floor_index_map[index]]
+                )
+                if index in current_floor_index_map
+                and current_floor_waypoint_distances_m[current_floor_index_map[index]] is not None
+                else float("inf"),
                 int(waypoint_ids[index]) if index < len(waypoint_ids) else int(index),
             )
         )
 
-    all_area_labels = list(waypoint_area_labels or [])
+    historical_display_global_indices = [
+        index
+        for index, floor_id in enumerate(normalized_floor_ids)
+        if int(floor_id) != int(current_floor_id)
+    ]
+    display_indices = historical_display_global_indices + current_floor_display_global_indices
+
     node_lines: List[str] = []
     for index in display_indices:
         wp_id = waypoint_ids[index]
         wp_desc = _clean_waypoint_description(waypoint_descriptions[index] if index < len(waypoint_descriptions) else "")
-        wp_py, wp_px = waypoint_positions[index]
-        is_last = last_visible_index is not None and index == last_visible_index
+        floor_id = int(normalized_floor_ids[index]) if index < len(normalized_floor_ids) else int(current_floor_id)
+        floor_label = _format_floor_label(floor_id)
+        is_last = last_visible_global_index is not None and index == last_visible_global_index
         suffix_notes: List[str] = []
-        if index == 0:
+        if initial_waypoint_index is not None and index == int(initial_waypoint_index):
             suffix_notes.append("INITIAL POSITION")
         if is_last and index != 0:
             suffix_notes.append("LAST POSITION")
         suffix = f"  <- {' | '.join(suffix_notes)}" if suffix_notes else ""
 
-        distance_m = None
-        relative_bearing_deg = None
-        if current_pose is None:
+        area_label = _clean_area_label(
+            waypoint_area_labels[index]
+            if waypoint_area_labels and index < len(waypoint_area_labels) else ""
+        )
+        area_note = f" | area={area_label}" if area_label else ""
+        if multi_floor_active:
+            area_note += f" | floor={floor_label}"
+
+        if floor_id != int(current_floor_id):
+            transition_label = _find_stair_connector_transition_label(
+                from_floor_id=current_floor_id,
+                to_floor_id=floor_id,
+                stair_connectors=stair_connectors,
+            )
+            spatial_info = f"historical waypoint on {floor_label} | reach via {transition_label}"
+        elif current_pose is None:
             spatial_info = "distance unknown"
         else:
+            local_index = current_floor_index_map.get(index)
+            wp_py, wp_px = waypoint_positions[index]
             wp_x_m = wp_px * resolution_cm / 100.0
             wp_y_m = wp_py * resolution_cm / 100.0
             curr_x_m, curr_y_m, curr_orientation_deg = current_pose[:3]
@@ -568,50 +720,42 @@ def build_waypoint_summary(
             relative_bearing_deg = curr_orientation_deg - absolute_angle_deg
             direction = format_relative_direction(relative_bearing_deg)
             spatial_info = f"{distance_m:.1f}m, {direction}"
-
-        area_label = ""
-        if waypoint_area_labels and index < len(waypoint_area_labels):
-            area_label = _clean_area_label(waypoint_area_labels[index])
-        area_note = f" | area={area_label}" if area_label else ""
-        reachability_note = _build_waypoint_reachability_note(
-            waypoint_index=index,
-            waypoint_id=wp_id,
-            waypoint_ids=waypoint_ids,
-            waypoint_positions=waypoint_positions,
-            waypoint_area_labels=all_area_labels,
-            current_pose=current_pose,
-            resolution_cm=resolution_cm,
-            full_map=full_map,
-            crop_offset=crop_offset,
-            visible_indices=visible_indices,
-            current_space_area_label=display_area_label,
-        )
-        if reachability_note:
-            spatial_info = f"{spatial_info} | {reachability_note}"
+            if local_index is not None:
+                reachability_note = _build_waypoint_reachability_note(
+                    waypoint_index=local_index,
+                    waypoint_id=wp_id,
+                    waypoint_ids=current_floor_ids,
+                    waypoint_positions=current_floor_positions,
+                    waypoint_area_labels=current_floor_area_labels,
+                    current_pose=current_pose,
+                    resolution_cm=resolution_cm,
+                    full_map=full_map,
+                    crop_offset=crop_offset,
+                    visible_indices=current_floor_visible_local_indices,
+                    current_space_area_label=display_area_label,
+                )
+                if reachability_note:
+                    spatial_info = f"{spatial_info} | {reachability_note}"
         node_lines.append(f"Space WP#{wp_id} [{wp_desc}{area_note}] -- {spatial_info}{suffix}")
-
-    visible_waypoint_ids = [waypoint_ids[index] for index in visible_indices]
-    visible_waypoint_positions = [waypoint_positions[index] for index in visible_indices]
-    visible_waypoint_descriptions = [
-        waypoint_descriptions[index] if index < len(waypoint_descriptions) else ""
-        for index in visible_indices
-    ]
-    visible_waypoint_area_labels = (
-        [_clean_area_label(waypoint_area_labels[index]) for index in visible_indices]
-        if waypoint_area_labels else []
-    )
 
     current_area_display = _clean_area_label(display_area_label)
     waypoint_area_path_line = _build_waypoint_area_path_line(
-        visible_waypoint_ids=visible_waypoint_ids,
-        visible_waypoint_positions=visible_waypoint_positions,
-        visible_waypoint_descriptions=visible_waypoint_descriptions,
-        visible_waypoint_area_labels=visible_waypoint_area_labels,
+        visible_waypoint_ids=waypoint_ids,
+        visible_waypoint_positions=waypoint_positions,
+        visible_waypoint_descriptions=waypoint_descriptions,
+        visible_waypoint_area_labels=(
+            [_clean_area_label(waypoint_area_labels[index]) for index in range(len(waypoint_ids))]
+            if waypoint_area_labels else []
+        ),
+        visible_waypoint_floor_ids=normalized_floor_ids,
         current_pose=current_pose,
         resolution_cm=resolution_cm,
         current_area_display=current_area_display,
         include_area_chain=include_area_chain,
         include_path=include_path,
+        current_floor_id=current_floor_id,
+        multi_floor_active=multi_floor_active,
+        stair_connectors=stair_connectors,
     )
 
     lines = header_lines + node_lines
@@ -807,16 +951,25 @@ def _build_waypoint_area_path_line(
     visible_waypoint_positions: Sequence[Tuple[int, int]],
     visible_waypoint_descriptions: Sequence[str],
     visible_waypoint_area_labels: Sequence[str],
+    visible_waypoint_floor_ids: Optional[Sequence[int]],
     current_pose: Optional[Sequence[float]],
     resolution_cm: float,
     current_area_display: str,
     include_area_chain: bool,
     include_path: bool,
+    current_floor_id: int,
+    multi_floor_active: bool,
+    stair_connectors: Optional[Sequence[Dict[str, Any]]],
 ) -> Optional[str]:
     if not include_area_chain and not include_path:
         return None
 
     node_entries: List[Dict[str, Any]] = []
+    normalized_floor_ids = _normalize_waypoint_floor_ids(
+        waypoint_ids=visible_waypoint_ids,
+        waypoint_floor_ids=visible_waypoint_floor_ids,
+        current_floor_id=current_floor_id,
+    )
     for index, wp_id in enumerate(visible_waypoint_ids):
         area_label = _clean_area_label(
             visible_waypoint_area_labels[index]
@@ -832,6 +985,7 @@ def _build_waypoint_area_path_line(
             "point": visible_waypoint_positions[index],
             "is_current": False,
             "description": waypoint_desc,
+            "floor_id": int(normalized_floor_ids[index]) if index < len(normalized_floor_ids) else int(current_floor_id),
         })
 
     if current_pose is not None:
@@ -843,6 +997,7 @@ def _build_waypoint_area_path_line(
             "point": (curr_py, curr_px),
             "is_current": True,
             "description": "",
+            "floor_id": int(current_floor_id),
         })
     elif node_entries:
         node_entries.append({
@@ -851,6 +1006,7 @@ def _build_waypoint_area_path_line(
             "point": None,
             "is_current": True,
             "description": "",
+            "floor_id": int(current_floor_id),
         })
 
     if not node_entries:
@@ -859,8 +1015,13 @@ def _build_waypoint_area_path_line(
     grouped_entries: List[Dict[str, Any]] = []
     for entry in node_entries:
         area_label = _clean_area_label(str(entry.get("area_label", "Unknown") or "Unknown"))
+        floor_id = int(entry.get("floor_id", current_floor_id) or current_floor_id)
         point = entry.get("point")
-        if grouped_entries and area_label == grouped_entries[-1]["area_label"]:
+        if (
+            grouped_entries
+            and area_label == grouped_entries[-1]["area_label"]
+            and floor_id == grouped_entries[-1]["floor_id"]
+        ):
             grouped_entries[-1]["members"].append(entry)
             if grouped_entries[-1]["first_point"] is None and point is not None:
                 grouped_entries[-1]["first_point"] = point
@@ -873,6 +1034,7 @@ def _build_waypoint_area_path_line(
             "members": [entry],
             "first_point": point,
             "last_point": point,
+            "floor_id": floor_id,
         })
 
     def _format_group(entry: Dict[str, Any]) -> str:
@@ -885,7 +1047,11 @@ def _build_waypoint_area_path_line(
             for member in entry.get("members", [])
         ]
         return _format_space_waypoint_chain_group(
-            area_label=str(entry.get("area_label", "Unknown") or "Unknown"),
+            area_label=_format_area_with_floor(
+                area_label=str(entry.get("area_label", "Unknown") or "Unknown"),
+                floor_id=int(entry.get("floor_id", current_floor_id) or current_floor_id),
+                multi_floor_active=multi_floor_active,
+            ),
             member_labels=member_labels,
         )
 
@@ -898,10 +1064,25 @@ def _build_waypoint_area_path_line(
         curr_group = grouped_entries[index]
         prev_point = prev_group.get("last_point")
         curr_point = curr_group.get("first_point")
+        prev_floor_id = int(prev_group.get("floor_id", current_floor_id) or current_floor_id)
+        curr_floor_id = int(curr_group.get("floor_id", current_floor_id) or current_floor_id)
+
+        if prev_floor_id != curr_floor_id:
+            transition_label = _find_stair_connector_transition_label(
+                from_floor_id=prev_floor_id,
+                to_floor_id=curr_floor_id,
+                stair_connectors=stair_connectors,
+            )
+            parts.append(f" -> {transition_label} -> ")
+            parts.append(_format_group(curr_group))
+            continue
 
         if include_path and index >= 2 and prev_point is not None and curr_point is not None:
             prior_point = grouped_entries[index - 2].get("last_point")
-            if prior_point is not None:
+            prior_floor_id = int(
+                grouped_entries[index - 2].get("floor_id", current_floor_id) or current_floor_id
+            )
+            if prior_point is not None and prior_floor_id == prev_floor_id:
                 previous_heading_deg = _segment_heading_deg(
                     start_point=prior_point,
                     end_point=prev_point,
@@ -940,162 +1121,52 @@ def build_action_landmark_map_info(
     landmark_dist_map_multi: Optional[Dict[str, List[Tuple[float, float]]]] = None,
     landmark_instances_world: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> Optional[str]:
-    """Build the action prompt's visible/off-screen landmark summary."""
-    landmark_dist_map = landmark_dist_map or {}
-    landmark_dist_map_multi = landmark_dist_map_multi or {}
-    landmark_instances_world = landmark_instances_world or []
-    if not (step_landmark_entries or landmark_dist_map or landmark_dist_map_multi or landmark_instances_world):
+    """Build the action prompt's visible landmark summary from the current view only."""
+    _ = landmark_dist_map
+    _ = landmark_dist_map_multi
+    _ = landmark_instances_world
+    if not step_landmark_entries:
         return None
 
-    if step_landmark_entries and any(entry.get("source") in {"vis", "off"} for entry in step_landmark_entries):
-        cls_totals: Dict[str, int] = {}
-        for item in landmark_instances_world:
-            cls_name = item.get("name")
-            if cls_name is None:
-                continue
-            cls_totals[str(cls_name)] = cls_totals.get(str(cls_name), 0) + 1
-        for entry in step_landmark_entries:
-            cls_name = entry.get("name")
-            if cls_name is None:
-                continue
-            cls_key = str(cls_name)
-            cls_totals[cls_key] = max(
-                cls_totals.get(cls_key, 0),
-                int(entry.get("class_total", 1) or 1),
-                int(_maybe_int(entry.get("instance_idx")) or 0) + 1,
-                sum(1 for other in step_landmark_entries if str(other.get("name")) == cls_key),
-            )
-
-        lines: List[str] = []
-        for entry in step_landmark_entries:
-            name = entry.get("name")
-            distance_m = entry.get("distance_m")
-            angle_deg = entry.get("angle_deg")
-            if name is None or distance_m is None or angle_deg is None:
-                continue
-            try:
-                cls_name = str(name)
-                dist_m = float(distance_m)
-                rel_angle_deg = float(angle_deg)
-                confidence = float(entry.get("confidence", 0.0))
-            except (TypeError, ValueError):
-                continue
-
-            instance_idx = _maybe_int(entry.get("instance_idx"))
-            suffix = ""
-            if instance_idx is not None and cls_totals.get(cls_name, 0) > 1:
-                suffix = f" #{instance_idx + 1}"
-            source = "vis" if str(entry.get("source", "vis")) == "vis" else "off vis"
-            lines.append(
-                f"  - {source} {cls_name}{suffix}: {dist_m:.1f}m, "
-                f"{format_relative_direction(rel_angle_deg)}, confidence: {confidence:.3f}"
-                f"{build_landmark_turn_hint(rel_angle_deg, is_visible=(source == 'vis'))}"
-            )
-        return "\n".join(lines) if lines else None
-
-    visible_entries: List[Tuple[str, float, float, Optional[int], float]] = []
+    cls_totals: Dict[str, int] = {}
     for entry in step_landmark_entries:
+        cls_name = entry.get("name")
+        if cls_name is None:
+            continue
+        cls_key = str(cls_name)
+        cls_totals[cls_key] = max(
+            cls_totals.get(cls_key, 0),
+            int(entry.get("class_total", 1) or 1),
+            int(_maybe_int(entry.get("instance_idx")) or 0) + 1,
+            sum(1 for other in step_landmark_entries if str(other.get("name")) == cls_key),
+        )
+
+    lines: List[str] = []
+    for entry in step_landmark_entries:
+        if str(entry.get("source", "vis")) != "vis":
+            continue
         name = entry.get("name")
         distance_m = entry.get("distance_m")
         angle_deg = entry.get("angle_deg")
         if name is None or distance_m is None or angle_deg is None:
             continue
         try:
-            visible_entries.append(
-                (
-                    str(name),
-                    float(distance_m),
-                    float(angle_deg),
-                    _maybe_int(entry.get("instance_idx")),
-                    float(entry.get("confidence", 0.0)),
-                )
-            )
+            cls_name = str(name)
+            dist_m = float(distance_m)
+            rel_angle_deg = float(angle_deg)
+            confidence = float(entry.get("confidence", 0.0))
         except (TypeError, ValueError):
             continue
 
-    visible_entries.sort(key=lambda item: item[1])
-    visible_instance_indices: Dict[str, set] = {}
-    lines: List[str] = []
-
-    for cls_name, dist_m, angle_deg, instance_idx, confidence in visible_entries:
-        if instance_idx is not None:
-            visible_instance_indices.setdefault(cls_name, set()).add(instance_idx)
-        same_cls_count = len(landmark_dist_map_multi.get(cls_name, [])) or sum(
-            1 for name, *_rest in visible_entries if name == cls_name
-        )
-        suffix = f" #{instance_idx + 1}" if instance_idx is not None and same_cls_count > 1 else ""
+        instance_idx = _maybe_int(entry.get("instance_idx"))
+        suffix = ""
+        if instance_idx is not None and cls_totals.get(cls_name, 0) > 1:
+            suffix = f" #{instance_idx + 1}"
         lines.append(
             f"  - vis {cls_name}{suffix}: {dist_m:.1f}m, "
-            f"{format_relative_direction(angle_deg)}, confidence: {confidence:.3f}"
-            f"{build_landmark_turn_hint(angle_deg, is_visible=True)}"
+            f"{format_relative_direction(rel_angle_deg)}, confidence: {confidence:.3f}"
+            f"{build_landmark_turn_hint(rel_angle_deg, is_visible=True)}"
         )
-
-    if landmark_instances_world:
-        offscreen_items: List[Tuple[str, str, float, float, float]] = []
-        for item in sorted(
-            landmark_instances_world,
-            key=lambda entry: float(entry.get("distance_m", 1e9)),
-        ):
-            cls_name = item.get("name")
-            instance_idx = _maybe_int(item.get("instance_idx"))
-            distance_m = item.get("distance_m")
-            angle_deg = item.get("angle_deg")
-            if cls_name is None or instance_idx is None or distance_m is None or angle_deg is None:
-                continue
-            if instance_idx in visible_instance_indices.get(str(cls_name), set()):
-                continue
-            same_cls_count = sum(1 for inst in landmark_instances_world if inst.get("name") == cls_name)
-            suffix = f" #{instance_idx + 1}" if same_cls_count > 1 else ""
-            offscreen_items.append(
-                (
-                    str(cls_name),
-                    suffix,
-                    float(distance_m),
-                    float(angle_deg),
-                    float(item.get("confidence", 0.0)),
-                )
-            )
-
-        for cls_name, suffix, dist_m, angle_deg, confidence in offscreen_items:
-            lines.append(
-                f"  - off vis {cls_name}{suffix}: {dist_m:.1f}m, "
-                f"{format_relative_direction(angle_deg)}, confidence: {confidence:.3f}"
-                f"{build_landmark_turn_hint(angle_deg)}"
-            )
-    elif landmark_dist_map_multi:
-        offscreen_items: List[Tuple[str, str, float, float]] = []
-        for cls_name, candidates in sorted(
-            landmark_dist_map_multi.items(),
-            key=lambda item: min([pair[0] for pair in item[1]]) if item[1] else 1e9,
-        ):
-            if not candidates:
-                continue
-            used_set = visible_instance_indices.get(cls_name, set())
-            sorted_candidates = sorted(candidates, key=lambda pair: pair[0])
-            cls_total = len(sorted_candidates)
-            for index, (dist_m, angle_deg) in enumerate(sorted_candidates):
-                if index in used_set:
-                    continue
-                suffix = f" #{index + 1}" if cls_total > 1 else ""
-                offscreen_items.append((cls_name, suffix, float(dist_m), float(angle_deg)))
-
-        for cls_name, suffix, dist_m, angle_deg in sorted(offscreen_items, key=lambda item: item[2]):
-            lines.append(
-                f"  - off vis {cls_name}{suffix}: {dist_m:.1f}m, "
-                f"{format_relative_direction(angle_deg)}, confidence: 0.000"
-                f"{build_landmark_turn_hint(angle_deg)}"
-            )
-    else:
-        visible_names = {name for name, *_rest in visible_entries}
-        for cls_name, (dist_m, angle_deg) in sorted(landmark_dist_map.items(), key=lambda item: item[1][0]):
-            if cls_name in visible_names:
-                continue
-            lines.append(
-                f"  - off vis {cls_name}: {dist_m:.1f}m, "
-                f"{format_relative_direction(angle_deg)}, confidence: 0.000"
-                f"{build_landmark_turn_hint(angle_deg)}"
-            )
-
     return "\n".join(lines) if lines else None
 
 

@@ -881,18 +881,17 @@ class MapVisualizer:
             )
 
             if should_render_detection:
-                map_obstacle_distances = self.calculate_obstacle_distances_from_full_map(full_map)
                 try:
                     obstacle_distances = self.calculate_obstacle_distances_from_depth(
                         getattr(controller, 'latest_depth_meters', None) if controller is not None else None,
                         hfov=hfov,
-                        fallback_distances=map_obstacle_distances,
+                        fallback_distances=None,
                     )
                 except Exception:
-                    obstacle_distances = map_obstacle_distances or {
-                        'front': '>2.0m open',
-                        'left_30': '>2.0m open',
-                        'right_30': '>2.0m open',
+                    obstacle_distances = {
+                        'front': 'Unknown',
+                        'left_30': 'Unknown',
+                        'right_30': 'Unknown',
                     }
 
                 rgb_for_det = rgb.copy()

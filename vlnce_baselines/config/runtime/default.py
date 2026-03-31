@@ -70,6 +70,11 @@ _C.MAP.ACTION_STAGNATION_REPLAN_STREAK = 3  # 连续多少个底层MOVE_FORWARD�
 _C.MAP.ACTION_STAGNATION_MAX_MOVEMENT_M = 0.25  # 底层MOVE“没动”阈值上限（实际使用时还会与单步距离的20%取较小值）
 _C.MAP.FINAL_DESTINATION_MATCH_AUTOSTOP_STREAK = 3  # 连续多少次thinking检测到waypoint_chain末尾与destination一致时，才允许进入终点稳定区自动停止判定
 _C.MAP.FINAL_DESTINATION_MATCH_AUTOSTOP_RADIUS_M = 1.0  # 以第一次终点匹配位置为圆心，连续命中都需留在半径1m内（约直径2m）才自动停止任务
+_C.MAP.ENABLE_MULTI_FLOOR_TOPOLOGY = True  # 是否启用基于z轴的多楼层拓扑拆分
+_C.MAP.FLOOR_Z_TOLERANCE_M = 1.0  # 高度差在1m内视为同楼层
+_C.MAP.FLOOR_Z_SWITCH_THRESHOLD_M = 1.5  # 超过1.5m才允许进入新楼层候选
+_C.MAP.FLOOR_SWITCH_STABLE_STEPS = 3  # 连续多少步稳定命中新楼层高度后正式切层
+_C.MAP.STAIR_CLEAR_RADIUS_M = 0.45  # 楼梯连接区域周围多少米内不再保留为障碍物
 
 
 

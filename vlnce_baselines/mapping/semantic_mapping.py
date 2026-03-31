@@ -14,6 +14,7 @@ import numpy as np
 from PIL import Image
 import matplotlib.pyplot as plt
 from collections import defaultdict
+from typing import Any, Dict, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -248,6 +249,162 @@ class Semantic_Mapping(nn.Module):
             self.one_step_full_map.zero_()
         self.one_step_tiles.clear()
         self.one_step_full_map_crop_offset = (0, 0)
+
+    @staticmethod
+    def _clone_optional_tensor(
+        tensor: Optional[Any],
+    ) -> Optional[Any]:
+        if tensor is None:
+            return None
+        if torch.is_tensor(tensor):
+            return tensor.clone()
+        if isinstance(tensor, np.ndarray):
+            return np.array(tensor, copy=True)
+        if hasattr(tensor, "clone"):
+            return tensor.clone()
+        return copy.deepcopy(tensor)
+
+    @staticmethod
+    def _clone_optional_array(array: Optional[np.ndarray]) -> Optional[np.ndarray]:
+        if array is None:
+            return None
+        return np.array(array, copy=True)
+
+    def _clone_tile_state(self, tiles_dict) -> Dict[Tuple[int, int], torch.Tensor]:
+        cloned: Dict[Tuple[int, int], torch.Tensor] = {}
+        for key, value in dict(tiles_dict).items():
+            if value is None:
+                continue
+            cloned[(int(key[0]), int(key[1]))] = value.clone()
+        return cloned
+
+    def export_state(self) -> Dict[str, Any]:
+        return {
+            "tiles": self._clone_tile_state(self.tiles),
+            "one_step_tiles": self._clone_tile_state(self.one_step_tiles),
+            "local_map": self._clone_optional_tensor(self.local_map),
+            "one_step_local_map": self._clone_optional_tensor(self.one_step_local_map),
+            "full_map": self._clone_optional_tensor(self.full_map),
+            "one_step_full_map": self._clone_optional_tensor(self.one_step_full_map),
+            "full_pose": self._clone_optional_tensor(self.full_pose),
+            "local_pose": self._clone_optional_tensor(self.local_pose),
+            "curr_loc": self._clone_optional_tensor(self.curr_loc),
+            "last_loc": self._clone_optional_tensor(self.last_loc),
+            "origins": self._clone_optional_array(self.origins),
+            "lmb": self._clone_optional_array(self.lmb),
+            "state": self._clone_optional_array(self.state),
+            "global_trajectory_points": [
+                (int(point[0]), int(point[1]))
+                for point in list(self.global_trajectory_points or [])
+            ],
+            "subtask_trajectory_points": [
+                (int(point[0]), int(point[1]))
+                for point in list(self.subtask_trajectory_points or [])
+            ],
+            "last_trajectory_pos": (
+                tuple(int(value) for value in self.last_trajectory_pos)
+                if self.last_trajectory_pos is not None
+                else None
+            ),
+            "full_map_crop_offset": tuple(self.full_map_crop_offset or (0, 0)),
+            "one_step_full_map_crop_offset": tuple(self.one_step_full_map_crop_offset or (0, 0)),
+            "full_w": int(self.full_w),
+            "full_h": int(self.full_h),
+            "local_w": int(self.local_w),
+            "local_h": int(self.local_h),
+            "visited_vis": self._clone_optional_array(getattr(self, "visited_vis", None)),
+        }
+
+    def import_state(self, state: Optional[Dict[str, Any]]) -> None:
+        def _restore_tiles(raw_tiles) -> defaultdict:
+            restored = defaultdict(lambda: None)
+            for key, value in dict(raw_tiles or {}).items():
+                restored[(int(key[0]), int(key[1]))] = value.clone() if value is not None else None
+            return restored
+
+        if not state:
+            self.reset()
+            return
+
+        self.tiles = _restore_tiles(state.get("tiles"))
+        self.one_step_tiles = _restore_tiles(state.get("one_step_tiles"))
+        self.local_map = self._clone_optional_tensor(state.get("local_map"))
+        self.one_step_local_map = self._clone_optional_tensor(state.get("one_step_local_map"))
+        self.full_map = self._clone_optional_tensor(state.get("full_map"))
+        self.one_step_full_map = self._clone_optional_tensor(state.get("one_step_full_map"))
+        self.full_pose = self._clone_optional_tensor(state.get("full_pose"))
+        self.local_pose = self._clone_optional_tensor(state.get("local_pose"))
+        self.curr_loc = self._clone_optional_tensor(state.get("curr_loc"))
+        self.last_loc = self._clone_optional_tensor(state.get("last_loc"))
+        self.origins = self._clone_optional_array(state.get("origins"))
+        self.lmb = self._clone_optional_array(state.get("lmb"))
+        self.state = self._clone_optional_array(state.get("state"))
+        self.global_trajectory_points = [
+            (int(point[0]), int(point[1]))
+            for point in list(state.get("global_trajectory_points", []) or [])
+        ]
+        self.subtask_trajectory_points = [
+            (int(point[0]), int(point[1]))
+            for point in list(state.get("subtask_trajectory_points", []) or [])
+        ]
+        last_trajectory_pos = state.get("last_trajectory_pos")
+        self.last_trajectory_pos = (
+            tuple(int(value) for value in last_trajectory_pos)
+            if last_trajectory_pos is not None
+            else None
+        )
+        self.full_map_crop_offset = tuple(state.get("full_map_crop_offset", (0, 0)) or (0, 0))
+        self.one_step_full_map_crop_offset = tuple(
+            state.get("one_step_full_map_crop_offset", (0, 0)) or (0, 0)
+        )
+        self.full_w = int(state.get("full_w", self.TILE_SIZE))
+        self.full_h = int(state.get("full_h", self.TILE_SIZE))
+        self.local_w = int(state.get("local_w", self.TILE_SIZE))
+        self.local_h = int(state.get("local_h", self.TILE_SIZE))
+        self.visited_vis = self._clone_optional_array(state.get("visited_vis"))
+
+    def recenter_to_world_pose(
+        self,
+        world_pose: Optional[Tuple[float, float, float]],
+        clear_one_step: bool = True,
+    ) -> None:
+        """Reload the local window around an externally supplied world pose."""
+        if world_pose is None:
+            return
+
+        world_x_m, world_y_m, world_o_deg = [float(value) for value in world_pose[:3]]
+        nc = int(self.local_map.shape[1]) if self.local_map is not None else (self.MAP_CHANNELS + 1)
+        if self.local_map is None:
+            self._prepare(nc)
+
+        self.full_pose.fill_(0.0)
+        self.full_pose[:, 0] = world_x_m
+        self.full_pose[:, 1] = world_y_m
+        self.full_pose[:, 2] = world_o_deg
+
+        self.local_pose.fill_(0.0)
+        self.local_pose[:, 0] = 6.0
+        self.local_pose[:, 1] = 6.0
+        self.local_pose[:, 2] = world_o_deg
+
+        self.local_map = self.get_local_map_from_tiles(nc)
+        if clear_one_step:
+            self.one_step_tiles.clear()
+            self.one_step_local_map = torch.zeros_like(self.local_map)
+            self.one_step_full_map = None
+            self.one_step_full_map_crop_offset = (0, 0)
+        else:
+            self.one_step_local_map = self.get_local_map_from_tiles(nc, is_one_step=True)
+
+        self.curr_loc = self.full_pose.clone()
+        self.last_loc = self.full_pose.clone()
+        locs = self.full_pose.cpu().numpy()
+        self.state[:, :3] = locs
+        for e in range(self.num_environments):
+            self.state[e, 3:] = self.lmb[e]
+
+        self.full_map = None
+        self.full_map_crop_offset = (0, 0)
     
     def _draw_line_on_tile(self, tile_key, x0, y0, x1, y1):
         """
@@ -934,7 +1091,11 @@ class Semantic_Mapping(nn.Module):
 
         return [gx1, gx2, gy1, gy2]
         
-    def init_map_and_pose(self, num_detected_classes: int):
+    def init_map_and_pose(
+        self,
+        num_detected_classes: int,
+        initial_pose: Optional[Tuple[float, float, float]] = None,
+    ):
         """
         初始化分块地图和agent姿态
         
@@ -949,43 +1110,29 @@ class Semantic_Mapping(nn.Module):
         if self.local_map is None:
             self._prepare(nc)
         
-        # Agent初始世界坐标：(6.0, 6.0, 0.0) - 位于Tile(0,0)中心
+        start_x_m = 6.0
+        start_y_m = 6.0
+        start_o_deg = 0.0
+        if initial_pose is not None:
+            start_x_m, start_y_m, start_o_deg = [float(value) for value in initial_pose[:3]]
+
+        # Agent初始世界坐标：默认(6.0, 6.0, 0.0)，多楼层切换时允许从外部指定绝对相对世界位姿。
         self.full_pose.fill_(0.)
-        self.full_pose[:, 0] = 6.0  # X方向 = 6m（块中心）
-        self.full_pose[:, 1] = 6.0  # Y方向 = 6m（块中心）
-        self.full_pose[:, 2] = 0.0  # 朝向东方
-        
-        # 创建初始块tile(0, 0)
-        self._ensure_tiles_exist([(0, 0)], nc)
-        
-        # 在初始块中标记agent位置（中心120, 120）
-        for e in range(self.num_environments):
-            tile = self.tiles[(0, 0)]
-            tile[e, 2:4, 119:122, 119:122] = 1.0  # Current & Past location
-        
-        # 获取Local Map（240×240，以agent为中心）
+        self.full_pose[:, 0] = start_x_m
+        self.full_pose[:, 1] = start_y_m
+        self.full_pose[:, 2] = start_o_deg
+
+        # 创建覆盖当前局部窗口的初始tiles，再以当前位置为中心提取Local Map。
+        tiles_needed = self._get_tiles_for_region(start_x_m, start_y_m, self.TILE_SIZE_M)
+        self._ensure_tiles_exist(tiles_needed or [(0, 0)], nc)
+
         self.local_map = self.get_local_map_from_tiles(nc)
-        self.one_step_local_map = self.local_map.clone()
-        
-        # Local Pose：agent相对Local Map origin的位置
-        # 初始时：Local Map origin在(0, 0)，agent在(6, 6) = 中心(120, 120)像素
-        # 后续：agent在Local Map中移动，local_pose会变化（如7.2, 5.8等）
-        # 只在recentering时重置回中心
+        self.one_step_local_map = torch.zeros_like(self.local_map)
+
+        # Local Pose：agent总是在当前Local Map中心，世界坐标通过origins/lmb保持连续。
         for e in range(self.num_environments):
-            self.local_pose[e] = torch.tensor([6.0, 6.0, 0.0]).float().to(self.device)
+            self.local_pose[e] = torch.tensor([6.0, 6.0, start_o_deg]).float().to(self.device)
             self.curr_loc[e] = self.full_pose[e].clone()
-            
-            # 更新Local Map边界和origins
-            # Local Map覆盖世界坐标[0, 12)m × [0, 12)m
-            # lmb存储：[gx1, gx2, gy1, gy2] 其中gx对应Y轴像素，gy对应X轴像素
-            self.lmb[e, 0] = 0     # gx1: Y方向起始（像素）
-            self.lmb[e, 1] = 240   # gx2: Y方向结束（像素）
-            self.lmb[e, 2] = 0     # gy1: X方向起始（像素）
-            self.lmb[e, 3] = 240   # gy2: X方向结束（像素）
-            
-            # origins: Local Map左上角的世界坐标（米）
-            # 存储顺序：[X, Y, 0]
-            self.origins[e] = [0.0, 0.0, 0.0]
         
         # 更新state
         locs = self.full_pose.cpu().numpy()
@@ -997,6 +1144,8 @@ class Semantic_Mapping(nn.Module):
         # 这里不预先生成，避免创建不必要的tiles
         self.full_map = None
         self.one_step_full_map = None
+        self.full_map_crop_offset = (0, 0)
+        self.one_step_full_map_crop_offset = (0, 0)
         
                                 
     def update_map(self, step: int, detected_classes: OrderedSet, current_episode_id: int) -> None:
