@@ -454,8 +454,10 @@ class Semantic_Mapping(nn.Module):
         self.vis_classes = []
         self.tiles.clear()
         self.one_step_tiles.clear()
-        
+
         # 清空轨迹
+        self.global_trajectory_points = []
+        self.subtask_trajectory_points = []
         self.last_trajectory_pos = None
         self.trajectory_points = []  # 清空轨迹点列表
         
@@ -483,7 +485,11 @@ class Semantic_Mapping(nn.Module):
         if hasattr(self, 'full_map'):
             self.full_map = None
             self.one_step_full_map = None
-        
+        self.full_map_crop_offset = (0, 0)
+        self.one_step_full_map_crop_offset = (0, 0)
+        if hasattr(self, 'visited_vis'):
+            self.visited_vis = None
+
         if self.visualize or self.print_images:
             self.vis_image = vu.init_vis_image()
             self.rgb_vis = None

@@ -108,6 +108,7 @@ class BaseNavigationController:
         self.latest_action_detection_vis = None
         self.latest_lookaround_images: List[np.ndarray] = []
         self.latest_lookaround_depths: List[np.ndarray] = []
+        self.latest_lookaround_detection_payloads: List[Any] = []
         self.latest_lookaround_phase = ""
         self.latest_obstacle_distances_12 = {
             f'angle_{i}': 'Unknown' for i in range(0, 360, 30)
@@ -693,6 +694,7 @@ class BaseNavigationController:
         self,
         phase: str,
         enable_landmark_detection: bool = False,
+        prepare_thinking_detection: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """Run the shared 12-step lookaround scan and cache the resulting map/render state."""
         from habitat.sims.habitat_simulator.actions import HabitatSimActions
@@ -701,6 +703,7 @@ class BaseNavigationController:
         self.latest_lookaround_end_reason = ""
         lookaround_images: List[np.ndarray] = []
         lookaround_depths: List[Optional[np.ndarray]] = []
+        lookaround_detection_payloads: List[Any] = []
         final_map_state = None
         final_snapshot_paths: Dict[str, Any] = {}
         final_last_waypoint_angle = None
@@ -739,6 +742,14 @@ class BaseNavigationController:
             rgb_bgr = cv2.cvtColor(obs[0]['rgb'], cv2.COLOR_RGB2BGR)
             lookaround_images.append(rgb_bgr.copy())
             lookaround_depths.append(self._depth_to_meters(obs[0]['depth']))
+            if prepare_thinking_detection and getattr(self, 'landmark_classes', None):
+                detections, labels, masks = self._detect_landmarks_for_visualization(
+                    rgb_bgr,
+                    list(self.landmark_classes),
+                )
+                lookaround_detection_payloads.append((detections, list(labels or []), masks))
+            else:
+                lookaround_detection_payloads.append((None, [], None))
 
             if debug_save_renderings:
                 final_snapshot_paths, _detected_landmarks_step, final_last_waypoint_angle = self._save_visualization_snapshot(
@@ -774,6 +785,7 @@ class BaseNavigationController:
         self.latest_lookaround_depths = [
             depth.copy() if depth is not None else None for depth in lookaround_depths
         ]
+        self.latest_lookaround_detection_payloads = list(lookaround_detection_payloads)
         self.latest_lookaround_phase = str(phase)
 
         if final_map_state is not None and not debug_save_renderings:
@@ -789,6 +801,7 @@ class BaseNavigationController:
             "look_step": look_step,
             "lookaround_images": lookaround_images,
             "lookaround_depths": lookaround_depths,
+            "lookaround_detection_payloads": lookaround_detection_payloads,
             "final_map_state": final_map_state,
             "final_snapshot_paths": final_snapshot_paths,
             "final_last_waypoint_angle": final_last_waypoint_angle,
@@ -927,11 +940,15 @@ class BaseNavigationController:
                 os.path.join(self.current_episode_dir, 'detection', f'step_{self.current_step:04d}_{phase}.png')
             )
 
-        if not force and required_paths and all(os.path.exists(path) for path in required_paths):
-            if not enable_landmark_detection:
-                return True
-            if hasattr(self, 'current_step_landmarks') and self.current_step in self.current_step_landmarks:
-                return True
+        if not force:
+            if enable_landmark_detection and hasattr(self, 'current_step_landmarks'):
+                if self.current_step in self.current_step_landmarks:
+                    return True
+            if required_paths and all(os.path.exists(path) for path in required_paths):
+                if not enable_landmark_detection:
+                    return True
+                if hasattr(self, 'current_step_landmarks') and self.current_step in self.current_step_landmarks:
+                    return True
 
         self._batch_obs([self.latest_obs], save_object_detection=enable_landmark_detection)
         map_state = self.mapper.get_map_state()
@@ -964,6 +981,37 @@ class BaseNavigationController:
             enable_landmark_detection=True,
             force=False,
         )
+
+    def _refresh_post_action_landmark_detection_state(self, action_phase: str) -> bool:
+        """Refresh the latest moved-to frame for action landmark memory and auto-stop checks."""
+        if self.latest_obs is None or self.mapper is None:
+            return False
+        if not getattr(self, "landmark_classes", None):
+            return False
+
+        self._batch_obs([self.latest_obs], save_object_detection=True)
+        map_state = self.mapper.get_map_state()
+        rgb_bgr = cv2.cvtColor(self.latest_obs["rgb"], cv2.COLOR_RGB2BGR)
+        _, detected_landmarks_step, _ = self._save_visualization_snapshot(
+            map_state=map_state,
+            rgb_bgr=rgb_bgr,
+            phase=action_phase,
+            detections=self.latest_detections_full if hasattr(self, "latest_detections_full") else None,
+            labels=self.latest_labels_full if hasattr(self, "latest_labels_full") else None,
+            masks=self.latest_masks_full if hasattr(self, "latest_masks_full") else None,
+            landmark_classes=list(self.landmark_classes),
+            render_policy={
+                "save_rgb": False,
+                "render_global_map": False,
+                "save_global_map": False,
+                "render_local_map": False,
+                "save_local_map": False,
+                "render_detection": True,
+                "save_detection": False,
+            },
+        )
+        self._record_landmark_detection_step(self.current_step, detected_landmarks_step)
+        return True
 
     def _update_obstacle_distances_12_directions(self, lookaround_depths: Optional[List[np.ndarray]] = None):
         """Update 12-view obstacle distances from depth, with per-view map fallback only when depth is unknown."""

@@ -139,8 +139,6 @@ def render_detection_bbox(owner,
     matched_in_view: set = set()  # 当前帧中实际可见的landmark类名
     candidate_entries: List[Dict[str, Any]] = []
     draw_items: List[LandmarkDrawItem] = []
-    action_waypoint_entries: List[Dict[str, Any]] = []
-
     def _build_action_waypoint_entries() -> List[Dict[str, Any]]:
         if controller is None or getattr(controller, "mapper", None) is None:
             return []
@@ -179,12 +177,6 @@ def render_detection_bbox(owner,
         filtered_entries: List[Dict[str, Any]] = []
         for entry in waypoint_entries:
             if bool(entry.get("is_current_area")):
-                continue
-            try:
-                relative_bearing_deg = float(entry.get("relative_bearing_deg", 999.0))
-            except (TypeError, ValueError):
-                continue
-            if abs(relative_bearing_deg) > 60.0:
                 continue
             filtered_entries.append(dict(entry))
 
@@ -338,16 +330,20 @@ def render_detection_bbox(owner,
     def _build_landmark_strip(selected_entries: List[Dict[str, Any]]) -> Tuple[Optional[np.ndarray], List[Dict[str, Any]]]:
         ordered_entries = [dict(item) for item in selected_entries]
         strip = None
-        if ordered_entries:
-            selected_visible_entries = [
-                entry for entry in ordered_entries
-                if str(entry.get("source", "off")) == "vis"
-            ][:max(1, int(landmark_strip_topk))]
+        selected_visible_entries = [
+            entry for entry in ordered_entries
+            if str(entry.get("source", "off")) == "vis"
+        ][:max(1, int(landmark_strip_topk))]
+        selected_offscreen_entries = [
+            entry for entry in ordered_entries
+            if str(entry.get("source", "off")) != "vis"
+        ][:max(1, int(landmark_strip_topk))]
+        if selected_visible_entries or selected_offscreen_entries or action_waypoint_entries:
             item_lines = build_landmark_strip_lines(
                 selected_visible_entries,
-                [],
+                selected_offscreen_entries,
                 landmark_dist_map_multi=landmark_dist_map_multi,
-                waypoint_entries=None,
+                waypoint_entries=action_waypoint_entries,
             )
             if item_lines:
                 strip = render_landmark_strip(
@@ -359,10 +355,30 @@ def render_detection_bbox(owner,
                 )
         return strip, ordered_entries
 
-    action_waypoint_entries: List[Dict[str, Any]] = []
+    action_waypoint_entries: List[Dict[str, Any]] = _build_action_waypoint_entries()
+
+    def _sort_selected_topk_entries(entries: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        ordered = [dict(entry) for entry in (entries or [])]
+        ordered.sort(
+            key=lambda entry: (
+                int(entry.get("selection_rank", 1e9) or 1e9),
+                -float(entry.get("confidence", 0.0)),
+                float(entry.get("distance_m", 1e9) or 1e9),
+                str(entry.get("name", "")),
+            )
+        )
+        return ordered
 
     if detections is None or len(detections.xyxy) == 0:
-        selected_topk_entries = []
+        selected_topk_entries: List[Dict[str, Any]] = []
+        for selected_inst in selected_world_landmark_instances:
+            offscreen_entry = _normalize_selected_world_entry(
+                selected_inst,
+                source="off",
+                candidate=None,
+            )
+            selected_topk_entries.append(offscreen_entry)
+        selected_topk_entries = _sort_selected_topk_entries(selected_topk_entries)
         strip, selected_topk_entries = _build_landmark_strip(selected_topk_entries)
         if controller is not None:
             controller.latest_visible_landmark_entries = []
@@ -483,11 +499,14 @@ def render_detection_bbox(owner,
             if candidate_key < previous_key:
                 visible_candidates_by_uid[matched_uid] = (dict(candidate), dict(matched_inst))
 
+        matched_visible_uids: set = set()
         for selected_inst in selected_world_landmark_instances:
             matched_uid = owner._landmark_instance_uid(selected_inst)
             matched_pair = visible_candidates_by_uid.get(matched_uid) if matched_uid is not None else None
             if matched_pair is None:
                 continue
+            if matched_uid is not None:
+                matched_visible_uids.add(matched_uid)
 
             candidate, matched_inst = matched_pair
             label_name = str(matched_inst.get("name", selected_inst.get("name", "")) or "")
@@ -554,6 +573,17 @@ def render_detection_bbox(owner,
                     distance_m=float(shown_dist_m) if shown_dist_m is not None else 999.0,
                 )
             )
+
+        for selected_inst in selected_world_landmark_instances:
+            matched_uid = owner._landmark_instance_uid(selected_inst)
+            if matched_uid is not None and matched_uid in matched_visible_uids:
+                continue
+            offscreen_entry = _normalize_selected_world_entry(
+                selected_inst,
+                source="off",
+                candidate=None,
+            )
+            selected_topk_entries.append(offscreen_entry)
     else:
         selected_entries = deduped_candidates[:max(1, int(detection_visible_topk))]
         same_cls_totals = {
@@ -632,6 +662,8 @@ def render_detection_bbox(owner,
         color,
         avoid_boxes=_build_action_distance_label_boxes(detection_vis.shape, action_distance_overlay),
     )
+
+    selected_topk_entries = _sort_selected_topk_entries(selected_topk_entries)
 
     strip, selected_topk_entries = _build_landmark_strip(selected_topk_entries)
     if append_bottom_strip and strip is not None:

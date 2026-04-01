@@ -12,7 +12,6 @@ from vlnce_baselines.config.core.params.api import (
 )
 from vlnce_baselines.vlm.api.api_client import APIConfig, BaseAPIClient
 from vlnce_baselines.vlm.prompts.action_prompt import get_action_execution_prompt
-from vlnce_baselines.visualization.visualizer import MapVisualizer
 
 
 class ActionExecutor(BaseAPIClient):
@@ -74,7 +73,7 @@ class ActionExecutor(BaseAPIClient):
         return None
 
     def _parse_action_command(self, response: Dict) -> Optional[Tuple[str, float]]:
-        """Parse merged action command strings while keeping backward compatibility."""
+        """Parse normalized action command strings from the VLM response."""
         action_raw = str(response.get('action', '')).strip()
         if not action_raw:
             return None
@@ -245,42 +244,36 @@ class ActionExecutor(BaseAPIClient):
 
     
     def decide_action(self,
-                     next_waypoint_destination: str,
+                     next_waypoint: str,
                      subtask_instruction: str,
                      first_person_image: Any,
                      action_mapping: Dict[str, int],
                      progress_summary: str = "",
                      waypoint_summary: str = "",
                      detection_image: Any = None,
-                     local_map_image: str = None,
                      detected_landmarks: str = None,
                      previous_action_reason: str = "",
-                     pose_before: tuple = None,
-                     pose_after: tuple = None,
                      obstacle_distances: Dict[str, str] = None,
                      landmark_map_info: str = None,
                      allowed_action_names: Optional[Sequence[str]] = None,
-                     save_dir: str = None) -> Tuple[Optional[int], Optional[str], Optional[str], Optional[Dict]]:
+                     save_dir: str = None) -> Tuple[Optional[int], Optional[str], Optional[Dict], int, float, str]:
         """
         基于第一人称视角、检测结果和局部地图决策下一步动作
         
         Args:
-            next_waypoint_destination: 下一个waypoint目的地
+            next_waypoint: 下一个waypoint目的地
             subtask_instruction: 子任务指令
             first_person_image: 第一人称RGB图像路径
             action_mapping: 动作名称到ID的映射
             progress_summary: 当前子任务进度摘要
             waypoint_summary: waypoint历史摘要（含相对当前pose的方向和距离）
             detection_image: 目标检测图像路径（可选）
-            local_map_image: 局部语义地图路径（可选）
             detected_landmarks: 已检测landmark类别字符串（可选）
             previous_action_reason: 上一步的action_analysis（可选）
-            pose_before: 上一个动作执行前的位姿 (x, y, orientation) 单位：米和度（可选）
-            pose_after: 上一个动作执行后的位姿 (x, y, orientation) 单位：米和度（可选）
             obstacle_distances: 预计算的障碍物距离字典 {'front': 'X.XXm', 'left_30': ..., ...}
             
         Returns:
-            (action_id, action_name, updated_progress, full_response, degrees, meters, prompt)
+            (action_id, action_name, full_response, degrees, meters, prompt)
         """
         # 使用预计算的距离（如果没有则设为Unknown）
         if not obstacle_distances:
@@ -290,16 +283,15 @@ class ActionExecutor(BaseAPIClient):
                 'right_30': 'Unknown',
             }
         
-        distance_summary = MapVisualizer.get_distance_summary(obstacle_distances)
-        
         # 构建prompt（精简版）
         prompt = get_action_execution_prompt(
-            next_waypoint_destination=next_waypoint_destination,
+            next_waypoint=next_waypoint,
             subtask_instruction=subtask_instruction,
             progress_summary=progress_summary,
             waypoint_summary=waypoint_summary,
             detected_landmarks=detected_landmarks,
             previous_action_reason=previous_action_reason,
+            obstacle_distances=obstacle_distances,
             landmark_map_info=landmark_map_info,
             allowed_action_names=allowed_action_names,
         )
@@ -323,16 +315,16 @@ class ActionExecutor(BaseAPIClient):
         
         if not response:
             print("✗ No response from VLM")
-            return None, None, None, None
+            return None, None, None, 0, 0.0, ""
         
         # 验诈1响应
         if not self.validate_response(response):
-            return None, None, None, None
+            return None, None, None, 0, 0.0, ""
         
         parsed_action = self._parse_action_command(response)
         if parsed_action is None:
             print(f"✗ Invalid action command: {response.get('action')}")
-            return None, None, None, None
+            return None, None, None, 0, 0.0, ""
 
         action_name, value = parsed_action
         normalized_allowed_actions = None
@@ -349,12 +341,12 @@ class ActionExecutor(BaseAPIClient):
             )
             response["_forbidden_action_name"] = action_name
             response["_allowed_action_names"] = sorted(normalized_allowed_actions)
-            return None, action_name, None, response, 0, 0, prompt
+            return None, action_name, response, 0, 0.0, prompt
 
         if action_name not in action_mapping:
             print(f"✗ Invalid action: {action_name}")
             print(f"✗ Valid actions: {list(action_mapping.keys())}")
-            return None, None, None, None
+            return None, None, None, 0, 0.0, ""
 
         action_id = action_mapping[action_name]
 
@@ -369,55 +361,13 @@ class ActionExecutor(BaseAPIClient):
         elif action_name == 'STOP':
             response['action'] = 'STOP'
         
-        # 计算实际位姿变化（如果提供了pose信息）
-        actual_degrees = None
-        actual_meters = None
-        if pose_before is not None and pose_after is not None:
-            x_before, y_before, ori_before = pose_before
-            x_after, y_after, ori_after = pose_after
-            
-            # 计算实际转向角度变化
-            # ori_before和ori_after都是角度制（degree），范围[-180, 180]
-            angle_diff = ori_after - ori_before
-            # 归一化到 [-180, 180]，处理跨越±180°边界的情况
-            # 例如：从170°转到-170° = -340° → 归一化为20°
-            while angle_diff > 180:
-                angle_diff -= 360
-            while angle_diff < -180:
-                angle_diff += 360
-            actual_degrees = abs(angle_diff)  # 取绝对值，因为记录的是转向幅度
-            
-            # 计算实际移动距离（2D欧氏距离）
-            # x, y都是米制（meter）
-            import math
-            actual_meters = math.sqrt((x_after - x_before)**2 + (y_after - y_before)**2)
-        
-        # 自动生成progress_summary（系统维护，包含坐标验证）
-        updated_progress = self._generate_progress_update(
-            current_progress=progress_summary,
-            action_name=action_name,
-            degrees=degrees,
-            meters=meters,
-            actual_degrees=actual_degrees,
-            actual_meters=actual_meters
-        )
-        
         # 简洁输出：动作 + 执行结果
         if action_name in ('TURN_LEFT', 'TURN_RIGHT'):
             info = f"{action_name} {degrees}°"
-            if actual_degrees is not None:
-                diff = abs(degrees - actual_degrees)
-                ratio = actual_degrees / degrees if degrees > 0 else 0
-                tag = "✓" if diff < 5 else (f"⚠{ratio*100:.0f}%" if diff < 15 else f"✗{ratio*100:.0f}%")
-                info += f" → {actual_degrees:.1f}° [{tag}]"
         elif action_name == 'MOVE_FORWARD':
             info = f"{action_name} {meters}m"
-            if actual_meters is not None:
-                ratio = actual_meters / meters if meters > 0 else 0
-                tag = "✓" if ratio > 0.9 else (f"⚠{ratio*100:.0f}%" if ratio > 0.5 else f"✗COLL {ratio*100:.0f}%")
-                info += f" → {actual_meters:.2f}m [{tag}]"
         else:
             info = action_name
         print(f"  Action: {info} | {response.get('reasoning', '')[:60]}")
-        
-        return action_id, action_name, updated_progress, response, degrees, meters, prompt
+
+        return action_id, action_name, response, degrees, meters, prompt

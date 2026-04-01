@@ -317,7 +317,7 @@ def build_landmark_strip_lines(
                 priority=1,
                 sort_key=sort_key,
                 segments=(
-                    LandmarkStripSegment("off ", status_color),
+                    LandmarkStripSegment("mem ", status_color),
                     LandmarkStripSegment(f"{display_prefix}{display_name}{suffix}", name_color),
                     LandmarkStripSegment(f" {float(distance_m):.1f}m", value_color),
                     LandmarkStripSegment(f" {format_relative_direction(float(angle_deg))}", value_color),

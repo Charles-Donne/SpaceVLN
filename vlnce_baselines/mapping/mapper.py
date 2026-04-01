@@ -74,6 +74,7 @@ class SemanticMapper:
         self._cached_space_area_crop_offset: Optional[Tuple[int, int]] = None
         self._cached_space_area_layer = np.zeros(map_shape, dtype=np.int32)
         self._cached_space_area_records: List[Dict[str, Any]] = []
+        self._floor_switched_this_step = False
 
         self._reset_floor_topology_state()
 
@@ -155,6 +156,7 @@ class SemanticMapper:
         self._active_stair_connector: Optional[Dict[str, Any]] = None
         self.stair_connectors: List[Dict[str, Any]] = []
         self._stair_clear_pixels_by_floor: Dict[int, Set[Tuple[int, int]]] = {}
+        self._floor_switched_this_step = False
 
     def reset(self):
         """重置建图器状态"""
@@ -213,9 +215,16 @@ class SemanticMapper:
             num_detected_classes=len(detected_classes),
         )
 
+        poses_for_mapping = poses
+        if self._floor_switched_this_step:
+            if torch.is_tensor(poses):
+                poses_for_mapping = torch.zeros_like(poses)
+            elif poses is not None:
+                poses_for_mapping = np.zeros_like(poses)
+
         self.mapping_module(
             batch_obs,
-            poses,
+            poses_for_mapping,
             self.mapping_module.local_map,
             self.mapping_module.local_pose,
         )
@@ -713,6 +722,7 @@ class SemanticMapper:
         self.current_world_z = float(target_anchor_z)
         self.multi_floor_active = len(self.floor_z_anchors) > 1
         self.on_stairs_connector = False
+        self._floor_switched_this_step = True
         self._clear_pending_floor_candidate()
         if self._active_stair_connector is not None:
             self._active_stair_connector["target_floor_id"] = target_floor_id
@@ -773,6 +783,7 @@ class SemanticMapper:
         predicted_pose: Tuple[float, float, float],
         num_detected_classes: int,
     ) -> None:
+        self._floor_switched_this_step = False
         if not self.enable_multi_floor_topology or world_z is None:
             return
 

@@ -1094,6 +1094,7 @@ class ThinkingViewRenderer:
         waypoint_angle_deg: Optional[float],
         draw_waypoints_fn: Callable[[np.ndarray, Dict[str, Any]], np.ndarray],
         initial_waypoint_index: Optional[int] = 0,
+        lookaround_detection_payloads: Optional[List[Tuple[Any, List[str], Any]]] = None,
         detection_topk: int = THINKING_DETECTION_TOPK,
     ) -> Tuple[List[str], List[str]]:
         os.makedirs(directions_dir, exist_ok=True)
@@ -1101,6 +1102,7 @@ class ThinkingViewRenderer:
             phase=phase,
             lookaround_images=lookaround_images,
             lookaround_depths=lookaround_depths,
+            lookaround_detection_payloads=lookaround_detection_payloads,
             landmark_classes=landmark_classes,
             detect_landmarks_fn=detect_landmarks_fn,
             render_detection_fn=render_detection_fn,
@@ -1135,6 +1137,7 @@ class ThinkingViewRenderer:
         phase: str,
         lookaround_images: List[np.ndarray],
         lookaround_depths: List[Optional[np.ndarray]],
+        lookaround_detection_payloads: Optional[List[Tuple[Any, List[str], Any]]],
         landmark_classes: Optional[List[str]],
         detect_landmarks_fn: Callable[[np.ndarray, List[str]], Tuple[Any, List[str], Any]],
         render_detection_fn: Callable[[np.ndarray, Any, List[str], Optional[np.ndarray]], Tuple[np.ndarray, List[Tuple[str, float]], Any, Any]],
@@ -1187,7 +1190,11 @@ class ThinkingViewRenderer:
             depth_meters = lookaround_depths[step_idx - 1] if step_idx - 1 < len(lookaround_depths) else None
             dets_view, labels_view = None, []
             if landmark_classes:
-                dets_view, labels_view, _ = detect_landmarks_fn(image, landmark_classes)
+                if lookaround_detection_payloads and step_idx - 1 < len(lookaround_detection_payloads):
+                    dets_view, labels_view, _ = lookaround_detection_payloads[step_idx - 1]
+                    labels_view = list(labels_view or [])
+                else:
+                    dets_view, labels_view, _ = detect_landmarks_fn(image, landmark_classes)
                 dets_view, labels_view = self._remove_transition_like_detections(
                     dets_view,
                     labels_view,

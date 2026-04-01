@@ -13,6 +13,138 @@ def check_inf_nan(value: Any) -> Any:
         return 0
     return value
 
+
+def _as_float(value: Any, default: float = 0.0) -> float:
+    value = check_inf_nan(value)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _as_int(value: Any, default: int = 0) -> int:
+    value = check_inf_nan(value)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _get_episode_duration_including_failed_s(item: Dict[str, Any]) -> float:
+    return _as_float(
+        item.get("episode_duration_including_failed_s", item.get("episode_duration_s", 0.0))
+    )
+
+
+def _get_episode_duration_excluding_failed_s(item: Dict[str, Any]) -> float:
+    return _as_float(
+        item.get(
+            "episode_duration_excluding_failed_s",
+            item.get("episode_duration_including_failed_s", item.get("episode_duration_s", 0.0)),
+        )
+    )
+
+
+def _compute_timing_metrics(results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    n = len(results)
+    thinking_api_count = sum(_as_int(item.get("thinking_api_count", 0)) for item in results)
+    thinking_api_failed_count = sum(_as_int(item.get("thinking_api_failed_count", 0)) for item in results)
+    thinking_api_total_duration_s = sum(
+        _as_float(item.get("thinking_api_total_duration_s", 0.0)) for item in results
+    )
+    thinking_api_failed_total_duration_s = sum(
+        _as_float(item.get("thinking_api_failed_total_duration_s", 0.0)) for item in results
+    )
+
+    action_api_count = sum(_as_int(item.get("action_api_count", 0)) for item in results)
+    action_api_failed_count = sum(_as_int(item.get("action_api_failed_count", 0)) for item in results)
+    action_api_total_duration_s = sum(
+        _as_float(item.get("action_api_total_duration_s", 0.0)) for item in results
+    )
+    action_api_failed_total_duration_s = sum(
+        _as_float(item.get("action_api_failed_total_duration_s", 0.0)) for item in results
+    )
+
+    api_total_duration_s = sum(
+        _as_float(
+            item.get(
+                "api_total_duration_s",
+                _as_float(item.get("thinking_api_total_duration_s", 0.0)) +
+                _as_float(item.get("action_api_total_duration_s", 0.0)),
+            )
+        )
+        for item in results
+    )
+    api_failed_total_duration_s = sum(
+        _as_float(
+            item.get(
+                "api_failed_total_duration_s",
+                _as_float(item.get("thinking_api_failed_total_duration_s", 0.0)) +
+                _as_float(item.get("action_api_failed_total_duration_s", 0.0)),
+            )
+        )
+        for item in results
+    )
+    failed_retry_wait_duration_s_total = sum(
+        _as_float(item.get("failed_retry_wait_duration_s", 0.0)) for item in results
+    )
+    failed_wasted_duration_s_total = sum(
+        _as_float(
+            item.get(
+                "failed_wasted_duration_s",
+                _as_float(item.get("api_failed_total_duration_s", 0.0)) +
+                _as_float(item.get("failed_retry_wait_duration_s", 0.0)),
+            )
+        )
+        for item in results
+    )
+
+    episode_duration_including_failed_s_list = [
+        _get_episode_duration_including_failed_s(item) for item in results
+    ]
+    episode_duration_excluding_failed_s_list = [
+        _get_episode_duration_excluding_failed_s(item) for item in results
+    ]
+
+    return {
+        "thinking_api_count": thinking_api_count,
+        "thinking_api_failed_count": thinking_api_failed_count,
+        "thinking_api_total_duration_s": thinking_api_total_duration_s,
+        "thinking_api_failed_total_duration_s": thinking_api_failed_total_duration_s,
+        "thinking_api_avg_duration_s": (
+            thinking_api_total_duration_s / thinking_api_count if thinking_api_count > 0 else 0.0
+        ),
+        "action_api_count": action_api_count,
+        "action_api_failed_count": action_api_failed_count,
+        "action_api_total_duration_s": action_api_total_duration_s,
+        "action_api_failed_total_duration_s": action_api_failed_total_duration_s,
+        "action_api_avg_duration_s": (
+            action_api_total_duration_s / action_api_count if action_api_count > 0 else 0.0
+        ),
+        "api_total_duration_s": api_total_duration_s,
+        "api_failed_total_duration_s": api_failed_total_duration_s,
+        "failed_retry_wait_duration_s_total": failed_retry_wait_duration_s_total,
+        "failed_wasted_duration_s_total": failed_wasted_duration_s_total,
+        "avg_api_total_duration_s_per_episode": api_total_duration_s / n if n > 0 else 0.0,
+        "avg_api_failed_total_duration_s_per_episode": (
+            api_failed_total_duration_s / n if n > 0 else 0.0
+        ),
+        "avg_failed_retry_wait_duration_s_per_episode": (
+            failed_retry_wait_duration_s_total / n if n > 0 else 0.0
+        ),
+        "avg_failed_wasted_duration_s_per_episode": (
+            failed_wasted_duration_s_total / n if n > 0 else 0.0
+        ),
+        "episode_duration_including_failed_s_total": sum(episode_duration_including_failed_s_list),
+        "episode_duration_including_failed_s_avg": (
+            sum(episode_duration_including_failed_s_list) / n if n > 0 else 0.0
+        ),
+        "episode_duration_excluding_failed_s_total": sum(episode_duration_excluding_failed_s_list),
+        "episode_duration_excluding_failed_s_avg": (
+            sum(episode_duration_excluding_failed_s_list) / n if n > 0 else 0.0
+        ),
+    }
+
 def load_results(results_dir: str) -> List[Dict[str, Any]]:
     log_dir = os.path.join(results_dir, "log")
     if not os.path.exists(log_dir):
@@ -54,12 +186,14 @@ def compute_metrics(results: List[Dict[str, Any]]) -> Dict[str, Any]:
         "avg_sr": sr_count / n if n > 0 else 0.0,
         "avg_spl": sum(spl_list) / n if n > 0 else 0.0,
         "avg_ndtw": sum(ndtw_list) / n if n > 0 else 0.0,
+        "timing": _compute_timing_metrics(results),
         "detailed_results": results,
     }
 
 
 def print_summary(metrics: Dict[str, Any]) -> None:
     n = metrics["total_episodes"]
+    timing = metrics["timing"]
     print("\n" + "=" * 80)
     print("📊 SpaceVLN 评估结果汇总")
     print("=" * 80)
@@ -69,6 +203,34 @@ def print_summary(metrics: Dict[str, Any]) -> None:
     print(f"  SR:    {metrics['sr_count']}/{n} ({metrics['avg_sr']:.3f})")
     print(f"  SPL:   {metrics['avg_spl']:.3f}")
     print(f"  nDTW:  {metrics['avg_ndtw']:.3f}")
+    print(f"\n⏱️  计时统计:")
+    print(
+        "  Thinking API: "
+        f"avg={timing['thinking_api_avg_duration_s']:.2f}s "
+        f"| total={timing['thinking_api_total_duration_s']:.2f}s "
+        f"| ok={timing['thinking_api_count']} fail={timing['thinking_api_failed_count']}"
+    )
+    print(
+        "  Action API:   "
+        f"avg={timing['action_api_avg_duration_s']:.2f}s "
+        f"| total={timing['action_api_total_duration_s']:.2f}s "
+        f"| ok={timing['action_api_count']} fail={timing['action_api_failed_count']}"
+    )
+    print(
+        "  API总耗时:     "
+        f"ok={timing['api_total_duration_s']:.2f}s "
+        f"| fail={timing['api_failed_total_duration_s']:.2f}s"
+    )
+    print(
+        "  失败浪费:       "
+        f"retry_wait={timing['failed_retry_wait_duration_s_total']:.2f}s "
+        f"| total={timing['failed_wasted_duration_s_total']:.2f}s"
+    )
+    print(
+        "  Episode平均:   "
+        f"exclude_failed={timing['episode_duration_excluding_failed_s_avg']:.2f}s "
+        f"| include_failed={timing['episode_duration_including_failed_s_avg']:.2f}s"
+    )
     print(f"\n{'=' * 80}")
 
 
@@ -117,6 +279,7 @@ def print_debug_info(metrics: Dict[str, Any]) -> None:
 
 def save_summary(metrics: Dict[str, Any], output_path: str) -> str:
     n = metrics["total_episodes"]
+    timing = metrics["timing"]
     content = f"""
 ================================================================================
 📊 SpaceVLN 评估结果汇总
@@ -128,6 +291,13 @@ def save_summary(metrics: Dict[str, Any], output_path: str) -> str:
   SR:    {metrics['sr_count']}/{n} ({metrics['avg_sr']:.3f})
   SPL:   {metrics['avg_spl']:.3f}
   nDTW:  {metrics['avg_ndtw']:.3f}
+
+⏱️  计时统计:
+  Thinking API: avg={timing['thinking_api_avg_duration_s']:.2f}s | total={timing['thinking_api_total_duration_s']:.2f}s | ok={timing['thinking_api_count']} fail={timing['thinking_api_failed_count']}
+  Action API:   avg={timing['action_api_avg_duration_s']:.2f}s | total={timing['action_api_total_duration_s']:.2f}s | ok={timing['action_api_count']} fail={timing['action_api_failed_count']}
+  API总耗时:     ok={timing['api_total_duration_s']:.2f}s | fail={timing['api_failed_total_duration_s']:.2f}s
+  失败浪费:       retry_wait={timing['failed_retry_wait_duration_s_total']:.2f}s | total={timing['failed_wasted_duration_s_total']:.2f}s
+  Episode平均:   exclude_failed={timing['episode_duration_excluding_failed_s_avg']:.2f}s | include_failed={timing['episode_duration_including_failed_s_avg']:.2f}s
 
 ================================================================================
 """
@@ -152,7 +322,23 @@ def save_episode_tables(
     csv_path = os.path.join(results_dir, "episode_results.csv")
     md_path = os.path.join(results_dir, "episode_results.md")
     sorted_results = sorted(results, key=lambda item: int(item.get("episode_id", -1)))
-    headers = ["episode_id", "NE", "OSR", "SR", "SPL", "nDTW"]
+    timing = metrics["timing"]
+    headers = [
+        "episode_id",
+        "NE",
+        "OSR",
+        "SR",
+        "SPL",
+        "nDTW",
+        "ThinkAvg(s)",
+        "ThinkTot(s)",
+        "ActAvg(s)",
+        "ActTot(s)",
+        "APIOK(s)",
+        "FailWaste(s)",
+        "EpNoFail(s)",
+        "EpAll(s)",
+    ]
 
     with open(csv_path, "w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=headers)
@@ -165,47 +351,81 @@ def save_episode_tables(
                 "SR": str(int(check_inf_nan(item.get("sr", 0)))),
                 "SPL": _format_metric_value(check_inf_nan(item.get("spl", 0.0)), 4),
                 "nDTW": _format_metric_value(check_inf_nan(item.get("ndtw", 0.0)), 4),
+                "ThinkAvg(s)": _format_metric_value(item.get("thinking_api_avg_duration_s", 0.0), 3),
+                "ThinkTot(s)": _format_metric_value(item.get("thinking_api_total_duration_s", 0.0), 3),
+                "ActAvg(s)": _format_metric_value(item.get("action_api_avg_duration_s", 0.0), 3),
+                "ActTot(s)": _format_metric_value(item.get("action_api_total_duration_s", 0.0), 3),
+                "APIOK(s)": _format_metric_value(item.get("api_total_duration_s", 0.0), 3),
+                "FailWaste(s)": _format_metric_value(item.get("failed_wasted_duration_s", item.get("api_failed_total_duration_s", 0.0)), 3),
+                "EpNoFail(s)": _format_metric_value(_get_episode_duration_excluding_failed_s(item), 3),
+                "EpAll(s)": _format_metric_value(_get_episode_duration_including_failed_s(item), 3),
             })
         writer.writerow({
-            "episode_id": "AVERAGE",
+            "episode_id": "SUMMARY",
             "NE": _format_metric_value(metrics["avg_ne"], 3),
             "OSR": _format_metric_value(metrics["avg_osr"], 4),
             "SR": _format_metric_value(metrics["avg_sr"], 4),
             "SPL": _format_metric_value(metrics["avg_spl"], 4),
             "nDTW": _format_metric_value(metrics["avg_ndtw"], 4),
+            "ThinkAvg(s)": _format_metric_value(timing["thinking_api_avg_duration_s"], 3),
+            "ThinkTot(s)": _format_metric_value(timing["thinking_api_total_duration_s"], 3),
+            "ActAvg(s)": _format_metric_value(timing["action_api_avg_duration_s"], 3),
+            "ActTot(s)": _format_metric_value(timing["action_api_total_duration_s"], 3),
+            "APIOK(s)": _format_metric_value(timing["api_total_duration_s"], 3),
+            "FailWaste(s)": _format_metric_value(timing["failed_wasted_duration_s_total"], 3),
+            "EpNoFail(s)": _format_metric_value(timing["episode_duration_excluding_failed_s_avg"], 3),
+            "EpAll(s)": _format_metric_value(timing["episode_duration_including_failed_s_avg"], 3),
         })
 
     md_lines = [
         "# Episode Results",
         "",
-        "| Episode | NE(m) | OSR | SR | SPL | nDTW |",
-        "| --- | --- | --- | --- | --- | --- |",
+        "| Episode | NE(m) | OSR | SR | SPL | nDTW | ThinkAvg(s) | ThinkTot(s) | ActAvg(s) | ActTot(s) | APIOK(s) | FailWaste(s) | EpNoFail(s) | EpAll(s) |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for item in sorted_results:
         md_lines.append(
-            "| {episode} | {ne} | {osr} | {sr} | {spl} | {ndtw} |".format(
+            "| {episode} | {ne} | {osr} | {sr} | {spl} | {ndtw} | {think_avg} | {think_total} | {action_avg} | {action_total} | {api_ok} | {fail_waste} | {ep_no_fail} | {ep_all} |".format(
                 episode=item.get("episode_id", ""),
                 ne=_format_metric_value(check_inf_nan(item.get("ne", -1.0)), 3),
                 osr=str(int(check_inf_nan(item.get("osr", 0)))),
                 sr=str(int(check_inf_nan(item.get("sr", 0)))),
                 spl=_format_metric_value(check_inf_nan(item.get("spl", 0.0)), 4),
                 ndtw=_format_metric_value(check_inf_nan(item.get("ndtw", 0.0)), 4),
+                think_avg=_format_metric_value(item.get("thinking_api_avg_duration_s", 0.0), 3),
+                think_total=_format_metric_value(item.get("thinking_api_total_duration_s", 0.0), 3),
+                action_avg=_format_metric_value(item.get("action_api_avg_duration_s", 0.0), 3),
+                action_total=_format_metric_value(item.get("action_api_total_duration_s", 0.0), 3),
+                api_ok=_format_metric_value(item.get("api_total_duration_s", 0.0), 3),
+                fail_waste=_format_metric_value(item.get("failed_wasted_duration_s", item.get("api_failed_total_duration_s", 0.0)), 3),
+                ep_no_fail=_format_metric_value(_get_episode_duration_excluding_failed_s(item), 3),
+                ep_all=_format_metric_value(_get_episode_duration_including_failed_s(item), 3),
             )
         )
     md_lines.extend([
         "",
-        "## Average",
+        "## Summary",
         "",
-        "| Episodes | NE(m) | OSR | SR | SPL | nDTW |",
-        "| --- | --- | --- | --- | --- | --- |",
-        "| {total} | {avg_ne} | {avg_osr} | {avg_sr} | {avg_spl} | {avg_ndtw} |".format(
+        "| Episodes | NE(m) | OSR | SR | SPL | nDTW | ThinkAvg(s) | ThinkTot(s) | ActAvg(s) | ActTot(s) | APIOK(s) | FailWaste(s) | EpNoFail(s) | EpAll(s) |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| {total} | {avg_ne} | {avg_osr} | {avg_sr} | {avg_spl} | {avg_ndtw} | {think_avg} | {think_total} | {action_avg} | {action_total} | {api_ok} | {fail_waste} | {ep_no_fail} | {ep_all} |".format(
             total=metrics["total_episodes"],
             avg_ne=_format_metric_value(metrics["avg_ne"], 3),
             avg_osr=_format_metric_value(metrics["avg_osr"], 4),
             avg_sr=_format_metric_value(metrics["avg_sr"], 4),
             avg_spl=_format_metric_value(metrics["avg_spl"], 4),
             avg_ndtw=_format_metric_value(metrics["avg_ndtw"], 4),
+            think_avg=_format_metric_value(timing["thinking_api_avg_duration_s"], 3),
+            think_total=_format_metric_value(timing["thinking_api_total_duration_s"], 3),
+            action_avg=_format_metric_value(timing["action_api_avg_duration_s"], 3),
+            action_total=_format_metric_value(timing["action_api_total_duration_s"], 3),
+            api_ok=_format_metric_value(timing["api_total_duration_s"], 3),
+            fail_waste=_format_metric_value(timing["failed_wasted_duration_s_total"], 3),
+            ep_no_fail=_format_metric_value(timing["episode_duration_excluding_failed_s_avg"], 3),
+            ep_all=_format_metric_value(timing["episode_duration_including_failed_s_avg"], 3),
         ),
+        "",
+        "> `ThinkTot/ActTot/APIOK/FailWaste` in Summary are batch totals; `ThinkAvg/ActAvg/EpNoFail/EpAll` are batch averages.",
         "",
         "> Note: repeated evaluation of the same episode keeps only the better result in `log/episode_XXX.json`.",
     ])

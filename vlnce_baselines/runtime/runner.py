@@ -249,12 +249,28 @@ def run_single_episode(
             "episode_id": episode_id,
             "success": result["success"],
             "steps": total_steps,
+            "episode_duration_including_failed_s": result.get(
+                "episode_duration_including_failed_s",
+                result.get("episode_duration_s", 0.0),
+            ),
+            "episode_duration_excluding_failed_s": result.get(
+                "episode_duration_excluding_failed_s",
+                result.get("episode_duration_s", 0.0),
+            ),
+            "api_total_duration_s": (result.get("api_summary") or {}).get("total_duration_s", 0.0),
+            "failed_wasted_duration_s": result.get("failed_wasted_duration_s", 0.0),
             "error": None,
         }
     except Exception as exc:
         import traceback
 
         error_msg = str(exc)
+        timing_summary = {}
+        if controller is not None and hasattr(controller, "_build_episode_timing_summary"):
+            try:
+                timing_summary = controller._build_episode_timing_summary()
+            except Exception:
+                timing_summary = {}
         print(f"\n❌ Episode {episode_id} 运行失败: {error_msg}")
         print("\n完整错误堆栈:")
         traceback.print_exc()
@@ -262,6 +278,10 @@ def run_single_episode(
             "episode_id": episode_id,
             "success": False,
             "steps": 0,
+            "episode_duration_including_failed_s": timing_summary.get("episode_duration_including_failed_s", 0.0),
+            "episode_duration_excluding_failed_s": timing_summary.get("episode_duration_excluding_failed_s", 0.0),
+            "api_total_duration_s": (timing_summary.get("api_summary") or {}).get("total_duration_s", 0.0),
+            "failed_wasted_duration_s": timing_summary.get("failed_wasted_duration_s", 0.0),
             "error": error_msg,
         }
     finally:
@@ -305,11 +325,31 @@ def print_batch_summary(results_summary: List[Dict[str, Any]], args: argparse.Na
     if total_count > 0:
         success_rate = success_count / total_count * 100.0
         avg_steps = sum(result["steps"] for result in results_summary) / total_count
+        avg_episode_duration_including_failed_s = (
+            sum(float(result.get("episode_duration_including_failed_s", 0.0) or 0.0) for result in results_summary)
+            / total_count
+        )
+        avg_episode_duration_excluding_failed_s = (
+            sum(float(result.get("episode_duration_excluding_failed_s", 0.0) or 0.0) for result in results_summary)
+            / total_count
+        )
+        avg_api_total_duration_s = (
+            sum(float(result.get("api_total_duration_s", 0.0) or 0.0) for result in results_summary)
+            / total_count
+        )
+        avg_failed_wasted_duration_s = (
+            sum(float(result.get("failed_wasted_duration_s", 0.0) or 0.0) for result in results_summary)
+            / total_count
+        )
         print(f"\n✅ 成功: {success_count}/{total_count} ({success_rate:.1f}%)")
         print(f"❌ 失败: {total_count - success_count}/{total_count}")
     else:
         success_rate = 0.0
         avg_steps = 0.0
+        avg_episode_duration_including_failed_s = 0.0
+        avg_episode_duration_excluding_failed_s = 0.0
+        avg_api_total_duration_s = 0.0
+        avg_failed_wasted_duration_s = 0.0
         print("\n⚠️  没有运行任何episodes")
 
     print("\n详细结果:")
@@ -324,6 +364,13 @@ def print_batch_summary(results_summary: List[Dict[str, Any]], args: argparse.Na
     print("=" * 60)
     print(f"✅ 成功率: {success_count}/{total_count} ({success_rate:.1f}%)")
     print(f"📊 平均步数: {avg_steps:.1f}")
+    print(
+        "⏱️  平均时间: "
+        f"API成功={avg_api_total_duration_s:.2f}s | "
+        f"Episode(去失败)={avg_episode_duration_excluding_failed_s:.2f}s | "
+        f"Episode(含失败)={avg_episode_duration_including_failed_s:.2f}s | "
+        f"失败浪费={avg_failed_wasted_duration_s:.2f}s"
+    )
     print(f"📁 结果目录: {results_dir}")
     print(f"📄 详细报告: {os.path.join(results_dir, 'summary.txt')}")
     print("=" * 60)
