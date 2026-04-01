@@ -886,6 +886,8 @@ class VLMNavigationController(BaseNavigationController):
         if getattr(self, "mapper", None) is None:
             return False
 
+        dest_room_norm = strip_space_type_variant_suffixes(str(dest_room or "").strip().lower()) or None
+        dest_object_norm = self._normalize_waypoint_endpoint_label(dest_object) or self._normalize_landmark_candidate(dest_object)
         current_area_text = (
             getattr(self.mapper, "current_space_area_display_label", "")
             or getattr(self.mapper, "current_space_area_label", "")
@@ -894,17 +896,83 @@ class VLMNavigationController(BaseNavigationController):
         current_area_type = self._normalize_landmark_candidate(
             getattr(self.mapper, "current_space_area_type", "")
         )
-        if current_area_type != "stairs" and not self._is_stairs_like_text(current_area_norm):
-            return False
+        dest_side = self._landing_side_from_text(dest_object_norm)
 
-        dest_side = self._landing_side_from_text(dest_object)
-        if dest_side is None:
+        area_matches = False
+        if current_area_norm:
+            room_matches = (
+                not dest_room_norm or
+                dest_room_norm in current_area_norm or
+                current_area_norm in dest_room_norm
+            )
+            side_matches = (
+                dest_side is None or
+                self._landing_side_from_text(current_area_norm) in {
+                    dest_side,
+                    "landing" if dest_side in {"top", "bottom"} else dest_side,
+                }
+            )
+            if room_matches and side_matches:
+                area_matches = True
+
+        if area_matches:
             return True
 
-        current_side = self._landing_side_from_text(current_area_norm)
-        if dest_side == "landing":
-            return current_side in {"landing", "top", "bottom"}
-        return current_side == dest_side
+        if current_area_type == "stairs" and self._is_stairs_like_text(current_area_norm):
+            if dest_side is None:
+                return True
+            current_side = self._landing_side_from_text(current_area_norm)
+            if dest_side == "landing":
+                return current_side in {"landing", "top", "bottom"}
+            if current_side == dest_side:
+                return True
+
+        current_pose = getattr(self.mapper, "full_pose", None)
+        resolution_cm = float(getattr(self.mapper, "resolution", 0.0) or 0.0)
+        if current_pose is None or len(current_pose) < 2 or resolution_cm <= 0.0:
+            return False
+
+        waypoint_positions, _waypoint_ids, waypoint_descriptions = self.mapper.get_global_waypoints()
+        waypoint_floor_ids = self.mapper.get_global_waypoint_floor_ids()
+        current_floor_id = int(getattr(self.mapper, "current_floor_id", 0) or 0)
+
+        semantic_match_radius_m = max(
+            float(self.ACTION_SUBTASK_AUTOCOMPLETE_OPEN_DISTANCE_M),
+            float(self.ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M),
+        )
+        for idx, description in enumerate(waypoint_descriptions or []):
+            if idx >= len(waypoint_positions):
+                break
+            if idx < len(waypoint_floor_ids) and int(waypoint_floor_ids[idx] or 0) != current_floor_id:
+                continue
+            desc_norm = self._normalize_waypoint_endpoint_label(description)
+            if not desc_norm:
+                continue
+
+            room_matches = (
+                not dest_room_norm or
+                dest_room_norm in desc_norm or
+                desc_norm in dest_room_norm
+            )
+            if not room_matches:
+                continue
+
+            if dest_object_norm and dest_object_norm not in desc_norm:
+                desc_side = self._landing_side_from_text(desc_norm)
+                if dest_side is None or desc_side != dest_side:
+                    continue
+
+            wp_x, wp_y = waypoint_positions[idx]
+            try:
+                curr_x = float(current_pose[0])
+                curr_y = float(current_pose[1])
+                dist_m = float(np.hypot(float(wp_x) - curr_x, float(wp_y) - curr_y) * (resolution_cm / 100.0))
+            except (TypeError, ValueError):
+                continue
+            if dist_m <= semantic_match_radius_m:
+                return True
+
+        return False
 
     def _get_current_subtask_autocomplete_candidates(self) -> List[str]:
         """Only allow proximity auto-stop when subtask_landmark is the destination landmark itself."""
@@ -1240,6 +1308,11 @@ class VLMNavigationController(BaseNavigationController):
     def _build_previous_subtask_landmark_summary(self) -> str:
         entries = self._get_latest_action_local_map_landmark_entries()
         autocomplete_info = dict(getattr(self, "previous_subtask_autocomplete_landmark_info", {}) or {})
+        if entries and not autocomplete_info:
+            inferred_autocomplete = self._should_autocomplete_subtask_during_action_step(entries)
+            if inferred_autocomplete is not None:
+                self._record_previous_subtask_autocomplete_landmark(inferred_autocomplete)
+                autocomplete_info = dict(getattr(self, "previous_subtask_autocomplete_landmark_info", {}) or {})
         if not entries:
             fallback_info = dict(autocomplete_info)
             if not fallback_info:
