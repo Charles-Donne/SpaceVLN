@@ -10,7 +10,9 @@ Internal base:
 from vlnce_baselines.controllers.vlm_navigation_controller import (
     VLMNavigationController,
 )
+from vlnce_baselines.controllers.landmark_memory_state import LandmarkMemoryState
 
 __all__ = [
+    "LandmarkMemoryState",
     "VLMNavigationController",
 ]

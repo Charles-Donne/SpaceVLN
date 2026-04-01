@@ -785,8 +785,11 @@ class MapVisualizer:
             self._prune_render_cache(render_cache_key)
         self._active_render_cache_key = render_cache_key
         depth_for_instances = getattr(controller, 'latest_depth_meters', None) if controller is not None else None
-        existing_landmark_instances = list(getattr(controller, 'latest_landmark_instances_world', []) or []) \
-            if controller is not None else []
+        landmark_memory = controller.landmark_memory if controller is not None else None
+        existing_landmark_instances = (
+            landmark_memory.get_world_instances()
+            if landmark_memory is not None else []
+        )
         projected_landmark_instances = self._project_landmark_instances_from_detections(
             detections=detections,
             labels=labels,
@@ -803,12 +806,12 @@ class MapVisualizer:
             current_pose=current_pose,
         )
 
-        if controller is not None:
-            controller.latest_landmark_instances_world = [dict(inst) for inst in landmark_instances_world]
+        if landmark_memory is not None:
+            landmark_memory.set_world_instances(landmark_instances_world)
 
         locked_action_landmark_entries = (
-            list(getattr(controller, 'latest_action_landmark_topk_entries', []) or [])
-            if controller is not None else []
+            landmark_memory.get_latest_prompt_entries()
+            if landmark_memory is not None else []
         )
         has_fresh_landmark_detection = (
             detections is not None and
@@ -884,9 +887,11 @@ class MapVisualizer:
                 if cls_name not in landmark_dist_map or dist_m < landmark_dist_map[cls_name][0]:
                     landmark_dist_map[cls_name] = (dist_m, angle_deg)
 
-            if controller is not None:
-                controller.latest_landmark_dist_map = landmark_dist_map if landmark_dist_map else {}
-                controller.latest_landmark_dist_map_multi = landmark_dist_map_multi if landmark_dist_map_multi else {}
+            if landmark_memory is not None:
+                landmark_memory.set_latest_distance_maps(
+                    dist_map=landmark_dist_map if landmark_dist_map else {},
+                    dist_map_multi=landmark_dist_map_multi if landmark_dist_map_multi else {},
+                )
 
             should_render_detection = (
                 policy.get('render_detection', False) and (
@@ -941,8 +946,8 @@ class MapVisualizer:
                 paths['detection'] = None
                 if controller is not None:
                     controller.latest_action_detection_vis = None
-                    controller.latest_visible_landmark_entries = []
-                    controller.latest_action_landmark_topk_entries = []
+                    if landmark_memory is not None:
+                        landmark_memory.clear_latest_prompt_view()
 
             n_cfg = len(landmark_classes) if landmark_classes else 0
             n_det_inst = len(detected_landmarks_step)

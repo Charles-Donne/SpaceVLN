@@ -188,12 +188,15 @@ def render_detection_bbox(owner,
         )
         return filtered_entries
 
+    landmark_memory = controller.landmark_memory if controller is not None else None
+
     if action_landmark_context is None:
         if selected_landmark_instances is not None:
             selected_world_landmark_instances = [dict(item) for item in (selected_landmark_instances or [])]
-            all_world_landmark_instances: List[Dict[str, Any]] = []
-            if controller is not None and getattr(controller, "latest_landmark_instances_world", None):
-                all_world_landmark_instances = list(controller.latest_landmark_instances_world or [])
+            all_world_landmark_instances: List[Dict[str, Any]] = (
+                landmark_memory.get_world_instances()
+                if landmark_memory is not None else []
+            )
             display_lookup_source = all_world_landmark_instances or selected_world_landmark_instances
             action_landmark_context = {
                 "all_instances": all_world_landmark_instances,
@@ -202,9 +205,10 @@ def render_detection_bbox(owner,
                 "class_totals": owner._build_landmark_class_totals(display_lookup_source),
             }
         else:
-            all_world_landmark_instances: List[Dict[str, Any]] = []
-            if controller is not None and getattr(controller, "latest_landmark_instances_world", None):
-                all_world_landmark_instances = list(controller.latest_landmark_instances_world or [])
+            all_world_landmark_instances: List[Dict[str, Any]] = (
+                landmark_memory.get_world_instances()
+                if landmark_memory is not None else []
+            )
             action_landmark_context = owner._build_action_landmark_context(
                 all_world_landmark_instances,
                 topk=local_map_landmark_topk,
@@ -380,9 +384,11 @@ def render_detection_bbox(owner,
             selected_topk_entries.append(offscreen_entry)
         selected_topk_entries = _sort_selected_topk_entries(selected_topk_entries)
         strip, selected_topk_entries = _build_landmark_strip(selected_topk_entries)
-        if controller is not None:
-            controller.latest_visible_landmark_entries = []
-            controller.latest_action_landmark_topk_entries = selected_topk_entries
+        if landmark_memory is not None:
+            landmark_memory.set_latest_prompt_entries(
+                visible_entries=[],
+                prompt_entries=selected_topk_entries,
+            )
         if append_bottom_strip and strip is not None:
             detection_vis = np.vstack([detection_vis, strip])
         if return_visible_entries:
@@ -669,9 +675,11 @@ def render_detection_bbox(owner,
     if append_bottom_strip and strip is not None:
         detection_vis = np.vstack([detection_vis, strip])
 
-    if controller is not None:
-        controller.latest_visible_landmark_entries = visible_entries_meta
-        controller.latest_action_landmark_topk_entries = selected_topk_entries
+    if landmark_memory is not None:
+        landmark_memory.set_latest_prompt_entries(
+            visible_entries=visible_entries_meta,
+            prompt_entries=selected_topk_entries,
+        )
 
     # 返回检测可视化、检测到的landmark列表、已匹配的类名集合和底部条带
     if return_visible_entries:

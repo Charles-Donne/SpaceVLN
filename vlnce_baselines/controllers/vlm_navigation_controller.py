@@ -20,6 +20,7 @@ import re
 import cv2
 import json
 import time
+import math
 import numpy as np
 import torch
 from typing import Dict, Any, List, Tuple, Optional, Sequence
@@ -1059,7 +1060,6 @@ class VLMNavigationController(BaseNavigationController):
                 candidate_names=candidate_names,
             ):
                 continue
-            source = "vis" if str(entry.get("source", "mem") or "mem") == "vis" else "mem"
             matches.append({
                 "name": str(entry.get('name') or candidate_names[0]),
                 "distance_m": float(entry.get('distance_m')),
@@ -1067,7 +1067,12 @@ class VLMNavigationController(BaseNavigationController):
                 "angle_deg": entry.get('angle_deg'),
                 "is_opening_like": bool(self._is_opening_like_landmark_entry(entry)),
                 "stop_distance_m": float(self._autocomplete_stop_distance_m(entry)),
-                "source": source,
+                "source": "vis" if str(entry.get("source", "mem") or "mem") == "vis" else "mem",
+                "display_id": self._safe_int(entry.get("display_id")),
+                "instance_idx": self._safe_int(entry.get("instance_idx")),
+                "class_total": self._safe_int(entry.get("class_total")),
+                "selection_rank": self._safe_int(entry.get("selection_rank")),
+                "instance_uid": self._safe_int(entry.get("instance_uid")),
             })
 
         if not matches:
@@ -1085,7 +1090,6 @@ class VLMNavigationController(BaseNavigationController):
                     candidate_names=candidate_names,
                 ):
                     continue
-                source = "vis" if str(entry.get("source", "mem") or "mem") == "vis" else "mem"
                 relaxed_matches.append({
                     "name": str(entry.get('name') or candidate_names[0]),
                     "distance_m": float(entry.get('distance_m')),
@@ -1094,7 +1098,12 @@ class VLMNavigationController(BaseNavigationController):
                     "is_opening_like": bool(self._is_opening_like_landmark_entry(entry)),
                     "stop_distance_m": float(self._autocomplete_stop_distance_m(entry)),
                     "structure_matched": True,
-                    "source": source,
+                    "source": "vis" if str(entry.get("source", "mem") or "mem") == "vis" else "mem",
+                    "display_id": self._safe_int(entry.get("display_id")),
+                    "instance_idx": self._safe_int(entry.get("instance_idx")),
+                    "class_total": self._safe_int(entry.get("class_total")),
+                    "selection_rank": self._safe_int(entry.get("selection_rank")),
+                    "instance_uid": self._safe_int(entry.get("instance_uid")),
                 })
 
             if not relaxed_matches:
@@ -1234,12 +1243,12 @@ class VLMNavigationController(BaseNavigationController):
 
     def _get_latest_action_local_map_landmark_entries(self) -> List[Dict[str, Any]]:
         latest_entries = self._sort_action_landmark_entries(
-            getattr(self, "latest_action_landmark_topk_entries", []) or []
+            self.landmark_memory.get_latest_prompt_entries()
         )
         if latest_entries:
             return latest_entries
 
-        history = getattr(self, "current_step_action_landmark_topk_entries", {}) or {}
+        history = self.landmark_memory.prompt_entries_by_step
         for step_idx in sorted(history.keys(), reverse=True):
             entries = self._sort_action_landmark_entries(history.get(step_idx, []) or [])
             if entries:
@@ -1270,7 +1279,7 @@ class VLMNavigationController(BaseNavigationController):
         return ordered_entries
 
     def _get_action_landmark_prompt_entries(self, detection_step: Optional[int]) -> List[Dict[str, Any]]:
-        history = getattr(self, "current_step_action_landmark_topk_entries", {}) or {}
+        history = self.landmark_memory.prompt_entries_by_step
         topk = max(1, int(LANDMARK_STRIP_TOPK))
         if detection_step is not None:
             entries = self._sort_action_landmark_entries(history.get(detection_step, []) or [])
@@ -1278,7 +1287,7 @@ class VLMNavigationController(BaseNavigationController):
                 return entries[:topk]
 
         latest_entries = self._sort_action_landmark_entries(
-            getattr(self, "latest_action_landmark_topk_entries", []) or []
+            self.landmark_memory.get_latest_prompt_entries()
         )
         if latest_entries:
             return latest_entries[:topk]
@@ -1290,9 +1299,9 @@ class VLMNavigationController(BaseNavigationController):
     ) -> str:
         summary = build_action_landmark_map_info(
             step_landmark_entries=entries,
-            landmark_dist_map=getattr(self, "latest_landmark_dist_map", {}),
-            landmark_dist_map_multi=getattr(self, "latest_landmark_dist_map_multi", {}),
-            landmark_instances_world=getattr(self, "latest_landmark_instances_world", []),
+            landmark_dist_map=self.landmark_memory.get_latest_dist_map(),
+            landmark_dist_map_multi=self.landmark_memory.get_latest_dist_map_multi(),
+            landmark_instances_world=self.landmark_memory.get_world_instances(),
         )
         return summary or "no valid action landmark entries"
 
@@ -1315,6 +1324,7 @@ class VLMNavigationController(BaseNavigationController):
             "display_id": self._safe_int(payload.get("display_id")),
             "instance_idx": self._safe_int(payload.get("instance_idx")),
             "class_total": self._safe_int(payload.get("class_total")),
+            "instance_uid": self._safe_int(payload.get("instance_uid")),
             "final_distance_m": distance_m,
             "final_direction": format_relative_direction(angle_deg) if angle_deg is not None else "Unknown",
             "final_angle_deg": angle_deg,
@@ -1375,17 +1385,26 @@ class VLMNavigationController(BaseNavigationController):
             autocomplete_name_norm = self._normalize_landmark_candidate(
                 autocomplete_info.get("raw_name") or autocomplete_info.get("name")
             )
+            autocomplete_instance_uid = self._safe_int(autocomplete_info.get("instance_uid"))
+            entry_instance_uid = self._safe_int(entry.get("instance_uid"))
             autocomplete_display_id = self._safe_int(autocomplete_info.get("display_id"))
             entry_display_id = self._safe_int(entry.get("display_id"))
             has_arrived = bool(entry.get("has_arrived"))
             if not has_arrived and entry_name_norm and autocomplete_name_norm:
-                has_arrived = (
+                same_name = (
                     entry_name_norm == autocomplete_name_norm
                     or entry_name_norm in autocomplete_name_norm
                     or autocomplete_name_norm in entry_name_norm
                 )
-                if has_arrived and autocomplete_display_id is not None and entry_display_id is not None:
-                    has_arrived = entry_display_id == autocomplete_display_id
+                if same_name:
+                    if autocomplete_instance_uid is not None and entry_instance_uid is not None:
+                        has_arrived = entry_instance_uid == autocomplete_instance_uid
+                    elif autocomplete_display_id is not None and entry_display_id is not None:
+                        has_arrived = entry_display_id == autocomplete_display_id
+                    else:
+                        autocomplete_class_total = self._safe_int(autocomplete_info.get("class_total")) or 1
+                        entry_class_total = self._safe_int(entry.get("class_total")) or 1
+                        has_arrived = autocomplete_class_total <= 1 and entry_class_total <= 1
             if not has_arrived:
                 has_arrived = self._entry_reaches_action_arrival_threshold(
                     entry,
@@ -1397,6 +1416,7 @@ class VLMNavigationController(BaseNavigationController):
                 "display_id": self._safe_int(entry.get("display_id")),
                 "instance_idx": self._safe_int(entry.get("instance_idx")),
                 "class_total": self._safe_int(entry.get("class_total")),
+                "instance_uid": self._safe_int(entry.get("instance_uid")),
                 "final_distance_m": distance_m,
                 "final_direction": format_relative_direction(angle_deg) if angle_deg is not None else "Unknown",
                 "final_angle_deg": angle_deg,
@@ -1454,16 +1474,13 @@ class VLMNavigationController(BaseNavigationController):
         )
 
     def _get_current_action_step_landmark_entries(self) -> List[Dict[str, Any]]:
-        if hasattr(self, 'current_step_action_landmark_topk_entries'):
-            entries = self.current_step_action_landmark_topk_entries.get(self.current_step, []) or []
-            if entries:
-                return entries
+        entries = self.landmark_memory.get_step_prompt_entries(self.current_step)
+        if entries:
+            return entries
         latest_entries = self._get_latest_action_local_map_landmark_entries()
         if latest_entries:
             return latest_entries
-        if not hasattr(self, 'current_step_landmark_entries'):
-            return []
-        return self.current_step_landmark_entries.get(self.current_step, []) or []
+        return self.landmark_memory.get_step_visible_entries(self.current_step)
 
     def _trigger_verify_replan(self, reason_tag: str, total_steps: int) -> Tuple[bool, Optional[Dict[str, Any]]]:
         if not self.current_subtask:
@@ -1870,16 +1887,7 @@ class VLMNavigationController(BaseNavigationController):
         self.tracked_landmark_classes.clear()
         self.target_landmark = None
         self.classes = []
-
-        if hasattr(self, 'current_step_landmarks'):
-            self.current_step_landmarks.clear()
-        if hasattr(self, 'current_step_landmark_entries'):
-            self.current_step_landmark_entries.clear()
-        if hasattr(self, 'current_step_action_landmark_topk_entries'):
-            self.current_step_action_landmark_topk_entries.clear()
-        if hasattr(self, 'latest_landmark_instances_world'):
-            self.latest_landmark_instances_world = []
-        self._clear_landmark_detection_cache()
+        self.landmark_memory.reset_subtask()
 
         detected = getattr(self.category_config, '_detected_classes', None)
         if detected is not None and hasattr(detected, '_dict'):
@@ -2681,8 +2689,6 @@ class VLMNavigationController(BaseNavigationController):
         """
         执行旋转动作序列（使用统一的执行器，确保地图更新、步数记录、可视化保存）
         """
-        from habitat.sims.habitat_simulator.actions import HabitatSimActions
-        
         for i, action_dict in enumerate(action_sequence):
             action_name = action_dict['action']
             
@@ -2706,6 +2712,255 @@ class VLMNavigationController(BaseNavigationController):
                 return False
         
         return True
+
+    def _ensure_action_observation_ready(self) -> bool:
+        """Ensure action planning has a current observation without duplicating refresh logic."""
+        if self.latest_obs is not None:
+            return True
+
+        refresh_steps = (
+            (HabitatSimActions.TURN_RIGHT, "OBS_REFRESH_TURN_RIGHT", "turn-right"),
+            (HabitatSimActions.TURN_LEFT, "OBS_REFRESH_TURN_LEFT", "turn-left"),
+        )
+        for action_id, action_name, warning_suffix in refresh_steps:
+            refresh_result = self.step_with_vlm(
+                action_id,
+                action_name=action_name,
+                save_vis=True,
+                enable_landmark_detection=False,
+            )
+            if refresh_result.get("done", False):
+                print(f"[WARN] Episode ended during observation refresh {warning_suffix}")
+                return False
+        return self.latest_obs is not None
+
+    def _build_action_detected_landmarks_text(self, detection_step: Optional[int]) -> str:
+        """Build the compact action-prompt landmark text from the current detection step."""
+        if detection_step is not None:
+            step_landmarks = self.landmark_memory.get_step_detected(detection_step)
+            if step_landmarks:
+                return ", ".join([name for name, _ in step_landmarks])
+
+        if getattr(self, "target_landmark", None):
+            return f"No {self.target_landmark} detected in current view"
+        return "No landmarks detected"
+
+    def _build_action_detection_image_input(self, last_step: int) -> Optional[Dict[str, Any]]:
+        """Prefer the detection render for action input and fall back to raw RGB only if needed."""
+        detection_vis = getattr(self, "latest_action_detection_vis", None)
+        if detection_vis is not None:
+            return {
+                "image_array": detection_vis,
+                "color_space": "bgr",
+                "artifact_name": "action_view.jpg",
+                "name": f"action_view_step_{last_step:04d}",
+            }
+
+        if self.latest_obs is not None and "rgb" in self.latest_obs:
+            rgb_bgr = cv2.cvtColor(self.latest_obs["rgb"], cv2.COLOR_RGB2BGR)
+            return {
+                "image_array": rgb_bgr,
+                "color_space": "bgr",
+                "artifact_name": "action_view.jpg",
+                "name": f"action_view_step_{last_step:04d}",
+            }
+
+        print(f"  [WARN] Action input image not available for step {last_step}")
+        return None
+
+    def _write_action_subtask_info_if_needed(self, subtask_id: str) -> None:
+        """Persist one action-subtask metadata file when a subtask starts running."""
+        info_file = self.save_manager.action_info_path(subtask_id)
+        if os.path.exists(info_file):
+            return
+
+        subtask_info = {
+            "subtask_id": self.subtask_count,
+            "next_waypoint": self._get_next_waypoint_field(self.current_subtask),
+            "subtask_instruction": self.current_subtask.get("subtask_instruction", ""),
+            "start_step": self.current_step,
+            "timestamp": datetime.now().isoformat(),
+        }
+        with open(info_file, "w", encoding="utf-8") as f:
+            json.dump(subtask_info, f, ensure_ascii=False, indent=2)
+
+    def _build_action_decision_context(self) -> Optional[Dict[str, Any]]:
+        """Collect the action-LLM inputs in one place so the execution path stays modular."""
+        if not self._ensure_action_observation_ready():
+            return None
+
+        last_step = self.current_step
+        action_phase = self._current_action_phase()
+        self._run_pre_action_detection_snapshot(action_phase)
+
+        detection_step = last_step
+        step_landmark_entries = self._get_action_landmark_prompt_entries(detection_step)
+        detected_landmarks = self._build_action_detected_landmarks_text(detection_step)
+        obstacle_distances = getattr(
+            self,
+            "latest_obstacle_distances",
+            {"front": "Unknown", "left_30": "Unknown", "right_30": "Unknown"},
+        )
+
+        subtask_id = self._current_subtask_run_id()
+        action_save_dir = self.save_manager.action_step_dir(
+            subtask_id,
+            self.current_step + 1,
+            create=True,
+        )
+        self._write_action_subtask_info_if_needed(subtask_id)
+
+        detection_image = self._build_action_detection_image_input(last_step)
+        waypoint_summary = self._get_waypoint_summary(
+            include_area_chain=False,
+            include_path=False,
+        )
+        action_landmark_map_info = build_action_landmark_map_info(
+            step_landmark_entries=step_landmark_entries,
+            landmark_dist_map=self.landmark_memory.get_latest_dist_map(),
+            landmark_dist_map_multi=self.landmark_memory.get_latest_dist_map_multi(),
+            landmark_instances_world=self.landmark_memory.get_world_instances(),
+        )
+        print(f"[ActionLandmarks] {action_landmark_map_info or 'no valid action landmark entries'}")
+
+        return {
+            "step_landmark_entries": step_landmark_entries,
+            "detected_landmarks": detected_landmarks,
+            "obstacle_distances": obstacle_distances,
+            "action_save_dir": action_save_dir,
+            "detection_image": detection_image,
+            "waypoint_summary": waypoint_summary,
+            "action_landmark_map_info": action_landmark_map_info,
+        }
+
+    def _request_vlm_action(
+        self,
+        action_context: Dict[str, Any],
+        action_subtask_instruction: str,
+        progress_summary_for_prompt: str,
+        previous_action_reason_for_prompt: str,
+        allowed_action_names: Optional[Sequence[str]],
+    ) -> Tuple[Optional[int], Optional[str], Optional[Dict[str, Any]], int, float]:
+        """Run the action VLM once, including blocked-front controller recovery."""
+        step_landmark_entries = action_context["step_landmark_entries"]
+        max_blocked_forward_requeries = 1
+
+        action_id: Optional[int] = None
+        action_name: Optional[str] = None
+        response: Optional[Dict[str, Any]] = None
+        degrees = 0
+        meters = 0.0
+
+        for blocked_retry_idx in range(max_blocked_forward_requeries):
+            action_api_start_time = time.perf_counter()
+            (
+                action_id,
+                action_name,
+                response,
+                degrees,
+                meters,
+                _prompt,
+            ) = self.action_executor.decide_action(
+                next_waypoint=self._get_next_waypoint_field(self.current_subtask),
+                subtask_instruction=action_subtask_instruction,
+                first_person_image=action_context["detection_image"] or "",
+                action_mapping=ACTION_MAPPING,
+                progress_summary=progress_summary_for_prompt,
+                waypoint_summary=action_context["waypoint_summary"],
+                detection_image=action_context["detection_image"],
+                detected_landmarks=action_context["detected_landmarks"],
+                previous_action_reason=previous_action_reason_for_prompt,
+                obstacle_distances=action_context["obstacle_distances"],
+                landmark_map_info=action_context["action_landmark_map_info"],
+                allowed_action_names=allowed_action_names,
+                save_dir=action_context["action_save_dir"],
+            )
+            self._record_action_api_call(
+                duration_s=time.perf_counter() - action_api_start_time,
+                success=bool(action_id is not None),
+                action_name=action_name,
+            )
+
+            if not (
+                self.action_stagnation_retry_pending and
+                str(action_name or "").upper() == "MOVE_FORWARD"
+            ):
+                break
+
+            print(
+                "[ActionStagnation] Rejected MOVE_FORWARD after blocked-front warning; "
+                "controller-side recovery will take over from the same current view"
+            )
+            action_id = None
+            action_name = None
+            previous_action_reason_for_prompt = (
+                f"{self.action_stagnation_retry_notice_text} "
+                "The previous response still chose `MOVE_FORWARD`, which is forbidden for this blocked-front retry. "
+                "Do not output `MOVE_FORWARD` on this call. Choose `TURN_LEFT 30deg` or `TURN_RIGHT 30deg`, "
+                "unless the destination is already reached and `STOP` is valid."
+            ).strip()
+            if blocked_retry_idx < max_blocked_forward_requeries - 1:
+                continue
+
+            print("[ERR] Action VLM kept choosing forbidden MOVE_FORWARD after a blocked-front warning")
+            forced_recovery = self._build_forced_blocked_front_recovery_action(
+                step_landmark_entries=step_landmark_entries,
+            )
+            if forced_recovery is None:
+                return None, None, None, 0, 0.0
+
+            action_id = forced_recovery["action_id"]
+            action_name = forced_recovery["action_name"]
+            response = forced_recovery["response"]
+            degrees = int(forced_recovery.get("degrees", 0) or 0)
+            meters = float(forced_recovery.get("meters", 0.0) or 0.0)
+            if str(action_name or "").upper() in ("TURN_LEFT", "TURN_RIGHT"):
+                self.blocked_front_controller_recovery_count = int(
+                    getattr(self, "blocked_front_controller_recovery_count", 0) or 0
+                ) + 1
+                print(
+                    "[ActionStagnation] Controller forced "
+                    f"{action_name} after forbidden blocked-front retries "
+                    f"(recovery #{self.blocked_front_controller_recovery_count})"
+                )
+            else:
+                self._reset_blocked_front_controller_recovery_state()
+                print("[ActionStagnation] Controller forced STOP because the destination is already reached")
+            break
+
+        return action_id, action_name, response, degrees, meters
+
+    def _check_post_action_landmark_autocomplete(
+        self,
+        action_phase: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Refresh post-step landmark state once and run auto-stop on that same state."""
+        self._refresh_post_action_landmark_detection_state(action_phase)
+        step_landmark_entries = self._get_current_action_step_landmark_entries()
+        auto_completed_subtask = self._should_autocomplete_subtask_during_action_step(
+            step_landmark_entries
+        )
+        if auto_completed_subtask is None:
+            return None
+
+        self._record_previous_subtask_autocomplete_landmark(auto_completed_subtask)
+        auto_stop_landmark_summary = self._format_action_landmark_entries_summary(
+            step_landmark_entries
+        )
+        landmark_kind = "opening-like" if auto_completed_subtask.get("is_opening_like") else "solid"
+        landmark_source = "vis" if str(auto_completed_subtask.get("source", "mem") or "mem") == "vis" else "mem"
+        landmark_display_id = self._safe_int(auto_completed_subtask.get("display_id"))
+        landmark_id_text = f" #{landmark_display_id}" if landmark_display_id is not None and landmark_display_id > 0 else ""
+        print(f"[AutoStopLandmarks] {auto_stop_landmark_summary}")
+        print(
+            "[AutoSubtaskComplete] "
+            f"{landmark_source} {auto_completed_subtask['name']}{landmark_id_text} ({landmark_kind}) reached within "
+            f"{auto_completed_subtask['distance_m']:.2f}m "
+            f"(threshold {float(auto_completed_subtask.get('stop_distance_m', self.ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M)):.2f}m) "
+            f"on action step {self.current_step}; "
+            "return control to the thinking controller."
+        )
+        return auto_completed_subtask
     
     def execute_action_with_vlm(self) -> Tuple[Optional[int], Optional[str], bool, int, Optional[Dict]]:
         """
@@ -2720,131 +2975,10 @@ class VLMNavigationController(BaseNavigationController):
         if self._episode_done_cached():
             print("[WARN] Episode already done, skip action decision")
             return None, None, True, 1, None
-        
-        # 获取当前观察：使用缓存的观察或通过旋转获取
-        if self.latest_obs is not None:
-            obs = self.latest_obs
-        else:
-            # 如果没有缓存，仍通过统一执行器做一次右转再左转回来；
-            # 这样真实 Habitat 动作会正确计步、更新地图并保存 navigation visualization。
-            refresh_right = self.step_with_vlm(
-                HabitatSimActions.TURN_RIGHT,
-                action_name="OBS_REFRESH_TURN_RIGHT",
-                save_vis=True,
-                enable_landmark_detection=False,
-            )
-            if refresh_right.get('done', False):
-                print("[WARN] Episode ended during observation refresh turn-right")
-                return None, None, True, 1, None
 
-            refresh_left = self.step_with_vlm(
-                HabitatSimActions.TURN_LEFT,
-                action_name="OBS_REFRESH_TURN_LEFT",
-                save_vis=True,
-                enable_landmark_detection=False,
-            )
-            if refresh_left.get('done', False):
-                print("[WARN] Episode ended during observation refresh turn-left")
-                return None, None, True, 1, None
-            obs = refresh_left.get('obs') or self.latest_obs
-        
-        # 获取最新保存的观察信息
-        # 上一步已保存的文件（如果current_step=13，则读取step_0012的地图）
-        last_step = self.current_step  # execute_action在step执行前调用，所以用current_step
-        action_phase = self._current_action_phase()
-
-        # 首次Action前检测：不在旋转过程中检测，等旋转结束后在当前朝向做一次
-        self._run_pre_action_detection_snapshot(action_phase)
-
-        detection_image = None
-        detection_step = last_step
-        
-        # 获取detection图像对应的landmark类别
-        # 使用找到的detection图像对应的step
-        detected_landmarks = None
-        step_landmark_entries = self._get_action_landmark_prompt_entries(detection_step)
-
-        if detection_step is not None and hasattr(self, 'current_step_landmarks') and detection_step in self.current_step_landmarks:
-            # 当前step检测到的landmarks: [(name, confidence), ...]
-            step_landmarks = self.current_step_landmarks[detection_step]
-            if step_landmarks:
-                detected_landmarks = ', '.join([name for name, _ in step_landmarks])
-        
-        # 退化策略：如果没有检测结果，报告"未检测到"
-        if not detected_landmarks:
-            if hasattr(self, 'target_landmark') and self.target_landmark:
-                detected_landmarks = f"No {self.target_landmark} detected in current view"
-            else:
-                detected_landmarks = "No landmarks detected"
-        
-        # 使用最新的障碍物距离（在step_with_vlm中已更新）
-        obstacle_distances = getattr(self, 'latest_obstacle_distances', {
-            'front': 'Unknown',
-            'left_30': 'Unknown',
-            'right_30': 'Unknown',
-        })
-        
-        # 准备action记录
-        subtask_id = self._current_subtask_run_id()
-        
-        # 保存子任务信息
-        subtask_info = {
-            "subtask_id": self.subtask_count,
-            "next_waypoint": self._get_next_waypoint_field(self.current_subtask),
-            "subtask_instruction": self.current_subtask.get('subtask_instruction', ''),
-            "start_step": self.current_step,
-            "timestamp": datetime.now().isoformat()
-        }
-        
-        # 计算save_dir: API发送时同步保存压缩图片+prompt
-        action_save_dir = self.save_manager.action_step_dir(
-            subtask_id,
-            self.current_step + 1,
-            create=True,
-        )
-
-        detection_image = None
-        detection_vis = getattr(self, 'latest_action_detection_vis', None)
-        if detection_vis is not None:
-            detection_image = {
-                "image_array": detection_vis,
-                "color_space": "bgr",
-                "artifact_name": "action_view.jpg",
-                "name": f"action_view_step_{last_step:04d}",
-            }
-        elif self.latest_obs is not None and 'rgb' in self.latest_obs:
-            rgb_bgr = cv2.cvtColor(self.latest_obs['rgb'], cv2.COLOR_RGB2BGR)
-            detection_image = {
-                "image_array": rgb_bgr,
-                "color_space": "bgr",
-                "artifact_name": "action_view.jpg",
-                "name": f"action_view_step_{last_step:04d}",
-            }
-        else:
-            print(f"  [WARN] Action input image not available for step {last_step}")
-
-        waypoint_summary = self._get_waypoint_summary(
-            include_area_chain=False,
-            include_path=False,
-        )
-        
-        # 保存子任务信息（首次创建时）
-        info_file = self.save_manager.action_info_path(subtask_id)
-        if not os.path.exists(info_file):
-            with open(info_file, 'w', encoding='utf-8') as f:
-                json.dump(subtask_info, f, ensure_ascii=False, indent=2)
-
-        # 构建 landmark_map_info：可见 + 地图离屏两类（按距离升序）
-        # action VLM 只有第一人称图，需要文字告知离屏的已映射 landmark 方向距离
-        landmark_dist_map = getattr(self, 'latest_landmark_dist_map', {})
-        landmark_dist_map_multi = getattr(self, 'latest_landmark_dist_map_multi', {})
-        action_landmark_map_info = build_action_landmark_map_info(
-            step_landmark_entries=step_landmark_entries,
-            landmark_dist_map=landmark_dist_map,
-            landmark_dist_map_multi=landmark_dist_map_multi,
-            landmark_instances_world=getattr(self, 'latest_landmark_instances_world', []),
-        )
-        print(f"[ActionLandmarks] {action_landmark_map_info or 'no valid action landmark entries'}")
+        action_context = self._build_action_decision_context()
+        if action_context is None:
+            return None, None, True, 1, None
 
         action_subtask_instruction = self._sanitize_subtask_instruction_text(
             self.current_subtask.get('subtask_instruction', ''),
@@ -2864,94 +2998,20 @@ class VLMNavigationController(BaseNavigationController):
             if self.action_stagnation_retry_pending
             else None
         )
-
-        result = None
-        action_id = None
-        action_name = None
-        response = None
-        degrees = 0
-        meters = 0
-        prompt = None
-        max_blocked_forward_requeries = 1
-
-        for blocked_retry_idx in range(max_blocked_forward_requeries):
-            action_api_start_time = time.perf_counter()
-            result = self.action_executor.decide_action(
-                next_waypoint=self._get_next_waypoint_field(self.current_subtask),
-                subtask_instruction=action_subtask_instruction,
-                first_person_image=detection_image or "",
-                action_mapping=ACTION_MAPPING,
-                progress_summary=progress_summary_for_prompt,
-                waypoint_summary=waypoint_summary,
-                detection_image=detection_image,
-                detected_landmarks=detected_landmarks,
-                previous_action_reason=previous_action_reason_for_prompt,
-                obstacle_distances=obstacle_distances,
-                landmark_map_info=action_landmark_map_info,
-                allowed_action_names=allowed_action_names,
-                save_dir=action_save_dir
-            )
-            action_api_duration_s = time.perf_counter() - action_api_start_time
-
-            action_id, action_name, response, degrees, meters, prompt = result
-
-            self._record_action_api_call(
-                duration_s=action_api_duration_s,
-                success=bool(action_id is not None),
-                action_name=action_name,
-            )
-
-            if self.action_stagnation_retry_pending and str(action_name or "").upper() == "MOVE_FORWARD":
-                print(
-                    "[ActionStagnation] Rejected MOVE_FORWARD after blocked-front warning; "
-                    "controller-side recovery will take over from the same current view"
-                )
-                action_id = None
-                action_name = None
-                previous_action_reason_for_prompt = (
-                    f"{self.action_stagnation_retry_notice_text} "
-                    "The previous response still chose `MOVE_FORWARD`, which is forbidden for this blocked-front retry. "
-                    "Do not output `MOVE_FORWARD` on this call. Choose `TURN_LEFT 30deg` or `TURN_RIGHT 30deg`, "
-                    "unless the destination is already reached and `STOP` is valid."
-                ).strip()
-                if blocked_retry_idx < max_blocked_forward_requeries - 1:
-                    continue
-                print("[ERR] Action VLM kept choosing forbidden MOVE_FORWARD after a blocked-front warning")
-                forced_recovery = self._build_forced_blocked_front_recovery_action(
-                    step_landmark_entries=step_landmark_entries,
-                )
-                if forced_recovery is None:
-                    return None, None, True, 1, None
-                action_id = forced_recovery["action_id"]
-                action_name = forced_recovery["action_name"]
-                response = forced_recovery["response"]
-                degrees = int(forced_recovery.get("degrees", 0) or 0)
-                meters = float(forced_recovery.get("meters", 0.0) or 0.0)
-                if str(action_name or "").upper() in ("TURN_LEFT", "TURN_RIGHT"):
-                    self.blocked_front_controller_recovery_count = int(
-                        getattr(self, "blocked_front_controller_recovery_count", 0) or 0
-                    ) + 1
-                    print(
-                        "[ActionStagnation] Controller forced "
-                        f"{action_name} after forbidden blocked-front retries "
-                        f"(recovery #{self.blocked_front_controller_recovery_count})"
-                    )
-                else:
-                    self._reset_blocked_front_controller_recovery_state()
-                    print("[ActionStagnation] Controller forced STOP because the destination is already reached")
-                break
-
-            if action_id is None:
-                break
-
-            break
+        action_id, action_name, response, degrees, meters = self._request_vlm_action(
+            action_context=action_context,
+            action_subtask_instruction=action_subtask_instruction,
+            progress_summary_for_prompt=progress_summary_for_prompt,
+            previous_action_reason_for_prompt=previous_action_reason_for_prompt,
+            allowed_action_names=allowed_action_names,
+        )
         
         if action_id is None:
             print("[ERR] VLM decision failed")
             return None, None, True, 1, None
         
         # 保存response（API返回后，到同一个save_dir）
-        with open(os.path.join(action_save_dir, "response.json"), 'w', encoding='utf-8') as f:
+        with open(os.path.join(action_context["action_save_dir"], "response.json"), 'w', encoding='utf-8') as f:
             json.dump(response, f, ensure_ascii=False, indent=2)
         
         # 保存planned action参数，供后续计算actual progress使用
@@ -3070,7 +3130,6 @@ class VLMNavigationController(BaseNavigationController):
                 if retry < max_retries - 1:
                     wait = (retry + 1) * 2
                     print(f"  [WARN] VLM Action failed, retry in {wait}s ({retry + 1}/{max_retries - 1})...")
-                    import time
                     time.sleep(wait)
 
             if action_id is None:
@@ -3165,27 +3224,8 @@ class VLMNavigationController(BaseNavigationController):
                     print('[WARN] Episode done (Habitat)')
                     return 'complete'
 
-                self._refresh_post_action_landmark_detection_state(action_phase)
-                current_step_landmark_entries = self._get_current_action_step_landmark_entries()
-                auto_completed_subtask = self._should_autocomplete_subtask_during_action_step(
-                    current_step_landmark_entries
-                )
+                auto_completed_subtask = self._check_post_action_landmark_autocomplete(action_phase)
                 if auto_completed_subtask is not None:
-                    self._record_previous_subtask_autocomplete_landmark(auto_completed_subtask)
-                    auto_stop_landmark_summary = self._format_action_landmark_entries_summary(
-                        current_step_landmark_entries
-                    )
-                    landmark_kind = 'opening-like' if auto_completed_subtask.get('is_opening_like') else 'solid'
-                    landmark_source = "vis" if str(auto_completed_subtask.get("source", "mem") or "mem") == "vis" else "mem"
-                    print(f"[AutoStopLandmarks] {auto_stop_landmark_summary}")
-                    print(
-                        '[AutoSubtaskComplete] '
-                        f"{landmark_source} {auto_completed_subtask['name']} ({landmark_kind}) reached within "
-                        f"{auto_completed_subtask['distance_m']:.2f}m "
-                        f"(threshold {float(auto_completed_subtask.get('stop_distance_m', self.ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M)):.2f}m) "
-                        f"on action step {self.current_step}; "
-                        'return control to the thinking controller.'
-                    )
                     break
 
                 replan_for_stagnation = self._update_action_stagnation_streak(
@@ -3203,7 +3243,6 @@ class VLMNavigationController(BaseNavigationController):
                 x_before, y_before, ori_before = pose_before_action_batch
                 x_after, y_after, ori_after = pose_after_action_batch
 
-                import math
                 angle_diff = ori_after - ori_before
                 while angle_diff > math.pi:
                     angle_diff -= 2 * math.pi
@@ -3484,8 +3523,6 @@ class VLMNavigationController(BaseNavigationController):
             total_steps: 总步数
             env_metrics: 从环境获取的metrics字典
         """
-        import math
-        
         def check_inf_nan(value):
             """检查并修正无效值（参考Sub-VLM-VLN）"""
             if isinstance(value, (int, float)):

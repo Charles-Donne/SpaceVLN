@@ -14,6 +14,7 @@ from habitat.core.simulator import Observations
 from habitat_baselines.common.environments import get_env_class
 
 from vlnce_baselines.detection import GroundedSAM
+from vlnce_baselines.controllers.landmark_memory_state import LandmarkMemoryState
 from vlnce_baselines.mapping import Semantic_Mapping, SemanticMapper, SemanticProcessor
 from vlnce_baselines.visualization import MapVisualizer
 from vlnce_baselines.visualization.obstacle_analysis import (
@@ -88,7 +89,7 @@ class BaseNavigationController:
         
         self.current_episode_id = None
         self.current_step = 0
-        self.latest_landmark_instances_world = []
+        self.landmark_memory = LandmarkMemoryState()
         self._reset_navigation_runtime_state()
 
     def _reset_navigation_runtime_state(self) -> None:
@@ -120,35 +121,12 @@ class BaseNavigationController:
             'right_30': 'Unknown',
         }
 
-    def _clear_landmark_detection_cache(self) -> None:
-        """清空landmark检测缓存；仅在episode/subtask重置时调用。"""
-        self.latest_landmark_dist_map = {}
-        self.latest_landmark_dist_map_multi = {}
-        self.latest_visible_landmark_entries = []
-        self.latest_action_landmark_topk_entries = []
-
-    def _ensure_landmark_detection_state(self) -> None:
-        """Lazily initialize per-step landmark caches."""
-        if not hasattr(self, 'current_step_landmarks'):
-            self.current_step_landmarks = {}
-        if not hasattr(self, 'current_step_landmark_entries'):
-            self.current_step_landmark_entries = {}
-        if not hasattr(self, 'current_step_action_landmark_topk_entries'):
-            self.current_step_action_landmark_topk_entries = {}
-
-    @staticmethod
-    def _clone_landmark_entries(entries: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
-        return [dict(item) for item in (entries or [])]
-
     def _record_landmark_detection_step(self, step_idx: int, detected_landmarks_step) -> None:
         """记录当前step的landmark检测结果和地图矫正后的距离/角度。"""
-        self._ensure_landmark_detection_state()
-
-        self.current_step_landmarks[step_idx] = detected_landmarks_step or []
-        visible_entries = getattr(self, 'latest_visible_landmark_entries', []) or []
-        topk_entries = getattr(self, 'latest_action_landmark_topk_entries', []) or []
-        self.current_step_landmark_entries[step_idx] = self._clone_landmark_entries(visible_entries)
-        self.current_step_action_landmark_topk_entries[step_idx] = self._clone_landmark_entries(topk_entries)
+        self.landmark_memory.record_step(
+            step_idx=step_idx,
+            detected_landmarks=detected_landmarks_step,
+        )
 
     def _get_detected_custom_landmarks(self) -> set:
         """读取当前帧检测结果中的自定义 landmark 类别。"""
@@ -323,13 +301,9 @@ class BaseNavigationController:
         
         self.category_config.reset_detected()
         self.classes = []
-        self.latest_landmark_instances_world = []
+        self.landmark_memory.reset_episode()
         self.mapper.reset()
         self.mapper.init_map_and_pose(num_detected_classes=0)
-        self.current_step_landmarks = {}
-        self.current_step_landmark_entries = {}
-        self.current_step_action_landmark_topk_entries = {}
-        self._clear_landmark_detection_cache()
         
         current_episodes = self.envs.current_episodes()
         self.current_episode = current_episodes[0]
@@ -950,13 +924,12 @@ class BaseNavigationController:
             )
 
         if not force:
-            if enable_landmark_detection and hasattr(self, 'current_step_landmarks'):
-                if self.current_step in self.current_step_landmarks:
-                    return True
+            if enable_landmark_detection and self.landmark_memory.has_step(self.current_step):
+                return True
             if required_paths and all(os.path.exists(path) for path in required_paths):
                 if not enable_landmark_detection:
                     return True
-                if hasattr(self, 'current_step_landmarks') and self.current_step in self.current_step_landmarks:
+                if self.landmark_memory.has_step(self.current_step):
                     return True
 
         self._batch_obs([self.latest_obs], save_object_detection=enable_landmark_detection)
