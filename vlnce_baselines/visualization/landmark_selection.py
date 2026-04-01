@@ -333,6 +333,72 @@ def _build_action_landmark_context(
         "class_totals": self._build_landmark_class_totals(display_lookup_source),
     }
 
+def _build_action_landmark_context_from_locked_entries(
+    self,
+    landmark_instances: Sequence[Dict[str, Any]],
+    locked_entries: Sequence[Dict[str, Any]],
+    topk: int = local_map_landmark_topk,
+) -> Dict[str, Any]:
+    all_instances = [dict(inst) for inst in (landmark_instances or [])]
+    keep_n = max(1, int(topk))
+    if not all_instances:
+        return self._build_action_landmark_context([], topk=keep_n)
+
+    ordered_locked_entries = sorted(
+        (dict(entry) for entry in (locked_entries or []) if isinstance(entry, dict)),
+        key=lambda entry: (
+            int(entry.get("selection_rank", 1e9) or 1e9),
+            -float(entry.get("confidence", 0.0) or 0.0),
+            float(entry.get("distance_m", 1e9) or 1e9),
+            str(entry.get("name", "")),
+        ),
+    )
+    uid_to_inst: Dict[int, Dict[str, Any]] = {}
+    for inst in all_instances:
+        uid = self._landmark_instance_uid(inst)
+        if uid is not None:
+            uid_to_inst[int(uid)] = dict(inst)
+
+    selected_instances: List[Dict[str, Any]] = []
+    seen_uids: set = set()
+
+    for locked in ordered_locked_entries:
+        uid = self._landmark_instance_uid(locked)
+        if uid is None or uid in seen_uids:
+            continue
+        matched = uid_to_inst.get(int(uid))
+        if matched is None:
+            continue
+        normalized = dict(matched)
+        normalized["selection_rank"] = len(selected_instances)
+        normalized["display_id"] = len(selected_instances) + 1
+        selected_instances.append(normalized)
+        seen_uids.add(int(uid))
+        if len(selected_instances) >= keep_n:
+            break
+
+    if len(selected_instances) < keep_n:
+        for candidate in self._sort_landmark_instances_for_action(all_instances):
+            uid = self._landmark_instance_uid(candidate)
+            if uid is not None and int(uid) in seen_uids:
+                continue
+            normalized = dict(candidate)
+            normalized["selection_rank"] = len(selected_instances)
+            normalized["display_id"] = len(selected_instances) + 1
+            selected_instances.append(normalized)
+            if uid is not None:
+                seen_uids.add(int(uid))
+            if len(selected_instances) >= keep_n:
+                break
+
+    display_lookup_source = all_instances or selected_instances
+    return {
+        "all_instances": all_instances,
+        "selected_instances": selected_instances,
+        "display_index_lookup": self._build_landmark_display_index_lookup(display_lookup_source),
+        "class_totals": self._build_landmark_class_totals(display_lookup_source),
+    }
+
 def _match_candidate_to_world_instance(
     self,
     candidate: Dict[str, Any],

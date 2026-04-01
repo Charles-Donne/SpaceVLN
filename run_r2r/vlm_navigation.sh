@@ -61,7 +61,7 @@ case "$MODE" in
     all)
         ;;
     skip-sr1|skip_sr1|resume)
-        MODE_ARG="--skip-existing-sr1"
+        MODE_ARG="--skip-sr1"
         ;;
     "")
         ;;

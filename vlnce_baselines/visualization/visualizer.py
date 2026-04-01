@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
+from vlnce_baselines.vlm.support.save_manager import get_episode_detail_dir
 from vlnce_baselines.visualization.map_projection import RotatedMapProjector
 from vlnce_baselines.visualization.obstacle_analysis import (
     ACTION_VIEW_DIRECTIONS,
@@ -598,7 +599,7 @@ class MapVisualizer:
 
     def _create_episode_directories(self, episode_id: int):
         """为特定episode创建保存目录"""
-        episode_dir = os.path.join(self.results_dir, f'episode_{episode_id}')
+        episode_dir = get_episode_detail_dir(self.results_dir, episode_id)
         dirs = ['rgb', 'global_map', 'local_map']
         for dir_name in dirs:
             os.makedirs(os.path.join(episode_dir, dir_name), exist_ok=True)
@@ -805,10 +806,26 @@ class MapVisualizer:
         if controller is not None:
             controller.latest_landmark_instances_world = [dict(inst) for inst in landmark_instances_world]
 
-        action_landmark_context = self._build_action_landmark_context(
-            landmark_instances_world,
-            topk=local_map_landmark_topk,
+        locked_action_landmark_entries = (
+            list(getattr(controller, 'latest_action_landmark_topk_entries', []) or [])
+            if controller is not None else []
         )
+        has_fresh_landmark_detection = (
+            detections is not None and
+            labels is not None and
+            bool(landmark_classes)
+        )
+        if locked_action_landmark_entries and not has_fresh_landmark_detection:
+            action_landmark_context = self._build_action_landmark_context_from_locked_entries(
+                landmark_instances_world,
+                locked_action_landmark_entries,
+                topk=local_map_landmark_topk,
+            )
+        else:
+            action_landmark_context = self._build_action_landmark_context(
+                landmark_instances_world,
+                topk=local_map_landmark_topk,
+            )
         selected_action_landmark_instances = list(action_landmark_context.get("selected_instances", []) or [])
         try:
             paths['rgb'] = self.save_rgb(step, episode_id, rgb, phase, controller) if policy.get('save_rgb', False) else None
@@ -1116,6 +1133,7 @@ MapVisualizer._select_action_landmark_instances = _landmark_selection._select_ac
 MapVisualizer._build_landmark_display_index_lookup = _landmark_selection._build_landmark_display_index_lookup
 MapVisualizer._build_landmark_class_totals = staticmethod(_landmark_selection._build_landmark_class_totals)
 MapVisualizer._build_action_landmark_context = _landmark_selection._build_action_landmark_context
+MapVisualizer._build_action_landmark_context_from_locked_entries = _landmark_selection._build_action_landmark_context_from_locked_entries
 MapVisualizer._match_candidate_to_world_instance = _landmark_selection._match_candidate_to_world_instance
 MapVisualizer._estimate_mask_rel_xy = _landmark_selection._estimate_mask_rel_xy
 MapVisualizer._analyze_mask_depth_profile = _landmark_selection._analyze_mask_depth_profile

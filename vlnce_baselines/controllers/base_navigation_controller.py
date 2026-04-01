@@ -25,6 +25,7 @@ from vlnce_baselines.visualization.obstacle_analysis import (
 )
 from vlnce_baselines.config.core.params.thresholds import OBS_OPEN_M, OBS_RISKY_M
 from vlnce_baselines.vlm.support.navigation_config import DIRECTION_CONFIG
+from vlnce_baselines.vlm.support.save_manager import get_episode_detail_dir
 from vlnce_baselines.config.core import ConfigHelper, create_category_config
 from vlnce_baselines.env.env_utils import construct_envs
 from vlnce_baselines.utils.system import get_device
@@ -438,6 +439,10 @@ class BaseNavigationController:
             print(f"[WARN] Episode already done, skip {context}")
             return None
 
+        before_step_hook = getattr(self, "_on_env_step_about_to_run", None)
+        if callable(before_step_hook):
+            before_step_hook(actions=actions, context=context)
+
         try:
             outputs = self.envs.step(actions)
         except AssertionError as exc:
@@ -451,6 +456,10 @@ class BaseNavigationController:
 
         obs, rewards, dones, infos = [list(x) for x in zip(*outputs)]
         self._cache_env_step_outcome(obs, dones, infos)
+
+        after_step_hook = getattr(self, "_on_env_step_finished", None)
+        if callable(after_step_hook):
+            after_step_hook(actions=actions, context=context, dones=dones)
         return obs, rewards, dones, infos
 
     def _store_latest_map_paths(self, paths: Optional[Dict[str, Any]]) -> None:
@@ -1074,7 +1083,7 @@ class BaseNavigationController:
     @property
     def current_episode_dir(self) -> str:
         """Return the current episode output directory if the subclass uses RESULTS_DIR layout."""
-        return os.path.join(self.config.RESULTS_DIR, f'episode_{self.current_episode_id}')
+        return get_episode_detail_dir(self.config.RESULTS_DIR, self.current_episode_id)
     
     def finish_episode(self, success: bool = False, stop_action: bool = False) -> dict:
         """

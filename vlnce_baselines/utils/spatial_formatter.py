@@ -767,8 +767,6 @@ def build_waypoint_summary(
     for group_idx, group in enumerate(grouped_display_indices):
         group_floor_id = grouped_floor_ids[group_idx] if group_idx < len(grouped_floor_ids) else int(current_floor_id)
         if multi_floor_active:
-            if group_idx > 0:
-                node_lines.append("")
             node_lines.append(f"--- Floor {int(group_floor_id) + 1} ---")
         for index in group:
             wp_id = waypoint_ids[index]
@@ -1268,15 +1266,15 @@ def build_action_landmark_map_info(
         name = entry.get("name")
         distance_m = entry.get("distance_m")
         angle_deg = entry.get("angle_deg")
-        if name is None or distance_m is None or angle_deg is None:
+        if name is None or distance_m is None:
             continue
         try:
             cls_name = str(name)
             dist_m = float(distance_m)
-            rel_angle_deg = float(angle_deg)
             confidence = float(entry.get("confidence", 0.0))
         except (TypeError, ValueError):
             continue
+        rel_angle_deg = _maybe_float(angle_deg)
 
         display_id = _maybe_int(entry.get("display_id"))
         instance_idx = _maybe_int(entry.get("instance_idx"))
@@ -1286,9 +1284,14 @@ def build_action_landmark_map_info(
         elif instance_idx is not None and cls_totals.get(cls_name, 0) > 1:
             suffix = f" #{instance_idx + 1}"
         source_tag = "vis" if str(entry.get("source", "vis")) == "vis" else "mem"
+        direction_text = (
+            format_relative_direction(rel_angle_deg)
+            if rel_angle_deg is not None
+            else "Unknown"
+        )
         parts.append(
             f"{source_tag} {cls_name}{suffix}: {dist_m:.1f}m, "
-            f"{format_relative_direction(rel_angle_deg)}, conf: {confidence:.3f}"
+            f"{direction_text}, conf: {confidence:.3f}"
         )
     return " || ".join(parts) if parts else None
 
@@ -1298,5 +1301,14 @@ def _maybe_int(value: Any) -> Optional[int]:
         return None
     try:
         return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _maybe_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
     except (TypeError, ValueError):
         return None

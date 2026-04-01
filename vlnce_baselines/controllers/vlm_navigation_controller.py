@@ -17,7 +17,6 @@ VLM Navigation Controller
 """
 import os
 import re
-import shutil
 import cv2
 import json
 import time
@@ -39,6 +38,7 @@ from vlnce_baselines.mapping.space_types import strip_space_type_variant_suffixe
 from vlnce_baselines.vlm import (
     LLMPlanner, ActionExecutor, SaveManager, NavigationVisualizer
 )
+from vlnce_baselines.vlm.support.save_manager import get_episode_detail_dir
 from vlnce_baselines.vlm.support.thinking_view_renderer import ThinkingViewRenderer
 from vlnce_baselines.vlm.support.subtask_schema import (
     get_next_waypoint,
@@ -211,6 +211,7 @@ class VLMNavigationController(BaseNavigationController):
         self.verify_replan_prompt_notice = ""
         self.pending_verify_view_restriction = None
         self.episode_wall_start_time = None
+        self.episode_wall_end_time = None
         self.failed_retry_wait_duration_s = 0.0
         self.thinking_api_call_records = []
         self.action_api_call_records = []
@@ -239,9 +240,6 @@ class VLMNavigationController(BaseNavigationController):
 
     def _should_save_navigation_gif(self) -> bool:
         return bool(self.save_navigation_gif)
-
-    def _should_refresh_postplanning_artifacts(self) -> bool:
-        return bool(self._should_save_api_request_artifacts() or getattr(self.config.MAP, "DEBUG_SAVE_RENDERINGS", False))
 
     @staticmethod
     def _parse_distance_text_m(distance_text: Optional[str]) -> Optional[float]:
@@ -385,7 +383,34 @@ class VLMNavigationController(BaseNavigationController):
     def _get_episode_duration_s(self) -> float:
         if self.episode_wall_start_time is None:
             return 0.0
-        return self._round_duration_s(time.perf_counter() - float(self.episode_wall_start_time))
+        end_time = self.episode_wall_end_time
+        if end_time is None:
+            end_time = time.perf_counter()
+        return self._round_duration_s(float(end_time) - float(self.episode_wall_start_time))
+
+    def _on_env_step_about_to_run(self, *, actions: Optional[List[Any]] = None, context: str = "") -> None:
+        if self.episode_wall_start_time is None:
+            self.episode_wall_start_time = time.perf_counter()
+            self.episode_wall_end_time = None
+
+    def _on_env_step_finished(
+        self,
+        *,
+        actions: Optional[List[Any]] = None,
+        context: str = "",
+        dones: Optional[List[Any]] = None,
+    ) -> None:
+        if self.episode_wall_start_time is None:
+            return
+        action_name = ""
+        if actions:
+            try:
+                action_name = str(self._action_name(actions[0]) or "")
+            except Exception:
+                action_name = ""
+        episode_done = bool(dones[0]) if dones else False
+        if action_name.upper() == "STOP" or episode_done:
+            self.episode_wall_end_time = time.perf_counter()
 
     def _build_episode_timing_summary(self) -> Dict[str, Any]:
         thinking_api_summary = self._summarize_api_timing_records(self.thinking_api_call_records)
@@ -873,6 +898,15 @@ class VLMNavigationController(BaseNavigationController):
             return False
         return any(token in normalized for token in ("stairs", "stair", "staircase", "stairway"))
 
+    def _current_subtask_uses_stairs_like_landmark(self) -> bool:
+        current_subtask = getattr(self, "current_subtask", None) or {}
+        subtask_landmark = self._get_subtask_landmark_field(current_subtask)
+        _dest_room, dest_object = self._parse_subtask_destination()
+        return (
+            self._is_stairs_like_text(subtask_landmark)
+            or self._is_stairs_like_text(dest_object)
+        )
+
     def _current_area_matches_stair_destination(
         self,
         dest_room: Optional[str],
@@ -976,6 +1010,8 @@ class VLMNavigationController(BaseNavigationController):
 
     def _get_current_subtask_autocomplete_candidates(self) -> List[str]:
         """Only allow proximity auto-stop when subtask_landmark is the destination landmark itself."""
+        if self._current_subtask_uses_stairs_like_landmark():
+            return []
         dest_room, dest_object = self._parse_subtask_destination()
         dest_object_norm = self._normalize_landmark_candidate(dest_object)
         subtask_landmark_norm = self._normalize_landmark_candidate(
@@ -1013,32 +1049,26 @@ class VLMNavigationController(BaseNavigationController):
             return None
 
         matches: List[Dict[str, Any]] = []
-        visible_entries = [
+        ordered_entries = [
             dict(entry)
             for entry in self._sort_action_landmark_entries(step_landmark_entries or [])
-            if str((entry or {}).get("source", "vis")) == "vis"
         ]
-        for entry in visible_entries[: int(self.ACTION_SUBTASK_AUTOCOMPLETE_TOPK)]:
-            if self._landmark_matches_current_subtask_destination(
-                entry.get('name'),
+        for entry in ordered_entries[: int(self.ACTION_SUBTASK_AUTOCOMPLETE_TOPK)]:
+            if not self._entry_reaches_action_arrival_threshold(
+                entry,
                 candidate_names=candidate_names,
             ):
-                try:
-                    distance_m = float(entry.get('distance_m'))
-                except (TypeError, ValueError):
-                    continue
-                is_opening_like = self._is_opening_like_landmark_entry(entry)
-                stop_distance_m = self._autocomplete_stop_distance_m(entry, is_opening_like=is_opening_like)
-                if distance_m > stop_distance_m:
-                    continue
-                matches.append({
-                    "name": str(entry.get('name') or candidate_names[0]),
-                    "distance_m": distance_m,
-                    "confidence": float(entry.get('confidence', 0.0) or 0.0),
-                    "angle_deg": entry.get('angle_deg'),
-                    "is_opening_like": bool(is_opening_like),
-                    "stop_distance_m": float(stop_distance_m),
-                })
+                continue
+            source = "vis" if str(entry.get("source", "mem") or "mem") == "vis" else "mem"
+            matches.append({
+                "name": str(entry.get('name') or candidate_names[0]),
+                "distance_m": float(entry.get('distance_m')),
+                "confidence": float(entry.get('confidence', 0.0) or 0.0),
+                "angle_deg": entry.get('angle_deg'),
+                "is_opening_like": bool(self._is_opening_like_landmark_entry(entry)),
+                "stop_distance_m": float(self._autocomplete_stop_distance_m(entry)),
+                "source": source,
+            })
 
         if not matches:
             dest_room, dest_object = self._parse_subtask_destination()
@@ -1049,31 +1079,22 @@ class VLMNavigationController(BaseNavigationController):
                 return None
 
             relaxed_matches: List[Dict[str, Any]] = []
-            for entry in self._sort_action_landmark_entries(step_landmark_entries or [])[
-                : int(self.ACTION_SUBTASK_AUTOCOMPLETE_TOPK)
-            ]:
-                if not self._landmark_matches_current_subtask_destination(
-                    entry.get('name'),
+            for entry in ordered_entries[: int(self.ACTION_SUBTASK_AUTOCOMPLETE_TOPK)]:
+                if not self._entry_reaches_action_arrival_threshold(
+                    entry,
                     candidate_names=candidate_names,
                 ):
                     continue
-                try:
-                    distance_m = float(entry.get('distance_m'))
-                except (TypeError, ValueError):
-                    continue
-                is_opening_like = self._is_opening_like_landmark_entry(entry)
-                stop_distance_m = self._autocomplete_stop_distance_m(entry, is_opening_like=is_opening_like)
-                if distance_m > stop_distance_m:
-                    continue
+                source = "vis" if str(entry.get("source", "mem") or "mem") == "vis" else "mem"
                 relaxed_matches.append({
                     "name": str(entry.get('name') or candidate_names[0]),
-                    "distance_m": distance_m,
+                    "distance_m": float(entry.get('distance_m')),
                     "confidence": float(entry.get('confidence', 0.0) or 0.0),
                     "angle_deg": entry.get('angle_deg'),
-                    "is_opening_like": bool(is_opening_like),
-                    "stop_distance_m": float(stop_distance_m),
+                    "is_opening_like": bool(self._is_opening_like_landmark_entry(entry)),
+                    "stop_distance_m": float(self._autocomplete_stop_distance_m(entry)),
                     "structure_matched": True,
-                    "source": str(entry.get("source", "mem") or "mem"),
+                    "source": source,
                 })
 
             if not relaxed_matches:
@@ -1096,6 +1117,28 @@ class VLMNavigationController(BaseNavigationController):
             )
         )
         return matches[0]
+
+    def _entry_reaches_action_arrival_threshold(
+        self,
+        entry: Optional[Dict[str, Any]],
+        candidate_names: Optional[Sequence[str]] = None,
+    ) -> bool:
+        if not entry:
+            return False
+        if self._is_stairs_like_text(entry.get("name")) or self._current_subtask_uses_stairs_like_landmark():
+            return False
+        if not self._landmark_matches_current_subtask_destination(
+            entry.get("name"),
+            candidate_names=candidate_names,
+        ):
+            return False
+
+        distance_m = self._safe_float(entry.get("distance_m"))
+        if distance_m is None:
+            return False
+
+        stop_distance_m = self._autocomplete_stop_distance_m(entry)
+        return float(distance_m) <= float(stop_distance_m)
 
     def _is_opening_like_landmark_entry(self, entry: Optional[Dict[str, Any]]) -> bool:
         if not entry:
@@ -1239,25 +1282,19 @@ class VLMNavigationController(BaseNavigationController):
         )
         if latest_entries:
             return latest_entries[:topk]
+        return []
 
-        world_instances = [dict(item) for item in (getattr(self, "latest_landmark_instances_world", []) or [])]
-        if not world_instances:
-            return []
-
-        world_instances.sort(
-            key=lambda entry: (
-                -float(self._safe_float(entry.get("confidence")) or 0.0),
-                float(self._safe_float(entry.get("distance_m")) or 1e9),
-                str(entry.get("name", "")),
-            )
+    def _format_action_landmark_entries_summary(
+        self,
+        entries: Sequence[Dict[str, Any]],
+    ) -> str:
+        summary = build_action_landmark_map_info(
+            step_landmark_entries=entries,
+            landmark_dist_map=getattr(self, "latest_landmark_dist_map", {}),
+            landmark_dist_map_multi=getattr(self, "latest_landmark_dist_map_multi", {}),
+            landmark_instances_world=getattr(self, "latest_landmark_instances_world", []),
         )
-        selected: List[Dict[str, Any]] = []
-        for rank, entry in enumerate(world_instances[:topk]):
-            entry["selection_rank"] = rank
-            entry["display_id"] = rank + 1
-            entry["source"] = entry.get("source", "mem") or "mem"
-            selected.append(entry)
-        return selected
+        return summary or "no valid action landmark entries"
 
     def _record_previous_subtask_autocomplete_landmark(
         self,
@@ -1324,6 +1361,7 @@ class VLMNavigationController(BaseNavigationController):
             return "Landmark: " + self._format_previous_subtask_landmark_summary_item(fallback_info)
         summary_items: List[str] = []
         info_entries: List[Dict[str, Any]] = []
+        landmark_arrival_candidates = self._get_current_subtask_landmark_candidates()
         for rank, entry in enumerate(entries[:2], start=1):
             raw_name = str(entry.get("name") or "").strip() or "Unknown"
             distance_m = self._safe_float(entry.get("distance_m"))
@@ -1348,6 +1386,11 @@ class VLMNavigationController(BaseNavigationController):
                 )
                 if has_arrived and autocomplete_display_id is not None and entry_display_id is not None:
                     has_arrived = entry_display_id == autocomplete_display_id
+            if not has_arrived:
+                has_arrived = self._entry_reaches_action_arrival_threshold(
+                    entry,
+                    candidate_names=landmark_arrival_candidates,
+                )
             info = {
                 "raw_name": raw_name,
                 "name": self._format_previous_subtask_landmark_name(raw_name, entry=entry),
@@ -1559,7 +1602,7 @@ class VLMNavigationController(BaseNavigationController):
         # 清理之前episode的输出目录
         if episode_id is not None:
             import shutil
-            old_episode_dir = os.path.join(self.config.RESULTS_DIR, f'episode_{episode_id}')
+            old_episode_dir = get_episode_detail_dir(self.config.RESULTS_DIR, episode_id)
             if os.path.exists(old_episode_dir):
                 print(f"[Reset] 清理旧数据: {old_episode_dir}")
                 shutil.rmtree(old_episode_dir)
@@ -1587,6 +1630,7 @@ class VLMNavigationController(BaseNavigationController):
         self.verify_replan_prompt_notice = ""
         self.pending_verify_view_restriction = None
         self.episode_wall_start_time = None
+        self.episode_wall_end_time = None
         self.failed_retry_wait_duration_s = 0.0
         self.thinking_api_call_records = []
         self.action_api_call_records = []
@@ -1615,7 +1659,7 @@ class VLMNavigationController(BaseNavigationController):
     @property
     def episode_dir(self) -> str:
         """获取当前episode的输出目录（动态属性，自动根据current_episode_id生成）"""
-        return os.path.join(self.config.RESULTS_DIR, f'episode_{self.current_episode_id}')
+        return get_episode_detail_dir(self.config.RESULTS_DIR, self.current_episode_id)
 
     @classmethod
     def _normalize_landmark_candidate(cls, text: Optional[str]) -> Optional[str]:
@@ -2210,13 +2254,19 @@ class VLMNavigationController(BaseNavigationController):
         }
 
     def _collect_thinking_detected_landmarks(self) -> List[str]:
-        """Collect landmark names seen during the latest lookaround for thinking verification."""
-        if hasattr(self, 'current_step_landmarks') and self.current_step_landmarks:
-            all_landmarks = set()
-            for landmarks_list in self.current_step_landmarks.values():
-                for name, _conf in landmarks_list:
-                    all_landmarks.add(name)
-            return sorted(list(all_landmarks))
+        """Keep thinking-side landmark text aligned with the action-side locked top-k entries."""
+        latest_entries = self._get_latest_action_local_map_landmark_entries()
+        if latest_entries:
+            names = []
+            seen = set()
+            for entry in latest_entries:
+                name = str(entry.get("name") or "").strip()
+                if not name or name in seen:
+                    continue
+                seen.add(name)
+                names.append(name)
+            if names:
+                return names
         return sorted(list(self.detected_classes)) if hasattr(self, 'detected_classes') else []
 
     def _run_thinking_cycle(
@@ -2566,75 +2616,17 @@ class VLMNavigationController(BaseNavigationController):
         thinking_dir: Optional[str] = None,
         refresh_direction_views: bool = True,
     ) -> Optional[int]:
-        """Persist planner space-area output into the world map and refresh debug renders."""
+        """Persist planner space-area output into the world map only."""
+        _ = phase
+        _ = thinking_dir
+        _ = refresh_direction_views
         if self.mapper is None:
             return None
 
         waypoint_desc = response.get('current_waypoint', 'Unknown location')
         waypoint_id = self.mapper.add_waypoint(waypoint_desc)
-
-        if self._should_refresh_postplanning_artifacts():
-            refreshed_maps = self._refresh_postplanning_map_snapshots(phase=phase)
-            if not refreshed_maps:
-                self._refresh_step_visualization_snapshot(
-                    phase=phase,
-                    enable_landmark_detection=False,
-                    force=True,
-                )
-            self._sync_postplanning_map_artifacts_to_thinking_dir(thinking_dir=thinking_dir)
-            if refresh_direction_views:
-                self._refresh_cached_lookaround_direction_views(phase=phase)
         self._save_waypoint_area_memory_snapshot()
         return waypoint_id
-
-    def _refresh_postplanning_map_snapshots(self, phase: str) -> bool:
-        """Force-refresh global/local map images after planner-created space areas are written."""
-        return self._refresh_current_map_snapshots(
-            phase=phase,
-            landmark_classes=list(self.landmark_classes),
-        )
-
-    @staticmethod
-    def _resolve_thinking_artifact_target_path(
-        thinking_dir: str,
-        stem: str,
-        source_path: str,
-    ) -> str:
-        for ext in (".png", ".jpg", ".jpeg", ".webp"):
-            candidate = os.path.join(thinking_dir, f"{stem}{ext}")
-            if os.path.exists(candidate):
-                return candidate
-        source_ext = os.path.splitext(str(source_path or ""))[1].lower() or ".png"
-        return os.path.join(thinking_dir, f"{stem}{source_ext}")
-
-    def _sync_postplanning_map_artifacts_to_thinking_dir(
-        self,
-        thinking_dir: Optional[str],
-    ) -> None:
-        if not thinking_dir:
-            return
-        os.makedirs(thinking_dir, exist_ok=True)
-
-        artifact_sources = {
-            "global_map": getattr(self, "latest_global_map", None),
-            "local_map": getattr(self, "latest_local_map", None),
-        }
-        for stem, source_path in artifact_sources.items():
-            if not source_path or not os.path.exists(source_path):
-                continue
-            target_path = self._resolve_thinking_artifact_target_path(
-                thinking_dir=thinking_dir,
-                stem=stem,
-                source_path=source_path,
-            )
-            try:
-                shutil.copyfile(source_path, target_path)
-            except Exception:
-                continue
-
-    def _refresh_cached_lookaround_direction_views(self, phase: str) -> bool:
-        """Direction-view disk refresh is disabled; keep only model-input artifacts."""
-        return False
 
     def auto_rotate_to_waypoint(self, waypoint_direction: str) -> Tuple[bool, List[Dict]]:
         """
@@ -2852,6 +2844,7 @@ class VLMNavigationController(BaseNavigationController):
             landmark_dist_map_multi=landmark_dist_map_multi,
             landmark_instances_world=getattr(self, 'latest_landmark_instances_world', []),
         )
+        print(f"[ActionLandmarks] {action_landmark_map_info or 'no valid action landmark entries'}")
 
         action_subtask_instruction = self._sanitize_subtask_instruction_text(
             self.current_subtask.get('subtask_instruction', ''),
@@ -3179,10 +3172,15 @@ class VLMNavigationController(BaseNavigationController):
                 )
                 if auto_completed_subtask is not None:
                     self._record_previous_subtask_autocomplete_landmark(auto_completed_subtask)
+                    auto_stop_landmark_summary = self._format_action_landmark_entries_summary(
+                        current_step_landmark_entries
+                    )
                     landmark_kind = 'opening-like' if auto_completed_subtask.get('is_opening_like') else 'solid'
+                    landmark_source = "vis" if str(auto_completed_subtask.get("source", "mem") or "mem") == "vis" else "mem"
+                    print(f"[AutoStopLandmarks] {auto_stop_landmark_summary}")
                     print(
                         '[AutoSubtaskComplete] '
-                        f"{auto_completed_subtask['name']} ({landmark_kind}) reached within "
+                        f"{landmark_source} {auto_completed_subtask['name']} ({landmark_kind}) reached within "
                         f"{auto_completed_subtask['distance_m']:.2f}m "
                         f"(threshold {float(auto_completed_subtask.get('stop_distance_m', self.ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M)):.2f}m) "
                         f"on action step {self.current_step}; "
@@ -3284,7 +3282,8 @@ class VLMNavigationController(BaseNavigationController):
     def run_vlm_navigation(self, max_subtask_steps: int = 5) -> Dict[str, Any]:
         """Run the top-level scheduler over the thinking controller and action controller."""
         max_steps = self.config.TASK_CONFIG.ENVIRONMENT.MAX_EPISODE_STEPS
-        self.episode_wall_start_time = time.perf_counter()
+        self.episode_wall_start_time = None
+        self.episode_wall_end_time = None
         self.failed_retry_wait_duration_s = 0.0
         self.thinking_api_call_records = []
         self.action_api_call_records = []
