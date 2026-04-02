@@ -184,11 +184,13 @@ class ThinkingViewRenderer:
         cls,
         waypoint_info: Optional[tuple],
         waypoint_area_labels: Optional[List[str]],
+        waypoint_floor_ids: Optional[List[int]],
         current_pose: Optional[np.ndarray],
         resolution_cm: float,
         current_space_area_label: str,
         full_map: Optional[np.ndarray],
         crop_offset: Optional[Tuple[int, int]],
+        current_floor_id: int = 0,
         initial_waypoint_index: Optional[int] = 0,
     ) -> List[Dict[str, Any]]:
         if current_pose is None:
@@ -237,11 +239,40 @@ class ThinkingViewRenderer:
                 "is_current_area": True,
             }]
 
-        curr_x_m, curr_y_m, curr_orientation_deg = [float(v) for v in current_pose[:3]]
         area_labels = list(waypoint_area_labels or [])
+        floor_ids = [
+            int(waypoint_floor_ids[index]) if waypoint_floor_ids and index < len(waypoint_floor_ids) else int(current_floor_id)
+            for index in range(len(waypoint_ids))
+        ]
+        current_floor_global_indices = [
+            index
+            for index, floor_id in enumerate(floor_ids)
+            if int(floor_id) == int(current_floor_id)
+        ]
+        current_floor_index_map = {
+            global_index: local_index
+            for local_index, global_index in enumerate(current_floor_global_indices)
+        }
+        current_floor_positions = [waypoint_positions[index] for index in current_floor_global_indices]
+        current_floor_ids = [waypoint_ids[index] for index in current_floor_global_indices]
+        current_floor_descriptions = [
+            waypoint_descriptions[index] if index < len(waypoint_descriptions) else ""
+            for index in current_floor_global_indices
+        ]
+        current_floor_area_labels = [
+            area_labels[index] if index < len(area_labels) else ""
+            for index in current_floor_global_indices
+        ]
+        current_floor_initial_index = (
+            current_floor_index_map.get(int(initial_waypoint_index))
+            if initial_waypoint_index is not None
+            else None
+        )
+
+        curr_x_m, curr_y_m, curr_orientation_deg = [float(v) for v in current_pose[:3]]
         resolved_current_area_text, current_area_anchor_index = resolve_display_current_area(
-            waypoint_positions=waypoint_positions,
-            waypoint_area_labels=area_labels,
+            waypoint_positions=current_floor_positions,
+            waypoint_area_labels=current_floor_area_labels,
             current_pose=current_pose,
             resolution_cm=resolution_cm,
             current_space_area_label=current_space_area_label,
@@ -249,22 +280,25 @@ class ThinkingViewRenderer:
             crop_offset=crop_offset,
         )
         display_indices = select_display_waypoint_indices(
-            waypoint_positions=waypoint_positions,
-            waypoint_ids=waypoint_ids,
-            waypoint_descriptions=waypoint_descriptions,
-            waypoint_area_labels=area_labels,
+            waypoint_positions=current_floor_positions,
+            waypoint_ids=current_floor_ids,
+            waypoint_descriptions=current_floor_descriptions,
+            waypoint_area_labels=current_floor_area_labels,
             current_pose=current_pose,
             resolution_cm=resolution_cm,
             full_map=full_map,
             crop_offset=crop_offset,
+            initial_waypoint_index=current_floor_initial_index,
+            skip_current_overlap=True,
         )
-        last_displayed_index = display_indices[-1] if display_indices else None
+        last_displayed_local_index = display_indices[-1] if display_indices else None
         entries: List[Dict[str, Any]] = []
 
-        for index in display_indices:
-            wp_id = waypoint_ids[index]
-            wp_desc = waypoint_descriptions[index]
-            wp_py, wp_px = waypoint_positions[index]
+        for local_index in display_indices:
+            global_index = current_floor_global_indices[local_index]
+            wp_id = current_floor_ids[local_index]
+            wp_desc = current_floor_descriptions[local_index]
+            wp_py, wp_px = current_floor_positions[local_index]
             wp_x_m = float(wp_px) * float(resolution_cm) / 100.0
             wp_y_m = float(wp_py) * float(resolution_cm) / 100.0
             dx = wp_x_m - curr_x_m
@@ -275,7 +309,7 @@ class ThinkingViewRenderer:
             snapped_relative_bearing_deg = float(snap_relative_bearing(relative_bearing_deg))
             view_angle_deg = cls._normalize_angle_deg(-snapped_relative_bearing_deg)
 
-            area_label = str(area_labels[index] if index < len(area_labels) else "").strip()
+            area_label = str(current_floor_area_labels[local_index] if local_index < len(current_floor_area_labels) else "").strip()
             clean_area_label, connected_area_labels = cls._split_area_label_links(area_label)
             description = str(wp_desc or "").strip()
             display_text = description or clean_area_label or f"WP#{wp_id}"
@@ -294,10 +328,10 @@ class ThinkingViewRenderer:
                 "relative_bearing_deg": relative_bearing_deg,
                 "snapped_relative_bearing_deg": snapped_relative_bearing_deg,
                 "view_angle_deg": view_angle_deg,
-                "is_last_visited": index == last_displayed_index,
+                "is_last_visited": local_index == last_displayed_local_index,
                 "is_task_initial_position": (
-                    initial_waypoint_index is not None
-                    and int(index) == int(initial_waypoint_index)
+                    current_floor_initial_index is not None
+                    and int(local_index) == int(current_floor_initial_index)
                 ),
             })
 
@@ -306,8 +340,8 @@ class ThinkingViewRenderer:
         current_area_view_angle = 0.0
         current_area_relative_bearing = 0.0
         current_area_snapped_bearing = 0.0
-        if current_area_anchor_index is not None and current_area_anchor_index < len(waypoint_positions):
-            anchor_py, anchor_px = waypoint_positions[current_area_anchor_index]
+        if current_area_anchor_index is not None and current_area_anchor_index < len(current_floor_positions):
+            anchor_py, anchor_px = current_floor_positions[current_area_anchor_index]
             anchor_x_m = float(anchor_px) * float(resolution_cm) / 100.0
             anchor_y_m = float(anchor_py) * float(resolution_cm) / 100.0
             dx = anchor_x_m - curr_x_m
@@ -1086,6 +1120,7 @@ class ThinkingViewRenderer:
         distance_lookup: Dict[str, str],
         waypoint_info: Optional[tuple],
         waypoint_area_labels: Optional[List[str]],
+        waypoint_floor_ids: Optional[List[int]],
         current_pose: Optional[np.ndarray],
         resolution_cm: float,
         current_space_area_label: str,
@@ -1093,6 +1128,7 @@ class ThinkingViewRenderer:
         crop_offset: Optional[Tuple[int, int]],
         waypoint_angle_deg: Optional[float],
         draw_waypoints_fn: Callable[[np.ndarray, Dict[str, Any]], np.ndarray],
+        current_floor_id: int = 0,
         initial_waypoint_index: Optional[int] = 0,
         lookaround_detection_payloads: Optional[List[Tuple[Any, List[str], Any]]] = None,
         detection_topk: int = THINKING_DETECTION_TOPK,
@@ -1110,6 +1146,7 @@ class ThinkingViewRenderer:
             distance_lookup=distance_lookup,
             waypoint_info=waypoint_info,
             waypoint_area_labels=waypoint_area_labels,
+            waypoint_floor_ids=waypoint_floor_ids,
             current_pose=current_pose,
             resolution_cm=resolution_cm,
             current_space_area_label=current_space_area_label,
@@ -1117,6 +1154,7 @@ class ThinkingViewRenderer:
             crop_offset=crop_offset,
             waypoint_angle_deg=waypoint_angle_deg,
             draw_waypoints_fn=draw_waypoints_fn,
+            current_floor_id=current_floor_id,
             initial_waypoint_index=initial_waypoint_index,
             detection_topk=detection_topk,
         )
@@ -1145,6 +1183,7 @@ class ThinkingViewRenderer:
         distance_lookup: Dict[str, str],
         waypoint_info: Optional[tuple],
         waypoint_area_labels: Optional[List[str]],
+        waypoint_floor_ids: Optional[List[int]],
         current_pose: Optional[np.ndarray],
         resolution_cm: float,
         current_space_area_label: str,
@@ -1152,6 +1191,7 @@ class ThinkingViewRenderer:
         crop_offset: Optional[Tuple[int, int]],
         waypoint_angle_deg: Optional[float],
         draw_waypoints_fn: Callable[[np.ndarray, Dict[str, Any]], np.ndarray],
+        current_floor_id: int = 0,
         initial_waypoint_index: Optional[int] = 0,
         detection_topk: int = THINKING_DETECTION_TOPK,
     ) -> List[Dict[str, Any]]:
@@ -1160,11 +1200,13 @@ class ThinkingViewRenderer:
         waypoint_entries = self._build_waypoint_view_entries(
             waypoint_info=waypoint_info,
             waypoint_area_labels=waypoint_area_labels,
+            waypoint_floor_ids=waypoint_floor_ids,
             current_pose=current_pose,
             resolution_cm=resolution_cm,
             current_space_area_label=current_space_area_label,
             full_map=full_map,
             crop_offset=crop_offset,
+            current_floor_id=current_floor_id,
             initial_waypoint_index=initial_waypoint_index,
         )
         view_angles = [float(config["angle"]) for config in DIRECTION_CONFIG]

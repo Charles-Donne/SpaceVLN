@@ -2,11 +2,29 @@
 import os
 import json
 import math
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 from datetime import datetime
 
 
 DETAIL_DIR_NAME = "detail"
+LOG_DIR_NAME = "log"
+EPISODE_BUCKET_SIZE = 100
+
+
+def get_episode_bucket_name(episode_id: int, bucket_size: int = EPISODE_BUCKET_SIZE) -> str:
+    episode_id = int(episode_id)
+    bucket_size = max(1, int(bucket_size))
+    if episode_id <= 0:
+        start = 0
+        end = bucket_size
+    else:
+        start = ((episode_id - 1) // bucket_size) * bucket_size + 1
+        end = start + bucket_size - 1
+    return f"{start}-{end}"
+
+
+def get_episode_bucket_dir(root_dir: str, episode_id: int, bucket_size: int = EPISODE_BUCKET_SIZE) -> str:
+    return os.path.join(root_dir, get_episode_bucket_name(episode_id, bucket_size=bucket_size))
 
 
 def get_episode_detail_root(dump_dir: str) -> str:
@@ -14,7 +32,67 @@ def get_episode_detail_root(dump_dir: str) -> str:
 
 
 def get_episode_detail_dir(dump_dir: str, episode_id: int) -> str:
+    return os.path.join(
+        get_episode_bucket_dir(get_episode_detail_root(dump_dir), episode_id),
+        f"episode_{int(episode_id)}",
+    )
+
+
+def get_episode_detail_legacy_dir(dump_dir: str, episode_id: int) -> str:
     return os.path.join(get_episode_detail_root(dump_dir), f"episode_{int(episode_id)}")
+
+
+def get_episode_detail_path_candidates(dump_dir: str, episode_id: int) -> List[str]:
+    candidates = [
+        get_episode_detail_dir(dump_dir, episode_id),
+        get_episode_detail_legacy_dir(dump_dir, episode_id),
+    ]
+    deduped: List[str] = []
+    for path in candidates:
+        if path not in deduped:
+            deduped.append(path)
+    return deduped
+
+
+def get_log_root(dump_dir: str) -> str:
+    return os.path.join(dump_dir, LOG_DIR_NAME)
+
+
+def get_episode_log_path(dump_dir: str, episode_id: int) -> str:
+    return os.path.join(
+        get_episode_bucket_dir(get_log_root(dump_dir), episode_id),
+        f"episode_{int(episode_id)}.json",
+    )
+
+
+def get_episode_log_legacy_path(dump_dir: str, episode_id: int) -> str:
+    return os.path.join(get_log_root(dump_dir), f"episode_{int(episode_id)}.json")
+
+
+def get_episode_log_path_candidates(dump_dir: str, episode_id: int) -> List[str]:
+    candidates = [
+        get_episode_log_path(dump_dir, episode_id),
+        get_episode_log_legacy_path(dump_dir, episode_id),
+    ]
+    deduped: List[str] = []
+    for path in candidates:
+        if path not in deduped:
+            deduped.append(path)
+    return deduped
+
+
+def iter_all_episode_log_paths(dump_dir: str) -> List[str]:
+    log_root = get_log_root(dump_dir)
+    if not os.path.exists(log_root):
+        return []
+
+    matched_paths: List[str] = []
+    for current_root, dirnames, filenames in os.walk(log_root):
+        dirnames.sort()
+        for filename in sorted(filenames):
+            if filename.startswith("episode_") and filename.endswith(".json"):
+                matched_paths.append(os.path.join(current_root, filename))
+    return matched_paths
 
 
 class SaveManager:
@@ -276,9 +354,9 @@ class SaveManager:
     def save_result(self, result: Dict):
         """
         保存最终结果，并维护按episode的最佳结果:
-        1. detail/episode_xxx/records/result_latest.json (本次运行结果)
-        2. detail/episode_xxx/records/result.json (该episode当前最佳结果)
-        3. log/episode_xxx.json (该episode当前最佳结果，供结果报告程序使用)
+        1. detail/<bucket>/episode_xxx/records/result_latest.json (本次运行结果)
+        2. detail/<bucket>/episode_xxx/records/result.json (该episode当前最佳结果)
+        3. log/<bucket>/episode_xxx.json (该episode当前最佳结果，供结果报告程序使用)
         """
         latest_result_path = os.path.join(self.records_dir, "result_latest.json")
         with open(latest_result_path, 'w', encoding='utf-8') as f:
@@ -288,9 +366,9 @@ class SaveManager:
         result_path = os.path.join(self.records_dir, "result.json")
         existing_best_result = self._load_json_if_exists(result_path)
 
-        log_dir = os.path.join(self.dump_dir, "log")
+        log_dir = os.path.dirname(get_episode_log_path(self.dump_dir, self.episode_id))
         os.makedirs(log_dir, exist_ok=True)
-        log_path = os.path.join(log_dir, f"episode_{self.episode_id}.json")
+        log_path = get_episode_log_path(self.dump_dir, self.episode_id)
 
         log_result = {
             'episode_id': result['episode_id'],

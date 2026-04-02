@@ -6,6 +6,7 @@ import os
 from typing import Any, Dict, List
 
 from vlnce_baselines.config.core.params.thresholds import EVAL_SUCCESS_DISTANCE_M
+from vlnce_baselines.vlm.support.save_manager import iter_all_episode_log_paths
 
 
 def check_inf_nan(value: Any) -> Any:
@@ -150,16 +151,32 @@ def load_results(results_dir: str) -> List[Dict[str, Any]]:
     if not os.path.exists(log_dir):
         return []
 
-    results: List[Dict[str, Any]] = []
-    for filename in sorted(os.listdir(log_dir)):
-        if not (filename.startswith("episode_") and filename.endswith(".json")):
-            continue
-        filepath = os.path.join(log_dir, filename)
+    results_by_episode: Dict[str, Dict[str, Any]] = {}
+    result_mtime_by_episode: Dict[str, float] = {}
+    for filepath in iter_all_episode_log_paths(results_dir):
+        filename = os.path.basename(filepath)
         try:
             with open(filepath, "r", encoding="utf-8") as f:
-                results.append(json.load(f))
+                payload = json.load(f)
         except Exception as exc:
             print(f"⚠️  读取文件失败 {filename}: {exc}")
+            continue
+
+        episode_key = str(payload.get("episode_id", filename))
+        current_mtime = os.path.getmtime(filepath)
+        previous_mtime = result_mtime_by_episode.get(episode_key, float("-inf"))
+        if episode_key not in results_by_episode or current_mtime >= previous_mtime:
+            results_by_episode[episode_key] = payload
+            result_mtime_by_episode[episode_key] = current_mtime
+
+    def _episode_sort_key(item: Dict[str, Any]) -> Any:
+        episode_id = item.get("episode_id", "")
+        try:
+            return (0, int(episode_id))
+        except (TypeError, ValueError):
+            return (1, str(episode_id))
+
+    results = sorted(results_by_episode.values(), key=_episode_sort_key)
     return results
 
 
@@ -427,7 +444,7 @@ def save_episode_tables(
         "",
         "> `ThinkTot/ActTot/APIOK/FailWaste` in Summary are batch totals; `ThinkAvg/ActAvg/EpNoFail/EpAll` are batch averages.",
         "",
-        "> Note: repeated evaluation of the same episode keeps only the better result in `log/episode_XXX.json`.",
+        "> Note: repeated evaluation of the same episode keeps only the better result in the bucketed `log/<range>/episode_XXX.json` path.",
     ])
     with open(md_path, "w", encoding="utf-8") as f:
         f.write("\n".join(md_lines) + "\n")

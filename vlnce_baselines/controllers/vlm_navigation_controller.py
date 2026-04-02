@@ -42,7 +42,10 @@ from vlnce_baselines.mapping.space_types import (
 from vlnce_baselines.vlm import (
     LLMPlanner, ActionExecutor, SaveManager, NavigationVisualizer
 )
-from vlnce_baselines.vlm.support.save_manager import get_episode_detail_dir
+from vlnce_baselines.vlm.support.save_manager import (
+    get_episode_detail_dir,
+    get_episode_detail_path_candidates,
+)
 from vlnce_baselines.vlm.support.thinking_view_renderer import ThinkingViewRenderer
 from vlnce_baselines.vlm.support.subtask_schema import (
     get_next_waypoint,
@@ -1693,10 +1696,10 @@ class VLMNavigationController(BaseNavigationController):
         # 清理之前episode的输出目录
         if episode_id is not None:
             import shutil
-            old_episode_dir = get_episode_detail_dir(self.config.RESULTS_DIR, episode_id)
-            if os.path.exists(old_episode_dir):
-                print(f"[Reset] 清理旧数据: {old_episode_dir}")
-                shutil.rmtree(old_episode_dir)
+            for old_episode_dir in get_episode_detail_path_candidates(self.config.RESULTS_DIR, episode_id):
+                if os.path.exists(old_episode_dir):
+                    print(f"[Reset] 清理旧数据: {old_episode_dir}")
+                    shutil.rmtree(old_episode_dir)
         
         # 调用父类重置
         super().reset_episode(episode_id)
@@ -2301,6 +2304,7 @@ class VLMNavigationController(BaseNavigationController):
             distance_lookup=self.latest_obstacle_distances_12,
             waypoint_info=waypoint_info,
             waypoint_area_labels=(final_map_state or {}).get('waypoint_area_labels', []),
+            waypoint_floor_ids=(final_map_state or {}).get('waypoint_floor_ids', []),
             current_pose=(final_map_state or {}).get('full_pose'),
             resolution_cm=float(getattr(self.mapper, 'resolution', 5)),
             current_space_area_label=str((final_map_state or {}).get('current_space_area_label', 'Unknown') or 'Unknown'),
@@ -2308,6 +2312,7 @@ class VLMNavigationController(BaseNavigationController):
             crop_offset=(final_map_state or {}).get('crop_offset'),
             waypoint_angle_deg=last_waypoint_angle_deg,
             draw_waypoints_fn=self._draw_waypoints_on_view,
+            current_floor_id=int((final_map_state or {}).get('current_floor_id', 0) or 0),
             initial_waypoint_index=waypoint_initial_index,
         )
 

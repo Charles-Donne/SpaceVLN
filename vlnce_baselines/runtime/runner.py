@@ -14,7 +14,11 @@ from typing import Any, Dict, List, Tuple
 
 from vlnce_baselines.config import ConfigHelper, get_config
 from vlnce_baselines.vlm.api.api_client import resolve_api_config_path
-from vlnce_baselines.vlm.support.save_manager import SaveManager, get_episode_detail_dir
+from vlnce_baselines.vlm.support.save_manager import (
+    SaveManager,
+    get_episode_detail_path_candidates,
+    get_episode_log_path_candidates,
+)
 from vlnce_baselines.controllers.vlm_navigation_controller import VLMNavigationController
 from vlnce_baselines.runtime.results_report import generate_results_report
 
@@ -147,14 +151,20 @@ def _result_has_sr1(result: Dict[str, Any]) -> bool:
 
 
 def _episode_has_existing_sr1(results_dir: str, episode_id: int) -> bool:
-    episode_dir = get_episode_detail_dir(results_dir, episode_id)
-    candidate_paths = [
-        os.path.join(results_dir, "log", f"episode_{int(episode_id)}.json"),
-        os.path.join(episode_dir, "records", "result.json"),
-        os.path.join(episode_dir, "records", "result_latest.json"),
-    ]
+    candidate_paths = []
+    candidate_paths.extend(get_episode_log_path_candidates(results_dir, episode_id))
+    for detail_dir in get_episode_detail_path_candidates(results_dir, episode_id):
+        candidate_paths.extend([
+            os.path.join(detail_dir, "records", "result.json"),
+            os.path.join(detail_dir, "records", "result_latest.json"),
+        ])
 
+    deduped_paths = []
     for path in candidate_paths:
+        if path not in deduped_paths:
+            deduped_paths.append(path)
+
+    for path in deduped_paths:
         loaded = _load_json_if_exists(path)
         if _result_has_sr1(loaded):
             return True

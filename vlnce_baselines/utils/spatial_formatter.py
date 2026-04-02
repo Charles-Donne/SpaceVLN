@@ -428,12 +428,25 @@ def select_display_waypoint_indices(
     resolution_cm: float,
     full_map: Optional[np.ndarray],
     crop_offset: Optional[Tuple[int, int]],
+    initial_waypoint_index: Optional[int] = None,
+    skip_current_overlap: bool = True,
 ) -> List[int]:
     if not waypoint_ids:
         return []
 
+    protected_initial_index: Optional[int] = None
+    if initial_waypoint_index is not None:
+        try:
+            candidate_initial_index = int(initial_waypoint_index)
+        except (TypeError, ValueError):
+            candidate_initial_index = -1
+        if 0 <= candidate_initial_index < len(waypoint_ids):
+            protected_initial_index = candidate_initial_index
+
     latest_anchor_index = len(waypoint_ids) - 1
-    while latest_anchor_index > 0:
+    while skip_current_overlap and latest_anchor_index > 0:
+        if protected_initial_index is not None and latest_anchor_index == protected_initial_index:
+            break
         if not _is_waypoint_overlapping_current_display(
             waypoint_index=latest_anchor_index,
             waypoint_positions=waypoint_positions,
@@ -447,7 +460,10 @@ def select_display_waypoint_indices(
 
     kept_reversed: List[int] = [latest_anchor_index]
     for candidate_index in range(latest_anchor_index - 1, -1, -1):
-        if _is_waypoint_overlapping_current_display(
+        if protected_initial_index is not None and candidate_index == protected_initial_index:
+            kept_reversed.append(candidate_index)
+            continue
+        if skip_current_overlap and _is_waypoint_overlapping_current_display(
             waypoint_index=candidate_index,
             waypoint_positions=waypoint_positions,
             current_pose=current_pose,
@@ -468,6 +484,9 @@ def select_display_waypoint_indices(
         ):
             continue
         kept_reversed.append(candidate_index)
+
+    if protected_initial_index is not None and protected_initial_index not in kept_reversed:
+        kept_reversed.append(protected_initial_index)
 
     display_indices = sorted(set(kept_reversed))
     if latest_anchor_index not in display_indices:
@@ -677,6 +696,8 @@ def build_waypoint_summary(
         resolution_cm=resolution_cm,
         full_map=full_map,
         crop_offset=crop_offset,
+        initial_waypoint_index=current_floor_initial_index,
+        skip_current_overlap=True,
     )
     last_visible_global_index = (
         current_floor_global_indices[current_floor_visible_local_indices[-1]]
@@ -718,6 +739,12 @@ def build_waypoint_summary(
         if current_pose is None:
             return (0, 0.0, int(waypoint_ids[global_index]) if global_index < len(waypoint_ids) else int(global_index))
         wp_py, wp_px = waypoint_positions[global_index]
+        distance_m = _waypoint_distance_to_current_m(
+            waypoint_index=global_index,
+            waypoint_positions=waypoint_positions,
+            current_pose=current_pose,
+            resolution_cm=resolution_cm,
+        )
         return (
             _counterclockwise_direction_sort_key(
                 float(current_pose[2]) - math.degrees(
@@ -733,12 +760,7 @@ def build_waypoint_summary(
                     )
                 )
             ),
-            float(
-                current_floor_waypoint_distances_m[current_floor_index_map[global_index]]
-            )
-            if global_index in current_floor_index_map
-            and current_floor_waypoint_distances_m[current_floor_index_map[global_index]] is not None
-            else float("inf"),
+            float(distance_m) if distance_m is not None else float("inf"),
             int(waypoint_ids[global_index]) if global_index < len(waypoint_ids) else int(global_index),
         )
 
@@ -748,19 +770,52 @@ def build_waypoint_summary(
             continue
         other_floor_groups.setdefault(int(floor_id), []).append(int(index))
 
-    other_floor_group_indices: List[List[int]] = []
-    for floor_id in sorted(other_floor_groups.keys()):
-        group = other_floor_groups[floor_id]
-        group.sort(key=_waypoint_ccw_sort_key)
-        other_floor_group_indices.append(group)
-
     grouped_display_indices: List[List[int]] = []
     grouped_floor_ids: List[int] = []
     if current_floor_display_global_indices:
         grouped_display_indices.append(current_floor_display_global_indices)
         grouped_floor_ids.append(int(current_floor_id))
     for floor_id in sorted(other_floor_groups.keys()):
-        grouped_display_indices.append(other_floor_groups[floor_id])
+        floor_global_indices = list(other_floor_groups[floor_id])
+        floor_positions = [waypoint_positions[index] for index in floor_global_indices]
+        floor_ids = [waypoint_ids[index] for index in floor_global_indices]
+        floor_descriptions = [
+            waypoint_descriptions[index] if index < len(waypoint_descriptions) else ""
+            for index in floor_global_indices
+        ]
+        floor_area_labels = [
+            _clean_area_label(
+                waypoint_area_labels[index]
+                if waypoint_area_labels and index < len(waypoint_area_labels) else ""
+            )
+            for index in floor_global_indices
+        ]
+        floor_initial_local_index = None
+        if initial_waypoint_index is not None:
+            try:
+                initial_global_index = int(initial_waypoint_index)
+            except (TypeError, ValueError):
+                initial_global_index = -1
+            if initial_global_index in floor_global_indices:
+                floor_initial_local_index = floor_global_indices.index(initial_global_index)
+        floor_visible_local_indices = select_display_waypoint_indices(
+            waypoint_positions=floor_positions,
+            waypoint_ids=floor_ids,
+            waypoint_descriptions=floor_descriptions,
+            waypoint_area_labels=floor_area_labels,
+            current_pose=current_pose,
+            resolution_cm=resolution_cm,
+            full_map=full_map,
+            crop_offset=crop_offset,
+            initial_waypoint_index=floor_initial_local_index,
+            skip_current_overlap=False,
+        )
+        floor_display_global_indices = [
+            floor_global_indices[index]
+            for index in floor_visible_local_indices
+        ]
+        floor_display_global_indices.sort(key=_waypoint_ccw_sort_key)
+        grouped_display_indices.append(floor_display_global_indices)
         grouped_floor_ids.append(int(floor_id))
 
     node_lines: List[str] = []
