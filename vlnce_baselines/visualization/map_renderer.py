@@ -601,7 +601,8 @@ def save_local_map(owner,
                   step: int,
                   episode_id: int,
                   local_map: np.ndarray,
-                  phase: str = "action") -> str:
+                  phase: str = "action",
+                  debug_lines: Optional[List[str]] = None) -> str:
     """
     保存局部地图（添加标签）
 
@@ -620,8 +621,10 @@ def save_local_map(owner,
     # 添加Local Map标签（不显示IMAGE编号）
     label_text = "Local Map"
 
-    # 创建白色标签背景（高度40像素）
-    label_height = 40
+    debug_lines = [str(line).strip() for line in list(debug_lines or []) if str(line or "").strip()]
+
+    # 创建白色标签背景（标题 + 可选debug行）
+    label_height = 40 + (22 * len(debug_lines))
     label_bg = np.ones((label_height, local_map.shape[1], 3), dtype=np.uint8) * 255
 
     # 绘制红色文字
@@ -633,10 +636,29 @@ def save_local_map(owner,
     # 计算文字位置（居中）
     text_size = cv2.getTextSize(label_text, font, font_scale, font_thickness)[0]
     text_x = (label_bg.shape[1] - text_size[0]) // 2
-    text_y = (label_height + text_size[1]) // 2
+    text_y = 26
 
-    # 在标签背景上绘制文字
+    # 在标签背景上绘制标题
     cv2.putText(label_bg, label_text, (text_x, text_y), font, font_scale, text_color, font_thickness)
+
+    if debug_lines:
+        debug_font = cv2.FONT_HERSHEY_SIMPLEX
+        debug_scale = 0.46
+        debug_thickness = 1
+        debug_color = (40, 40, 40)
+        base_y = 40
+        for idx, line in enumerate(debug_lines):
+            line_y = base_y + (idx + 1) * 20
+            cv2.putText(
+                label_bg,
+                line,
+                (10, line_y),
+                debug_font,
+                debug_scale,
+                debug_color,
+                debug_thickness,
+                cv2.LINE_AA,
+            )
 
     # 垂直拼接：地图在上，标签在下
     labeled_map = np.vstack([local_map, label_bg])

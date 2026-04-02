@@ -900,6 +900,8 @@ def _build_local_landmarks_from_instances(owner,
                 "display_id": int(inst.get("display_id", int(selection_key) + 1 if selection_key < 1e9 else 0) or 0),
                 "selection_rank": int(selection_rank) if selection_rank is not None else None,
                 "confidence": float(inst.get("confidence", 0.0)),
+                "instance_uid": owner._landmark_instance_uid(inst),
+                "stop_distance_m": float(inst.get("stop_distance_m", 0.0) or 0.0),
             },
         ))
 

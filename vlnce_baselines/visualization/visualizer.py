@@ -24,6 +24,7 @@ from vlnce_baselines.config.core.constants import (
     landmark_duplicate_rel_dist_m,
     local_map_landmark_topk,
 )
+from vlnce_baselines.utils.spatial_formatter import format_relative_direction
 
 
 class MapVisualizer:
@@ -31,6 +32,47 @@ class MapVisualizer:
 
     GLOBAL_TRAJECTORY_COLOR = (0, 0, 170)
     LOCAL_TRAJECTORY_COLOR = (0, 0, 170)
+
+    @staticmethod
+    def _build_local_map_landmark_debug_lines(
+        selected_instances: Optional[List[Dict[str, Any]]],
+        topk: int = 2,
+    ) -> List[str]:
+        lines: List[str] = []
+        ordered = sorted(
+            [dict(item) for item in (selected_instances or []) if isinstance(item, dict)],
+            key=lambda item: (
+                int(item.get("selection_rank", 1e9) or 1e9),
+                -float(item.get("confidence", 0.0) or 0.0),
+                float(item.get("distance_m", 1e9) or 1e9),
+                str(item.get("name", "")),
+            ),
+        )
+        for item in ordered[:max(1, int(topk))]:
+            name = str(item.get("name") or "Unknown").strip() or "Unknown"
+            try:
+                display_id = int(item.get("display_id"))
+            except (TypeError, ValueError):
+                display_id = None
+            try:
+                distance_m = float(item.get("distance_m"))
+                distance_text = f"{distance_m:.2f}m"
+            except (TypeError, ValueError):
+                distance_text = "Unknown"
+            try:
+                angle_deg = float(item.get("angle_deg"))
+                direction_text = format_relative_direction(angle_deg)
+            except (TypeError, ValueError):
+                direction_text = "Unknown"
+            try:
+                confidence = float(item.get("confidence", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                confidence = 0.0
+            prefix = f"#{display_id}" if display_id is not None and display_id > 0 else "#?"
+            lines.append(
+                f"{prefix} {name} | {distance_text} | {direction_text} | c{confidence:.3f}"
+            )
+        return lines
 
     def __init__(self, 
                  results_dir: str,
@@ -874,8 +916,22 @@ class MapVisualizer:
                     waypoint_positions, waypoint_ids, space_area_layer, space_area_records, crop_offset,
                     mapping_classes=mapping_classes
                 )
+            local_map_debug_lines = self._build_local_map_landmark_debug_lines(
+                selected_action_landmark_instances,
+                topk=local_map_landmark_topk,
+            )
+            if not local_map_debug_lines and controller is not None:
+                local_map_debug_lines = list(
+                    getattr(controller, "latest_action_local_map_debug_lines", []) or []
+                )
             paths['local_map'] = (
-                self.save_local_map(step, episode_id, local_map, phase)
+                self.save_local_map(
+                    step,
+                    episode_id,
+                    local_map,
+                    phase,
+                    debug_lines=local_map_debug_lines,
+                )
                 if policy.get('save_local_map', False) and local_map is not None else None
             )
 

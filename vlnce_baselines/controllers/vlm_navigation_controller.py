@@ -35,7 +35,10 @@ from vlnce_baselines.utils.spatial_formatter import (
     format_relative_direction,
 )
 from vlnce_baselines.controllers.base_navigation_controller import BaseNavigationController
-from vlnce_baselines.mapping.space_types import strip_space_type_variant_suffixes
+from vlnce_baselines.mapping.space_types import (
+    normalize_space_type,
+    strip_space_type_variant_suffixes,
+)
 from vlnce_baselines.vlm import (
     LLMPlanner, ActionExecutor, SaveManager, NavigationVisualizer
 )
@@ -118,6 +121,7 @@ class VLMNavigationController(BaseNavigationController):
         self.enable_auto_retreat = bool(getattr(config.MAP, "ENABLE_AUTO_RETREAT", False))
         self.save_api_request_artifacts = bool(getattr(config.MAP, "SAVE_API_REQUEST_ARTIFACTS", False))
         self.save_navigation_step_images = bool(getattr(config.MAP, "SAVE_NAVIGATION_STEP_IMAGES", False))
+        self.latest_action_local_map_debug_lines = []
         self.save_navigation_gif = bool(getattr(config.MAP, "SAVE_NAVIGATION_GIF", True))
         self.auto_retreat_stop_early_if_reverse_blocked = bool(
             getattr(
@@ -1010,21 +1014,33 @@ class VLMNavigationController(BaseNavigationController):
         return False
 
     def _get_current_subtask_autocomplete_candidates(self) -> List[str]:
-        """Only allow proximity auto-stop when subtask_landmark is the destination landmark itself."""
+        """Allow proximity auto-stop when the subtask landmark aligns with the destination landmark or connector/generic destination space."""
         if self._current_subtask_uses_stairs_like_landmark():
             return []
         dest_room, dest_object = self._parse_subtask_destination()
         dest_object_norm = self._normalize_landmark_candidate(dest_object)
+        dest_space_candidates = self._get_current_subtask_autocomplete_space_candidates(dest_room)
         subtask_landmark_norm = self._normalize_landmark_candidate(
             self._get_subtask_landmark_field(getattr(self, 'current_subtask', None))
         )
-        if not dest_object_norm or not subtask_landmark_norm:
+        if not subtask_landmark_norm:
+            return []
+
+        destination_candidates: List[str] = []
+        for raw_candidate in (dest_object_norm, *dest_space_candidates):
+            normalized = self._normalize_landmark_candidate(raw_candidate)
+            if normalized and normalized not in destination_candidates:
+                destination_candidates.append(normalized)
+        if not destination_candidates:
             return []
 
         destination_aligned = (
-            subtask_landmark_norm == dest_object_norm or
-            subtask_landmark_norm in dest_object_norm or
-            dest_object_norm in subtask_landmark_norm
+            any(
+                subtask_landmark_norm == candidate or
+                subtask_landmark_norm in candidate or
+                candidate in subtask_landmark_norm
+                for candidate in destination_candidates
+            )
         )
         stair_destination_aligned = self._current_area_matches_stair_destination(
             dest_room,
@@ -1035,7 +1051,32 @@ class VLMNavigationController(BaseNavigationController):
             return []
 
         candidates: List[str] = []
-        for raw_candidate in (subtask_landmark_norm, dest_object_norm):
+        for raw_candidate in (subtask_landmark_norm, *destination_candidates):
+            normalized = self._normalize_landmark_candidate(raw_candidate)
+            if normalized and normalized not in candidates:
+                candidates.append(normalized)
+        return candidates
+
+    def _get_current_subtask_autocomplete_space_candidates(
+        self,
+        dest_room: Optional[str],
+    ) -> List[str]:
+        """Allow connector/generic destination spaces themselves to trigger proximity auto-stop."""
+        room_norm = self._normalize_waypoint_endpoint_label(dest_room) or self._normalize_landmark_candidate(dest_room)
+        if not room_norm:
+            return []
+
+        canonical_space = normalize_space_type(room_norm)
+        is_connector_space = canonical_space == "hallway"
+        is_generic_room_space = room_norm == "room"
+        if not is_connector_space and not is_generic_room_space:
+            return []
+
+        candidates: List[str] = []
+        for raw_candidate in (
+            room_norm,
+            canonical_space if canonical_space != "Unknown" else None,
+        ):
             normalized = self._normalize_landmark_candidate(raw_candidate)
             if normalized and normalized not in candidates:
                 candidates.append(normalized)
@@ -1277,6 +1318,39 @@ class VLMNavigationController(BaseNavigationController):
             )
         )
         return ordered_entries
+
+    def _build_action_landmark_overlay_lines(
+        self,
+        entries: Sequence[Dict[str, Any]],
+        topk: int = 2,
+    ) -> List[str]:
+        ordered_entries = self._sort_action_landmark_entries(entries or [])
+        lines: List[str] = []
+        for entry in ordered_entries[:max(1, int(topk))]:
+            name = str(entry.get("name") or "Unknown").strip() or "Unknown"
+            display_id = self._safe_int(entry.get("display_id"))
+            distance_m = self._safe_float(entry.get("distance_m"))
+            angle_deg = self._safe_float(entry.get("angle_deg"))
+            confidence = self._safe_float(entry.get("confidence")) or 0.0
+            prefix = f"#{display_id}" if display_id is not None and display_id > 0 else "#?"
+            distance_text = f"{distance_m:.2f}m" if distance_m is not None else "Unknown"
+            direction_text = format_relative_direction(angle_deg) if angle_deg is not None else "Unknown"
+            lines.append(
+                f"{prefix} {name} | {distance_text} | {direction_text} | c{confidence:.3f}"
+            )
+        return lines
+
+    def _log_action_landmark_debug(
+        self,
+        tag: str,
+        entries: Sequence[Dict[str, Any]],
+    ) -> None:
+        ordered_entries = self._sort_action_landmark_entries(entries or [])
+        if not ordered_entries:
+            self.latest_action_local_map_debug_lines = []
+            return
+
+        self.latest_action_local_map_debug_lines = self._build_action_landmark_overlay_lines(ordered_entries)
 
     def _get_action_landmark_prompt_entries(self, detection_step: Optional[int]) -> List[Dict[str, Any]]:
         history = self.landmark_memory.prompt_entries_by_step
@@ -1653,6 +1727,7 @@ class VLMNavigationController(BaseNavigationController):
         self.action_api_call_records = []
         self.previous_subtask_landmark_final_info = None
         self.previous_subtask_autocomplete_landmark_info = None
+        self.latest_action_local_map_debug_lines = []
         self.pose_before_action = None  # 重置pose追踪
         self.last_planned_degrees = 0  # 记录计划转向角度
         self.last_planned_meters = 0   # 记录计划移动距离
@@ -2821,7 +2896,7 @@ class VLMNavigationController(BaseNavigationController):
             landmark_dist_map_multi=self.landmark_memory.get_latest_dist_map_multi(),
             landmark_instances_world=self.landmark_memory.get_world_instances(),
         )
-        print(f"[ActionLandmarks] {action_landmark_map_info or 'no valid action landmark entries'}")
+        self._log_action_landmark_debug("pre-action", step_landmark_entries)
 
         return {
             "step_landmark_entries": step_landmark_entries,
@@ -2940,18 +3015,15 @@ class VLMNavigationController(BaseNavigationController):
         auto_completed_subtask = self._should_autocomplete_subtask_during_action_step(
             step_landmark_entries
         )
+        self._log_action_landmark_debug("post-action", step_landmark_entries)
         if auto_completed_subtask is None:
             return None
 
         self._record_previous_subtask_autocomplete_landmark(auto_completed_subtask)
-        auto_stop_landmark_summary = self._format_action_landmark_entries_summary(
-            step_landmark_entries
-        )
         landmark_kind = "opening-like" if auto_completed_subtask.get("is_opening_like") else "solid"
         landmark_source = "vis" if str(auto_completed_subtask.get("source", "mem") or "mem") == "vis" else "mem"
         landmark_display_id = self._safe_int(auto_completed_subtask.get("display_id"))
         landmark_id_text = f" #{landmark_display_id}" if landmark_display_id is not None and landmark_display_id > 0 else ""
-        print(f"[AutoStopLandmarks] {auto_stop_landmark_summary}")
         print(
             "[AutoSubtaskComplete] "
             f"{landmark_source} {auto_completed_subtask['name']}{landmark_id_text} ({landmark_kind}) reached within "
