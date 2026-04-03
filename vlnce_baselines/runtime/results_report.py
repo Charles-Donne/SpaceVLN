@@ -3,7 +3,7 @@ import csv
 import json
 import math
 import os
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from vlnce_baselines.config.core.params.thresholds import EVAL_SUCCESS_DISTANCE_M
 from vlnce_baselines.vlm.support.save_manager import iter_all_episode_log_paths
@@ -178,6 +178,53 @@ def load_results(results_dir: str) -> List[Dict[str, Any]]:
 
     results = sorted(results_by_episode.values(), key=_episode_sort_key)
     return results
+
+
+def _episode_id_as_int(item: Dict[str, Any]) -> Optional[int]:
+    episode_id = item.get("episode_id", None)
+    try:
+        return int(episode_id)
+    except (TypeError, ValueError):
+        return None
+
+
+def filter_results_by_episode_range(
+    results: List[Dict[str, Any]],
+    *,
+    start_episode_id: Optional[int] = None,
+    end_episode_id: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    if start_episode_id is None and end_episode_id is None:
+        return list(results)
+
+    filtered: List[Dict[str, Any]] = []
+    for item in results:
+        episode_id = _episode_id_as_int(item)
+        if episode_id is None:
+            continue
+        if start_episode_id is not None and episode_id < int(start_episode_id):
+            continue
+        if end_episode_id is not None and episode_id > int(end_episode_id):
+            continue
+        filtered.append(item)
+    return filtered
+
+
+def _resolve_report_output_dir(
+    results_dir: str,
+    *,
+    start_episode_id: Optional[int] = None,
+    end_episode_id: Optional[int] = None,
+    output_dir: Optional[str] = None,
+) -> str:
+    if output_dir:
+        return os.path.abspath(output_dir)
+    if start_episode_id is None and end_episode_id is None:
+        return results_dir
+
+    start_label = "start" if start_episode_id is None else str(int(start_episode_id))
+    end_label = "end" if end_episode_id is None else str(int(end_episode_id))
+    return os.path.join(results_dir, "reports", f"{start_label}-{end_label}")
 
 
 def compute_metrics(results: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -458,6 +505,9 @@ def generate_results_report(
     save: bool = True,
     debug: bool = False,
     verbose: bool = True,
+    start_episode_id: Optional[int] = None,
+    end_episode_id: Optional[int] = None,
+    output_dir: Optional[str] = None,
 ) -> Dict[str, Any]:
     if not os.path.exists(results_dir):
         raise FileNotFoundError(f"目录不存在: {results_dir}")
@@ -465,12 +515,39 @@ def generate_results_report(
     if verbose:
         print(f"📂 加载结果: {results_dir}")
 
-    results = load_results(results_dir)
-    if not results:
+    all_results = load_results(results_dir)
+    if not all_results:
         raise FileNotFoundError(f"未找到任何episode结果: {os.path.join(results_dir, 'log')}")
 
+    results = filter_results_by_episode_range(
+        all_results,
+        start_episode_id=start_episode_id,
+        end_episode_id=end_episode_id,
+    )
+    if not results:
+        if start_episode_id is not None or end_episode_id is not None:
+            raise FileNotFoundError(
+                f"未找到指定范围内的episode结果: [{start_episode_id}, {end_episode_id}]"
+            )
+        raise FileNotFoundError(f"未找到任何episode结果: {os.path.join(results_dir, 'log')}")
+
+    report_output_dir = _resolve_report_output_dir(
+        results_dir,
+        start_episode_id=start_episode_id,
+        end_episode_id=end_episode_id,
+        output_dir=output_dir,
+    )
+
     if verbose:
-        print(f"✅ 加载了 {len(results)} 个episode")
+        if start_episode_id is not None or end_episode_id is not None:
+            print(
+                f"✅ 总共加载 {len(all_results)} 个episode，"
+                f"范围过滤后保留 {len(results)} 个episode "
+                f"([{start_episode_id}, {end_episode_id}])"
+            )
+            print(f"📁 部分报告输出目录: {report_output_dir}")
+        else:
+            print(f"✅ 加载了 {len(results)} 个episode")
 
     metrics = compute_metrics(results)
     saved_paths: Dict[str, str] = {}
@@ -481,10 +558,11 @@ def generate_results_report(
             print_debug_info(metrics)
 
     if save:
-        summary_path = os.path.join(results_dir, "summary.txt")
+        os.makedirs(report_output_dir, exist_ok=True)
+        summary_path = os.path.join(report_output_dir, "summary.txt")
         save_summary(metrics, summary_path)
         saved_paths["summary"] = summary_path
-        saved_paths.update(save_episode_tables(results, metrics, results_dir))
+        saved_paths.update(save_episode_tables(results, metrics, report_output_dir))
         if verbose:
             print(f"📋 汇总报告已保存: {summary_path}")
             print(f"📋 Episode表格已保存: {saved_paths['csv']}")
@@ -502,16 +580,25 @@ def build_results_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--path", type=str, required=True, help="结果目录路径")
     parser.add_argument("--save", action="store_true", help="保存 summary 和结果表格")
     parser.add_argument("--debug", action="store_true", help="打印逐 episode 调试信息")
+    parser.add_argument("--start-id", type=int, default=None, help="只统计起始 episode ID")
+    parser.add_argument("--end-id", type=int, default=None, help="只统计结束 episode ID")
+    parser.add_argument("--output-dir", type=str, default=None, help="报告输出目录")
     return parser
 
 
 def run_results_report_from_args(args: argparse.Namespace) -> int:
     try:
+        if args.start_id is not None and args.end_id is not None and args.end_id < args.start_id:
+            print(f"❌ end-id 不能小于 start-id: {args.start_id} -> {args.end_id}")
+            return 1
         generate_results_report(
             args.path,
             save=bool(args.save),
             debug=bool(args.debug),
             verbose=True,
+            start_episode_id=args.start_id,
+            end_episode_id=args.end_id,
+            output_dir=args.output_dir,
         )
         return 0
     except FileNotFoundError as exc:
