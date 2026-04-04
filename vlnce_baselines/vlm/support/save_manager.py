@@ -299,14 +299,14 @@ class SaveManager:
         if total_steps < 0:
             total_steps = float('inf')
 
-        # 排序规则：SR > OSR > SPL > 总时间更短 > nDTW > NE更小 > oracle SPL > path更短 > steps更少
+        # 排序规则：SR > OSR > SPL > nDTW > NE更小 > 总时间更短 > oracle SPL > path更短 > steps更少
         return (
             success,
             oracle_success,
             spl,
-            -episode_duration_s,
             ndtw,
             -dtg,
+            -episode_duration_s,
             oracle_spl,
             -path_length,
             -total_steps,
