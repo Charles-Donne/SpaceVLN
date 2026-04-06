@@ -95,6 +95,7 @@ class VLMNavigationController(BaseNavigationController):
     FINAL_DESTINATION_MATCH_AUTOSTOP_STREAK = 3
     FINAL_DESTINATION_MATCH_AUTOSTOP_RADIUS_M = 1.0
     ACTION_STAGNATION_REPLAN_STREAK = 3
+    ACTION_CONSECUTIVE_TURN_LIMIT = 3
     LOW_LEVEL_STAGNATION_RATIO = CFG_LOW_LEVEL_STAGNATION_RATIO
     LOW_LEVEL_STAGNATION_CAP_M = CFG_LOW_LEVEL_STAGNATION_CAP_M
     STUCK_RETREAT_DISTANCE_M = 1.0
@@ -216,6 +217,9 @@ class VLMNavigationController(BaseNavigationController):
         self.action_stagnation_retry_pending = False
         self.action_stagnation_retry_notice_text = ""
         self.action_stagnation_progress_warning_text = ""
+        self.action_consecutive_turn_count = 0
+        self.action_force_forward_after_turns_pending = False
+        self.action_force_forward_after_turns_notice_text = ""
         self.verify_replan_prompt_notice = ""
         self.pending_verify_view_restriction = None
         self.episode_wall_start_time = None
@@ -285,8 +289,43 @@ class VLMNavigationController(BaseNavigationController):
         self.action_stagnation_retry_notice_text = ""
         self.action_stagnation_progress_warning_text = ""
 
+    def _clear_action_force_forward_prompt_state(self) -> None:
+        self.action_force_forward_after_turns_pending = False
+        self.action_force_forward_after_turns_notice_text = ""
+
     def _reset_blocked_front_controller_recovery_state(self) -> None:
         self.blocked_front_controller_recovery_count = 0
+
+    def _build_action_force_forward_after_turns_notice(self) -> str:
+        limit = max(1, int(getattr(self, "ACTION_CONSECUTIVE_TURN_LIMIT", 3) or 3))
+        return (
+            f"The last {limit} action decisions were consecutive turns. "
+            "Do not output `TURN_LEFT 30deg` or `TURN_RIGHT 30deg` on this call. "
+            "If arrival is already satisfied, output `STOP`; otherwise output one `MOVE_FORWARD` action."
+        )
+
+    def _update_action_consecutive_turn_state(self, action_name: Optional[str]) -> None:
+        action_name_upper = str(action_name or "").upper()
+        limit = max(1, int(getattr(self, "ACTION_CONSECUTIVE_TURN_LIMIT", 3) or 3))
+        if action_name_upper in ("TURN_LEFT", "TURN_RIGHT"):
+            self.action_consecutive_turn_count = int(
+                getattr(self, "action_consecutive_turn_count", 0) or 0
+            ) + 1
+            if self.action_consecutive_turn_count >= limit:
+                self.action_force_forward_after_turns_pending = True
+                self.action_force_forward_after_turns_notice_text = (
+                    self._build_action_force_forward_after_turns_notice()
+                )
+                if self.action_consecutive_turn_count == limit:
+                    print(
+                        "[ActionTurnLimit] "
+                        f"{limit} consecutive turn actions detected; "
+                        "the next action call will forbid more turning and require forward progress or valid STOP"
+                    )
+            return
+
+        self.action_consecutive_turn_count = 0
+        self._clear_action_force_forward_prompt_state()
 
     def _get_action_progress_summary_for_prompt(self) -> str:
         base_summary = str(self.progress_summary or "").strip()
@@ -774,6 +813,98 @@ class VLMNavigationController(BaseNavigationController):
                 "selected_distance_text": selected_distance_text,
                 "other_side": other_side,
                 "other_distance_text": other_distance_text,
+            },
+        }
+
+    def _build_forced_forward_after_turn_limit_action(
+        self,
+        step_landmark_entries: Optional[Sequence[Dict[str, Any]]] = None,
+        obstacle_distances: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        current_entries = list(step_landmark_entries or [])
+        auto_completed_subtask = self._should_autocomplete_subtask_during_action_step(current_entries)
+        if auto_completed_subtask is not None:
+            self._record_previous_subtask_autocomplete_landmark(auto_completed_subtask)
+            landmark_kind = "opening-like" if auto_completed_subtask.get("is_opening_like") else "solid"
+            distance_m = float(auto_completed_subtask.get("distance_m", 0.0) or 0.0)
+            threshold_m = float(
+                auto_completed_subtask.get(
+                    "stop_distance_m",
+                    self.ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M,
+                )
+            )
+            response = self._build_controller_forced_action_response(
+                action_name="STOP",
+                reasoning=(
+                    f"The destination landmark {auto_completed_subtask['name']} is already within "
+                    f"{distance_m:.2f}m, which satisfies the auto-stop threshold {threshold_m:.2f}m, "
+                    "so stop instead of forcing another movement."
+                ),
+                action_analysis=(
+                    f"Destination landmark {auto_completed_subtask['name']} is already reached, so stop now"
+                ),
+            )
+            return {
+                "action_id": HabitatSimActions.STOP,
+                "action_name": "STOP",
+                "response": response,
+                "degrees": 0,
+                "meters": 0.0,
+                "recovery_kind": "stop",
+                "recovery_meta": {
+                    "landmark_name": auto_completed_subtask["name"],
+                    "landmark_kind": landmark_kind,
+                    "distance_m": distance_m,
+                    "threshold_m": threshold_m,
+                },
+            }
+
+        front_distance_text = str((obstacle_distances or {}).get("front") or "Unknown")
+        if self._is_obstacle_distance_blocked(front_distance_text):
+            response = self._build_controller_forced_action_response(
+                action_name="STOP",
+                reasoning=(
+                    "Three consecutive turn actions have already been used, but the current FRONT route is still "
+                    f"blocked ({front_distance_text}). Do not keep spinning in place; end this action stage and "
+                    "return to thinking for a new route."
+                ),
+                action_analysis=(
+                    "Three consecutive turn actions already happened and FRONT is still blocked, "
+                    "so stop the current action stage and replan"
+                ),
+            )
+            return {
+                "action_id": HabitatSimActions.STOP,
+                "action_name": "STOP",
+                "response": response,
+                "degrees": 0,
+                "meters": 0.0,
+                "recovery_kind": "replan_handoff",
+                "recovery_meta": {
+                    "front_distance_text": front_distance_text,
+                },
+            }
+
+        response = self._build_controller_forced_action_response(
+            action_name="MOVE_FORWARD",
+            reasoning=(
+                "Three consecutive turn actions have already happened. "
+                f"The current FRONT route is still passable ({front_distance_text}), so force one short forward step "
+                "instead of allowing another in-place turn."
+            ),
+            action_analysis=(
+                "Three consecutive turn actions already happened, so force one short forward step before any more turning"
+            ),
+        )
+        return {
+            "action_id": HabitatSimActions.MOVE_FORWARD,
+            "action_name": "MOVE_FORWARD",
+            "response": response,
+            "degrees": 0,
+            "meters": float(self.move_distance),
+            "recovery_kind": "forced_forward",
+            "recovery_meta": {
+                "front_distance_text": front_distance_text,
             },
         }
 
@@ -1721,6 +1852,8 @@ class VLMNavigationController(BaseNavigationController):
         self.action_stagnation_streak = 0
         self._reset_blocked_front_controller_recovery_state()
         self._clear_action_stagnation_prompt_state()
+        self.action_consecutive_turn_count = 0
+        self._clear_action_force_forward_prompt_state()
         self.verify_replan_prompt_notice = ""
         self.pending_verify_view_restriction = None
         self.episode_wall_start_time = None
@@ -2529,6 +2662,8 @@ class VLMNavigationController(BaseNavigationController):
         self.action_stagnation_streak = 0
         self._reset_blocked_front_controller_recovery_state()
         self._clear_action_stagnation_prompt_state()
+        self.action_consecutive_turn_count = 0
+        self._clear_action_force_forward_prompt_state()
         self.verify_replan_prompt_notice = ""
         self.pose_before_action = None
         self.last_planned_degrees = 0
@@ -2961,6 +3096,35 @@ class VLMNavigationController(BaseNavigationController):
                 action_name=action_name,
             )
 
+            if (
+                self.action_force_forward_after_turns_pending and
+                (not self.action_stagnation_retry_pending) and
+                str(action_name or "").upper() in ("TURN_LEFT", "TURN_RIGHT")
+            ):
+                print(
+                    "[ActionTurnLimit] Rejected extra turn after consecutive-turn limit; "
+                    "controller-side forward recovery will take over from the same current view"
+                )
+                forced_forward = self._build_forced_forward_after_turn_limit_action(
+                    step_landmark_entries=step_landmark_entries,
+                    obstacle_distances=action_context.get("obstacle_distances"),
+                )
+                if forced_forward is None:
+                    return None, None, None, 0, 0.0
+                action_id = forced_forward["action_id"]
+                action_name = forced_forward["action_name"]
+                response = forced_forward["response"]
+                degrees = int(forced_forward.get("degrees", 0) or 0)
+                meters = float(forced_forward.get("meters", 0.0) or 0.0)
+                if str(action_name or "").upper() == "MOVE_FORWARD":
+                    print("[ActionTurnLimit] Controller forced one short MOVE_FORWARD after consecutive turns")
+                else:
+                    print(
+                        "[ActionTurnLimit] FRONT stayed blocked after consecutive turns; "
+                        "end the current action stage and trigger replan"
+                    )
+                break
+
             if not (
                 self.action_stagnation_retry_pending and
                 str(action_name or "").upper() == "MOVE_FORWARD"
@@ -3065,24 +3229,62 @@ class VLMNavigationController(BaseNavigationController):
         )
 
         progress_summary_for_prompt = self._get_action_progress_summary_for_prompt()
-        previous_action_reason_for_prompt = (
-            self.action_stagnation_retry_notice_text
-            if self.action_stagnation_retry_pending and self.action_stagnation_retry_notice_text
-            else self.previous_action_reason
-        )
+        force_forward_after_turns_pending = bool(
+            getattr(self, "action_force_forward_after_turns_pending", False)
+        ) and (not self.action_stagnation_retry_pending)
+        if self.action_stagnation_retry_pending and self.action_stagnation_retry_notice_text:
+            previous_action_reason_for_prompt = self.action_stagnation_retry_notice_text
+        elif force_forward_after_turns_pending and self.action_force_forward_after_turns_notice_text:
+            if self.previous_action_reason:
+                previous_action_reason_for_prompt = (
+                    f"{self.action_force_forward_after_turns_notice_text} {self.previous_action_reason}"
+                ).strip()
+            else:
+                previous_action_reason_for_prompt = self.action_force_forward_after_turns_notice_text
+        else:
+            previous_action_reason_for_prompt = self.previous_action_reason
         allowed_action_names = (
             ("TURN_LEFT", "TURN_RIGHT", "STOP")
             if self.action_stagnation_retry_pending
+            else ("MOVE_FORWARD", "STOP")
+            if force_forward_after_turns_pending
             else None
         )
-        action_id, action_name, response, degrees, meters = self._request_vlm_action(
-            action_context=action_context,
-            action_subtask_instruction=action_subtask_instruction,
-            progress_summary_for_prompt=progress_summary_for_prompt,
-            previous_action_reason_for_prompt=previous_action_reason_for_prompt,
-            allowed_action_names=allowed_action_names,
-        )
-        
+        if (
+            force_forward_after_turns_pending and
+            self._is_obstacle_distance_blocked((action_context.get("obstacle_distances") or {}).get("front"))
+        ):
+            forced_forward = self._build_forced_forward_after_turn_limit_action(
+                step_landmark_entries=action_context.get("step_landmark_entries"),
+                obstacle_distances=action_context.get("obstacle_distances"),
+            )
+            if forced_forward is None:
+                print("[ERR] Forced forward-after-turn-limit recovery failed")
+                return None, None, True, 1, None
+            action_id = forced_forward["action_id"]
+            action_name = forced_forward["action_name"]
+            response = forced_forward["response"]
+            degrees = int(forced_forward.get("degrees", 0) or 0)
+            meters = float(forced_forward.get("meters", 0.0) or 0.0)
+            if str(action_name or "").upper() == "STOP":
+                print(
+                    "[ActionTurnLimit] "
+                    "Consecutive-turn limit is active and FRONT is blocked, so controller ended the current action stage"
+                )
+            else:
+                print(
+                    "[ActionTurnLimit] "
+                    "Controller forced one short MOVE_FORWARD after consecutive turns"
+                )
+        else:
+            action_id, action_name, response, degrees, meters = self._request_vlm_action(
+                action_context=action_context,
+                action_subtask_instruction=action_subtask_instruction,
+                progress_summary_for_prompt=progress_summary_for_prompt,
+                previous_action_reason_for_prompt=previous_action_reason_for_prompt,
+                allowed_action_names=allowed_action_names,
+            )
+
         if action_id is None:
             print("[ERR] VLM decision failed")
             return None, None, True, 1, None
@@ -3095,7 +3297,8 @@ class VLMNavigationController(BaseNavigationController):
         self.last_planned_degrees = degrees
         self.last_planned_meters = meters
         self.last_action_name = action_name
-        
+        self._update_action_consecutive_turn_state(action_name)
+
         # 保存当前的action_analysis作为下一次的previous_action_reason
         if self.action_stagnation_retry_pending and str(action_name or "").upper() in ("TURN_LEFT", "TURN_RIGHT"):
             self.previous_action_reason = self._build_post_avoidance_turn_notice(action_name)
