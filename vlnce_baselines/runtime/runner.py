@@ -270,18 +270,29 @@ def run_single_episode(
 
         error_msg = str(exc)
         timing_summary = {}
+        finalized_success = False
+        finalized_steps = 0
         if controller is not None and hasattr(controller, "_build_episode_timing_summary"):
             try:
                 timing_summary = controller._build_episode_timing_summary()
             except Exception:
                 timing_summary = {}
+        if controller is not None:
+            try:
+                finalized_steps = int(getattr(controller, "current_step", 0) or 0)
+                final_metrics = controller.finish_episode(success=False, stop_action=True)
+                normalized_metrics = controller._normalize_final_env_metrics(final_metrics)
+                controller._save_navigation_result(finalized_steps, normalized_metrics)
+                finalized_success = bool((normalized_metrics or {}).get("success", 0))
+            except Exception:
+                pass
         print(f"\n❌ Episode {episode_id} 运行失败: {error_msg}")
         print("\n完整错误堆栈:")
         traceback.print_exc()
         return {
             "episode_id": episode_id,
-            "success": False,
-            "steps": 0,
+            "success": finalized_success,
+            "steps": finalized_steps,
             "episode_duration_including_failed_s": timing_summary.get("episode_duration_including_failed_s", 0.0),
             "episode_duration_excluding_failed_s": timing_summary.get("episode_duration_excluding_failed_s", 0.0),
             "api_total_duration_s": (timing_summary.get("api_summary") or {}).get("total_duration_s", 0.0),

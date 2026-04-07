@@ -3615,6 +3615,7 @@ class VLMNavigationController(BaseNavigationController):
         controller_mode = 'thinking'
         thinking_mode = 'initial'
         navigation_complete = False
+        failure_reason = ""
 
         while not navigation_complete:
             if controller_mode == 'thinking':
@@ -3645,25 +3646,11 @@ class VLMNavigationController(BaseNavigationController):
                     else:
                         failure_reason = 'verify_lookaround_failed' if cycle_reason == 'lookaround_failed' else 'verify_replan_failed'
                     print(f"[ERR] Thinking controller failed ({thinking_mode})")
-                    failure_timing_summary = self._build_episode_timing_summary()
-                    return {
-                        'success': False,
-                        'total_steps': self.current_step,
-                        'subtask_count': self.subtask_count,
-                        'detected_classes': list(self.detected_classes) if hasattr(self, 'detected_classes') else [],
-                        'episode_duration_s': failure_timing_summary['episode_duration_including_failed_s'],
-                        'episode_duration_including_failed_s': failure_timing_summary['episode_duration_including_failed_s'],
-                        'episode_duration_excluding_failed_s': failure_timing_summary['episode_duration_excluding_failed_s'],
-                        'failed_api_total_duration_s': failure_timing_summary['failed_api_total_duration_s'],
-                        'failed_retry_wait_duration_s': failure_timing_summary['failed_retry_wait_duration_s'],
-                        'failed_wasted_duration_s': failure_timing_summary['failed_wasted_duration_s'],
-                        'thinking_api_summary': failure_timing_summary['thinking_api_summary'],
-                        'action_api_summary': failure_timing_summary['action_api_summary'],
-                        'api_summary': failure_timing_summary['api_summary'],
-                        'gif_path': None,
-                        'result_file': None,
-                        'reason': failure_reason,
-                    }
+                    print(
+                        "[WARN] Finalize the episode with current trajectory/metrics "
+                        "instead of discarding evaluation."
+                    )
+                    break
 
                 if controller_mode == 'complete':
                     navigation_complete = True
@@ -3743,7 +3730,8 @@ class VLMNavigationController(BaseNavigationController):
             'action_api_summary': episode_timing_summary['action_api_summary'],
             'api_summary': episode_timing_summary['api_summary'],
             'gif_path': gif_path,
-            'result_file': final_result
+            'result_file': final_result,
+            'reason': failure_reason,
         }
 
     def _estimate_fallback_success_spl(self, path_length: float) -> float:
