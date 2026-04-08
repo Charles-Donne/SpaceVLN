@@ -238,31 +238,6 @@ class SaveManager:
     def is_complete_saved_result(cls, result: Optional[Dict]) -> bool:
         return cls.is_complete_log_result(result) or cls.is_complete_full_result(result)
 
-    @classmethod
-    def should_replace_incomplete_non_sr1_best(
-        cls,
-        new_result: Optional[Dict],
-        new_log_result: Optional[Dict],
-        existing_best_result: Optional[Dict],
-        existing_best_log: Optional[Dict],
-    ) -> bool:
-        if not (
-            cls.is_complete_saved_result(new_result)
-            and cls.is_complete_saved_result(new_log_result)
-        ):
-            return False
-
-        existing_candidates = [
-            candidate
-            for candidate in (existing_best_result, existing_best_log)
-            if candidate
-        ]
-        if not existing_candidates:
-            return False
-        if any(cls.result_has_sr1(candidate) for candidate in existing_candidates):
-            return False
-        return any(not cls.is_complete_saved_result(candidate) for candidate in existing_candidates)
-
     def _result_rank_key(self, result: Optional[Dict]) -> tuple:
         if not result:
             return (
@@ -413,26 +388,23 @@ class SaveManager:
         }
 
         existing_best_log = self._load_json_if_exists(log_path)
+        complete_candidates = [
+            candidate
+            for candidate in (existing_best_result, existing_best_log)
+            if self.is_complete_saved_result(candidate)
+        ]
         compare_baseline = None
-        for candidate in (existing_best_result, existing_best_log):
-            if not candidate:
-                continue
+        for candidate in complete_candidates:
             if compare_baseline is None or self._is_better_result(candidate, compare_baseline):
                 compare_baseline = candidate
-        existing_best_has_sr1 = any(
-            self.result_has_sr1(candidate)
-            for candidate in (existing_best_result, existing_best_log)
-            if candidate
-        )
+
+        new_result_is_complete = self.is_complete_full_result(result)
+        new_log_result_is_complete = self.is_complete_log_result(log_result)
+        new_best_candidate_is_complete = new_result_is_complete and new_log_result_is_complete
         should_update_best = (
-            (not existing_best_has_sr1) and (
+            new_best_candidate_is_complete
+            and (
                 compare_baseline is None
-                or self.should_replace_incomplete_non_sr1_best(
-                    new_result=result,
-                    new_log_result=log_result,
-                    existing_best_result=existing_best_result,
-                    existing_best_log=existing_best_log,
-                )
                 or self._is_better_result(log_result, compare_baseline)
             )
         )
@@ -443,8 +415,8 @@ class SaveManager:
             with open(log_path, 'w', encoding='utf-8') as f:
                 json.dump(log_result, f, indent=2, ensure_ascii=False)
 
-        if existing_best_has_sr1 and compare_baseline is not None:
-            status = "kept(sr=1 locked)"
+        if not new_best_candidate_is_complete:
+            status = "kept(new incomplete ignored)"
         else:
             status = "updated" if should_update_best else "kept"
 

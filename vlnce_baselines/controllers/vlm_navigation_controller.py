@@ -2739,6 +2739,7 @@ class VLMNavigationController(BaseNavigationController):
             print("[GoalRegionMatch] streak reset (final waypoint tail no longer matches destination)")
 
         auto_finish_by_streak = (
+            not is_initial and
             not task_finished and
             match_hit and
             stayed_inside_anchor_region and

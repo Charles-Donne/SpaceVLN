@@ -9,17 +9,20 @@
 # 
 # 用法: 
 #   单个episode:           bash run_r2r/vlm_navigation.sh [episode_id] [max_steps]
-#   批量运行:              bash run_r2r/vlm_navigation.sh [start_id] [num_episodes] [max_steps] [mode]
-#   随机运行:              bash run_r2r/vlm_navigation.sh random [num_episodes] [max_steps]
-#   指定列表:              bash run_r2r/vlm_navigation.sh list [episode_ids] [max_steps]
+#   批量运行:              bash run_r2r/vlm_navigation.sh [start_id] [num_episodes] [max_steps] [mode] [parallel_workers]
+#   随机运行:              bash run_r2r/vlm_navigation.sh random [num_episodes] [max_steps] [mode] [parallel_workers]
+#   指定列表:              bash run_r2r/vlm_navigation.sh list [episode_ids] [max_steps] [mode] [parallel_workers]
 # 
 # 示例:
 #   bash run_r2r/vlm_navigation.sh 832              # 使用配置文件的最大步数
 #   bash run_r2r/vlm_navigation.sh 832 300          # 设置最大步数为 300
 #   bash run_r2r/vlm_navigation.sh 1500 300 200     # 默认 mode=all，全跑
 #   bash run_r2r/vlm_navigation.sh 1500 300 200 skip-sr1
+#   bash run_r2r/vlm_navigation.sh 1500 300 200 all 4
+#   bash run_r2r/vlm_navigation.sh 1500 300 200 skip-sr1 4
 #   bash run_r2r/vlm_navigation.sh random 20 150    # 随机测试 20 个episodes，最多 150 步
-#   bash run_r2r/vlm_navigation.sh list "832,701" 400  # 指定episodes，最多 400 步
+#   bash run_r2r/vlm_navigation.sh random 20 150 all 4
+#   bash run_r2r/vlm_navigation.sh list "832,701" 400 all 2  # 指定episodes，并行运行
 
 set -e
 trap 'echo "❌ 错误：脚本在第 $LINENO 行失败"; exit 1' ERR
@@ -29,6 +32,8 @@ export GLOG_minloglevel=2
 export MAGNUM_LOG=quiet
 export PYTHONWARNINGS="ignore"
 export TRANSFORMERS_VERBOSITY=error
+export MPLCONFIGDIR="${MPLCONFIGDIR:-/tmp/matplotlib-spacevln}"
+mkdir -p "$MPLCONFIGDIR"
 
 # Force NVIDIA EGL backend to avoid Mesa/dri2 selection issues in headless mode.
 export __EGL_VENDOR_LIBRARY_FILENAMES="/usr/share/glvnd/egl_vendor.d/10_nvidia.json"
@@ -54,8 +59,26 @@ NUM_EPISODES=${2:-1}
 MAX_STEPS=${3:-}  # 可选的第3个参数：最大步数
 RANDOM_MODE=""
 EPISODE_IDS_MODE=""
-MODE=${4:-all}
+ARG4=${4:-}
+ARG5=${5:-}
+MODE="all"
+PARALLEL_WORKERS="1"
 MODE_ARG=""
+
+if [[ -n "$ARG4" && "$ARG4" =~ ^[0-9]+$ ]]; then
+    PARALLEL_WORKERS="$ARG4"
+elif [[ -n "$ARG4" ]]; then
+    MODE="$ARG4"
+fi
+
+if [[ -n "$ARG5" ]]; then
+    if [[ "$ARG5" =~ ^[0-9]+$ ]]; then
+        PARALLEL_WORKERS="$ARG5"
+    else
+        echo "❌ parallel_workers必须是正整数: $ARG5"
+        exit 1
+    fi
+fi
 
 case "$MODE" in
     all)
@@ -72,6 +95,11 @@ case "$MODE" in
         ;;
 esac
 
+if ! [[ "$PARALLEL_WORKERS" =~ ^[0-9]+$ ]] || [ "$PARALLEL_WORKERS" -lt 1 ]; then
+    echo "❌ parallel_workers必须是大于等于1的正整数: $PARALLEL_WORKERS"
+    exit 1
+fi
+
 # 检查是否为随机模式或列表模式
 if [ "$EPISODE_ID" == "random" ]; then
     RANDOM_MODE="--random"
@@ -85,7 +113,6 @@ fi
 
 # 参数验证
 MIN_EPISODE_ID=1
-MAX_EPISODE_ID=1800
 
 if ! [[ "$EPISODE_ID" =~ ^[0-9]+$ ]]; then
     echo "❌ episode_id必须是正整数: $EPISODE_ID"
@@ -97,14 +124,6 @@ if [ -z "$RANDOM_MODE" ] && [ -z "$EPISODE_IDS_MODE" ]; then
     if [ "$EPISODE_ID" -lt "$MIN_EPISODE_ID" ]; then
         echo "❌ episode_id不能小于 $MIN_EPISODE_ID: $EPISODE_ID"
         echo "   建议使用: bash run_r2r/vlm_navigation.sh $MIN_EPISODE_ID ..."
-        exit 1
-    fi
-    
-    END_EPISODE_ID=$((EPISODE_ID + NUM_EPISODES - 1))
-    if [ "$END_EPISODE_ID" -gt "$MAX_EPISODE_ID" ]; then
-        echo "❌ 结束episode ID ($END_EPISODE_ID) 超过最大值 $MAX_EPISODE_ID"
-        MAX_NUM=$((MAX_EPISODE_ID - EPISODE_ID + 1))
-        echo "   建议使用: bash run_r2r/vlm_navigation.sh $EPISODE_ID $MAX_NUM"
         exit 1
     fi
 fi
@@ -164,10 +183,11 @@ else
         echo "📋 配置: Episode $EPISODE_ID | 最大步数 $DISPLAY_MAX_STEPS"
     else
         END_ID=$((EPISODE_ID + NUM_EPISODES - 1))
-        echo "📋 配置: Episodes $EPISODE_ID-$END_ID (共$NUM_EPISODES个) | 最大步数 $DISPLAY_MAX_STEPS"
+        echo "📋 配置: 请求 Episodes $EPISODE_ID-$END_ID (共$NUM_EPISODES个，超出数据集会自动截断) | 最大步数 $DISPLAY_MAX_STEPS"
     fi
 fi
 echo "🧩 模式: $MODE"
+echo "⚡ 并行workers: $PARALLEL_WORKERS"
 
 echo "📁 结果: $RESULTS_DIR/"
 echo ""
@@ -204,6 +224,7 @@ CUDA_VISIBLE_DEVICES=0 "$PYTHON_BIN" vlm_navigation.py \
     --results-dir "$RESULTS_DIR" \
     --vlm-api-config "$API_CONFIG" \
     --max-subtask-steps 5 \
+    --parallel-workers "$PARALLEL_WORKERS" \
     $MAX_STEPS_ARG \
     $MODE_ARG
 

@@ -66,6 +66,10 @@ class LLMPlanner(BaseAPIClient):
         if not current_waypoint:
             return False
 
+        if str(mode).strip().lower() == 'initial' and bool(response.get('global_task_finish', False)):
+            print("  [WARN] Initial planning returned global_task_finish=true at task start; reject and retry")
+            return False
+
         return True
 
     def _call_planner_with_retry(
