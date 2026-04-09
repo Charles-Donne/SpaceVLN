@@ -7,7 +7,7 @@ from habitat.core.utils import try_cv2_import
 from habitat.tasks.vln.vln import VLNEpisode
 from habitat.utils.visualizations import maps as habitat_maps
 
-from vlnce_baselines.config.core.params.thresholds import FLOOR_SAME_Z_M
+from navigation_system.config.core.params.thresholds import FLOOR_SAME_Z_M
 
 cv2 = try_cv2_import()
 

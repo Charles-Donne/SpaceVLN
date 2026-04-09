@@ -1,306 +1,301 @@
-# SpaceVLN: Space-Guided Vision-Language Navigation
+# SpaceVLN
 
-<div align="center">
+SpaceVLN 是一个在 Habitat 上运行的分层视觉语言导航系统。当前仓库已经按“单机单项目”使用场景收缩过一轮，主链路集中在规划、动作、建图、结果保存和报告生成这几层，不再保留旧的交互式入口和历史兼容脚本。
 
-**A ReAct-based VLM navigation system with dynamic semantic map guidance**
+## 1. 环境准备
 
-[![Python](https://img.shields.io/badge/Python-3.8-blue.svg)](https://www.python.org/)
-[![Habitat](https://img.shields.io/badge/Habitat-v0.1.7-orange.svg)](https://github.com/facebookresearch/habitat-lab)
+仓库默认按 `conda + Python 3.8` 使用，建议新建独立环境 `spacevln`：
 
-[Paper](https://github.com/Charles-Donne/SpaceVLN) | [Web](https://github.com/Charles-Donne/SpaceVLN) | [Docs](docs/)
-
-</div>
-
----
-
-## 🎯 Overview
-
-SpaceVLN implements a **hierarchical navigation framework** for Vision-Language Navigation in Continuous Environments (VLN-CE):
-
-- **THOUGHT**: LLM decomposes tasks into subtasks with map context
-- **ACT**: VLM executes actions guided by RGB + Detection + Local Map
-- **REFLECT**: 360° scanning verifies progress and replans
-
-**Key Features**:
-- 🗺️ Dynamic semantic mapping with landmark tracking
-- 🎯 Constraint-aware subtask decomposition
-- 🔄 Adaptive replanning with 360° context
-- 🤖 Open-vocabulary object detection (GroundedSAM)
-
----
-
-## 🏗️ System Architecture
-
-```
-Instruction → LLM (THOUGHT)
-                ↓
-            Subtask + Landmark
-                ↓
-          Update Map Markers
-                ↓
-            VLM (ACT)
-                ↓
-    RGB + Detection + Local Map → Action
-                ↓
-          Execute & Update
-                ↓
-          Check Completion (REFLECT)
-                ↓
-        360° Scan → Verify → Replan
-                ↓
-            Loop until Goal
-```
-
-**Data Flow**:
-```python
-# THOUGHT Phase
-llm_input = {
-    "instruction": "Walk to the kitchen...",
-    "images": [front_0°, left_90°, back_180°, right_270°],
-    "maps": [global_map, local_map],
-    "detected_objects": ["floor", "wall", "door", "table"]
-}
-llm_output = {
-    "subtask_destination": "kitchen's table",
-    "subtask_landmark": "table"  # → landmark_classes = ["table"]
-}
-
-# ACT Phase  
-vlm_input = {
-    "images": [rgb_view, detection_view, local_map],
-    "subtask": "Move to doorway"
-}
-vlm_output = {
-    "action": "MOVE_FORWARD",  # or TURN_LEFT/RIGHT/STOP
-    "reasoning": "Safe path ahead, door 3m away"
-}
-
-# REFLECT Phase
-verify_input = {
-    "360_scan": [updated_maps, new_detections],
-    "current_subtask": {
-        "destination": "kitchen's table",
-        "landmark": "table"
-    }
-}
-verify_output = {
-    "global_task_finish": False,
-    "next_subtask": {...}
-}
-```
-
----
-
-## 🚀 Quick Start
-
-### Prerequisites
 ```bash
-# Assume Habitat-Sim/Lab v0.1.7 already installed on server
-conda activate your-habitat-env
-cd CA-Nav-code
+conda create -n spacevln python=3.8 -y
+conda activate spacevln
 ```
 
-### 1. Configure API Keys
+先安装与你机器 CUDA 匹配的 PyTorch。当前工作环境使用的是 CUDA 12.1 版本组合：
+
 ```bash
-cd vlnce_baselines/config/api/
-
-# Create one unified API config for both thinking/action models
-cp vlm_api_config.yaml.template vlm_api_config.yaml
-# Edit: add your provider, API key, and model names
-
-# Example:
-# provider: "dashscope"
-# dashscope.api_key: "sk-..."
-# dashscope.llm_model: "qwen-vl-max-latest"
-# dashscope.vlm_model: "qwen-vl-plus-latest"
+pip install --extra-index-url https://download.pytorch.org/whl/cu121 \
+  torch==2.1.2+cu121 \
+  torchvision==0.16.2+cu121 \
+  torchaudio==2.1.2+cu121
 ```
 
-### 2. Run Navigation
+再安装仓库依赖：
+
 ```bash
-# Single episode test
-python run_vlm_navigation.py \
-    --episode-id 0 \
-    --split val_seen \
-    --max-steps 500
-
-# Batch evaluation
-bash run_r2r/interactive_navigation.sh
+cd /home/charlesdonne/project/nav_ws/SpaceVLN
+pip install -r requirements.txt
 ```
 
-### 3. Check Results
+`requirements.txt` 里默认依赖本地 Habitat：
+
+```text
+-e ../habitat-lab
+```
+
+所以请确认同级目录存在可用的 [`habitat-lab`](/home/charlesdonne/project/nav_ws/habitat-lab)。
+
+## 2. 模型与数据
+
+运行前需要准备两类外部资源：
+
+- Habitat 数据与 R2R/SpaceVLN 评测数据。
+- GroundedSAM / RepViT-SAM 权重。
+
+默认路径定义在 [`default.py`](/home/charlesdonne/project/nav_ws/SpaceVLN/navigation_system/config/runtime/default.py)：
+
+- `MAP.GROUNDING_DINO_CONFIG_PATH`
+- `MAP.GROUNDING_DINO_CHECKPOINT_PATH`
+- `MAP.SAM_CHECKPOINT_PATH`
+- `MAP.RepViTSAM_CHECKPOINT_PATH`
+
+如果你的权重路径不同，直接改这一个文件即可。
+
+## 3. API 配置
+
+标准运行使用统一配置文件：
+
+[`vlm_api_config.yaml.template`](/home/charlesdonne/project/nav_ws/SpaceVLN/navigation_system/config/api/vlm_api_config.yaml.template)
+
+复制一份后填写：
+
 ```bash
-ls results/episode_0/
-# ├── rgb/              # First-person views
-# ├── detection/        # Object detection
-# ├── global_map/       # Semantic maps
-# ├── local_map/        # Local maps
-# └── vlm/
-#     ├── observations/ # Stitched views
-#     ├── subtasks/     # Subtask logs
-#     └── navigation.gif
+cp navigation_system/config/api/vlm_api_config.yaml.template \
+   navigation_system/config/api/vlm_api_config.yaml
 ```
 
----
+当前支持三类 provider：
 
-## 📂 Project Structure
+- `dashscope`
+- `openrouter`
+- `openai`
 
-```
-CA-Nav-code/
-├── vlnce_baselines/
-│   ├── vlm/                           # Core VLM modules
-│   │   ├── thinking.py                # LLM planner (THOUGHT)
-│   │   ├── action.py                  # VLM executor (ACT)
-│   │   ├── prompts.py                 # LLM prompts
-│   │   ├── action_prompt.py           # VLM prompts
-│   │   └── api_client.py              # API wrapper
-│   ├── vlm_navigation_controller.py   # Main controller
-│   ├── detection/grounded_sam.py      # Object detection
-│   ├── mapping/mapper.py              # Semantic mapping
-│   └── visualization/visualizer.py    # Visualization
-├── docs/
-│   ├── 工作流程图.md                   # Detailed workflow
-│   └── 建图机制说明.md                 # Mapping mechanism
-└── requirements.txt
+OpenAI 兼容接口建议填写：
+
+```yaml
+provider: "openai"
+
+openai:
+  api_key: "env:OPENAI_API_KEY"
+  base_url: "https://your-openai-compatible-endpoint"
+  wire_api: "responses"
+  llm_model: "gpt-5.4"
+  vlm_model: "gpt-5.4-nano"
+  reasoning_effort: "none"
 ```
 
----
+Qwen 显式上下文缓存单独使用：
 
-## ⚙️ Configuration
+- [`vlm_api_config_qwen_cache.yaml`](/home/charlesdonne/project/nav_ws/SpaceVLN/navigation_system/config/api/vlm_api_config_qwen_cache.yaml)
+- [`vlm_navigation_qwen_cache.py`](/home/charlesdonne/project/nav_ws/SpaceVLN/vlm_navigation_qwen_cache.py)
+- [`vlm_navigation_qwen_cache.sh`](/home/charlesdonne/project/nav_ws/SpaceVLN/run_r2r/vlm_navigation_qwen_cache.sh)
 
-### Detection Classes
+缓存配置块示例：
+
+```yaml
+qwen_context_cache:
+  enabled: true
+  cache_type: "ephemeral"
+  print_usage: false
+  save_usage_json: true
+  results_dir_suffix: "_cache"
+```
+
+## 4. 运行方式
+
+标准运行：
+
+```bash
+bash run_r2r/vlm_navigation.sh 1 10 260 4
+```
+
+含义：
+
+- 从 episode `1` 开始
+- 连续跑 `10` 个 episode
+- 每个 episode 最多 `260` 步
+- 并行 `4` 个 worker
+
+缓存版运行：
+
+```bash
+bash run_r2r/vlm_navigation_qwen_cache.sh 1 10 260 4
+```
+
+也支持直接传完整 CLI 参数：
+
+```bash
+python vlm_navigation.py \
+  --exp-config navigation_system/config/experiments/r2r_eval.yaml \
+  --episode-id 1 \
+  --num-episodes 10 \
+  --max-steps 260 \
+  --parallel-workers 4 \
+  --vlm-api-config navigation_system/config/api/vlm_api_config.yaml
+```
+
+报告生成：
+
+```bash
+bash run_r2r/vlm_report_range.sh 1 100
+```
+
+## 5. 结果目录
+
+结果根目录会按模型组合自动生成：
+
+```text
+data/result/vlnce/<planner>__<action>/
+```
+
+显式缓存版会额外带后缀：
+
+```text
+data/result/vlnce/<planner>__<action>_cache/
+```
+
+当前结果布局是：
+
+```text
+data/result/vlnce/planner__action/
+├── detail/
+│   └── 1-100/
+│       └── episode_1/
+│           ├── thinking/
+│           ├── action/
+│           ├── visualization/
+│           └── records/
+│               └── result_latest.json
+└── log/
+    └── 1-100/
+        └── episode_1.json
+```
+
+`detail/episode_x` 下保留的重点产物：
+
+- `thinking/subtask_*`
+  - `prompt.md` 或 `system_prompt.md + user_prompt.md`
+  - 模型真实看到的图片副本
+  - `provider_response.json`
+  - 解析后的 `response.json`
+  - 缓存版额外有 `cache_usage.json`
+- `action/subtask_*`
+  - 动作模型输入输出
+- `visualization/`
+  - 导航逐步可视化
+  - `navigation.gif`
+- `records/result_latest.json`
+  - 当前这次 episode 的完整结果
+
+`log/episode_x.json` 保存每个 episode 的最佳摘要结果，报告程序只依赖这一层。
+
+## 6. 保存策略
+
+当前默认策略已经收缩过：
+
+- 保留模型输入输出调试产物。
+- 保留导航可视化和 GIF。
+- 保留 `result_latest.json` 与 `log/episode_x.json`。
+- 默认不再额外保存整段 stdout 文本日志。
+- 默认不再保存 `waypoint_memory.json`。
+- 默认不再在 `records/` 下复制一份 `result.json`。
+
+这些开关统一在 [`default.py`](/home/charlesdonne/project/nav_ws/SpaceVLN/navigation_system/config/runtime/default.py) 的 `MAP` 配置里：
+
 ```python
-# vlnce_baselines/config_system/constants.py
-mapping_classes = [
-    'floor', 'wall', 'door', 'bed', 'sofa', 'chair', 
-    'table', 'desk', 'cabinet', 'tv', 'toilet', ...
-]  # 25 common indoor objects
-
-landmark_classes = []  # Dynamically updated per subtask
+_C.MAP.SAVE_API_REQUEST_ARTIFACTS = True
+_C.MAP.SAVE_NAVIGATION_STEP_IMAGES = True
+_C.MAP.SAVE_NAVIGATION_GIF = True
+_C.MAP.SAVE_EPISODE_STDOUT_LOG = False
+_C.MAP.SAVE_WAYPOINT_MEMORY = False
+_C.MAP.SAVE_BEST_RESULT_COPY = False
 ```
 
-### Action Parameters
-```python
-TURN_ANGLE = 30        # degrees (12 steps = 360°)
-MOVE_DISTANCE = 0.25   # meters
+如果你想重新打开 stdout 文本日志，只需要把 `SAVE_EPISODE_STDOUT_LOG` 改成 `True`。
+
+## 7. 当前架构
+
+主链路目录如下：
+
+```text
+SpaceVLN/
+├── run_r2r/
+│   ├── common.sh
+│   ├── vlm_navigation.sh
+│   ├── vlm_navigation_qwen_cache.sh
+│   └── vlm_report_range.sh
+├── navigation_system/
+│   ├── controllers/
+│   │   ├── base_navigation_controller.py
+│   │   ├── runtime_state.py
+│   │   ├── vlm_navigation_controller.py
+│   │   └── vlm_navigation_controller_qwen_cache.py
+│   ├── runtime/
+│   │   ├── runner.py
+│   │   ├── runner_qwen_cache.py
+│   │   └── results_report.py
+│   ├── vlm/
+│   │   ├── api/
+│   │   ├── planning/
+│   │   ├── execution/
+│   │   ├── prompts/
+│   │   └── support/
+│   ├── mapping/
+│   ├── detection/
+│   └── visualization/
+├── vlm_navigation.py
+└── vlm_navigation_qwen_cache.py
 ```
 
----
+模块职责：
 
-## 🔑 Key Mechanisms
+- `controllers/`
+  负责 episode 调度、thinking/action 切换、状态维护。
+- `runtime/`
+  负责 CLI、并行 worker、结果汇总和报告。
+- `vlm/api/`
+  负责 provider 配置解析与请求发送。
+- `vlm/planning/`
+  负责高层规划模型接入。
+- `vlm/execution/`
+  负责低层动作模型接入。
+- `vlm/prompts/`
+  负责 prompt 模板。
+- `vlm/support/`
+  负责保存、thinking 视图渲染和导航 GIF。
+- `mapping/`
+  负责语义建图和空间拓扑。
+- `detection/`
+  负责 GroundedSAM / RepViT-SAM 检测。
+- `visualization/`
+  负责地图、检测和观测可视化。
 
-### 1. Dynamic Landmark Tracking
-```python
-# Subtask 1
-subtask_1 = {"subtask_landmark": "door"}
-→ landmark_classes = ["door"]
-→ Map: Purple "door" markers + Orange trajectory
+## 8. 运行流程
 
-# Subtask completes
-mapper.clear_trajectory()
+系统主循环是：
 
-# Subtask 2  
-subtask_2 = {"subtask_landmark": "sofa"}
-→ landmark_classes = ["sofa"]  # Replaces "door"
-→ Map: Purple "sofa" markers + New trajectory
-```
+1. 环视并更新地图。
+2. Planner 根据多视角图像和 global map 生成下一子任务。
+3. Action model 根据 detection 视图与结构化上下文输出动作。
+4. 执行动作并更新地图。
+5. 到达子任务边界后重新 verify / replan。
+6. 直到任务完成或 episode 预算耗尽。
 
-### 2. Three-Image Action Guidance
-```
-VLM receives 3 images:
-1. RGB View: First-person perspective
-2. Detection View: Bounding boxes with labels
-3. Local Map: Top-down semantic map
-   • Green: Safe floor
-   • Black: Obstacles (AVOID)
-   • Orange: Trajectory
-   • Blue: Field of view
-```
+缓存版与标准版的差异只有两点：
 
-### 3. 360° Contextual Awareness
-```python
-# Before each REFLECT phase
-look_around_and_collect()  # 12 steps × 30° = 360°
-# Captures: Front (0°), Left (90°), Back (180°), Right (270°)
-# Updates: Semantic map + Detected objects
-```
+- planner/action adapter 不同。
+- 结果目录后缀不同，并且缓存版会额外保存缓存命中统计。
 
----
+## 9. 当前清理结论
 
-## 📊 Performance
+这轮整理后，仓库里已经去掉了几类明显无效的内容：
 
-| Metric | Value | Note |
-|--------|-------|------|
-| Token Usage | 60k-120k | per episode (GPT-4o) |
-| API Calls | 50-100 | LLM + VLM |
-| Cost | $0.01-0.05 | per episode |
-| Runtime | 5-10 min | 50-100 actions |
+- 已失效的 `interactive_navigation.sh`
+- 无引用的 `audit_result_layout.py`
+- 无引用的 `observation_collector.py`
 
----
+如果后面还要继续做更深一轮瘦身，优先建议沿着这三条继续做：
 
-## 🐛 Troubleshooting
-
-| Issue | Solution |
-|-------|----------|
-| `FileNotFoundError: config.yaml` | Create from `.template` files |
-| API call fails | Check API key and network |
-| No landmarks on map | Verify `landmark_classes` updated |
-| Trajectory accumulates | Confirm `clear_trajectory()` called |
-
----
-
-## 🛠️ Local Environment Notes (2026-03-23)
-
-This repository was adapted for local execution under `nav_ws` with relative paths and GPU-EGL fixes.
-
-### Dependency versions in use
-
-- `supervision==0.4.0`
-- `gym==0.21.0`
-- `numpy==1.23.5`
-
-### Why `supervision==0.4.0` can fail by default
-
-In this version, `sv.Detections` may not always expose a `mask` attribute in the same way as newer releases.
-To avoid runtime crashes, `grounded_sam.py` now uses compatibility-safe access (`getattr(..., None)`).
-
-### Runtime/path adjustments applied
-
-- Relative dataset/model paths under `../data/...` (from SpaceVLN root)
-- Launcher forces `spatial_agent` Python interpreter
-- Headless EGL is pinned to NVIDIA vendor to avoid Mesa/dri2 context failures
-
-For exact edited files and rationale, see [docs/LOCAL_CHANGES_2026-03-23.md](docs/LOCAL_CHANGES_2026-03-23.md).
-
----
-
-## 📚 Documentation
-
-- **[工作流程图.md](docs/工作流程图.md)**: Detailed workflow with diagrams
-- **[建图机制说明.md](docs/建图机制说明.md)**: Semantic mapping mechanism
-- **[系统说明文档.md](docs/系统说明文档.md)**: System architecture (Chinese)
-
----
-
-## 🙏 Acknowledgments
-
-Built upon:
-- **CA-Nav**: Constraint-aware navigation framework ([Code](https://github.com/Chenkehan21/CA-Nav-code))
-- **NaVid**: Video-based VLM navigation baseline ([Code](https://github.com/jzhzhang/NaVid-VLN-CE))
-- **Habitat**: Simulation platform ([Code](https://github.com/facebookresearch/habitat-lab))
-- **GroundedSAM**: Open-vocabulary detection ([Code](https://github.com/IDEA-Research/Grounded-Segment-Anything))
-
----
-
-## 📄 License
-
-MIT License - See [LICENSE](LICENSE)
-
----
-
-## 📧 Citation
-
-To be added.
-
----
-
-**System Status**: ✅ Production Ready | **Version**: v1.0.0 | **Updated**: 2025-12-10
+- 继续拆 `vlm_navigation_controller.py`
+- 继续收紧结果产物种类
+- 继续把 provider 特定逻辑从通用 API client 分离

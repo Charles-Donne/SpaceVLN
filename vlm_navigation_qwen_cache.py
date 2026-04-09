@@ -1,10 +1,11 @@
 """
-VLM Navigation Runner
-=====================
-Thin CLI entrypoint for SpaceVLN batch navigation.
+Qwen explicit-context-cache navigation runner.
 """
 
-from navigation_system.runtime.runner import build_arg_parser, run_navigation_from_args
+from navigation_system.runtime.runner_qwen_cache import (
+    build_arg_parser,
+    run_navigation_from_args,
+)
 
 
 def main() -> int:

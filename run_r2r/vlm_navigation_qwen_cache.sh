@@ -1,5 +1,5 @@
 #!/bin/bash
-# SpaceVLN standard navigation entrypoint.
+# Qwen explicit-context-cache navigation entrypoint.
 # Supports both:
 # 1. old positional shorthand
 # 2. standard flag-based CLI
@@ -15,28 +15,23 @@ PYTHON_BIN="$(spacevln_select_python)"
 spacevln_setup_runtime_env "$PYTHON_BIN"
 
 CONFIG_FILE="navigation_system/config/experiments/r2r_eval.yaml"
-API_CONFIG="${VLM_API_CONFIG:-navigation_system/config/api/vlm_api_config.yaml}"
+API_CONFIG="${VLM_API_CONFIG:-navigation_system/config/api/vlm_api_config_qwen_cache.yaml}"
 
 cd "$PROJECT_ROOT"
 
-if [ ! -f "$CONFIG_FILE" ]; then
-    echo "❌ Habitat 配置不存在: $CONFIG_FILE"
-    exit 1
-fi
-
 if [ ! -f "$API_CONFIG" ]; then
-    echo "❌ API 配置不存在: $API_CONFIG"
-    echo "   请从 navigation_system/config/api/vlm_api_config.yaml.template 复制并配置"
+    echo "❌ 缓存版 API 配置不存在: $API_CONFIG"
     exit 1
 fi
 
 run_python() {
-    exec "$PYTHON_BIN" vlm_navigation.py \
+    exec "$PYTHON_BIN" vlm_navigation_qwen_cache.py \
         --exp-config "$CONFIG_FILE" \
         --vlm-api-config "$API_CONFIG" \
         "$@"
 }
 
+# If any argument already uses flag style, pass through directly.
 for arg in "$@"; do
     if [[ "$arg" == --* ]]; then
         run_python "$@"
@@ -117,16 +112,17 @@ fi
 if ! [[ "$FIRST_ARG" =~ ^[0-9]+$ ]]; then
     echo "❌ 不支持的第一个参数: $FIRST_ARG"
     echo "   可用写法:"
-    echo "   bash run_r2r/vlm_navigation.sh 832"
-    echo "   bash run_r2r/vlm_navigation.sh 832 300"
-    echo "   bash run_r2r/vlm_navigation.sh 1 600 260 5"
-    echo "   bash run_r2r/vlm_navigation.sh random 20 260 all 4"
-    echo "   bash run_r2r/vlm_navigation.sh --episode-id 832 --num-episodes 1"
+    echo "   bash run_r2r/vlm_navigation_qwen_cache.sh 832"
+    echo "   bash run_r2r/vlm_navigation_qwen_cache.sh 832 300"
+    echo "   bash run_r2r/vlm_navigation_qwen_cache.sh 1 600 260 5"
+    echo "   bash run_r2r/vlm_navigation_qwen_cache.sh random 20 260 all 4"
+    echo "   bash run_r2r/vlm_navigation_qwen_cache.sh --episode-id 832 --num-episodes 1"
     exit 1
 fi
 
 EPISODE_ID="$FIRST_ARG"
 
+# 2 个位置参数时，默认按“单 episode + max_steps”解释，更符合旧脚本注释示例。
 if [[ -n "$SECOND_ARG" && -z "$THIRD_ARG" ]]; then
     run_python \
         --episode-id "$EPISODE_ID" \

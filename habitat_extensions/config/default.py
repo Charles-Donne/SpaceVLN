@@ -6,7 +6,7 @@ from typing import List, Optional, Union
 from habitat.config.default import Config as CN
 from habitat.config.default import get_config
 
-from vlnce_baselines.config.core.params.thresholds import EVAL_SUCCESS_DISTANCE_M
+from navigation_system.config.core.params.thresholds import EVAL_SUCCESS_DISTANCE_M
 
 
 _C = get_config()
@@ -108,7 +108,7 @@ _C.TASK.TOP_DOWN_MAP_VLNCE.DRAW_SHORTEST_PATH = False
 _C.TASK.TOP_DOWN_MAP_VLNCE.DRAW_REFERENCE_PATH = True
 _C.TASK.TOP_DOWN_MAP_VLNCE.DRAW_FIXED_WAYPOINTS = False
 _C.TASK.TOP_DOWN_MAP_VLNCE.DRAW_MP3D_AGENT_PATH = True
-_C.TASK.TOP_DOWN_MAP_VLNCE.GRAPHS_FILE = "vlnce_baselines/data/connectivity_graphs.pkl"
+_C.TASK.TOP_DOWN_MAP_VLNCE.GRAPHS_FILE = "navigation_system/data/connectivity_graphs.pkl"
 _C.TASK.TOP_DOWN_MAP_VLNCE.FOG_OF_WAR = CN()
 _C.TASK.TOP_DOWN_MAP_VLNCE.FOG_OF_WAR.DRAW = False
 _C.TASK.TOP_DOWN_MAP_VLNCE.FOG_OF_WAR.FOV = 79
