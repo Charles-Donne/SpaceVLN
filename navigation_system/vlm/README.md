@@ -47,7 +47,7 @@ vlm/
   - `common.py` 管模板加载和 cache prompt bundle。
   - `templates/` 只放 markdown 模板。
 - `reporting/`
-  - 只负责缓存命中与速度统计。
+  - 只负责基于 `vlm_info.json` 汇总缓存命中与速度统计。
 - `support/`
   - `artifacts.py` 管结果目录和落盘规则。
   - `schema.py` 管方向配置、动作映射、subtask payload 规范。

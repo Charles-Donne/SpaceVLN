@@ -77,6 +77,7 @@ _C.MAP.SAVE_API_REQUEST_ARTIFACTS = True   # 是否保存每次LLM/VLM调用的�
 _C.MAP.SAVE_STEP_MAP_ARTIFACTS = False  # 是否额外保存逐步 global_map/local_map 中间地图工件
 _C.MAP.SAVE_NAVIGATION_STEP_IMAGES = True   # 是否保存逐步navigation PNG
 _C.MAP.SAVE_NAVIGATION_GIF = True     # 是否生成最终navigation.gif
+_C.MAP.CLEANUP_NAVIGATION_STEP_IMAGES_AFTER_GIF = True  # 生成navigation.gif后是否自动删除visualization中的逐帧PNG
 _C.MAP.SAVE_EPISODE_STDOUT_LOG = False  # 是否额外保存整段stdout/stderr文本日志
 _C.MAP.SAVE_WAYPOINT_MEMORY = False  # 是否保存waypoint_memory.json
 _C.MAP.SAVE_BEST_RESULT_COPY = False  # 是否在records/里额外保留best result.json副本

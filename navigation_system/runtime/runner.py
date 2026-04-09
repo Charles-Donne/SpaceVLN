@@ -128,11 +128,11 @@ def _get_episode_records_log_path(results_dir: str, episode_id: int) -> str:
     return os.path.join(records_dir, f"episode_{int(episode_id)}.log")
 
 
-def _get_episode_latest_result_path(results_dir: str, episode_id: int) -> str:
+def _get_episode_result_path(results_dir: str, episode_id: int) -> str:
     episode_dir = get_episode_detail_dir(results_dir, episode_id)
     records_dir = os.path.join(episode_dir, "records")
     os.makedirs(records_dir, exist_ok=True)
-    return os.path.join(records_dir, "result_latest.json")
+    return os.path.join(records_dir, "result.json")
 
 
 def _save_episode_stdout_log_enabled(config) -> bool:
@@ -200,7 +200,7 @@ def _redirect_process_output_to_null():
 def _extract_episode_metrics(result: Dict[str, Any]) -> Dict[str, Any]:
     metrics: Dict[str, Any] = {}
     candidate_paths = [
-        str(result.get("latest_result_file") or "").strip(),
+        str(result.get("result_detail_file") or "").strip(),
         str(result.get("result_file") or "").strip(),
     ]
     for path in candidate_paths:
@@ -438,7 +438,7 @@ def _episode_has_existing_sr1(results_dir: str, episode_id: int) -> bool:
     candidate_paths.extend(get_episode_log_path_candidates(results_dir, episode_id))
     for detail_dir in get_episode_detail_path_candidates(results_dir, episode_id):
         candidate_paths.extend([
-            os.path.join(detail_dir, "records", "result_latest.json"),
+            os.path.join(detail_dir, "records", "result.json"),
         ])
 
     deduped_paths = []
@@ -517,7 +517,7 @@ def run_single_episode(
         if save_episode_stdout_log
         else ""
     )
-    latest_result_path = _get_episode_latest_result_path(results_dir, episode_id)
+    result_path = _get_episode_result_path(results_dir, episode_id)
     print(
         _build_episode_start_summary(
             episode_id=episode_id,
@@ -555,12 +555,15 @@ def run_single_episode(
                     "episode_duration_excluding_failed_s",
                     result.get("episode_duration_s", 0.0),
                 ),
-                "api_total_duration_s": (result.get("api_summary") or {}).get("total_duration_s", 0.0),
+                "api_total_duration_s": (
+                    (result.get("thinking_api_summary") or {}).get("total_duration_s", 0.0)
+                    + (result.get("action_api_summary") or {}).get("total_duration_s", 0.0)
+                ),
                 "failed_wasted_duration_s": result.get("failed_wasted_duration_s", 0.0),
                 "error": None,
                 "reason": result.get("reason", ""),
                 "result_file": result.get("result_file", ""),
-                "latest_result_file": latest_result_path,
+                "result_detail_file": result_path,
                 "episode_log_path": episode_log_path,
             }
     except Exception as exc:
@@ -597,15 +600,18 @@ def run_single_episode(
             "episode_id": episode_id,
             "success": finalized_success,
             "steps": finalized_steps,
-            "episode_duration_including_failed_s": timing_summary.get("episode_duration_including_failed_s", 0.0),
-            "episode_duration_excluding_failed_s": timing_summary.get("episode_duration_excluding_failed_s", 0.0),
-            "api_total_duration_s": (timing_summary.get("api_summary") or {}).get("total_duration_s", 0.0),
-            "failed_wasted_duration_s": timing_summary.get("failed_wasted_duration_s", 0.0),
-            "error": error_msg,
-            "result_file": "",
-            "latest_result_file": latest_result_path,
-            "episode_log_path": episode_log_path if save_episode_stdout_log else "",
-        }
+                "episode_duration_including_failed_s": timing_summary.get("episode_duration_s", 0.0),
+                "episode_duration_excluding_failed_s": timing_summary.get("episode_duration_s", 0.0),
+                "api_total_duration_s": (
+                    (timing_summary.get("thinking_api_summary") or {}).get("total_duration_s", 0.0)
+                    + (timing_summary.get("action_api_summary") or {}).get("total_duration_s", 0.0)
+                ),
+                "failed_wasted_duration_s": timing_summary.get("failed_wasted_duration_s", 0.0),
+                "error": error_msg,
+                "result_file": "",
+                "result_detail_file": result_path,
+                "episode_log_path": episode_log_path if save_episode_stdout_log else "",
+            }
     finally:
         if controller is not None:
             try:

@@ -76,13 +76,13 @@
 - `system_prompt.md`
 - `user_prompt.md`
 - 输入图片副本
+- `vlm_info.json`
 - `response.json`
-- `cache_usage.json`
 
 其中：
 
 - `system_prompt.md` 是被显式缓存的稳定文本。
 - `user_prompt.md` 是每次变化的动态文本。
 - 输入图片副本就是模型实际看到的压缩后版本，便于直接 debug。
+- `vlm_info.json` 统一记录模型、token、耗时和缓存统计。
 - `response.json` 是系统解析后的最终输出。
-- `cache_usage.json` 记录缓存命中、耗时和 token 统计。

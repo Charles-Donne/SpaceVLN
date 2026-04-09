@@ -80,8 +80,6 @@ class SaveManager:
         "total_steps",
         "subtask_count",
         "episode_duration_s",
-        "episode_duration_including_failed_s",
-        "episode_duration_excluding_failed_s",
         "failed_api_total_duration_s",
         "failed_retry_wait_duration_s",
         "failed_wasted_duration_s",
@@ -96,27 +94,13 @@ class SaveManager:
         "timestamp",
     )
     LOG_RESULT_FIELDS = (
-        "thinking_api_count",
-        "thinking_api_failed_count",
-        "thinking_api_avg_duration_s",
-        "thinking_api_total_duration_s",
-        "thinking_api_failed_total_duration_s",
-        "action_api_count",
-        "action_api_failed_count",
-        "action_api_avg_duration_s",
-        "action_api_total_duration_s",
-        "action_api_failed_total_duration_s",
-        "api_total_duration_s",
-        "api_failed_total_duration_s",
+        "thinking_api_summary",
+        "action_api_summary",
     )
     FULL_RESULT_FIELDS = (
         "success",
         "distance_to_goal",
         "oracle_success",
-        "subtask_history",
-        "thinking_api_summary",
-        "action_api_summary",
-        "api_summary",
     )
     API_SUMMARY_FIELDS = (
         "count",
@@ -213,7 +197,7 @@ class SaveManager:
             return False
         return all(
             cls._has_complete_api_summary(result, key)
-            for key in ("thinking_api_summary", "action_api_summary", "api_summary")
+            for key in ("thinking_api_summary", "action_api_summary")
         )
 
     @classmethod
@@ -313,20 +297,14 @@ class SaveManager:
     def save_result(self, result: Dict):
         """
         保存最终结果，并维护按episode的最佳汇总:
-        1. detail/<bucket>/episode_xxx/records/result_latest.json (本次运行结果)
+        1. detail/<bucket>/episode_xxx/records/result.json (本次运行结果)
         2. log/<bucket>/episode_xxx.json (该episode当前最佳结果，供结果报告程序使用)
-        3. 可选: detail/.../records/result.json (仅在显式开启 save_best_result_copy 时保留)
+        3. 不再额外维护 result_latest.json
         """
-        latest_result_path = os.path.join(self.records_dir, "result_latest.json")
-        with open(latest_result_path, 'w', encoding='utf-8') as f:
-            json.dump(result, f, indent=2, ensure_ascii=False)
-
         result_path = os.path.join(self.records_dir, "result.json")
-        existing_best_result = (
-            self._load_json_if_exists(result_path)
-            if self.save_best_result_copy_enabled
-            else None
-        )
+        existing_best_result = self._load_json_if_exists(result_path)
+        with open(result_path, 'w', encoding='utf-8') as f:
+            json.dump(result, f, indent=2, ensure_ascii=False)
 
         log_dir = os.path.dirname(get_episode_log_path(self.dump_dir, self.episode_id))
         os.makedirs(log_dir, exist_ok=True)
@@ -338,36 +316,16 @@ class SaveManager:
             'total_steps': result.get('total_steps', 0),
             'subtask_count': result.get('subtask_count', 0),
             'episode_duration_s': result.get('episode_duration_s', 0.0),
-            'episode_duration_including_failed_s': result.get(
-                'episode_duration_including_failed_s',
-                result.get('episode_duration_s', 0.0),
-            ),
-            'episode_duration_excluding_failed_s': result.get(
-                'episode_duration_excluding_failed_s',
-                result.get('episode_duration_s', 0.0),
-            ),
             'failed_api_total_duration_s': result.get('failed_api_total_duration_s', 0.0),
             'failed_retry_wait_duration_s': result.get('failed_retry_wait_duration_s', 0.0),
             'failed_wasted_duration_s': result.get('failed_wasted_duration_s', result.get('failed_api_total_duration_s', 0.0)),
-
             'ne': result.get('ne', -1),
             'osr': result.get('osr', 0),
             'sr': result.get('sr', 0),
             'spl': result.get('spl', 0.0),
             'ndtw': result.get('ndtw', 0.0),
-
-            'thinking_api_count': (result.get('thinking_api_summary') or {}).get('count', 0),
-            'thinking_api_failed_count': (result.get('thinking_api_summary') or {}).get('failure_count', 0),
-            'thinking_api_avg_duration_s': (result.get('thinking_api_summary') or {}).get('avg_duration_s', 0.0),
-            'thinking_api_total_duration_s': (result.get('thinking_api_summary') or {}).get('total_duration_s', 0.0),
-            'thinking_api_failed_total_duration_s': (result.get('thinking_api_summary') or {}).get('failed_total_duration_s', 0.0),
-            'action_api_count': (result.get('action_api_summary') or {}).get('count', 0),
-            'action_api_failed_count': (result.get('action_api_summary') or {}).get('failure_count', 0),
-            'action_api_avg_duration_s': (result.get('action_api_summary') or {}).get('avg_duration_s', 0.0),
-            'action_api_total_duration_s': (result.get('action_api_summary') or {}).get('total_duration_s', 0.0),
-            'action_api_failed_total_duration_s': (result.get('action_api_summary') or {}).get('failed_total_duration_s', 0.0),
-            'api_total_duration_s': (result.get('api_summary') or {}).get('total_duration_s', 0.0),
-            'api_failed_total_duration_s': (result.get('api_summary') or {}).get('failed_total_duration_s', 0.0),
+            'thinking_api_summary': result.get('thinking_api_summary', {}),
+            'action_api_summary': result.get('action_api_summary', {}),
             'path_length': result.get('path_length', 0.0),
             'oracle_navigation_error': result.get('oracle_navigation_error', float('inf')),
             'oracle_spl': result.get('oracle_spl', 0.0),

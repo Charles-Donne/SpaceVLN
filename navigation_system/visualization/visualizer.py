@@ -33,6 +33,42 @@ class MapVisualizer:
 
     GLOBAL_TRAJECTORY_COLOR = (0, 0, 170)
     LOCAL_TRAJECTORY_COLOR = (0, 0, 170)
+    SPACE_AREA_COLOR_PALETTE: Tuple[Tuple[int, int, int], ...] = (
+        (255, 160, 80),   # blue
+        (80, 220, 255),   # yellow
+        (255, 110, 210),  # pink
+        (120, 170, 255),  # orange-peach
+        (210, 130, 255),  # violet
+        (255, 210, 90),   # cyan
+    )
+    SPACE_TYPE_PREFERRED_COLOR_INDEX: Dict[str, int] = {
+        "hallway": 0,
+        "stairs": 1,
+        "living room": 2,
+        "bedroom": 3,
+        "kitchen": 4,
+        "bathroom": 5,
+        "dining room": 1,
+        "office": 2,
+        "laundry room": 3,
+        "closet": 4,
+        "balcony": 5,
+        "garage": 0,
+    }
+    SPACE_TYPE_ALIAS_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+        ("hallway", ("hallway", "hall", "corridor", "passage", "entry", "entryway", "foyer", "doorway")),
+        ("stairs", ("stairs", "stair", "stairway", "staircase", "landing")),
+        ("living room", ("living room", "living area", "lounge", "family room", "sitting room")),
+        ("bedroom", ("bedroom", "bed room", "master bedroom", "guest bedroom", "nursery")),
+        ("bathroom", ("bathroom", "restroom", "washroom", "toilet room")),
+        ("kitchen", ("kitchen", "kitchenette")),
+        ("dining room", ("dining room", "dining area", "breakfast room")),
+        ("office", ("office", "study", "workspace", "work room")),
+        ("laundry room", ("laundry room", "utility room")),
+        ("closet", ("closet", "wardrobe")),
+        ("garage", ("garage",)),
+        ("balcony", ("balcony", "patio", "terrace", "deck")),
+    )
 
     @staticmethod
     def _build_local_map_landmark_debug_lines(
@@ -107,6 +143,7 @@ class MapVisualizer:
             "space_area_mask": {},
             "space_area_contours": {},
             "space_area_label_anchor": {},
+            "space_area_color_assignments": {},
         }
         self._active_render_cache_key = None
 
@@ -142,6 +179,7 @@ class MapVisualizer:
             "space_area_mask",
             "space_area_contours",
             "space_area_label_anchor",
+            "space_area_color_assignments",
         ):
             bucket = self._render_cache.get(name, {})
             stale_keys = [key for key in bucket.keys() if not isinstance(key, tuple) or not key or key[0] != keep_token]
@@ -219,20 +257,141 @@ class MapVisualizer:
         return obstacle_mask
 
     @staticmethod
-    def _space_area_color(area_id: int, space_type: str) -> Tuple[int, int, int]:
-        palette = [
-            (255, 160, 80),   # blue
-            (255, 110, 210),  # pink
-            (80, 220, 255),   # yellow
-            (210, 130, 255),  # violet
-            (255, 210, 90),   # cyan
-            (120, 170, 255),  # orange-peach
-        ]
-        space_text = str(space_type)
-        seed = int(area_id) * 131
-        for index, ch in enumerate(space_text):
-            seed += (index + 17) * ord(ch)
-        return palette[seed % len(palette)]
+    def _normalize_space_area_type(space_type: str) -> str:
+        normalized = re.sub(r"[^a-z0-9]+", " ", str(space_type or "").strip().lower())
+        normalized = " ".join(normalized.split())
+        if not normalized:
+            return "unknown"
+        for canonical_name, aliases in MapVisualizer.SPACE_TYPE_ALIAS_GROUPS:
+            for alias in aliases:
+                alias_text = " ".join(str(alias).strip().lower().split())
+                if normalized == alias_text or alias_text in normalized:
+                    return canonical_name
+        return normalized
+
+    @classmethod
+    def _space_area_color_preference_order(
+        cls,
+        area_id: int,
+        space_type: str,
+    ) -> List[int]:
+        del area_id
+        palette_len = len(cls.SPACE_AREA_COLOR_PALETTE)
+        normalized_type = cls._normalize_space_area_type(space_type)
+        preferred_index = cls.SPACE_TYPE_PREFERRED_COLOR_INDEX.get(normalized_type)
+        if preferred_index is None:
+            seed = 0
+            for index, ch in enumerate(normalized_type):
+                seed += (index + 17) * ord(ch)
+            preferred_index = seed % max(1, palette_len)
+        preferred_index = int(preferred_index) % max(1, palette_len)
+        fallback_order = [preferred_index]
+        for offset in range(1, palette_len):
+            fallback_order.append((preferred_index + offset) % palette_len)
+        return fallback_order
+
+    @staticmethod
+    def _build_space_area_adjacency(
+        display_layer: np.ndarray,
+        area_ids: List[int],
+    ) -> Dict[int, set]:
+        adjacency: Dict[int, set] = {int(area_id): set() for area_id in area_ids}
+        layer = np.asarray(display_layer, dtype=np.int32)
+        if layer.size == 0:
+            return adjacency
+
+        for left_view, right_view in (
+            (layer[:, :-1], layer[:, 1:]),
+            (layer[:-1, :], layer[1:, :]),
+        ):
+            valid = (
+                (left_view > 0)
+                & (right_view > 0)
+                & (left_view != right_view)
+            )
+            if not np.any(valid):
+                continue
+            left_values = left_view[valid].astype(np.int32, copy=False)
+            right_values = right_view[valid].astype(np.int32, copy=False)
+            pairs = np.stack(
+                [
+                    np.minimum(left_values, right_values),
+                    np.maximum(left_values, right_values),
+                ],
+                axis=1,
+            )
+            for pair in np.unique(pairs, axis=0):
+                area_a = int(pair[0])
+                area_b = int(pair[1])
+                if area_a == area_b:
+                    continue
+                adjacency.setdefault(area_a, set()).add(area_b)
+                adjacency.setdefault(area_b, set()).add(area_a)
+        return adjacency
+
+    @classmethod
+    def _resolve_space_area_colors(
+        cls,
+        display_layer: np.ndarray,
+        space_area_records: List[Dict[str, Any]],
+    ) -> Dict[int, Tuple[int, int, int]]:
+        if display_layer is None or display_layer.size == 0 or not space_area_records:
+            return {}
+
+        record_by_id: Dict[int, Dict[str, Any]] = {}
+        for record in list(space_area_records or []):
+            try:
+                area_id = int(record.get("id", 0) or 0)
+            except (TypeError, ValueError):
+                area_id = 0
+            if area_id > 0:
+                record_by_id[area_id] = dict(record)
+        if not record_by_id:
+            return {}
+
+        layer_ids, counts = np.unique(np.asarray(display_layer, dtype=np.int32), return_counts=True)
+        area_sizes = {
+            int(area_id): int(count)
+            for area_id, count in zip(layer_ids.tolist(), counts.tolist())
+            if int(area_id) > 0 and int(area_id) in record_by_id
+        }
+        area_ids = sorted(area_sizes.keys())
+        if not area_ids:
+            return {}
+
+        adjacency = cls._build_space_area_adjacency(display_layer, area_ids)
+        ordered_area_ids = sorted(
+            area_ids,
+            key=lambda area_id: (
+                -len(adjacency.get(int(area_id), set())),
+                -int(area_sizes.get(int(area_id), 0)),
+                cls._normalize_space_area_type(str(record_by_id.get(int(area_id), {}).get("space_type", ""))),
+                int(area_id),
+            ),
+        )
+
+        color_assignments: Dict[int, Tuple[int, int, int]] = {}
+        palette = list(cls.SPACE_AREA_COLOR_PALETTE)
+        for area_id in ordered_area_ids:
+            neighbor_colors = {
+                color_assignments[neighbor_id]
+                for neighbor_id in adjacency.get(int(area_id), set())
+                if neighbor_id in color_assignments
+            }
+            preference_order = cls._space_area_color_preference_order(
+                area_id=int(area_id),
+                space_type=str(record_by_id.get(int(area_id), {}).get("space_type", "")),
+            )
+            chosen_color = None
+            for color_index in preference_order:
+                candidate = palette[int(color_index) % len(palette)]
+                if candidate not in neighbor_colors:
+                    chosen_color = candidate
+                    break
+            if chosen_color is None:
+                chosen_color = palette[preference_order[0] % len(palette)]
+            color_assignments[int(area_id)] = chosen_color
+        return color_assignments
 
     def _prepare_space_area_display_layer(
         self,
@@ -290,6 +449,32 @@ class MapVisualizer:
         if display_layer is None or not space_area_records:
             return image
 
+        color_assignments: Dict[int, Tuple[int, int, int]] = {}
+        color_cache_key = None
+        if cache_token is not None:
+            record_signature = tuple(
+                sorted(
+                    (
+                        int(record.get("id", 0) or 0),
+                        self._normalize_space_area_type(str(record.get("space_type", ""))),
+                    )
+                    for record in list(space_area_records or [])
+                    if int(record.get("id", 0) or 0) > 0
+                )
+            )
+            color_cache_key = (
+                cache_token,
+                int(image.shape[1]),
+                record_signature,
+            )
+            cached_colors = self._render_cache["space_area_color_assignments"].get(color_cache_key)
+            if isinstance(cached_colors, dict):
+                color_assignments = dict(cached_colors)
+        if not color_assignments:
+            color_assignments = self._resolve_space_area_colors(display_layer, list(space_area_records or []))
+            if color_cache_key is not None:
+                self._render_cache["space_area_color_assignments"][color_cache_key] = dict(color_assignments)
+
         label_candidates: List[Dict[str, Any]] = []
         for record in space_area_records:
             area_id = int(record.get("id", 0) or 0)
@@ -303,7 +488,12 @@ class MapVisualizer:
             )
             if not np.any(mask):
                 continue
-            color = self._space_area_color(area_id, str(record.get("space_type", "")))
+            color = tuple(
+                color_assignments.get(
+                    int(area_id),
+                    self.SPACE_AREA_COLOR_PALETTE[int(area_id) % len(self.SPACE_AREA_COLOR_PALETTE)],
+                )
+            )
             if fill_regions:
                 image[mask] = color
 
@@ -656,10 +846,11 @@ class MapVisualizer:
         label_anchor: Optional[Tuple[int, int]] = None,
         label_center: Optional[Tuple[int, int]] = None,
     ) -> None:
+        del color
         x1, y1, x2, y2 = label_box
         draw_x2 = max(x1, x2 - 1)
         draw_y2 = max(y1, y2 - 1)
-        label_bg_color = tuple(int(channel) for channel in color)
+        label_bg_color = (255, 0, 0)
         label_border_color = (255, 255, 255)
         label_text_color = (255, 255, 255)
 
@@ -712,6 +903,32 @@ class MapVisualizer:
         return os.path.join(
             self.get_map_artifact_dir(episode_id, map_kind),
             self.get_map_artifact_filename(step, phase),
+        )
+
+    def get_model_input_map_artifact_dir(self, episode_id: int, map_kind: str) -> str:
+        return self.get_map_artifact_dir(episode_id, map_kind)
+
+    def get_model_input_map_artifact_filename(
+        self,
+        step: int,
+        phase: str,
+        map_kind: str,
+    ) -> str:
+        kind = str(map_kind).strip().lower()
+        if kind not in {"global", "local"}:
+            raise ValueError(f"Unsupported model-input map kind: {map_kind}")
+        return f"model_input__{self._normalize_artifact_phase(kind)}__{self.get_map_artifact_filename(step, phase)}"
+
+    def get_model_input_map_artifact_path(
+        self,
+        step: int,
+        episode_id: int,
+        phase: str,
+        map_kind: str,
+    ) -> str:
+        return os.path.join(
+            self.get_model_input_map_artifact_dir(episode_id, map_kind),
+            self.get_model_input_map_artifact_filename(step, phase, map_kind),
         )
 
     def get_render_policy(
@@ -1078,8 +1295,14 @@ class MapVisualizer:
                     paths['global_map_input'] = {
                         "image_array": global_map_with_trajectory,
                         "color_space": "bgr",
-                        "artifact_name": "global_map.png",
+                        "artifact_name": "global_map.jpg",
                         "name": "global_map",
+                        "original_artifact_path": self.get_model_input_map_artifact_path(
+                            step=step,
+                            episode_id=episode_id,
+                            phase=phase,
+                            map_kind="global",
+                        ),
                     }
             elif landmark_instances_world:
                 landmarks = self._build_landmarks_from_instances(

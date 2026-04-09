@@ -294,6 +294,25 @@ class NavigationVisualizer:
         except Exception as e:
             print(f"✗ Error saving GIF: {e}")
             return None
+
+    def cleanup_step_images(self) -> int:
+        """Delete saved step PNG frames after GIF generation to save disk space."""
+        if not self.visualization_dir or not os.path.isdir(self.visualization_dir):
+            return 0
+
+        removed_count = 0
+        for filename in sorted(os.listdir(self.visualization_dir)):
+            if not (filename.startswith("step_") and filename.endswith(".png")):
+                continue
+            path = os.path.join(self.visualization_dir, filename)
+            try:
+                os.remove(path)
+                removed_count += 1
+            except FileNotFoundError:
+                continue
+            except Exception as exc:
+                print(f"⚠️  Failed to remove visualization frame {path}: {exc}")
+        return removed_count
     
     def clear_frames(self):
         """清空视频帧列表"""

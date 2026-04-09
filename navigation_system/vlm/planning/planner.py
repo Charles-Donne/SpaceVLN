@@ -40,7 +40,7 @@ class LLMPlanner(BaseAPIClient):
         # 默认动作空间与interactive_navigation一致
         self.action_space = action_space or "MOVE_FORWARD (0.25m), TURN_LEFT (30°), TURN_RIGHT (30°), STOP"
         
-        # 方向观察图压缩（节省token），global_map保持全分辨率（需要细节）
+        # 所有 thinking 输入统一走压缩版本，便于稳定控 token。
         self.set_compression_config(enabled=True, max_size=448, quality=75)
         self.last_call_timing_info = {
             "records": [],
@@ -55,6 +55,37 @@ class LLMPlanner(BaseAPIClient):
             "records": [],
             "failed_retry_wait_duration_s": 0.0,
         }
+
+    def _finalize_vlm_info_retry_summary(self, save_dir: Optional[str]) -> None:
+        """Patch the saved vlm_info.json with aggregate retry stats for this call."""
+        if not save_dir:
+            return
+
+        records = list(self.last_call_timing_info.get("records", []) or [])
+        if not records:
+            return
+
+        failed_attempts = [record for record in records if not bool(record.get("success", False))]
+        failed_api_duration_s = sum(
+            max(0.0, float(record.get("duration_s", 0.0) or 0.0))
+            for record in failed_attempts
+        )
+        failed_retry_wait_duration_s = max(
+            0.0,
+            float(self.last_call_timing_info.get("failed_retry_wait_duration_s", 0.0) or 0.0),
+        )
+        self._update_vlm_info_artifact(
+            save_dir,
+            {
+                "attempts": len(records),
+                "failed_attempts": len(failed_attempts),
+                "failed_retry_wait_time_s": round(failed_retry_wait_duration_s, 4),
+                "failed_wasted_time_s": round(
+                    failed_api_duration_s + failed_retry_wait_duration_s,
+                    4,
+                ),
+            },
+        )
     
     def validate_response(self, response: Dict, mode: str = 'initial') -> bool:
         """验证响应字段"""
@@ -95,7 +126,7 @@ class LLMPlanner(BaseAPIClient):
             response = self.call_api(
                 prompt,
                 images,
-                save_dir=save_dir if retry == 0 else None,
+                save_dir=save_dir,
                 no_compress_indices=no_compress,
             )
             attempt_duration_s = time.perf_counter() - attempt_start_time
@@ -121,6 +152,7 @@ class LLMPlanner(BaseAPIClient):
                 "duration_s": max(0.0, float(attempt_duration_s)),
             })
             if attempt_success:
+                self._finalize_vlm_info_retry_summary(save_dir)
                 return normalized_response, prompt_debug_text
 
             if retry < max_retries - 1:
@@ -133,6 +165,7 @@ class LLMPlanner(BaseAPIClient):
                 time.sleep(wait)
 
         print(f"  [ERR] {failure_label} failed after {max_retries} attempts")
+        self._finalize_vlm_info_retry_summary(save_dir)
         return None, prompt_debug_text
 
     @staticmethod
@@ -212,16 +245,13 @@ class LLMPlanner(BaseAPIClient):
         images = observation_images.copy()
         images.append(global_map_image)
 
-        # global_map不压缩（需要全分辨率），其余图片压缩
-        no_compress = {len(observation_images)}  # global_map的索引
-        
         return self._call_planner_with_retry(
             prompt=prompt,
             images=images,
             direction_names=direction_names,
             mode='initial',
             save_dir=save_dir,
-            no_compress=no_compress,
+            no_compress=None,
             failure_label="LLM Planning",
         )
     
@@ -290,15 +320,12 @@ class LLMPlanner(BaseAPIClient):
         images = observation_images.copy()
         images.append(global_map_image)
 
-        # global_map不压缩（需要全分辨率），其余图片压缩
-        no_compress = {len(observation_images)}  # global_map的索引
-        
         return self._call_planner_with_retry(
             prompt=prompt,
             images=images,
             direction_names=direction_names,
             mode='verify',
             save_dir=save_dir,
-            no_compress=no_compress,
+            no_compress=None,
             failure_label="LLM Verify",
         )

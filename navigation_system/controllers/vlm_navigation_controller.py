@@ -3466,6 +3466,14 @@ class VLMNavigationController(BaseNavigationController):
         gif_path = None
         if self.nav_visualizer and self.runtime_options.save_navigation_gif:
             gif_path = self.nav_visualizer.save_gif(fps=2)
+            if (
+                gif_path
+                and self.runtime_options.cleanup_navigation_step_images_after_gif
+            ):
+                removed_count = self.nav_visualizer.cleanup_step_images()
+                if removed_count > 0:
+                    print(f"[Visualization] Removed {removed_count} step images after GIF generation")
+            self.nav_visualizer.clear_frames()
 
         total_steps = self.current_step
 
@@ -3487,15 +3495,12 @@ class VLMNavigationController(BaseNavigationController):
             'total_steps': total_steps,
             'subtask_count': self.subtask_count,
             'detected_classes': list(self.detected_classes),
-            'episode_duration_s': episode_timing_summary['episode_duration_including_failed_s'],
-            'episode_duration_including_failed_s': episode_timing_summary['episode_duration_including_failed_s'],
-            'episode_duration_excluding_failed_s': episode_timing_summary['episode_duration_excluding_failed_s'],
+            'episode_duration_s': episode_timing_summary['episode_duration_s'],
             'failed_api_total_duration_s': episode_timing_summary['failed_api_total_duration_s'],
             'failed_retry_wait_duration_s': episode_timing_summary['failed_retry_wait_duration_s'],
             'failed_wasted_duration_s': episode_timing_summary['failed_wasted_duration_s'],
             'thinking_api_summary': episode_timing_summary['thinking_api_summary'],
             'action_api_summary': episode_timing_summary['action_api_summary'],
-            'api_summary': episode_timing_summary['api_summary'],
             'gif_path': gif_path,
             'result_file': final_result,
             'reason': failure_reason,
@@ -3567,14 +3572,12 @@ class VLMNavigationController(BaseNavigationController):
         
         metrics_source = dict(env_metrics if env_metrics else (self.latest_info if self.latest_info else {}))
         episode_timing_summary = self._build_episode_timing_summary()
-        episode_duration_including_failed_s = episode_timing_summary['episode_duration_including_failed_s']
-        episode_duration_excluding_failed_s = episode_timing_summary['episode_duration_excluding_failed_s']
+        episode_duration_s = episode_timing_summary['episode_duration_s']
         failed_api_total_duration_s = episode_timing_summary['failed_api_total_duration_s']
         failed_retry_wait_duration_s = episode_timing_summary['failed_retry_wait_duration_s']
         failed_wasted_duration_s = episode_timing_summary['failed_wasted_duration_s']
         thinking_api_summary = episode_timing_summary['thinking_api_summary']
         action_api_summary = episode_timing_summary['action_api_summary']
-        all_api_summary = episode_timing_summary['api_summary']
         
         # 提取并验证核心指标
         result = {
@@ -3582,9 +3585,7 @@ class VLMNavigationController(BaseNavigationController):
             'instruction': self.current_instruction,
             'total_steps': total_steps,
             'subtask_count': self.subtask_count,
-            'episode_duration_s': episode_duration_including_failed_s,
-            'episode_duration_including_failed_s': episode_duration_including_failed_s,
-            'episode_duration_excluding_failed_s': episode_duration_excluding_failed_s,
+            'episode_duration_s': episode_duration_s,
             'failed_api_total_duration_s': failed_api_total_duration_s,
             'failed_retry_wait_duration_s': failed_retry_wait_duration_s,
             'failed_wasted_duration_s': failed_wasted_duration_s,
@@ -3601,11 +3602,8 @@ class VLMNavigationController(BaseNavigationController):
             'oracle_navigation_error': float(check_inf_nan(metrics_source.get('oracle_navigation_error', float('inf')))),
             'oracle_spl': float(check_inf_nan(metrics_source.get('oracle_spl', 0.0))),
 
-            # 导航历史
-            'subtask_history': self.subtask_history,
             'thinking_api_summary': thinking_api_summary,
             'action_api_summary': action_api_summary,
-            'api_summary': all_api_summary,
             'timestamp': datetime.now().isoformat()
         }
 

@@ -8,6 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 
 PROJECT_ROOT="$(spacevln_project_root)"
+RESULTS_ROOT="$(cd "$PROJECT_ROOT/.." && pwd)/data/result/vlnce"
 
 START_ID=${1:-}
 END_ID=${2:-}
@@ -25,10 +26,60 @@ usage() {
     echo ""
     echo "示例:"
     echo "  bash run_r2r/vlm_report_range.sh 1500 1799"
+    echo "  bash run_r2r/vlm_report_range.sh 1 50 qwen3.5-plus__qwen3.5-flash_cache"
     echo "  bash run_r2r/vlm_report_range.sh 1500 1799 /abs/path/to/data/result/vlnce/qwen3.5-plus__qwen3.5-flash"
     echo ""
     echo "说明:"
     echo "  只读取已有 log 生成部分汇总，不会重新跑 episode。"
+    echo "  第3个参数既可以传完整 results_dir，也可以直接传 data/result/vlnce 下的实验文件夹名。"
+}
+
+print_available_results_dirs() {
+    echo "可选实验目录:"
+    if [ ! -d "$RESULTS_ROOT" ]; then
+        echo "  (results 根目录不存在: $RESULTS_ROOT)"
+        return
+    fi
+
+    local found_any=0
+    while IFS= read -r name; do
+        found_any=1
+        echo "  - $name"
+    done < <(find "$RESULTS_ROOT" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort)
+
+    if [ "$found_any" -eq 0 ]; then
+        echo "  (当前没有实验目录)"
+    fi
+}
+
+resolve_results_dir() {
+    local raw_arg="$1"
+    local default_dir="$2"
+
+    if [ -z "$raw_arg" ]; then
+        printf '%s\n' "$default_dir"
+        return 0
+    fi
+
+    if [[ "$raw_arg" = /* ]]; then
+        printf '%s\n' "$raw_arg"
+        return 0
+    fi
+
+    if [ -d "$raw_arg" ]; then
+        local abs_dir
+        abs_dir="$(cd "$raw_arg" && pwd)"
+        printf '%s\n' "$abs_dir"
+        return 0
+    fi
+
+    if [ -d "$RESULTS_ROOT/$raw_arg" ]; then
+        printf '%s\n' "$RESULTS_ROOT/$raw_arg"
+        return 0
+    fi
+
+    printf '%s\n' "$raw_arg"
+    return 0
 }
 
 if [ -z "$START_ID" ] || [ -z "$END_ID" ]; then
@@ -65,7 +116,17 @@ cd "$PROJECT_ROOT"
 
 DEFAULT_RESULTS_DIR="$(spacevln_default_results_dir "$PYTHON_BIN" "navigation_system/config/api/vlm_api_config.yaml")"
 
-RESULTS_DIR=${RESULTS_DIR_ARG:-$DEFAULT_RESULTS_DIR}
+RESULTS_DIR="$(resolve_results_dir "$RESULTS_DIR_ARG" "$DEFAULT_RESULTS_DIR")"
+
+if [ ! -d "$RESULTS_DIR" ]; then
+    echo "❌ 目录不存在: $RESULTS_DIR"
+    echo ""
+    print_available_results_dirs
+    echo ""
+    echo "示例:"
+    echo "  bash run_r2r/vlm_report_range.sh $START_ID $END_ID qwen3.5-plus__qwen3.5-flash_cache"
+    exit 1
+fi
 
 echo "📊 生成部分结果报告"
 echo "   Range: $START_ID-$END_ID"

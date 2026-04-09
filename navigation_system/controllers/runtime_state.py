@@ -13,6 +13,7 @@ class VLMControllerOptions:
     save_api_request_artifacts: bool
     save_navigation_step_images: bool
     save_navigation_gif: bool
+    cleanup_navigation_step_images_after_gif: bool
     save_episode_stdout_log: bool
     save_waypoint_memory: bool
     save_best_result_copy: bool
@@ -40,6 +41,9 @@ class VLMControllerOptions:
                 getattr(map_config, "SAVE_NAVIGATION_STEP_IMAGES", False)
             ),
             save_navigation_gif=bool(getattr(map_config, "SAVE_NAVIGATION_GIF", True)),
+            cleanup_navigation_step_images_after_gif=bool(
+                getattr(map_config, "CLEANUP_NAVIGATION_STEP_IMAGES_AFTER_GIF", True)
+            ),
             save_episode_stdout_log=bool(
                 getattr(map_config, "SAVE_EPISODE_STDOUT_LOG", False)
             ),
@@ -128,42 +132,23 @@ class EpisodeTimingTracker:
     @classmethod
     def summarize_records(cls, records: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         normalized_records = [item for item in list(records or []) if isinstance(item, dict)]
-        success_durations = [
-            float(item.get("duration_s", 0.0))
-            for item in normalized_records
-            if bool(item.get("success", False))
-        ]
+        durations = [float(item.get("duration_s", 0.0)) for item in normalized_records]
         failure_durations = [
             float(item.get("duration_s", 0.0))
             for item in normalized_records
             if not bool(item.get("success", False))
         ]
-        all_durations = success_durations + failure_durations
-        success_count = len(success_durations)
+        count = len(normalized_records)
         failure_count = len(failure_durations)
-        total_duration_s = sum(success_durations)
+        total_duration_s = sum(durations)
         failed_total_duration_s = sum(failure_durations)
-        avg_duration_s = total_duration_s / success_count if success_count > 0 else 0.0
-        failed_avg_duration_s = (
-            failed_total_duration_s / failure_count if failure_count > 0 else 0.0
-        )
-        all_total_duration_s = sum(all_durations)
-        all_avg_duration_s = all_total_duration_s / len(all_durations) if all_durations else 0.0
-        min_duration_s = min(success_durations) if success_durations else 0.0
-        max_duration_s = max(success_durations) if success_durations else 0.0
+        avg_duration_s = total_duration_s / count if count > 0 else 0.0
         return {
-            "count": int(success_count),
-            "success_count": int(success_count),
+            "count": int(count),
             "failure_count": int(failure_count),
             "total_duration_s": cls.round_duration_s(total_duration_s),
             "avg_duration_s": cls.round_duration_s(avg_duration_s),
             "failed_total_duration_s": cls.round_duration_s(failed_total_duration_s),
-            "failed_avg_duration_s": cls.round_duration_s(failed_avg_duration_s),
-            "all_count": int(len(all_durations)),
-            "all_total_duration_s": cls.round_duration_s(all_total_duration_s),
-            "all_avg_duration_s": cls.round_duration_s(all_avg_duration_s),
-            "min_duration_s": cls.round_duration_s(min_duration_s),
-            "max_duration_s": cls.round_duration_s(max_duration_s),
         }
 
     def reset(self) -> None:
@@ -248,25 +233,19 @@ class EpisodeTimingTracker:
     def build_summary(self) -> Dict[str, Any]:
         thinking_api_summary = self.summarize_records(self.thinking_records)
         action_api_summary = self.summarize_records(self.action_records)
-        api_summary = self.summarize_records(list(self.thinking_records) + list(self.action_records))
-        episode_duration_including_failed_s = self.current_episode_duration_s()
-        failed_api_total_duration_s = float(api_summary.get("failed_total_duration_s", 0.0) or 0.0)
+        episode_duration_s = self.current_episode_duration_s()
+        failed_api_total_duration_s = float(
+            thinking_api_summary.get("failed_total_duration_s", 0.0) or 0.0
+        ) + float(action_api_summary.get("failed_total_duration_s", 0.0) or 0.0)
         failed_retry_wait_duration_s = self.round_duration_s(self.failed_retry_wait_duration_s)
         failed_wasted_duration_s = self.round_duration_s(
             failed_api_total_duration_s + failed_retry_wait_duration_s
         )
-        episode_duration_excluding_failed_s = self.round_duration_s(
-            max(0.0, float(episode_duration_including_failed_s) - failed_wasted_duration_s)
-        )
         return {
-            "episode_duration_including_failed_s": self.round_duration_s(
-                episode_duration_including_failed_s
-            ),
-            "episode_duration_excluding_failed_s": episode_duration_excluding_failed_s,
+            "episode_duration_s": self.round_duration_s(episode_duration_s),
             "failed_api_total_duration_s": self.round_duration_s(failed_api_total_duration_s),
             "failed_retry_wait_duration_s": failed_retry_wait_duration_s,
             "failed_wasted_duration_s": failed_wasted_duration_s,
             "thinking_api_summary": thinking_api_summary,
             "action_api_summary": action_api_summary,
-            "api_summary": api_summary,
         }

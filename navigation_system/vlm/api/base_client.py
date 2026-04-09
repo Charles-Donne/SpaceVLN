@@ -95,6 +95,108 @@ class BaseAPIClient(ABC):
             json.dump(payload, f, ensure_ascii=False, indent=2)
 
     @staticmethod
+    def _safe_int(value: Any, default: int = 0) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return int(default)
+
+    @staticmethod
+    def _safe_float(value: Any, default: float = 0.0) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return float(default)
+
+    @staticmethod
+    def _extract_usage_token_details(usage: Dict[str, Any]) -> Dict[str, Any]:
+        details = usage.get("prompt_tokens_details")
+        if isinstance(details, dict):
+            return details
+        details = usage.get("input_tokens_details")
+        if isinstance(details, dict):
+            return details
+        return {}
+
+    def _build_vlm_info_payload(
+        self,
+        *,
+        usage: Optional[Dict[str, Any]],
+        latency_s: float,
+        success: bool,
+        attempt_count: int = 1,
+        failed_attempt_count: int = 0,
+        failed_retry_wait_duration_s: float = 0.0,
+        failed_wasted_duration_s: float = 0.0,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        usage_dict = dict(usage or {})
+        details = self._extract_usage_token_details(usage_dict)
+        input_tokens = self._safe_int(
+            usage_dict.get("prompt_tokens", usage_dict.get("input_tokens", 0)),
+            0,
+        )
+        output_tokens = self._safe_int(
+            usage_dict.get("completion_tokens", usage_dict.get("output_tokens", 0)),
+            0,
+        )
+        total_tokens = self._safe_int(
+            usage_dict.get("total_tokens", input_tokens + output_tokens),
+            input_tokens + output_tokens,
+        )
+        payload: Dict[str, Any] = {
+            "model": str(getattr(self.config, "model", "") or ""),
+            "provider": str(getattr(self.config, "provider", "") or ""),
+            "success": bool(success),
+            "duration_s": round(max(0.0, self._safe_float(latency_s, 0.0)), 4),
+            "attempts": max(1, self._safe_int(attempt_count, 1)),
+            "failed_attempts": max(0, self._safe_int(failed_attempt_count, 0)),
+            "failed_retry_wait_time_s": round(
+                max(0.0, self._safe_float(failed_retry_wait_duration_s, 0.0)),
+                4,
+            ),
+            "failed_wasted_time_s": round(
+                max(0.0, self._safe_float(failed_wasted_duration_s, 0.0)),
+                4,
+            ),
+            "input_tokens": input_tokens,
+            "input_text_tokens": self._safe_int(details.get("text_tokens", 0), 0),
+            "input_image_tokens": self._safe_int(details.get("image_tokens", 0), 0),
+            "output_tokens": output_tokens,
+            "total_tokens": total_tokens,
+        }
+        if extra:
+            payload.update(dict(extra))
+        return payload
+
+    def _save_vlm_info_artifact(
+        self,
+        save_dir: Optional[str],
+        payload: Dict[str, Any],
+    ) -> None:
+        self._save_json_artifact(save_dir, "vlm_info.json", payload)
+
+    def _update_vlm_info_artifact(
+        self,
+        save_dir: Optional[str],
+        patch: Dict[str, Any],
+    ) -> None:
+        if not (save_dir and self.save_request_artifacts):
+            return
+        info_path = os.path.join(save_dir, "vlm_info.json")
+        payload: Dict[str, Any] = {}
+        if os.path.exists(info_path):
+            try:
+                with open(info_path, "r", encoding="utf-8") as f:
+                    loaded = json.load(f) or {}
+                if isinstance(loaded, dict):
+                    payload = loaded
+            except Exception:
+                payload = {}
+        payload.update(dict(patch or {}))
+        self._save_vlm_info_artifact(save_dir, payload)
+
+    @staticmethod
     def _mime_from_path(path: str) -> str:
         suffix = os.path.splitext(str(path or ""))[1].lower()
         if suffix in {".jpg", ".jpeg"}:
@@ -120,7 +222,7 @@ class BaseAPIClient(ABC):
         if isinstance(image_input, dict):
             artifact_name = str(image_input.get("artifact_name") or "").strip()
             if artifact_name:
-                return artifact_name
+                return self._replace_suffix(artifact_name, ".jpg" if compress else ".png")
             base_name = str(image_input.get("name") or f"img_{idx:02d}").strip() or f"img_{idx:02d}"
             return self._replace_suffix(base_name, ".jpg" if compress else ".png")
 
@@ -433,6 +535,19 @@ class BaseAPIClient(ABC):
             })
         
         for idx, image_input in enumerate(image_paths):
+            if should_save_artifacts and isinstance(image_input, dict):
+                original_artifact_path = str(image_input.get("original_artifact_path") or "").strip()
+                if original_artifact_path:
+                    os.makedirs(os.path.dirname(original_artifact_path), exist_ok=True)
+                    original_bytes, _original_mime_type = self._load_image_input_bytes(
+                        image_input,
+                        compress=False,
+                        max_size=self.compression_max_size,
+                        quality=self.compression_quality,
+                    )
+                    with open(original_artifact_path, "wb") as f:
+                        f.write(original_bytes)
+
             skip_compress = no_compress_indices is not None and idx in no_compress_indices
             compress = False if skip_compress else self.compress_images
             image_bytes, mime_type = self._load_image_input_bytes(
@@ -616,6 +731,7 @@ class BaseAPIClient(ABC):
             no_compress_indices: 不压缩的图片索引集合（如 {4} 表示第5张图不压缩）
         """
         t_start = time.time()
+        response = None
         try:
             # 确保 prompt 是 UTF-8 编码的字符串
             if isinstance(prompt, bytes):
@@ -724,7 +840,16 @@ class BaseAPIClient(ABC):
                         print(f"  [DEBUG] First item is image_url")
                     elif first_item.get('type') == 'input_image':
                         print(f"  [DEBUG] First item is input_image")
-                
+                self._save_vlm_info_artifact(
+                    save_dir,
+                    self._build_vlm_info_payload(
+                        usage=None,
+                        latency_s=latency,
+                        success=False,
+                        attempt_count=1,
+                        failed_attempt_count=1,
+                    ),
+                )
                 return None
             
             result = response.json()
@@ -759,6 +884,16 @@ class BaseAPIClient(ABC):
             # 检查响应
             if not content or len(content.strip()) < 10:
                 print(f"✗ Empty or too short API response: {content}")
+                self._save_vlm_info_artifact(
+                    save_dir,
+                    self._build_vlm_info_payload(
+                        usage=usage,
+                        latency_s=latency,
+                        success=False,
+                        attempt_count=1,
+                        failed_attempt_count=1,
+                    ),
+                )
                 return None
             
             # 检查截断
@@ -774,6 +909,16 @@ class BaseAPIClient(ABC):
                     print(f"[WARN] Response truncated (max_tokens={self.config.max_tokens})")
             
             parsed = self.parse_json_response(content)
+            self._save_vlm_info_artifact(
+                save_dir,
+                self._build_vlm_info_payload(
+                    usage=usage,
+                    latency_s=latency,
+                    success=parsed is not None,
+                    attempt_count=1,
+                    failed_attempt_count=0 if parsed is not None else 1,
+                ),
+            )
             
             if parsed is None:
                 print(f"✗ JSON parse failed | Raw (first 300): {content[:300]}")
@@ -783,15 +928,46 @@ class BaseAPIClient(ABC):
         except requests.exceptions.Timeout:
             elapsed = time.time() - t_start
             print(f"✗ API timeout after {elapsed:.1f}s (limit={self.config.timeout}s)")
+            self._save_vlm_info_artifact(
+                save_dir,
+                self._build_vlm_info_payload(
+                    usage=None,
+                    latency_s=elapsed,
+                    success=False,
+                    attempt_count=1,
+                    failed_attempt_count=1,
+                ),
+            )
             return None
         except json.JSONDecodeError as e:
             elapsed = time.time() - t_start
             print(f"✗ JSON decode error ({elapsed:.1f}s): {e}")
-            print(f"✗ Response text: {response.text[:300]}")
+            if response is not None:
+                print(f"✗ Response text: {response.text[:300]}")
+            self._save_vlm_info_artifact(
+                save_dir,
+                self._build_vlm_info_payload(
+                    usage=None,
+                    latency_s=elapsed,
+                    success=False,
+                    attempt_count=1,
+                    failed_attempt_count=1,
+                ),
+            )
             return None
         except Exception as e:
             elapsed = time.time() - t_start
             print(f"✗ API call failed ({elapsed:.1f}s): {e}")
+            self._save_vlm_info_artifact(
+                save_dir,
+                self._build_vlm_info_payload(
+                    usage=None,
+                    latency_s=elapsed,
+                    success=False,
+                    attempt_count=1,
+                    failed_attempt_count=1,
+                ),
+            )
             return None
     
     def validate_fields(self, response: Dict, required_fields: List[str]) -> bool:

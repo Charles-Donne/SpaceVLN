@@ -97,7 +97,6 @@ qwen_context_cache:
   enabled: true
   cache_type: "ephemeral"
   print_usage: false
-  save_usage_json: true
   results_dir_suffix: "_cache"
 ```
 
@@ -138,6 +137,7 @@ python vlm_navigation.py \
 
 ```bash
 bash run_r2r/vlm_report_range.sh 1 100
+bash run_r2r/vlm_report_range.sh 1 100 qwen3.5-plus__qwen3.5-flash_cache
 ```
 
 ## 5. 结果目录
@@ -165,7 +165,7 @@ data/result/vlnce/planner__action/
 │           ├── action/
 │           ├── visualization/
 │           └── records/
-│               └── result_latest.json
+│               └── result.json
 └── log/
     └── 1-100/
         └── episode_1.json
@@ -176,15 +176,14 @@ data/result/vlnce/planner__action/
 - `thinking/subtask_*`
   - `prompt.md` 或 `system_prompt.md + user_prompt.md`
   - 模型真实看到的图片副本
-  - `provider_response.json`
+  - `vlm_info.json`
   - 解析后的 `response.json`
-  - 缓存版额外有 `cache_usage.json`
 - `action/subtask_*`
   - 动作模型输入输出
 - `visualization/`
   - 导航逐步可视化
   - `navigation.gif`
-- `records/result_latest.json`
+- `records/result.json`
   - 当前这次 episode 的完整结果
 
 `log/episode_x.json` 保存每个 episode 的最佳摘要结果，报告程序只依赖这一层。
@@ -194,11 +193,11 @@ data/result/vlnce/planner__action/
 当前默认策略已经收缩过：
 
 - 保留模型输入输出调试产物。
-- 保留导航可视化和 GIF。
-- 保留 `result_latest.json` 与 `log/episode_x.json`。
+- 保留导航 GIF；默认在 GIF 成功生成后自动清理 `visualization/` 里的逐帧 PNG 以节省空间。
+- 保留 `result.json` 与 `log/episode_x.json`。
 - 默认不再额外保存整段 stdout 文本日志。
 - 默认不再保存 `waypoint_memory.json`。
-- 默认不再在 `records/` 下复制一份 `result.json`。
+- 默认不再额外保存第二份 episode result 副本。
 
 这些开关统一在 [`default.py`](/home/charlesdonne/project/nav_ws/SpaceVLN/navigation_system/config/runtime/default.py) 的 `MAP` 配置里：
 
@@ -206,6 +205,7 @@ data/result/vlnce/planner__action/
 _C.MAP.SAVE_API_REQUEST_ARTIFACTS = True
 _C.MAP.SAVE_NAVIGATION_STEP_IMAGES = True
 _C.MAP.SAVE_NAVIGATION_GIF = True
+_C.MAP.CLEANUP_NAVIGATION_STEP_IMAGES_AFTER_GIF = True
 _C.MAP.SAVE_EPISODE_STDOUT_LOG = False
 _C.MAP.SAVE_WAYPOINT_MEMORY = False
 _C.MAP.SAVE_BEST_RESULT_COPY = False

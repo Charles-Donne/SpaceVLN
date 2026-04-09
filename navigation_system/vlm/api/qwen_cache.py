@@ -33,7 +33,6 @@ class QwenContextCacheSettings:
     enabled: bool = True
     cache_type: str = "ephemeral"
     print_usage: bool = True
-    save_usage_json: bool = True
     results_dir_suffix: str = "_cache"
 
     @classmethod
@@ -48,7 +47,6 @@ class QwenContextCacheSettings:
             enabled=bool(block.get("enabled", True)),
             cache_type=str(block.get("cache_type") or "ephemeral").strip().lower() or "ephemeral",
             print_usage=bool(block.get("print_usage", True)),
-            save_usage_json=bool(block.get("save_usage_json", True)),
             results_dir_suffix=str(block.get("results_dir_suffix") or "_cache").strip()
             or "_cache",
         )
@@ -223,13 +221,13 @@ class QwenContextCacheMixin:
         hit_pct = float(summary.cache_hit_ratio) * 100.0
         sign = "+" if savings_pct >= 0.0 else ""
         return (
-            "[CtxCache] "
-            f"prompt={summary.prompt_tokens} "
+            "[VLM][cache] "
+            f"input={summary.prompt_tokens} "
             f"| cached={summary.cached_tokens} "
-            f"| create={summary.cache_creation_input_tokens} "
+            f"| write={summary.cache_creation_input_tokens} "
             f"| uncached={summary.uncached_prompt_tokens} "
             f"| hit={hit_pct:.1f}% "
-            f"| input_cost_x={summary.effective_input_cost_multiplier:.3f} "
+            f"| cost={summary.effective_input_cost_multiplier:.3f}x "
             f"| savings={sign}{savings_pct:.1f}%"
         )
 
@@ -239,9 +237,6 @@ class QwenContextCacheMixin:
         save_dir: Optional[str],
         system_prompt: str,
         user_prompt: str,
-        full_prompt: Optional[str],
-        result: Dict[str, Any],
-        summary: Optional[QwenCacheUsageSummary],
     ) -> None:
         if not (save_dir and self.save_request_artifacts):
             return
@@ -250,31 +245,38 @@ class QwenContextCacheMixin:
             f.write(system_prompt)
         with open(os.path.join(save_dir, "user_prompt.md"), "w", encoding="utf-8") as f:
             f.write(user_prompt)
-        if not self.context_cache_settings.save_usage_json:
-            return
+
+    def _build_cache_vlm_info_extra(
+        self,
+        *,
+        summary: Optional[QwenCacheUsageSummary],
+        provider_reported_explicit_cache_counters: bool,
+    ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
-            "model": str(getattr(self.config, "model", "") or ""),
-            "provider": str(getattr(self.config, "provider", "") or ""),
-            "usage": dict(result.get("usage") or {}),
-            "prompt_token_details": self._extract_prompt_token_details(dict(result.get("usage") or {})),
-            "cache_control_requested": bool(
-                getattr(self.context_cache_settings, "enabled", True)
-            ),
-            "cache_type_requested": str(
-                getattr(self.context_cache_settings, "cache_type", "") or ""
-            ),
-            "provider_reported_explicit_cache_counters": self._has_explicit_cache_counters(
-                dict(result.get("usage") or {})
-            ),
+            "cache": {
+                "enabled": bool(getattr(self.context_cache_settings, "enabled", True)),
+                "type": str(getattr(self.context_cache_settings, "cache_type", "") or ""),
+                "reported": bool(provider_reported_explicit_cache_counters and summary is not None),
+            }
         }
         if summary is not None:
-            payload["context_cache_status"] = "reported"
-            payload["context_cache"] = summary.to_dict()
-        else:
-            payload["context_cache_status"] = "not_reported"
-            payload["context_cache"] = None
-        with open(os.path.join(save_dir, "cache_usage.json"), "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2, ensure_ascii=False)
+            payload["cache"].update(
+                {
+                    "cached_tokens": int(summary.cached_tokens),
+                    "write_tokens": int(summary.cache_creation_input_tokens),
+                    "uncached_tokens": int(summary.uncached_prompt_tokens),
+                    "hit_ratio": round(float(summary.cache_hit_ratio), 4),
+                    "cost_ratio": round(
+                        float(summary.effective_input_cost_multiplier),
+                        4,
+                    ),
+                    "savings_ratio": round(
+                        float(summary.input_cost_savings_ratio),
+                        4,
+                    ),
+                }
+            )
+        return payload
 
     @staticmethod
     def _build_content_preview(
@@ -454,6 +456,20 @@ class QwenContextCacheMixin:
                     print(f"✗ Error detail: {response.json()}")
                 except Exception:
                     print(f"✗ Response: {response.text[:500]}")
+                self._save_vlm_info_artifact(
+                    save_dir,
+                    self._build_vlm_info_payload(
+                        usage=None,
+                        latency_s=latency_s,
+                        success=False,
+                        attempt_count=1,
+                        failed_attempt_count=1,
+                        extra=self._build_cache_vlm_info_extra(
+                            summary=None,
+                            provider_reported_explicit_cache_counters=False,
+                        ),
+                    ),
+                )
                 return None
 
             result = response.json()
@@ -489,7 +505,7 @@ class QwenContextCacheMixin:
                 raw_details = self._extract_prompt_token_details(usage)
                 detail_keys = sorted(str(key) for key in raw_details.keys())
                 print(
-                    "[CtxCache] provider returned no explicit cache counters "
+                    "[VLM][cache] provider returned no explicit cache counters "
                     f"(details_keys={detail_keys or ['<none>']})"
                 )
 
@@ -497,13 +513,24 @@ class QwenContextCacheMixin:
                 save_dir=save_dir,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
-                full_prompt=full_prompt,
-                result=result,
-                summary=self.last_cache_usage,
             )
 
             if not content or len(content.strip()) < 10:
                 print(f"✗ Empty or too short API response: {content}")
+                self._save_vlm_info_artifact(
+                    save_dir,
+                    self._build_vlm_info_payload(
+                        usage=usage,
+                        latency_s=latency_s,
+                        success=False,
+                        attempt_count=1,
+                        failed_attempt_count=1,
+                        extra=self._build_cache_vlm_info_extra(
+                            summary=self.last_cache_usage,
+                            provider_reported_explicit_cache_counters=has_explicit_cache_counters,
+                        ),
+                    ),
+                )
                 return None
 
             finish_reason = dict((result.get("choices") or [{}])[0] or {}).get(
@@ -514,6 +541,20 @@ class QwenContextCacheMixin:
                 print(f"[WARN] Response truncated (max_tokens={self.config.max_tokens})")
 
             parsed = self.parse_json_response(content)
+            self._save_vlm_info_artifact(
+                save_dir,
+                self._build_vlm_info_payload(
+                    usage=usage,
+                    latency_s=latency_s,
+                    success=parsed is not None,
+                    attempt_count=1,
+                    failed_attempt_count=0 if parsed is not None else 1,
+                    extra=self._build_cache_vlm_info_extra(
+                        summary=self.last_cache_usage,
+                        provider_reported_explicit_cache_counters=has_explicit_cache_counters,
+                    ),
+                ),
+            )
             if parsed is None:
                 print(f"✗ JSON parse failed | Raw (first 300): {content[:300]}")
             return parsed
@@ -521,12 +562,54 @@ class QwenContextCacheMixin:
         except requests.exceptions.Timeout:
             elapsed = time.time() - t_start
             print(f"✗ API timeout after {elapsed:.1f}s (limit={self.config.timeout}s)")
+            self._save_vlm_info_artifact(
+                save_dir,
+                self._build_vlm_info_payload(
+                    usage=None,
+                    latency_s=elapsed,
+                    success=False,
+                    attempt_count=1,
+                    failed_attempt_count=1,
+                    extra=self._build_cache_vlm_info_extra(
+                        summary=None,
+                        provider_reported_explicit_cache_counters=False,
+                    ),
+                ),
+            )
             return None
         except json.JSONDecodeError as exc:
             elapsed = time.time() - t_start
             print(f"✗ JSON decode error ({elapsed:.1f}s): {exc}")
+            self._save_vlm_info_artifact(
+                save_dir,
+                self._build_vlm_info_payload(
+                    usage=None,
+                    latency_s=elapsed,
+                    success=False,
+                    attempt_count=1,
+                    failed_attempt_count=1,
+                    extra=self._build_cache_vlm_info_extra(
+                        summary=None,
+                        provider_reported_explicit_cache_counters=False,
+                    ),
+                ),
+            )
             return None
         except Exception as exc:
             elapsed = time.time() - t_start
             print(f"✗ Explicit-cache API call failed ({elapsed:.1f}s): {exc}")
+            self._save_vlm_info_artifact(
+                save_dir,
+                self._build_vlm_info_payload(
+                    usage=None,
+                    latency_s=elapsed,
+                    success=False,
+                    attempt_count=1,
+                    failed_attempt_count=1,
+                    extra=self._build_cache_vlm_info_extra(
+                        summary=None,
+                        provider_reported_explicit_cache_counters=False,
+                    ),
+                ),
+            )
             return None

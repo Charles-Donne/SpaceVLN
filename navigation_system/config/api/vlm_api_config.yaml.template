@@ -79,5 +79,4 @@ qwen_context_cache:
   enabled: false
   cache_type: "ephemeral"
   print_usage: false
-  save_usage_json: true
   results_dir_suffix: "_cache"

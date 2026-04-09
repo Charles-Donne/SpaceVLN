@@ -59,14 +59,13 @@ class QwenContextCachePlanner(QwenContextCacheMixin, LLMPlanner):
 
         images = list(observation_images or [])
         images.append(global_map_image)
-        no_compress = {len(observation_images or [])}
         return self._call_planner_with_retry(
             prompt=prompt_bundle,
             images=images,
             direction_names=direction_names,
             mode="initial",
             save_dir=save_dir,
-            no_compress=no_compress,
+            no_compress=None,
             failure_label="LLM Planning",
         )
 
@@ -105,13 +104,12 @@ class QwenContextCachePlanner(QwenContextCacheMixin, LLMPlanner):
 
         images = list(observation_images or [])
         images.append(global_map_image)
-        no_compress = {len(observation_images or [])}
         return self._call_planner_with_retry(
             prompt=prompt_bundle,
             images=images,
             direction_names=direction_names,
             mode="verify",
             save_dir=save_dir,
-            no_compress=no_compress,
+            no_compress=None,
             failure_label="LLM Verify",
         )

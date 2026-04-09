@@ -183,22 +183,32 @@ def maybe_generate_cache_report(args: argparse.Namespace, config) -> None:
     _write_cache_report_text(report_text, txt_path)
 
     overall = report.overall
-    if overall.requests_with_provider_counters > 0:
+    end_to_end_speed = (
+        float(overall.output_tokens) / float(overall.total_duration_s)
+        if overall.total_duration_s > 0
+        else 0.0
+    )
+    reported_ratio = (
+        float(overall.cache_reported_requests) / float(overall.request_count)
+        if overall.request_count > 0
+        else 0.0
+    )
+    if overall.cache_reported_requests > 0:
         print(
-            "[CtxCache][overall] "
+            "[VLM][cache][overall] "
             f"req={overall.request_count} "
-            f"| covered={overall.cache_metric_request_coverage_ratio * 100:.1f}% "
+            f"| reported={reported_ratio * 100:.1f}% "
             f"| hit={overall.weighted_cache_hit_ratio * 100:.1f}% "
-            f"| input_cost_x={overall.effective_input_cost_multiplier:.3f} "
-            f"| speed={overall.end_to_end_tokens_per_second:.1f} tok/s"
+            f"| cost={overall.cost_ratio:.3f}x "
+            f"| speed={end_to_end_speed:.1f} tok/s"
         )
     else:
         print(
-            "[CtxCache][overall] "
-            f"req={overall.request_count} | provider_counters=0 "
+            "[VLM][cache][overall] "
+            f"req={overall.request_count} | reported=0 "
             "| cache metrics unavailable in current artifacts"
         )
-    print(f"[CtxCache][report] {txt_path}")
+    print(f"[VLM][cache][report] {txt_path}")
 
 
 def run_navigation_from_args(args: argparse.Namespace) -> int:

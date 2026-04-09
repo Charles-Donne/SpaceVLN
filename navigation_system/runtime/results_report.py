@@ -46,24 +46,42 @@ def _get_episode_duration_excluding_failed_s(item: Dict[str, Any]) -> float:
     )
 
 
+def _get_api_summary_value(item: Dict[str, Any], prefix: str, key: str, default: float = 0.0) -> float:
+    nested = item.get(f"{prefix}_api_summary")
+    if isinstance(nested, dict) and key in nested:
+        return _as_float(nested.get(key), default)
+    return _as_float(item.get(f"{prefix}_api_{key}", default), default)
+
+
+def _get_api_summary_count(item: Dict[str, Any], prefix: str, key: str, default: int = 0) -> int:
+    nested = item.get(f"{prefix}_api_summary")
+    if isinstance(nested, dict) and key in nested:
+        return _as_int(nested.get(key), default)
+    return _as_int(item.get(f"{prefix}_api_{key}", default), default)
+
+
 def _compute_timing_metrics(results: List[Dict[str, Any]]) -> Dict[str, Any]:
     n = len(results)
-    thinking_api_count = sum(_as_int(item.get("thinking_api_count", 0)) for item in results)
-    thinking_api_failed_count = sum(_as_int(item.get("thinking_api_failed_count", 0)) for item in results)
+    thinking_api_count = sum(_get_api_summary_count(item, "thinking", "count", 0) for item in results)
+    thinking_api_failed_count = sum(
+        _get_api_summary_count(item, "thinking", "failure_count", 0) for item in results
+    )
     thinking_api_total_duration_s = sum(
-        _as_float(item.get("thinking_api_total_duration_s", 0.0)) for item in results
+        _get_api_summary_value(item, "thinking", "total_duration_s", 0.0) for item in results
     )
     thinking_api_failed_total_duration_s = sum(
-        _as_float(item.get("thinking_api_failed_total_duration_s", 0.0)) for item in results
+        _get_api_summary_value(item, "thinking", "failed_total_duration_s", 0.0) for item in results
     )
 
-    action_api_count = sum(_as_int(item.get("action_api_count", 0)) for item in results)
-    action_api_failed_count = sum(_as_int(item.get("action_api_failed_count", 0)) for item in results)
+    action_api_count = sum(_get_api_summary_count(item, "action", "count", 0) for item in results)
+    action_api_failed_count = sum(
+        _get_api_summary_count(item, "action", "failure_count", 0) for item in results
+    )
     action_api_total_duration_s = sum(
-        _as_float(item.get("action_api_total_duration_s", 0.0)) for item in results
+        _get_api_summary_value(item, "action", "total_duration_s", 0.0) for item in results
     )
     action_api_failed_total_duration_s = sum(
-        _as_float(item.get("action_api_failed_total_duration_s", 0.0)) for item in results
+        _get_api_summary_value(item, "action", "failed_total_duration_s", 0.0) for item in results
     )
 
     api_total_duration_s = sum(
