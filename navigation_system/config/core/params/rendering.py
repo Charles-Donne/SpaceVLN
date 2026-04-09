@@ -1,5 +1,9 @@
 """Rendering and visualization style parameters."""
 
+DEFAULT_ENABLE_GLOBAL_MAP_CROP = False
+DEFAULT_ENABLE_ADAPTIVE_ZOOM = True
+DEFAULT_DEBUG_SAVE_RENDERINGS = False
+
 # PIL palette in normalized RGB [0, 1].
 COLOR_PALETTE = [
     1.00, 1.00, 1.00,

@@ -1,0 +1,8 @@
+DETECTION:
+  MODEL:
+    GROUNDING_DINO_CONFIG_PATH: ../data/model/grounded_sam/GroundingDINO_SwinT_OGC.py
+    GROUNDING_DINO_CHECKPOINT_PATH: ../data/model/grounded_sam/groundingdino_swint_ogc.pth
+    SAM_CHECKPOINT_PATH: ../data/model/grounded_sam/sam_vit_h_4b8939.pth
+    REPVIT_SAM_CHECKPOINT_PATH: ../data/model/grounded_sam/repvit_sam.pt
+    SAM_ENCODER_VERSION: vit_h
+    USE_REPVIT_SAM: true

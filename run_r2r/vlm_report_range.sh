@@ -9,6 +9,7 @@ source "$SCRIPT_DIR/common.sh"
 
 PROJECT_ROOT="$(spacevln_project_root)"
 RESULTS_ROOT="$(cd "$PROJECT_ROOT/.." && pwd)/data/result/vlnce"
+CONFIG_FILE="${EXP_CONFIG:-navigation_system/config/experiments/r2r_eval.yaml}"
 
 START_ID=${1:-}
 END_ID=${2:-}
@@ -114,7 +115,7 @@ fi
 
 cd "$PROJECT_ROOT"
 
-DEFAULT_RESULTS_DIR="$(spacevln_default_results_dir "$PYTHON_BIN" "navigation_system/config/api/vlm_api_config.yaml")"
+DEFAULT_RESULTS_DIR="$(spacevln_default_results_dir "$PYTHON_BIN" "navigation_system/config/vlm/vlm_api_config.yaml")"
 
 RESULTS_DIR="$(resolve_results_dir "$RESULTS_DIR_ARG" "$DEFAULT_RESULTS_DIR")"
 
@@ -135,6 +136,7 @@ echo "   Output: $RESULTS_DIR/reports/$START_ID-$END_ID"
 
 "$PYTHON_BIN" -m navigation_system.runtime.results_report \
     --path "$RESULTS_DIR" \
+    --exp-config "$CONFIG_FILE" \
     --save \
     --start-id "$START_ID" \
     --end-id "$END_ID"

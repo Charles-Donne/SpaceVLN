@@ -1,0 +1,212 @@
+"""Episode-level console output, result lookup, and stdout redirection helpers."""
+
+import contextlib
+import json
+import os
+import sys
+from typing import Any, Dict
+
+from navigation_system.runtime.storage.artifacts import (
+    get_episode_detail_dir,
+)
+
+
+def get_episode_records_log_path(results_dir: str, episode_id: int) -> str:
+    episode_dir = get_episode_detail_dir(results_dir, episode_id)
+    records_dir = os.path.join(episode_dir, "records")
+    os.makedirs(records_dir, exist_ok=True)
+    return os.path.join(records_dir, f"episode_{int(episode_id)}.log")
+
+
+def get_episode_result_path(results_dir: str, episode_id: int) -> str:
+    episode_dir = get_episode_detail_dir(results_dir, episode_id)
+    records_dir = os.path.join(episode_dir, "records")
+    os.makedirs(records_dir, exist_ok=True)
+    return os.path.join(records_dir, "result.json")
+
+
+def save_episode_stdout_log_enabled(config) -> bool:
+    output_cfg = getattr(config, "OUTPUT", None)
+    log_cfg = getattr(output_cfg, "LOGS", None)
+    return bool(getattr(log_cfg, "SAVE_EPISODE_STDOUT", False))
+
+
+@contextlib.contextmanager
+def redirect_process_output_to_file(log_path: str, mode: str = "w"):
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+
+    stdout_fd = sys.stdout.fileno()
+    stderr_fd = sys.stderr.fileno()
+    saved_stdout_fd = os.dup(stdout_fd)
+    saved_stderr_fd = os.dup(stderr_fd)
+
+    sys.stdout.flush()
+    sys.stderr.flush()
+
+    log_file = open(log_path, mode, encoding="utf-8")
+    try:
+        os.dup2(log_file.fileno(), stdout_fd)
+        os.dup2(log_file.fileno(), stderr_fd)
+        yield
+    finally:
+        try:
+            sys.stdout.flush()
+            sys.stderr.flush()
+        except Exception:
+            pass
+        os.dup2(saved_stdout_fd, stdout_fd)
+        os.dup2(saved_stderr_fd, stderr_fd)
+        os.close(saved_stdout_fd)
+        os.close(saved_stderr_fd)
+        log_file.close()
+
+
+@contextlib.contextmanager
+def redirect_process_output_to_null():
+    stdout_fd = sys.stdout.fileno()
+    stderr_fd = sys.stderr.fileno()
+    saved_stdout_fd = os.dup(stdout_fd)
+    saved_stderr_fd = os.dup(stderr_fd)
+
+    sys.stdout.flush()
+    sys.stderr.flush()
+
+    with open(os.devnull, "w", encoding="utf-8") as sink:
+        try:
+            os.dup2(sink.fileno(), stdout_fd)
+            os.dup2(sink.fileno(), stderr_fd)
+            yield
+        finally:
+            try:
+                sys.stdout.flush()
+                sys.stderr.flush()
+            except Exception:
+                pass
+            os.dup2(saved_stdout_fd, stdout_fd)
+            os.dup2(saved_stderr_fd, stderr_fd)
+            os.close(saved_stdout_fd)
+            os.close(saved_stderr_fd)
+
+
+def load_json_if_exists(path: str) -> Dict[str, Any]:
+    if not path or not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def extract_episode_metrics(result: Dict[str, Any]) -> Dict[str, Any]:
+    metrics: Dict[str, Any] = {}
+    candidate_paths = [
+        str(result.get("result_detail_file") or "").strip(),
+        str(result.get("result_file") or "").strip(),
+    ]
+    for path in candidate_paths:
+        if not path:
+            continue
+        metrics = load_json_if_exists(path)
+        if metrics:
+            break
+
+    if not metrics:
+        return {}
+
+    return {
+        "sr": metrics.get("sr", metrics.get("success", 0)),
+        "osr": metrics.get("osr", metrics.get("oracle_success", 0)),
+        "ne": metrics.get("ne", metrics.get("distance_to_goal", -1.0)),
+        "spl": metrics.get("spl", 0.0),
+        "ndtw": metrics.get("ndtw", 0.0),
+    }
+
+
+def build_episode_console_summary(
+    *,
+    episode_id: int,
+    index: int,
+    total: int,
+    result: Dict[str, Any],
+    metrics: Dict[str, Any],
+    worker_index: int = 0,
+    worker_count: int = 0,
+) -> str:
+    status = "OK" if bool(result.get("success", False)) else "FAIL"
+    steps = int(result.get("steps", result.get("total_steps", 0)) or 0)
+    reason = str(result.get("reason") or "").strip()
+    error = str(result.get("error") or "").strip()
+
+    parts = [
+        (
+            f"[W{worker_index}/{worker_count} {index}/{total}]"
+            if worker_index > 0 and worker_count > 0
+            else f"[{index}/{total}]"
+        ),
+        f"Episode {episode_id}",
+        status,
+        f"steps={steps}",
+    ]
+
+    if metrics:
+        ne = metrics.get("ne", -1.0)
+        sr = metrics.get("sr", 0)
+        osr = metrics.get("osr", 0)
+        spl = metrics.get("spl", 0.0)
+        ndtw = metrics.get("ndtw", 0.0)
+        try:
+            parts.append(f"NE={float(ne):.3f}m")
+        except Exception:
+            pass
+        parts.append(f"OSR={int(osr)}")
+        parts.append(f"SR={int(sr)}")
+        try:
+            parts.append(f"SPL={float(spl):.4f}")
+        except Exception:
+            pass
+        try:
+            parts.append(f"nDTW={float(ndtw):.4f}")
+        except Exception:
+            pass
+
+    if reason:
+        parts.append(f"reason={reason}")
+    if error:
+        parts.append(f"error={error}")
+
+    return " | ".join(parts)
+
+
+def build_episode_start_summary(
+    *,
+    episode_id: int,
+    index: int,
+    total: int,
+    worker_index: int = 0,
+    worker_count: int = 0,
+) -> str:
+    parts = [
+        (
+            f"[W{worker_index}/{worker_count} {index}/{total}]"
+            if worker_index > 0 and worker_count > 0
+            else f"[{index}/{total}]"
+        ),
+        f"Episode {episode_id}",
+        "START",
+    ]
+    return " | ".join(parts)
+
+
+__all__ = [
+    "build_episode_console_summary",
+    "build_episode_start_summary",
+    "extract_episode_metrics",
+    "get_episode_records_log_path",
+    "get_episode_result_path",
+    "load_json_if_exists",
+    "redirect_process_output_to_file",
+    "redirect_process_output_to_null",
+    "save_episode_stdout_log_enabled",
+]

@@ -8,8 +8,8 @@ from navigation_system.vlm.prompts.cache_builders import (
     build_initial_planner_cache_prompt_bundle,
     build_verify_planner_cache_prompt_bundle,
 )
-from navigation_system.vlm.support.schema import get_next_waypoint
-from navigation_system.vlm.api.qwen_cache import QwenContextCacheMixin
+from navigation_system.vlm.contracts.schema import get_next_waypoint
+from navigation_system.vlm.api.qwen_context_cache_client import QwenContextCacheMixin
 
 
 class QwenContextCachePlanner(QwenContextCacheMixin, LLMPlanner):
@@ -17,7 +17,7 @@ class QwenContextCachePlanner(QwenContextCacheMixin, LLMPlanner):
 
     def __init__(
         self,
-        config_path: str = "navigation_system/config/api/vlm_api_config_qwen_cache.yaml",
+        config_path: str = "navigation_system/config/vlm/vlm_api_config_qwen_cache.yaml",
         action_space: str = None,
     ):
         super().__init__(config_path=config_path, action_space=action_space)

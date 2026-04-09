@@ -8,7 +8,7 @@ from navigation_system.vlm.prompts.common import ExplicitCachePromptBundle
 from navigation_system.vlm.prompts.cache_builders import (
     build_action_cache_prompt_bundle,
 )
-from navigation_system.vlm.api.qwen_cache import QwenContextCacheMixin
+from navigation_system.vlm.api.qwen_context_cache_client import QwenContextCacheMixin
 
 
 class QwenContextCacheActionExecutor(QwenContextCacheMixin, ActionExecutor):
@@ -16,7 +16,7 @@ class QwenContextCacheActionExecutor(QwenContextCacheMixin, ActionExecutor):
 
     def __init__(
         self,
-        config_path: str = "navigation_system/config/api/vlm_api_config_qwen_cache.yaml",
+        config_path: str = "navigation_system/config/vlm/vlm_api_config_qwen_cache.yaml",
         turn_angle: float = 30.0,
         move_distance: float = 0.25,
     ):

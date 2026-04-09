@@ -1,18 +1,27 @@
 """Configuration package for SpaceVLN.
 
 Layout:
-- `runtime/`: runtime Habitat/YACS config assembly
-- `core/`: project-level static params, constants, and config helpers
-- `experiments/`: experiment YAML overrides
-- `api/`: canonical API config templates
+- `system/`: external deployment defaults such as GPU, model paths, task paths, and camera/sensor setup
+- `runtime/`: structured panels plus synchronization into Habitat/runtime-derived fields
+- `core/`: static constants, categories, and algorithm/behavior default parameters
+- `experiments/`: experiment YAML control panels
+- `vlm/`: canonical VLM API config templates
 """
 
-from navigation_system.config.runtime.default import get_config
-from navigation_system.config.core import ConfigHelper, CategoryConfig, create_category_config
+from importlib import import_module
+from typing import Any
 
 __all__ = [
-    "get_config",
-    "ConfigHelper",
     "CategoryConfig",
+    "ConfigHelper",
     "create_category_config",
+    "get_config",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    if name == "get_config":
+        return getattr(import_module("navigation_system.config.runtime.default"), name)
+    if name in {"ConfigHelper", "CategoryConfig", "create_category_config"}:
+        return getattr(import_module("navigation_system.config.core"), name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

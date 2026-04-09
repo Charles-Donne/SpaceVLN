@@ -6,7 +6,7 @@ LLM规划模块
 import re
 import time
 from typing import Any, Dict, List, Tuple, Optional
-from navigation_system.vlm.api.client import APIConfig, BaseAPIClient
+from navigation_system.vlm.api.api_client import APIConfig, BaseAPIClient
 from navigation_system.vlm.prompts.builders import (
     get_initial_planning_prompt,
     get_verification_replanning_prompt
@@ -15,7 +15,7 @@ from navigation_system.vlm.prompts.common import (
     PromptLike,
     extract_prompt_debug_text,
 )
-from navigation_system.vlm.support.schema import (
+from navigation_system.vlm.contracts.schema import (
     REQUIRED_SUBTASK_FIELDS,
     get_next_waypoint,
     normalize_subtask_payload,
@@ -25,7 +25,7 @@ from navigation_system.vlm.support.schema import (
 class LLMPlanner(BaseAPIClient):
     """LLM规划器 - 负责子任务生成和验证"""
 
-    def __init__(self, config_path: str = "navigation_system/config/api/vlm_api_config.yaml", 
+    def __init__(self, config_path: str = "navigation_system/config/vlm/vlm_api_config.yaml", 
                  action_space: str = None):
         """
         初始化LLM规划器

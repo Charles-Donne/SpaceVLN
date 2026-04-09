@@ -42,26 +42,26 @@ pip install -r requirements.txt
 - Habitat 数据与 R2R/SpaceVLN 评测数据。
 - GroundedSAM / RepViT-SAM 权重。
 
-默认路径定义在 [`default.py`](/home/charlesdonne/project/nav_ws/SpaceVLN/navigation_system/config/runtime/default.py)：
+默认路径定义在 [`10_detection_models.yaml`](/home/charlesdonne/project/nav_ws/SpaceVLN/navigation_system/config/system/10_detection_models.yaml)：
 
-- `MAP.GROUNDING_DINO_CONFIG_PATH`
-- `MAP.GROUNDING_DINO_CHECKPOINT_PATH`
-- `MAP.SAM_CHECKPOINT_PATH`
-- `MAP.RepViTSAM_CHECKPOINT_PATH`
+- `DETECTION.MODEL.GROUNDING_DINO_CONFIG_PATH`
+- `DETECTION.MODEL.GROUNDING_DINO_CHECKPOINT_PATH`
+- `DETECTION.MODEL.SAM_CHECKPOINT_PATH`
+- `DETECTION.MODEL.REPVIT_SAM_CHECKPOINT_PATH`
 
-如果你的权重路径不同，直接改这一个文件即可。
+如果你的权重路径不同，直接改 [`10_detection_models.yaml`](/home/charlesdonne/project/nav_ws/SpaceVLN/navigation_system/config/system/10_detection_models.yaml) 即可。
 
 ## 3. API 配置
 
 标准运行使用统一配置文件：
 
-[`vlm_api_config.yaml.template`](/home/charlesdonne/project/nav_ws/SpaceVLN/navigation_system/config/api/vlm_api_config.yaml.template)
+[`vlm_api_config.yaml.template`](/home/charlesdonne/project/nav_ws/SpaceVLN/navigation_system/config/vlm/vlm_api_config.yaml.template)
 
 复制一份后填写：
 
 ```bash
-cp navigation_system/config/api/vlm_api_config.yaml.template \
-   navigation_system/config/api/vlm_api_config.yaml
+cp navigation_system/config/vlm/vlm_api_config.yaml.template \
+   navigation_system/config/vlm/vlm_api_config.yaml
 ```
 
 当前支持三类 provider：
@@ -86,9 +86,10 @@ openai:
 
 Qwen 显式上下文缓存单独使用：
 
-- [`vlm_api_config_qwen_cache.yaml`](/home/charlesdonne/project/nav_ws/SpaceVLN/navigation_system/config/api/vlm_api_config_qwen_cache.yaml)
+- [`vlm_api_config_qwen_cache.yaml`](/home/charlesdonne/project/nav_ws/SpaceVLN/navigation_system/config/vlm/vlm_api_config_qwen_cache.yaml)
 - [`vlm_navigation_qwen_cache.py`](/home/charlesdonne/project/nav_ws/SpaceVLN/vlm_navigation_qwen_cache.py)
 - [`vlm_navigation_qwen_cache.sh`](/home/charlesdonne/project/nav_ws/SpaceVLN/run_r2r/vlm_navigation_qwen_cache.sh)
+- [`profiles.py`](/home/charlesdonne/project/nav_ws/SpaceVLN/navigation_system/runtime/profiles.py)
 
 缓存配置块示例：
 
@@ -105,6 +106,13 @@ qwen_context_cache:
 标准运行：
 
 ```bash
+bash run_r2r/vlm_navigation.sh 1 10 260 4
+```
+
+如果想切换实验面板，可以直接覆盖：
+
+```bash
+EXP_CONFIG=navigation_system/config/experiments/r2r_eval.yaml \
 bash run_r2r/vlm_navigation.sh 1 10 260 4
 ```
 
@@ -130,7 +138,7 @@ python vlm_navigation.py \
   --num-episodes 10 \
   --max-steps 260 \
   --parallel-workers 4 \
-  --vlm-api-config navigation_system/config/api/vlm_api_config.yaml
+  --vlm-api-config navigation_system/config/vlm/vlm_api_config.yaml
 ```
 
 报告生成：
@@ -139,6 +147,8 @@ python vlm_navigation.py \
 bash run_r2r/vlm_report_range.sh 1 100
 bash run_r2r/vlm_report_range.sh 1 100 qwen3.5-plus__qwen3.5-flash_cache
 ```
+
+报告脚本也会默认读取 `EXP_CONFIG`，用于同步 `SUCCESS_DISTANCE_M` 这类评测参数。
 
 ## 5. 结果目录
 
@@ -199,19 +209,30 @@ data/result/vlnce/planner__action/
 - 默认不再保存 `waypoint_memory.json`。
 - 默认不再额外保存第二份 episode result 副本。
 
-这些开关统一在 [`default.py`](/home/charlesdonne/project/nav_ws/SpaceVLN/navigation_system/config/runtime/default.py) 的 `MAP` 配置里：
+这些开关统一由实验面板控制，推荐修改入口是：
 
-```python
-_C.MAP.SAVE_API_REQUEST_ARTIFACTS = True
-_C.MAP.SAVE_NAVIGATION_STEP_IMAGES = True
-_C.MAP.SAVE_NAVIGATION_GIF = True
-_C.MAP.CLEANUP_NAVIGATION_STEP_IMAGES_AFTER_GIF = True
-_C.MAP.SAVE_EPISODE_STDOUT_LOG = False
-_C.MAP.SAVE_WAYPOINT_MEMORY = False
-_C.MAP.SAVE_BEST_RESULT_COPY = False
+- [`r2r_eval.yaml`](/home/charlesdonne/project/nav_ws/SpaceVLN/navigation_system/config/experiments/r2r_eval.yaml)
+  - 主实验面板，按 `TASK / PATHS / OUTPUT / CONTROL / EVAL` 分区，只放当前实验覆盖项。
+- [`navigation_system/config/system/00_runtime.yaml`](/home/charlesdonne/project/nav_ws/SpaceVLN/navigation_system/config/system/00_runtime.yaml)
+  - 系统默认任务入口、GPU/并行环境与目录。
+- [`navigation_system/config/system/10_detection_models.yaml`](/home/charlesdonne/project/nav_ws/SpaceVLN/navigation_system/config/system/10_detection_models.yaml)
+  - 检测模型路径与开关。
+- [`navigation_system/config/system/20_space_sensor.yaml`](/home/charlesdonne/project/nav_ws/SpaceVLN/navigation_system/config/system/20_space_sensor.yaml)
+  - 相机 HFOV、分辨率与 agent height 等传感器参数。
+- [`navigation_system/config/README.md`](/home/charlesdonne/project/nav_ws/SpaceVLN/navigation_system/config/README.md)
+  - 配置分层说明。
+- [`default.py`](/home/charlesdonne/project/nav_ws/SpaceVLN/navigation_system/config/runtime/default.py)
+  - 运行时装配层，不建议把这里当成日常实验入口。
+
+例如如果你想重新打开 stdout 文本日志，只需要把：
+
+```yaml
+OUTPUT:
+  LOGS:
+    SAVE_EPISODE_STDOUT: true
 ```
 
-如果你想重新打开 stdout 文本日志，只需要把 `SAVE_EPISODE_STDOUT_LOG` 改成 `True`。
+写到实验 yaml 即可。
 
 ## 7. 当前架构
 
@@ -225,50 +246,56 @@ SpaceVLN/
 │   ├── vlm_navigation_qwen_cache.sh
 │   └── vlm_report_range.sh
 ├── navigation_system/
-│   ├── controllers/
-│   │   ├── base_navigation_controller.py
-│   │   ├── runtime_state.py
-│   │   ├── vlm_navigation_controller.py
-│   │   └── vlm_navigation_controller_qwen_cache.py
-│   ├── runtime/
-│   │   ├── runner.py
-│   │   ├── runner_qwen_cache.py
-│   │   └── results_report.py
+│   ├── controller/
 │   ├── vlm/
-│   │   ├── api/
-│   │   ├── planning/
-│   │   ├── execution/
-│   │   ├── prompts/
-│   │   └── support/
-│   ├── mapping/
 │   ├── detection/
-│   └── visualization/
+│   ├── space/
+│   │   ├── map/
+│   │   ├── topology/
+│   │   ├── landmarks/
+│   │   ├── geometry/
+│   │   └── description/
+│   ├── render/
+│   │   ├── map/
+│   │   ├── views/
+│   │   └── episode_visualization/
+│   ├── runtime/
+│   │   ├── storage/
+│   │   └── ...
+│   ├── env/
+│   └── config/
 ├── vlm_navigation.py
+├── docs/
+│   └── ARCHITECTURE.md
 └── vlm_navigation_qwen_cache.py
 ```
 
 模块职责：
 
-- `controllers/`
-  负责 episode 调度、thinking/action 切换、状态维护。
-- `runtime/`
-  负责 CLI、并行 worker、结果汇总和报告。
-- `vlm/api/`
-  负责 provider 配置解析与请求发送。
-- `vlm/planning/`
-  负责高层规划模型接入。
-- `vlm/execution/`
-  负责低层动作模型接入。
-- `vlm/prompts/`
-  负责 prompt 模板。
-- `vlm/support/`
-  负责保存、thinking 视图渲染和导航 GIF。
-- `mapping/`
-  负责语义建图和空间拓扑。
+- `controller/`
+  负责 navigation 主控、thinking/action 切换、停止/恢复策略和 controller 自身运行态。
+- `vlm/`
+  负责模型接口、prompt、planner、action executor、cache 与 VLM 统计。
 - `detection/`
-  负责 GroundedSAM / RepViT-SAM 检测。
-- `visualization/`
-  负责地图、检测和观测可视化。
+  负责 GroundedSAM / RepViT-SAM 检测与分割。
+- `space/`
+  负责空间世界模型。
+  - `map/`：语义地图和地图分析
+  - `topology/`：空间区域、连接关系、waypoint
+  - `landmarks/`：landmark memory、landmark world instance、landmark 选择
+  - `geometry/`：depth、pose、rotation、projection
+  - `description/`：给 VLM 的空间文本描述
+- `render/`
+  负责所有渲染输出。
+  - `map/`：地图渲染
+  - `views/`：给模型的输入图
+  - `episode_visualization/`：整段导航回放与 GIF
+- `runtime/`
+  负责 CLI、批量运行、结果路径、结果汇总。
+- `env/`
+  负责 Habitat 环境注册和构造。
+- `config/`
+  负责配置、参数和实验 yaml。
 
 ## 8. 运行流程
 
@@ -288,14 +315,10 @@ SpaceVLN/
 
 ## 9. 当前清理结论
 
-这轮整理后，仓库里已经去掉了几类明显无效的内容：
-
-- 已失效的 `interactive_navigation.sh`
-- 无引用的 `audit_result_layout.py`
-- 无引用的 `observation_collector.py`
+这轮整理后，仓库已经统一成 `controller / vlm / detection / space / render / runtime / env / config` 这套骨架，并去掉了旧的 `controllers / mapping / visualization / utils` 目录。
 
 如果后面还要继续做更深一轮瘦身，优先建议沿着这三条继续做：
 
-- 继续拆 `vlm_navigation_controller.py`
-- 继续收紧结果产物种类
-- 继续把 provider 特定逻辑从通用 API client 分离
+- 继续拆 [`navigation_controller.py`](/home/charlesdonne/project/nav_ws/SpaceVLN/navigation_system/controller/navigation_controller.py)
+- 继续收紧 detail 产物种类
+- 继续把 detection / render 里的大文件再拆细一层

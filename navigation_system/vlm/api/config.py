@@ -79,7 +79,7 @@ class APIConfig:
         if not os.path.exists(resolved_path):
             raise FileNotFoundError(
                 f"配置文件不存在: {config_path}. "
-                f"请在 `navigation_system/config/api/` 下创建统一 yaml 配置。"
+                f"请在 `navigation_system/config/vlm/` 下创建统一 yaml 配置。"
             )
 
         self.path = resolved_path

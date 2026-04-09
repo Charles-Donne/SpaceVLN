@@ -1,13 +1,12 @@
-"""
-检测模块 - Detection Module
-============================
-目标检测和实例分割
+"""Detection package with lazy model import."""
 
-模块：
-- grounded_sam.py: GroundedSAM (GroundingDINO + SAM/RepViTSAM)
-- RepViTSAM/: 轻量级SAM模型
-"""
+from importlib import import_module
+from typing import Any
 
-from navigation_system.detection.grounded_sam import GroundedSAM
+__all__ = ["GroundedSAM"]
 
-__all__ = ['GroundedSAM']
+
+def __getattr__(name: str) -> Any:
+    if name == "GroundedSAM":
+        return getattr(import_module("navigation_system.detection.grounded_sam"), name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

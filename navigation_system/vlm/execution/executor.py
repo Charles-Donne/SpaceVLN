@@ -10,7 +10,7 @@ from navigation_system.config.core.params.api import (
     ACTION_IMAGE_COMPRESSION_MAX_SIZE,
     ACTION_IMAGE_COMPRESSION_QUALITY,
 )
-from navigation_system.vlm.api.client import APIConfig, BaseAPIClient
+from navigation_system.vlm.api.api_client import APIConfig, BaseAPIClient
 from navigation_system.vlm.prompts.builders import get_action_execution_prompt
 
 
@@ -21,7 +21,7 @@ class ActionExecutor(BaseAPIClient):
     VALID_TURN_VALUES = VALID_TURN_DEGREES
     VALID_MOVE_VALUES = VALID_MOVE_METERS
     
-    def __init__(self, config_path: str = "navigation_system/config/api/vlm_api_config.yaml", 
+    def __init__(self, config_path: str = "navigation_system/config/vlm/vlm_api_config.yaml", 
                  turn_angle: float = 30.0, 
                  move_distance: float = 0.25):
         """

@@ -55,7 +55,7 @@ spacevln_default_results_dir() {
     local python_bin="$1"
     local api_config="$2"
     "$python_bin" - <<PY
-from navigation_system.vlm.api.client import build_default_results_dir_from_api_config
+from navigation_system.vlm.api.api_client import build_default_results_dir_from_api_config
 print(build_default_results_dir_from_api_config("$api_config"))
 PY
 }
@@ -83,4 +83,154 @@ spacevln_mode_arg() {
             return 1
             ;;
     esac
+}
+
+spacevln_dispatch_navigation_cli() {
+    local project_root="$1"
+    local python_bin="$2"
+    local entry_script="$3"
+    local config_file="$4"
+    local api_config="$5"
+    local api_missing_message="$6"
+    local api_missing_hint="$7"
+    shift 7
+
+    local cli_args=("$@")
+
+    cd "$project_root" || exit 1
+
+    if [ ! -f "$config_file" ]; then
+        echo "❌ Habitat 配置不存在: $config_file"
+        exit 1
+    fi
+
+    if [ ! -f "$api_config" ]; then
+        echo "❌ $api_missing_message: $api_config"
+        if [ -n "$api_missing_hint" ]; then
+            echo "   $api_missing_hint"
+        fi
+        exit 1
+    fi
+
+    spacevln_run_python_entry() {
+        exec "$python_bin" "$entry_script" \
+            --exp-config "$config_file" \
+            --vlm-api-config "$api_config" \
+            "$@"
+    }
+
+    for arg in "${cli_args[@]}"; do
+        if [[ "$arg" == --* ]]; then
+            spacevln_run_python_entry "${cli_args[@]}"
+        fi
+    done
+
+    local first_arg="${cli_args[0]:-}"
+    local second_arg="${cli_args[1]:-}"
+    local third_arg="${cli_args[2]:-}"
+    local fourth_arg="${cli_args[3]:-}"
+    local fifth_arg="${cli_args[4]:-}"
+    local mode="all"
+    local parallel_workers="1"
+    local mode_arg=""
+
+    if [[ -n "$fourth_arg" && "$fourth_arg" =~ ^[0-9]+$ ]]; then
+        parallel_workers="$fourth_arg"
+    elif [[ -n "$fourth_arg" ]]; then
+        mode="$fourth_arg"
+    fi
+
+    if [[ -n "$fifth_arg" ]]; then
+        if [[ "$fifth_arg" =~ ^[0-9]+$ ]]; then
+            parallel_workers="$fifth_arg"
+        else
+            echo "❌ parallel_workers 必须是正整数: $fifth_arg"
+            exit 1
+        fi
+    fi
+
+    spacevln_validate_parallel_workers "$parallel_workers"
+    mode_arg="$(spacevln_mode_arg "$mode")"
+
+    if [[ -z "$first_arg" ]]; then
+        spacevln_run_python_entry
+    fi
+
+    if [[ "$first_arg" == "random" ]]; then
+        local num_episodes="${second_arg:-1}"
+        local max_steps="${third_arg:-}"
+        local args=(
+            --random
+            --num-episodes "$num_episodes"
+            --parallel-workers "$parallel_workers"
+            --max-subtask-steps 5
+        )
+        if [[ -n "$max_steps" ]]; then
+            args+=(--max-steps "$max_steps")
+        fi
+        if [[ -n "$mode_arg" ]]; then
+            args+=("$mode_arg")
+        fi
+        spacevln_run_python_entry "${args[@]}"
+    fi
+
+    if [[ "$first_arg" == "list" ]]; then
+        local episode_ids="$second_arg"
+        local max_steps="${third_arg:-}"
+        if [[ -z "$episode_ids" ]]; then
+            echo "❌ list 模式需要 episode id 列表"
+            exit 1
+        fi
+        local args=(
+            --episode-ids "$episode_ids"
+            --parallel-workers "$parallel_workers"
+            --max-subtask-steps 5
+        )
+        if [[ -n "$max_steps" ]]; then
+            args+=(--max-steps "$max_steps")
+        fi
+        if [[ -n "$mode_arg" ]]; then
+            args+=("$mode_arg")
+        fi
+        spacevln_run_python_entry "${args[@]}"
+    fi
+
+    if ! [[ "$first_arg" =~ ^[0-9]+$ ]]; then
+        echo "❌ 不支持的第一个参数: $first_arg"
+        echo "   可用写法:"
+        echo "   bash run_r2r/$(basename "$entry_script" .py).sh 832"
+        echo "   bash run_r2r/$(basename "$entry_script" .py).sh 832 300"
+        echo "   bash run_r2r/$(basename "$entry_script" .py).sh 1 600 260 5"
+        echo "   bash run_r2r/$(basename "$entry_script" .py).sh random 20 260 all 4"
+        echo "   bash run_r2r/$(basename "$entry_script" .py).sh --episode-id 832 --num-episodes 1"
+        exit 1
+    fi
+
+    local episode_id="$first_arg"
+
+    if [[ -n "$second_arg" && -z "$third_arg" ]]; then
+        spacevln_run_python_entry \
+            --episode-id "$episode_id" \
+            --num-episodes 1 \
+            --max-steps "$second_arg" \
+            --parallel-workers "$parallel_workers" \
+            --max-subtask-steps 5 \
+            ${mode_arg:+"$mode_arg"}
+    fi
+
+    local num_episodes="${second_arg:-1}"
+    local max_steps="${third_arg:-}"
+    local args=(
+        --episode-id "$episode_id"
+        --num-episodes "$num_episodes"
+        --parallel-workers "$parallel_workers"
+        --max-subtask-steps 5
+    )
+    if [[ -n "$max_steps" ]]; then
+        args+=(--max-steps "$max_steps")
+    fi
+    if [[ -n "$mode_arg" ]]; then
+        args+=("$mode_arg")
+    fi
+    spacevln_run_python_entry "${args[@]}"
 }

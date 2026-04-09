@@ -13,8 +13,7 @@ import supervision as sv
 from groundingdino.util.inference import Model
 from segment_anything import sam_model_registry, SamPredictor
 
-from navigation_system.detection.RepViTSAM.setup_repvit_sam import build_sam_repvit
-from navigation_system.utils.system import get_device
+from navigation_system.detection.vendor.repvit_sam.setup_repvit_sam import build_sam_repvit
 
 
 VisualObservation = Union[torch.Tensor, np.ndarray]
@@ -43,26 +42,28 @@ class GroundedSAM(Segment):
     width: float = 640.
     
     def _create_model(self, config: Config, device: torch.device) -> Any:
-        GROUNDING_DINO_CONFIG_PATH = config.MAP.GROUNDING_DINO_CONFIG_PATH
-        GROUNDING_DINO_CHECKPOINT_PATH = config.MAP.GROUNDING_DINO_CHECKPOINT_PATH
-        SAM_CHECKPOINT_PATH = config.MAP.SAM_CHECKPOINT_PATH
-        SAM_ENCODER_VERSION = config.MAP.SAM_ENCODER_VERSION
-        RepViTSAM_CHECKPOINT_PATH = config.MAP.RepViTSAM_CHECKPOINT_PATH
-        # device = torch.device("cuda", config.TORCH_GPU_ID if torch.cuda.is_available() else "cpu")
+        detection_model_cfg = config.DETECTION.MODEL
+        detection_threshold_cfg = config.DETECTION.THRESHOLDS
+
+        grounding_dino_config_path = detection_model_cfg.GROUNDING_DINO_CONFIG_PATH
+        grounding_dino_checkpoint_path = detection_model_cfg.GROUNDING_DINO_CHECKPOINT_PATH
+        sam_checkpoint_path = detection_model_cfg.SAM_CHECKPOINT_PATH
+        sam_encoder_version = detection_model_cfg.SAM_ENCODER_VERSION
+        repvit_sam_checkpoint_path = detection_model_cfg.REPVIT_SAM_CHECKPOINT_PATH
         
         self.grounding_dino_model = Model(
-            model_config_path=GROUNDING_DINO_CONFIG_PATH, 
-            model_checkpoint_path=GROUNDING_DINO_CHECKPOINT_PATH,
+            model_config_path=grounding_dino_config_path,
+            model_checkpoint_path=grounding_dino_checkpoint_path,
             device=device
             )
-        if config.MAP.REPVITSAM:
-            sam = build_sam_repvit(checkpoint=RepViTSAM_CHECKPOINT_PATH)
+        if detection_model_cfg.USE_REPVIT_SAM:
+            sam = build_sam_repvit(checkpoint=repvit_sam_checkpoint_path)
             sam.to(device=device)
         else:
-            sam = sam_model_registry[SAM_ENCODER_VERSION](checkpoint=SAM_CHECKPOINT_PATH).to(device=device)
+            sam = sam_model_registry[sam_encoder_version](checkpoint=sam_checkpoint_path).to(device=device)
         self.sam_predictor = SamPredictor(sam)
-        self.box_threshold = config.MAP.BOX_THRESHOLD
-        self.text_threshold = config.MAP.TEXT_THRESHOLD
+        self.box_threshold = float(detection_threshold_cfg.BOX)
+        self.text_threshold = float(detection_threshold_cfg.TEXT)
         self.grounding_dino_model.model.eval()
         
     def _segment(self, sam_predictor: SamPredictor, image: np.ndarray, xyxy: np.ndarray) -> np.ndarray:
