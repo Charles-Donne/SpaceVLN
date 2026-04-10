@@ -256,11 +256,6 @@ def render_global_map(owner,
         display_ops,
         interpolation=cv2.INTER_NEAREST,
     )
-    transformed_obstacle_mask = _apply_display_ops_to_image(
-        obstacle_mask_display.astype(np.uint8) * 255,
-        display_ops,
-        interpolation=cv2.INTER_NEAREST,
-    )
     global_map_rotated = _apply_display_ops_to_image(
         sem_map_vis,
         display_ops,
@@ -270,7 +265,8 @@ def render_global_map(owner,
     last_waypoint_angle = None
 
     if current_pose is not None:
-        # ===== 阶段5: final 440×440 底图上叠加轨迹，避免裁剪/缩放后二次变小 =====
+        # ===== 阶段5: 地图底层(area/floor/obstacle)已先完成裁剪/缩放；
+        # 再后渲染轨迹、标签、箭头，确保它们都在 obstacle 之上 =====
         if projector is not None and trajectory_points is not None and len(trajectory_points) > 1:
             trajectory_color = owner.GLOBAL_TRAJECTORY_COLOR
             display_points = projector.world_points_to_global_display(trajectory_points)
@@ -287,11 +283,6 @@ def render_global_map(owner,
                     color=trajectory_color,
                     thickness=trajectory_thickness,
                 )
-
-        if transformed_obstacle_mask is not None:
-            transformed_obstacle_bool = np.asarray(transformed_obstacle_mask > 127, dtype=bool)
-            global_map_rotated[transformed_obstacle_bool] = [0, 0, 0]
-            global_map_with_trajectory[transformed_obstacle_bool] = [0, 0, 0]
 
         owner._draw_space_areas_in_place(
             global_map_rotated,
@@ -332,11 +323,6 @@ def render_global_map(owner,
         cv2.drawContours(global_map_with_trajectory, [agent_arrow], 0, (255, 255, 255), 1)
         cv2.drawContours(global_map_rotated, [agent_arrow], 0, (0, 0, 255), -1)
         cv2.drawContours(global_map_with_trajectory, [agent_arrow], 0, (0, 0, 255), -1)
-
-        if transformed_obstacle_mask is not None:
-            transformed_obstacle_bool = np.asarray(transformed_obstacle_mask > 127, dtype=bool)
-            global_map_rotated[transformed_obstacle_bool] = [0, 0, 0]
-            global_map_with_trajectory[transformed_obstacle_bool] = [0, 0, 0]
 
     # 添加方位标签到global map
     global_map_with_trajectory = owner.add_orientation_labels(global_map_with_trajectory)
@@ -528,7 +514,10 @@ def render_local_map(owner,
         cv2.polylines(local_map, [visible_polygon], isClosed=True, 
                      color=border_color, thickness=border_thickness)
 
-    # ===== 阶段6.5: 绘制轨迹线（在FOV之后，确保轨迹可见）=====
+    # ===== 阶段6.4: 先把 obstacle 重新压回 FOV 之上，再画轨迹/landmark/箭头 =====
+    local_map[obstacle_local] = [0, 0, 0]  # 黑色BGR
+
+    # ===== 阶段6.5: 绘制轨迹线（在 obstacle 之后，确保轨迹位于其上）=====
     if len(trajectory_display_points) > 1:
         trajectory_color = owner.LOCAL_TRAJECTORY_COLOR
         for i in range(len(trajectory_display_points) - 1):
@@ -544,9 +533,6 @@ def render_local_map(owner,
     nearby_color = (0, 100, 0)  # 深绿色BGR
     nearby_thickness = 2  # 2像素线宽
     cv2.circle(local_map, (fov_center_x, fov_center_y), nearby_radius, nearby_color, nearby_thickness)
-
-    # ===== 阶段7: 叠加黑色障碍物层 =====
-    local_map[obstacle_local] = [0, 0, 0]  # 黑色BGR
 
     # ===== 阶段8: 绘制Landmark标记 =====
     landmarks = []
@@ -619,8 +605,6 @@ def render_local_map(owner,
                     font_thickness,
                     cv2.LINE_AA,
                 )
-
-    local_map[obstacle_local] = [0, 0, 0]
 
     # ===== 阶段9: 绘制朝上的箭头（最上层）=====
     arrow_color = (0, 0, 255)

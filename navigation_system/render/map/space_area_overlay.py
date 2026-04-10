@@ -196,8 +196,8 @@ def _draw_space_areas_in_place(
     cache_key: Optional[Any] = None,
     display_layer_override: Optional[np.ndarray] = None,
 ) -> np.ndarray:
-    del alpha
     cache_token = cache_key if cache_key is not None else self._active_render_cache_key
+    fill_alpha = float(max(0.0, min(1.0, alpha)))
     if display_layer_override is not None:
         display_layer = np.asarray(display_layer_override, dtype=np.int32)
         if display_layer.shape[:2] != image.shape[:2]:
@@ -261,11 +261,18 @@ def _draw_space_areas_in_place(
             )
         )
         if fill_regions:
-            image[mask] = color
+            if fill_alpha >= 1.0:
+                image[mask] = color
+            else:
+                color_arr = np.asarray(color, dtype=np.float32)
+                base_pixels = image[mask].astype(np.float32)
+                blended = (base_pixels * (1.0 - fill_alpha)) + (color_arr * fill_alpha)
+                image[mask] = np.clip(blended, 0.0, 255.0).astype(np.uint8)
 
         if contours:
+            contour_color = tuple(max(0, min(255, int(round(channel * 0.78)))) for channel in color)
             if fill_regions:
-                cv2.drawContours(image, contours, -1, color, 3)
+                cv2.drawContours(image, contours, -1, contour_color, 2)
             if show_labels:
                 label_key = "display_label" if use_display_label else "label"
                 label = self._compact_space_area_overlay_label(

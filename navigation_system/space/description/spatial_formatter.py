@@ -945,11 +945,12 @@ def build_waypoint_summary(
             local_index = current_floor_index_map.get(index)
             is_last = last_visible_global_index is not None and index == last_visible_global_index
             suffix_notes: List[str] = []
-            if initial_waypoint_index is not None and index == int(initial_waypoint_index):
+            is_initial = initial_waypoint_index is not None and index == int(initial_waypoint_index)
+            if is_initial:
                 suffix_notes.append("INITIAL POSITION")
             if is_last and index != 0:
                 suffix_notes.append("LAST POSITION")
-            if index in global_initial_neighborhood_indices:
+            if (not is_initial) and index in global_initial_neighborhood_indices:
                 suffix_notes.append("near INITIAL POSITION; not task goal")
             suffix = f"  <- {' | '.join(suffix_notes)}" if suffix_notes else ""
 

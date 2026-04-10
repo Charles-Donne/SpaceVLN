@@ -44,28 +44,30 @@ class MapVisualizer:
     GLOBAL_TRAJECTORY_COLOR = (0, 0, 170)
     LOCAL_TRAJECTORY_COLOR = (0, 0, 170)
     SPACE_AREA_COLOR_PALETTE: Tuple[Tuple[int, int, int], ...] = (
-        (242, 204, 163),  # pastel blue
-        (170, 230, 255),  # butter yellow
-        (214, 186, 255),  # soft pink
-        (191, 224, 255),  # peach
-        (232, 190, 214),  # lavender
-        (186, 244, 210),  # mint
-        (255, 216, 173),  # apricot
-        (224, 214, 255),  # lilac
+        (255, 219, 182),  # powder blue
+        (186, 214, 255),  # peach
+        (199, 190, 255),  # rose pink
+        (255, 203, 224),  # lavender
+        (179, 236, 255),  # butter yellow
+        (200, 240, 193),  # mint
+        (171, 195, 244),  # soft coral
+        (235, 231, 189),  # aqua
+        (255, 206, 199),  # periwinkle
+        (224, 196, 232),  # mauve
     )
     SPACE_TYPE_PREFERRED_COLOR_INDEX: Dict[str, int] = {
         "hallway": 0,
-        "stairs": 7,
-        "living room": 5,
-        "bedroom": 4,
-        "kitchen": 6,
-        "bathroom": 1,
+        "stairs": 6,
+        "living room": 1,
+        "bedroom": 3,
+        "kitchen": 4,
+        "bathroom": 7,
         "dining room": 2,
-        "office": 3,
-        "laundry room": 6,
-        "closet": 7,
-        "balcony": 2,
-        "garage": 3,
+        "office": 8,
+        "laundry room": 5,
+        "closet": 9,
+        "balcony": 7,
+        "garage": 8,
     }
     SPACE_TYPE_ALIAS_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
         ("hallway", ("hallway", "hall", "corridor", "passage", "entry", "entryway", "foyer", "doorway")),
