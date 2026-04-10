@@ -5,6 +5,11 @@ import math
 from typing import Dict, List, Optional
 from datetime import datetime
 
+from navigation_system.runtime.storage.naming import (
+    build_subtask_name,
+    build_subtask_name_from_token,
+)
+
 
 DETAIL_DIR_NAME = "detail"
 LOG_DIR_NAME = "log"
@@ -247,13 +252,17 @@ class SaveManager:
         return self._result_rank_key(new_result) > self._result_rank_key(old_result)
     
     def thinking_subtask_dir(self, subtask_count: int, create: bool = False) -> str:
-        path = os.path.join(self.episode_dir, "thinking", f"subtask_{int(subtask_count)}")
+        path = os.path.join(self.episode_dir, "thinking", build_subtask_name(subtask_count))
         if create:
             os.makedirs(path, exist_ok=True)
         return path
 
     def action_subtask_dir(self, subtask_id: str, create: bool = False) -> str:
-        path = os.path.join(self.episode_dir, "action", f"subtask_{subtask_id}")
+        path = os.path.join(
+            self.episode_dir,
+            "action",
+            build_subtask_name_from_token(subtask_id),
+        )
         if create:
             os.makedirs(path, exist_ok=True)
         return path

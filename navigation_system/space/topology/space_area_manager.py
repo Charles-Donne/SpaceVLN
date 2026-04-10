@@ -19,6 +19,12 @@ from navigation_system.config.core.params.spatial import (
     SPACE_AREA_SAME_TYPE_CONNECTOR_SPLIT_DISTANCE_M,
     SPACE_AREA_SAME_TYPE_MERGE_MIN_CLEARANCE_M,
     SPACE_AREA_SAMPLE_PIXELS_PER_AREA,
+    WAYPOINT_VISIBILITY_RADIUS_M,
+    WAYPOINT_VISIBILITY_SAMPLES,
+)
+from navigation_system.space.geometry.connectivity import (
+    build_bounded_geodesic_distance_field,
+    query_world_distance_from_field_m,
 )
 from navigation_system.space.topology.space_types import (
     normalize_space_type,
@@ -187,7 +193,6 @@ class SpaceAreaManager:
             )
             merged_record["pixels"].update(world_pixels)
             merged_record.setdefault("waypoint_points", set()).add((int(pixel_y), int(pixel_x)))
-            merged_record["center_world_px"] = (int(pixel_y), int(pixel_x))
             merged_record["description"] = description
 
             for extra_record in overlapping_records:
@@ -202,6 +207,7 @@ class SpaceAreaManager:
                     new_label=str(merged_record["label"]),
                 )
                 self.space_area_records.remove(extra_record)
+            merged_record["center_world_px"] = self._compute_record_center_from_pixels(merged_record)
 
             self.current_space_area_label = str(merged_record["label"])
             self.current_space_area_type = str(merged_record["space_type"])
@@ -231,6 +237,7 @@ class SpaceAreaManager:
             "waypoint_points": {(int(pixel_y), int(pixel_x))},
             "description": description,
         }
+        record["center_world_px"] = self._compute_record_center_from_pixels(record)
         self.space_area_records.append(record)
         self.current_space_area_label = label
         self.current_space_area_type = space_type
@@ -254,9 +261,14 @@ class SpaceAreaManager:
             return np.zeros(self.map_shape, dtype=np.int32), []
 
         obstacle_mask = np.asarray(full_map[0] > 0.5, dtype=bool)
+        projector = self._build_projector(full_map, full_pose, crop_offset)
+        self._prune_records_against_obstacles(
+            full_map=full_map,
+            projector=projector,
+        )
         self._consolidate_same_type_records(
             obstacle_mask=obstacle_mask,
-            projector=self._build_projector(full_map, full_pose, crop_offset),
+            projector=projector,
             clearance_map=self._build_clearance_map(obstacle_mask),
         )
         self._maintain_current_area_with_pose(
@@ -270,15 +282,18 @@ class SpaceAreaManager:
         h_map, w_map = full_map.shape[1], full_map.shape[2]
         layer = np.zeros((h_map, w_map), dtype=np.int32)
         best_distance = np.full((h_map, w_map), np.inf, dtype=np.float32)
-        projector = self._build_projector(full_map, full_pose, crop_offset)
         if projector is None:
             self._set_unknown_current_area()
             return layer, []
 
-        traversible = np.asarray(full_map[1] > 0.5, dtype=bool) & (~obstacle_mask)
+        traversible = ~obstacle_mask
         area_records: List[Dict[str, Any]] = []
         self._refresh_connection_metadata(full_map, full_pose, crop_offset)
         for record in self.space_area_records:
+            record_pixels = set(record.get("pixels", set()) or set())
+            if not record_pixels:
+                continue
+
             center_py, center_px = record["center_world_px"]
             record_id = int(record["id"])
             area_records.append({
@@ -292,7 +307,7 @@ class SpaceAreaManager:
             })
 
             projected_pixel_count = 0
-            for world_py, world_px in record["pixels"]:
+            for world_py, world_px in record_pixels:
                 rotated = projector.world_to_rotated_pixel(world_py, world_px)
                 if rotated is None:
                     continue
@@ -300,7 +315,11 @@ class SpaceAreaManager:
                 col = int(round(rotated[1]))
                 if not (0 <= row < h_map and 0 <= col < w_map):
                     continue
-                dist = float(np.hypot(world_py - center_py, world_px - center_px))
+                dist = self._distance_to_record_waypoints(
+                    record=record,
+                    pixel_y=int(world_py),
+                    pixel_x=int(world_px),
+                )
                 if dist < best_distance[row, col]:
                     if layer[row, col] != record_id:
                         projected_pixel_count += 1
@@ -327,6 +346,40 @@ class SpaceAreaManager:
             waypoint_area_labels=waypoint_area_labels,
         )
         return layer, area_records
+
+    def _prune_records_against_obstacles(
+        self,
+        full_map: np.ndarray,
+        projector: Optional[RotatedMapProjector],
+    ) -> None:
+        """Shrink persisted area pixels against the latest obstacle map before rendering."""
+        if projector is None or full_map is None:
+            return
+
+        for record in self.space_area_records:
+            filtered_pixels: Set[Tuple[int, int]] = set()
+            for world_py, world_px in set(record.get("pixels", set()) or set()):
+                if self._world_pixel_is_traversible_with_projector(
+                    pixel_y=int(world_py),
+                    pixel_x=int(world_px),
+                    full_map=full_map,
+                    projector=projector,
+                ):
+                    filtered_pixels.add((int(world_py), int(world_px)))
+
+            if not filtered_pixels:
+                for world_py, world_px in self._record_waypoint_points(record):
+                    if self._world_pixel_is_traversible_with_projector(
+                        pixel_y=int(world_py),
+                        pixel_x=int(world_px),
+                        full_map=full_map,
+                        projector=projector,
+                    ):
+                        filtered_pixels.add((int(world_py), int(world_px)))
+
+            record["pixels"] = filtered_pixels
+            if filtered_pixels:
+                record["center_world_px"] = self._compute_record_center_from_pixels(record)
 
     def _consolidate_same_type_records(
         self,
@@ -622,27 +675,8 @@ class SpaceAreaManager:
         projector: Optional[RotatedMapProjector],
         clearance_map: Optional[np.ndarray],
     ) -> Set[Tuple[int, int]]:
-        if (
-            not world_pixels
-            or projector is None
-            or clearance_map is None
-            or str(space_type or "Unknown") in self.CONNECTOR_SPACE_TYPES
-        ):
-            return set(world_pixels)
-
-        min_clearance_px = (self.NARROW_PASSAGE_CLEARANCE_M * 100.0) / float(self.resolution)
-        filtered_pixels: Set[Tuple[int, int]] = set()
-        for pixel_y, pixel_x in world_pixels:
-            clearance_px = self._world_pixel_clearance_px(
-                pixel_y=int(pixel_y),
-                pixel_x=int(pixel_x),
-                projector=projector,
-                clearance_map=clearance_map,
-            )
-            if clearance_px is None or clearance_px >= min_clearance_px:
-                filtered_pixels.add((int(pixel_y), int(pixel_x)))
-
-        return filtered_pixels if filtered_pixels else set(world_pixels)
+        del space_type, projector, clearance_map
+        return set(world_pixels)
 
     def _find_space_area_start(
         self,
@@ -680,9 +714,8 @@ class SpaceAreaManager:
         if full_map is None or projector is None:
             return fallback
 
-        obstacle_mask = full_map[0] > 0.5
-        explored_mask = full_map[1] > 0.5
-        traversible = explored_mask & (~obstacle_mask)
+        obstacle_mask = np.asarray(full_map[0] > 0.5, dtype=bool)
+        traversible = ~obstacle_mask
         center_rot = projector.world_to_rotated_pixel(pixel_y, pixel_x)
         if center_rot is None:
             return set()
@@ -709,8 +742,8 @@ class SpaceAreaManager:
         start = (center_row, center_col)
 
         max_radius_px = int(round((max_radius_m * 100.0) / float(self.resolution)))
-        selected_rotated = self._collect_connected_rotated_pixels(
-            traversible=traversible,
+        selected_rotated = self._collect_visible_rotated_pixels(
+            obstacle_mask=obstacle_mask,
             start=start,
             max_radius_px=max_radius_px,
         )
@@ -722,8 +755,8 @@ class SpaceAreaManager:
 
         if len(world_pixels) < self.MIN_RENDERABLE_AREA_PIXELS:
             seed_radius_px = int(round((self.MIN_SEED_AREA_RADIUS_M * 100.0) / float(self.resolution)))
-            seed_rotated = self._collect_connected_rotated_pixels(
-                traversible=traversible,
+            seed_rotated = self._collect_visible_rotated_pixels(
+                obstacle_mask=obstacle_mask,
                 start=start,
                 max_radius_px=max(1, min(seed_radius_px, max_radius_px)),
             )
@@ -778,6 +811,49 @@ class SpaceAreaManager:
                         continue
                     visited[next_row, next_col] = True
                     queue.append((next_row, next_col))
+
+        return selected
+
+    @classmethod
+    def _collect_visible_rotated_pixels(
+        cls,
+        obstacle_mask: np.ndarray,
+        start: Tuple[int, int],
+        max_radius_px: int,
+    ) -> List[Tuple[int, int]]:
+        h_map, w_map = obstacle_mask.shape
+        free_mask = ~np.asarray(obstacle_mask, dtype=bool)
+        start_row = int(start[0])
+        start_col = int(start[1])
+        if not (0 <= start_row < h_map and 0 <= start_col < w_map):
+            return []
+        if not free_mask[start_row, start_col]:
+            return []
+
+        radius_sq = float(max_radius_px * max_radius_px)
+        selected: List[Tuple[int, int]] = []
+        row_min = max(0, start_row - int(max_radius_px))
+        row_max = min(h_map - 1, start_row + int(max_radius_px))
+        col_min = max(0, start_col - int(max_radius_px))
+        col_max = min(w_map - 1, start_col + int(max_radius_px))
+
+        for row in range(row_min, row_max + 1):
+            row_delta_sq = float((row - start_row) ** 2)
+            for col in range(col_min, col_max + 1):
+                if not free_mask[row, col]:
+                    continue
+                dist_sq = row_delta_sq + float((col - start_col) ** 2)
+                if dist_sq > radius_sq:
+                    continue
+                if not cls._line_is_clear(
+                    obstacle_mask=obstacle_mask,
+                    start_row=float(start_row),
+                    start_col=float(start_col),
+                    end_row=float(row),
+                    end_col=float(col),
+                ):
+                    continue
+                selected.append((int(row), int(col)))
 
         return selected
 
@@ -995,6 +1071,9 @@ class SpaceAreaManager:
         full_pose: Optional[Sequence[float]] = None,
         crop_offset: Optional[Tuple[int, int]] = None,
         require_nearby_waypoint: bool = True,
+        distance_field: Optional[np.ndarray] = None,
+        obstacle_mask: Optional[np.ndarray] = None,
+        projector: Optional[RotatedMapProjector] = None,
     ) -> Optional[Dict[str, Any]]:
         if containment_pixel is None:
             contain_y, contain_x = int(pixel_y), int(pixel_x)
@@ -1014,6 +1093,9 @@ class SpaceAreaManager:
             full_map=full_map,
             full_pose=full_pose,
             crop_offset=crop_offset,
+            distance_field=distance_field,
+            obstacle_mask=obstacle_mask,
+            projector=projector,
         ):
             return containing_record
         return None
@@ -1033,6 +1115,23 @@ class SpaceAreaManager:
         projector: Optional[RotatedMapProjector] = None,
     ) -> Optional[Dict[str, Any]]:
         record_map = self._build_record_label_map()
+        obstacle_mask = (
+            np.asarray(full_map[0] > 0.5, dtype=bool)
+            if full_map is not None and projector is not None
+            else None
+        )
+        distance_field = None
+        if obstacle_mask is not None and projector is not None:
+            distance_field = build_bounded_geodesic_distance_field(
+                obstacle_mask=obstacle_mask,
+                projector=projector,
+                source_world=(int(probe_py), int(probe_px)),
+                max_distance_m=max(
+                    float(self.CURRENT_AREA_WAYPOINT_MAX_DISTANCE_M),
+                    float(self.CURRENT_AREA_INITIAL_WAYPOINT_MAX_DISTANCE_M),
+                ),
+                resolution_cm=float(self.resolution),
+            )
 
         sticky_record = self._record_from_label_map(self.current_space_area_label, record_map)
         if sticky_record is not None and self._record_has_nearby_area_waypoint(
@@ -1044,6 +1143,9 @@ class SpaceAreaManager:
             full_map=full_map,
             full_pose=full_pose,
             crop_offset=crop_offset,
+            distance_field=distance_field,
+            obstacle_mask=obstacle_mask,
+            projector=projector,
         ):
             return sticky_record
 
@@ -1068,6 +1170,9 @@ class SpaceAreaManager:
                             full_map=full_map,
                             full_pose=full_pose,
                             crop_offset=crop_offset,
+                            distance_field=distance_field,
+                            obstacle_mask=obstacle_mask,
+                            projector=projector,
                         ):
                             return layer_record
 
@@ -1081,6 +1186,9 @@ class SpaceAreaManager:
             full_pose=full_pose,
             crop_offset=crop_offset,
             require_nearby_waypoint=True,
+            distance_field=distance_field,
+            obstacle_mask=obstacle_mask,
+            projector=projector,
         )
         if containing_record is not None:
             return containing_record
@@ -1094,6 +1202,9 @@ class SpaceAreaManager:
             full_pose=full_pose,
             crop_offset=crop_offset,
             record_map=record_map,
+            distance_field=distance_field,
+            obstacle_mask=obstacle_mask,
+            projector=projector,
         )
         if fallback_record is not None:
             return fallback_record
@@ -1105,6 +1216,9 @@ class SpaceAreaManager:
             full_map=full_map,
             full_pose=full_pose,
             crop_offset=crop_offset,
+            distance_field=distance_field,
+            obstacle_mask=obstacle_mask,
+            projector=projector,
         )
 
     def _build_record_label_map(self) -> Dict[str, Dict[str, Any]]:
@@ -1135,6 +1249,9 @@ class SpaceAreaManager:
         full_map: Optional[np.ndarray],
         full_pose: Optional[Sequence[float]],
         crop_offset: Optional[Tuple[int, int]],
+        distance_field: Optional[np.ndarray] = None,
+        obstacle_mask: Optional[np.ndarray] = None,
+        projector: Optional[RotatedMapProjector] = None,
     ) -> bool:
         if not waypoint_positions:
             return False
@@ -1143,11 +1260,15 @@ class SpaceAreaManager:
         if not record_label:
             return False
 
-        projector = self._build_projector(full_map, full_pose, crop_offset)
-        obstacle_mask = (
-            np.asarray(full_map[0] > 0.5, dtype=bool)
-            if full_map is not None and projector is not None
-            else None
+        local_projector = projector or self._build_projector(full_map, full_pose, crop_offset)
+        local_obstacle_mask = (
+            obstacle_mask
+            if obstacle_mask is not None
+            else (
+                np.asarray(full_map[0] > 0.5, dtype=bool)
+                if full_map is not None and local_projector is not None
+                else None
+            )
         )
         area_labels = list(waypoint_area_labels or [])
 
@@ -1168,16 +1289,29 @@ class SpaceAreaManager:
                 self.CURRENT_AREA_WAYPOINT_MAX_DISTANCE_M
             )
             max_distance_px = (float(max_distance_m) * 100.0) / float(self.resolution)
-            if distance_px > max_distance_px + 1e-6:
-                continue
-            if obstacle_mask is not None and projector is not None:
-                if not self._world_line_is_clear(
-                    obstacle_mask=obstacle_mask,
-                    projector=projector,
-                    start_world=(int(pixel_y), int(pixel_x)),
-                    end_world=(wp_py, wp_px),
-                ):
+            if distance_field is not None and local_obstacle_mask is not None and local_projector is not None:
+                geodesic_distance_m = query_world_distance_from_field_m(
+                    distance_field=distance_field,
+                    obstacle_mask=local_obstacle_mask,
+                    projector=local_projector,
+                    target_world=(wp_py, wp_px),
+                    resolution_cm=float(self.resolution),
+                    target_radius_m=WAYPOINT_VISIBILITY_RADIUS_M,
+                    target_samples=WAYPOINT_VISIBILITY_SAMPLES,
+                )
+                if geodesic_distance_m is None or geodesic_distance_m > float(max_distance_m) + 1e-6:
                     continue
+            else:
+                if distance_px > max_distance_px + 1e-6:
+                    continue
+                if local_obstacle_mask is not None and local_projector is not None:
+                    if not self._world_line_is_clear(
+                        obstacle_mask=local_obstacle_mask,
+                        projector=local_projector,
+                        start_world=(int(pixel_y), int(pixel_x)),
+                        end_world=(wp_py, wp_px),
+                    ):
+                        continue
             return True
         return False
 
@@ -1191,15 +1325,22 @@ class SpaceAreaManager:
         full_pose: Optional[Sequence[float]],
         crop_offset: Optional[Tuple[int, int]],
         record_map: Optional[Dict[str, Dict[str, Any]]] = None,
+        distance_field: Optional[np.ndarray] = None,
+        obstacle_mask: Optional[np.ndarray] = None,
+        projector: Optional[RotatedMapProjector] = None,
     ) -> Optional[Dict[str, Any]]:
         if not waypoint_positions:
             return None
 
-        projector = self._build_projector(full_map, full_pose, crop_offset)
-        obstacle_mask = (
-            np.asarray(full_map[0] > 0.5, dtype=bool)
-            if full_map is not None and projector is not None
-            else None
+        local_projector = projector or self._build_projector(full_map, full_pose, crop_offset)
+        local_obstacle_mask = (
+            obstacle_mask
+            if obstacle_mask is not None
+            else (
+                np.asarray(full_map[0] > 0.5, dtype=bool)
+                if full_map is not None and local_projector is not None
+                else None
+            )
         )
         area_labels = list(waypoint_area_labels or [])
         record_label_map = record_map or self._build_record_label_map()
@@ -1225,19 +1366,37 @@ class SpaceAreaManager:
                 self.CURRENT_AREA_WAYPOINT_MAX_DISTANCE_M
             )
             max_distance_px = (float(max_distance_m) * 100.0) / float(self.resolution)
-            if distance_px > max_distance_px + 1e-6:
-                continue
-
-            if obstacle_mask is not None and projector is not None:
-                if not self._world_line_is_clear(
-                    obstacle_mask=obstacle_mask,
-                    projector=projector,
-                    start_world=(int(pixel_y), int(pixel_x)),
-                    end_world=(wp_py, wp_px),
-                ):
+            if distance_field is not None and local_obstacle_mask is not None and local_projector is not None:
+                geodesic_distance_m = query_world_distance_from_field_m(
+                    distance_field=distance_field,
+                    obstacle_mask=local_obstacle_mask,
+                    projector=local_projector,
+                    target_world=(wp_py, wp_px),
+                    resolution_cm=float(self.resolution),
+                    target_radius_m=WAYPOINT_VISIBILITY_RADIUS_M,
+                    target_samples=WAYPOINT_VISIBILITY_SAMPLES,
+                )
+                if geodesic_distance_m is None or geodesic_distance_m > float(max_distance_m) + 1e-6:
+                    continue
+                candidates.append((float(geodesic_distance_m), int(index), record))
+            else:
+                if distance_px > max_distance_px + 1e-6:
                     continue
 
-            candidates.append((distance_px, int(index), record))
+                if local_obstacle_mask is not None and local_projector is not None:
+                    if not self._world_line_is_clear(
+                        obstacle_mask=local_obstacle_mask,
+                        projector=local_projector,
+                        start_world=(int(pixel_y), int(pixel_x)),
+                        end_world=(wp_py, wp_px),
+                    ):
+                        continue
+
+                candidates.append((
+                    float(distance_px) * float(self.resolution) / 100.0,
+                    int(index),
+                    record,
+                ))
 
         if not candidates:
             return None
@@ -1259,15 +1418,22 @@ class SpaceAreaManager:
         full_map: Optional[np.ndarray],
         full_pose: Optional[Sequence[float]],
         crop_offset: Optional[Tuple[int, int]],
+        distance_field: Optional[np.ndarray] = None,
+        obstacle_mask: Optional[np.ndarray] = None,
+        projector: Optional[RotatedMapProjector] = None,
     ) -> Optional[Dict[str, Any]]:
         if not self.space_area_records:
             return None
 
-        projector = self._build_projector(full_map, full_pose, crop_offset)
-        obstacle_mask = (
-            np.asarray(full_map[0] > 0.5, dtype=bool)
-            if full_map is not None and projector is not None
-            else None
+        local_projector = projector or self._build_projector(full_map, full_pose, crop_offset)
+        local_obstacle_mask = (
+            obstacle_mask
+            if obstacle_mask is not None
+            else (
+                np.asarray(full_map[0] > 0.5, dtype=bool)
+                if full_map is not None and local_projector is not None
+                else None
+            )
         )
         initial_waypoint = None
         if waypoint_positions and waypoint_positions[0] is not None:
@@ -1286,17 +1452,34 @@ class SpaceAreaManager:
                     self.CURRENT_AREA_WAYPOINT_MAX_DISTANCE_M
                 )
                 max_distance_px = (float(max_distance_m) * 100.0) / float(self.resolution)
-                if distance_px > max_distance_px + 1e-6:
-                    continue
-                if obstacle_mask is not None and projector is not None:
-                    if not self._world_line_is_clear(
-                        obstacle_mask=obstacle_mask,
-                        projector=projector,
-                        start_world=(int(pixel_y), int(pixel_x)),
-                        end_world=point,
-                    ):
+                if distance_field is not None and local_obstacle_mask is not None and local_projector is not None:
+                    geodesic_distance_m = query_world_distance_from_field_m(
+                        distance_field=distance_field,
+                        obstacle_mask=local_obstacle_mask,
+                        projector=local_projector,
+                        target_world=point,
+                        resolution_cm=float(self.resolution),
+                        target_radius_m=WAYPOINT_VISIBILITY_RADIUS_M,
+                        target_samples=WAYPOINT_VISIBILITY_SAMPLES,
+                    )
+                    if geodesic_distance_m is None or geodesic_distance_m > float(max_distance_m) + 1e-6:
                         continue
-                candidate = (distance_px, is_initial_point)
+                    candidate = (float(geodesic_distance_m), is_initial_point)
+                else:
+                    if distance_px > max_distance_px + 1e-6:
+                        continue
+                    if local_obstacle_mask is not None and local_projector is not None:
+                        if not self._world_line_is_clear(
+                            obstacle_mask=local_obstacle_mask,
+                            projector=local_projector,
+                            start_world=(int(pixel_y), int(pixel_x)),
+                            end_world=point,
+                        ):
+                            continue
+                    candidate = (
+                        float(distance_px) * float(self.resolution) / 100.0,
+                        is_initial_point,
+                    )
                 if best_match is None or candidate < best_match:
                     best_match = candidate
             if best_match is not None:
@@ -1332,8 +1515,7 @@ class SpaceAreaManager:
             return int(pixel_y), int(pixel_x)
 
         obstacle_mask = np.asarray(full_map[0] > 0.5, dtype=bool)
-        explored_mask = np.asarray(full_map[1] > 0.5, dtype=bool)
-        traversible = explored_mask & (~obstacle_mask)
+        traversible = ~obstacle_mask
         rotated = projector.world_to_rotated_pixel(float(pixel_y), float(pixel_x))
         if rotated is None:
             return int(pixel_y), int(pixel_x)
@@ -1685,6 +1867,21 @@ class SpaceAreaManager:
         center = record.get("center_world_px", (0, 0))
         return [(int(center[0]), int(center[1]))]
 
+    def _distance_to_record_waypoints(
+        self,
+        record: Dict[str, Any],
+        pixel_y: int,
+        pixel_x: int,
+    ) -> float:
+        waypoint_points = self._record_waypoint_points(record)
+        if not waypoint_points:
+            center = tuple(record.get("center_world_px", (0, 0)))
+            return float(np.hypot(float(pixel_y) - float(center[0]), float(pixel_x) - float(center[1])))
+        return min(
+            float(np.hypot(float(pixel_y) - float(point[0]), float(pixel_x) - float(point[1])))
+            for point in waypoint_points
+        )
+
     def _sample_record_pixels(self, record: Dict[str, Any]) -> List[Tuple[int, int]]:
         return self._sample_pixels(
             pixels=record.get("pixels", set()),
@@ -1885,8 +2082,7 @@ class SpaceAreaManager:
         if not (0 <= row < full_map.shape[1] and 0 <= col < full_map.shape[2]):
             return False
         obstacle = bool(full_map[0, row, col] > 0.5)
-        explored = bool(full_map[1, row, col] > 0.5)
-        return explored and not obstacle
+        return not obstacle
 
     def _world_pixel_is_traversible(
         self,

@@ -21,5 +21,5 @@ spacevln_dispatch_navigation_cli \
     "$CONFIG_FILE" \
     "$API_CONFIG" \
     "缓存版 API 配置不存在" \
-    "" \
+    "可复制 navigation_system/config/vlm/vlm_api_config_qwen_cache.yaml.template 为 .yaml 后再填写本地密钥" \
     "$@"

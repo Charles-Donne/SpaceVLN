@@ -13,6 +13,9 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 
+from navigation_system.config.core.params.api import (
+    THINKING_VIEW_MODEL_CONTENT_WIDTH,
+)
 from navigation_system.config.core.params.spatial import (
     CURRENT_AREA_OVERLAP_THRESHOLD_M as CFG_CURRENT_AREA_OVERLAP_THRESHOLD_M,
     THINKING_DETECTION_GROUP_MAX_VIEWS as CFG_THINKING_DETECTION_GROUP_MAX_VIEWS,
@@ -34,6 +37,7 @@ from navigation_system.render.map.landmark_overlay import (
     LandmarkStripSegment,
     render_landmark_strip,
 )
+from navigation_system.render.image_resize import resize_image_to_width
 from navigation_system.space.landmarks.landmark_selection import (
     _build_outer_ring_sampling_mask,
     _sample_random_mask_coords,
@@ -50,6 +54,7 @@ from navigation_system.space.geometry.map_projection import RotatedMapProjector
 class ThinkingViewRenderer:
     """Render and save the 12 annotated direction views used by the thinking model."""
 
+    MODEL_CONTENT_WIDTH = THINKING_VIEW_MODEL_CONTENT_WIDTH
     THINKING_DETECTION_TOPK = CFG_THINKING_DETECTION_TOPK
     THINKING_DETECTION_GROUP_MAX_VIEWS = CFG_THINKING_DETECTION_GROUP_MAX_VIEWS
     THINKING_DETECTION_TRANSITION_TOTAL_MAX_VIEWS = CFG_THINKING_DETECTION_TRANSITION_TOTAL_MAX_VIEWS
@@ -291,7 +296,7 @@ class ThinkingViewRenderer:
             initial_waypoint_index=current_floor_initial_index,
             skip_current_overlap=True,
         )
-        last_displayed_local_index = display_indices[-1] if display_indices else None
+        last_visited_local_index = len(current_floor_ids) - 1 if current_floor_ids else None
         entries: List[Dict[str, Any]] = []
 
         for local_index in display_indices:
@@ -328,7 +333,7 @@ class ThinkingViewRenderer:
                 "relative_bearing_deg": relative_bearing_deg,
                 "snapped_relative_bearing_deg": snapped_relative_bearing_deg,
                 "view_angle_deg": view_angle_deg,
-                "is_last_visited": local_index == last_displayed_local_index,
+                "is_last_visited": local_index == last_visited_local_index,
                 "is_task_initial_position": (
                     current_floor_initial_index is not None
                     and int(local_index) == int(current_floor_initial_index)
@@ -489,6 +494,15 @@ class ThinkingViewRenderer:
                 assigned_view_angle = cls._assigned_view_angle_for_waypoint(updated_entry, view_angles_deg)
                 if assigned_view_angle is not None:
                     updated_entry["assigned_view_angle"] = float(assigned_view_angle)
+                filtered_entries.append(updated_entry)
+                continue
+
+            if bool(entry.get("is_last_visited")) or bool(entry.get("is_task_initial_position")):
+                updated_entry = dict(entry)
+                assigned_view_angle = cls._assigned_view_angle_for_waypoint(updated_entry, view_angles_deg)
+                if assigned_view_angle is None:
+                    continue
+                updated_entry["assigned_view_angle"] = float(assigned_view_angle)
                 filtered_entries.append(updated_entry)
                 continue
 
@@ -1264,6 +1278,7 @@ class ThinkingViewRenderer:
             dist_key = f"angle_{angle}"
             dist_str = distance_lookup.get(dist_key, "Unknown")
             image = draw_distance_fn(image, dist_str)
+            image = resize_image_to_width(image, self.MODEL_CONTENT_WIDTH)
 
             _h, width = image.shape[:2]
             top_text = f"{direction_name} | Obstacle: {dist_str}"
@@ -1290,8 +1305,9 @@ class ThinkingViewRenderer:
                 bottom_label = render_landmark_strip(
                     width,
                     bottom_lines,
-                    font_scale=0.52,
+                    font_scale=0.48,
                     font_thickness=1,
+                    compact=True,
                 )
                 labeled_image = np.vstack([top_label, image, bottom_label])
             else:

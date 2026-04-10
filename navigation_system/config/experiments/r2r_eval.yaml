@@ -2,7 +2,8 @@ TASK:
   BASE_TASK_CONFIG_PATH: habitat_extensions/config/spacevln_task.yaml
 
 PATHS:
-  RESULTS_DIR: data/logs/eval_results/
+  RESULTS_ROOT: ""
+  RESULTS_DIR: ""
 
 OUTPUT:
   REQUESTS:

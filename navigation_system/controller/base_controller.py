@@ -28,6 +28,7 @@ from navigation_system.space.map.obstacle_analysis import (
 from navigation_system.config.core.params.thresholds import OBS_OPEN_M, OBS_RISKY_M
 from navigation_system.vlm.contracts.schema import DIRECTION_CONFIG
 from navigation_system.runtime.storage.artifacts import get_episode_detail_dir
+from navigation_system.runtime.storage.naming import build_step_artifact_filename
 from navigation_system.config.core import ConfigHelper, create_category_config
 from navigation_system.controller.state import DetectedClassRegistry
 from navigation_system.env import construct_envs, ensure_env_registered
@@ -927,7 +928,11 @@ class BaseNavigationController:
         required_paths = []
         if render_policy.get('save_rgb', False):
             required_paths.append(
-                os.path.join(self.current_episode_dir, 'rgb', f'step_{self.current_step:04d}_{phase}.png')
+                os.path.join(
+                    self.current_episode_dir,
+                    'rgb',
+                    build_step_artifact_filename(self.current_step, phase),
+                )
             )
         if render_policy.get('save_global_map', False):
             required_paths.append(
@@ -949,7 +954,11 @@ class BaseNavigationController:
             )
         if enable_landmark_detection and render_policy.get('save_detection', False):
             required_paths.append(
-                os.path.join(self.current_episode_dir, 'detection', f'step_{self.current_step:04d}_{phase}.png')
+                os.path.join(
+                    self.current_episode_dir,
+                    'detection',
+                    build_step_artifact_filename(self.current_step, phase),
+                )
             )
 
         if not force:

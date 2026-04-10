@@ -79,8 +79,13 @@ class QwenCacheUsageSummary:
 def build_default_qwen_context_cache_results_dir(
     config_path: str,
     repo_root: Optional[str] = None,
+    results_root: Optional[str] = None,
 ) -> str:
-    base_dir = build_default_results_dir_from_api_config(config_path, repo_root=repo_root)
+    base_dir = build_default_results_dir_from_api_config(
+        config_path,
+        repo_root=repo_root,
+        results_root=results_root,
+    )
     settings = QwenContextCacheSettings.from_config_path(config_path)
     suffix = str(settings.results_dir_suffix or "").strip()
     return f"{base_dir}{suffix}" if suffix else base_dir

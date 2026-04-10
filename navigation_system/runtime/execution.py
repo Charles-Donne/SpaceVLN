@@ -24,7 +24,15 @@ from navigation_system.runtime.profiles import (
     STANDARD_RUNTIME_PROFILE,
     resolve_runtime_profile,
 )
-from navigation_system.vlm.api.api_client import resolve_api_config_path
+from navigation_system.vlm.api.api_client import (
+    resolve_api_config_path,
+    resolve_results_dir_path,
+)
+
+INITIAL_FAILURE_RETRY_REASONS = {
+    "initial_subtask_failed",
+    "initial_lookaround_failed",
+}
 
 
 def load_runtime_config(
@@ -32,10 +40,24 @@ def load_runtime_config(
     profile: NavigationRuntimeProfile = STANDARD_RUNTIME_PROFILE,
 ):
     config = get_config(args.exp_config, [])
-    resolved_results_dir = str(getattr(args, "results_dir", "") or "").strip()
+    resolved_results_dir = resolve_results_dir_path(
+        str(getattr(args, "results_dir", "") or "").strip()
+    )
+    configured_results_dir = resolve_results_dir_path(
+        str(getattr(config, "RESULTS_DIR", "") or "").strip()
+    )
+    configured_results_root = str(getattr(config, "RESULTS_ROOT", "") or "").strip()
     if not resolved_results_dir:
-        resolved_results_dir = profile.default_results_dir_builder(args.vlm_api_config)
+        if configured_results_dir:
+            resolved_results_dir = configured_results_dir
+        else:
+            resolved_results_dir = profile.default_results_dir_builder(
+                args.vlm_api_config,
+                results_root=configured_results_root or None,
+            )
     config.defrost()
+    if hasattr(config, "PATHS"):
+        config.PATHS.RESULTS_ROOT = configured_results_root
     config.RESULTS_DIR = resolved_results_dir
     if hasattr(config, "PATHS"):
         config.PATHS.RESULTS_DIR = resolved_results_dir
@@ -80,13 +102,27 @@ def create_navigation_controller(
     return controller, unified_config
 
 
-def run_single_episode(
+def _should_retry_initial_failure(result: Dict[str, Any]) -> bool:
+    if not isinstance(result, dict):
+        return False
+    if bool(result.get("success", False)):
+        return False
+    if str(result.get("error") or "").strip():
+        return False
+    reason = str(result.get("reason") or "").strip().lower()
+    return reason in INITIAL_FAILURE_RETRY_REASONS
+
+
+def _run_single_episode_attempt(
     base_config,
     args: argparse.Namespace,
     episode_id: int,
-    index: int,
-    total: int,
-    profile: NavigationRuntimeProfile = STANDARD_RUNTIME_PROFILE,
+    *,
+    profile: NavigationRuntimeProfile,
+    episode_log_path: str,
+    result_path: str,
+    save_stdout_log: bool,
+    stdout_log_mode: str,
 ) -> Dict[str, Any]:
     controller = None
     console_result: Dict[str, Any] = {
@@ -98,28 +134,10 @@ def run_single_episode(
         "failed_wasted_duration_s": 0.0,
         "error": None,
     }
-    results_dir = os.path.abspath(str(base_config.RESULTS_DIR or os.getcwd()))
-    save_stdout_log = save_episode_stdout_log_enabled(base_config)
-    episode_log_path = (
-        get_episode_records_log_path(results_dir, episode_id)
-        if save_stdout_log
-        else ""
-    )
-    result_path = get_episode_result_path(results_dir, episode_id)
-    print(
-        build_episode_start_summary(
-            episode_id=episode_id,
-            index=index,
-            total=total,
-            worker_index=int(getattr(args, "worker_index", 0) or 0),
-            worker_count=int(getattr(args, "worker_count", 0) or 0),
-        ),
-        flush=True,
-    )
 
     try:
         redirect_context = (
-            redirect_process_output_to_file(episode_log_path)
+            redirect_process_output_to_file(episode_log_path, mode=stdout_log_mode)
             if save_stdout_log and episode_log_path
             else redirect_process_output_to_null()
         )
@@ -202,6 +220,80 @@ def run_single_episode(
                 controller.envs.close()
             except Exception as cleanup_error:
                 print(f"⚠️  清理环境时出错: {cleanup_error}")
+
+    return console_result
+
+
+def run_single_episode(
+    base_config,
+    args: argparse.Namespace,
+    episode_id: int,
+    index: int,
+    total: int,
+    profile: NavigationRuntimeProfile = STANDARD_RUNTIME_PROFILE,
+) -> Dict[str, Any]:
+    console_result: Dict[str, Any] = {
+        "episode_id": int(episode_id),
+        "success": False,
+        "steps": 0,
+        "episode_duration_s": 0.0,
+        "api_total_duration_s": 0.0,
+        "failed_wasted_duration_s": 0.0,
+        "error": None,
+    }
+    results_dir = os.path.abspath(str(base_config.RESULTS_DIR or os.getcwd()))
+    save_stdout_log = save_episode_stdout_log_enabled(base_config)
+    episode_log_path = (
+        get_episode_records_log_path(results_dir, episode_id)
+        if save_stdout_log
+        else ""
+    )
+    result_path = get_episode_result_path(results_dir, episode_id)
+    print(
+        build_episode_start_summary(
+            episode_id=episode_id,
+            index=index,
+            total=total,
+            worker_index=int(getattr(args, "worker_index", 0) or 0),
+            worker_count=int(getattr(args, "worker_count", 0) or 0),
+        ),
+        flush=True,
+    )
+
+    max_attempts = 2
+    attempts_run = 0
+    for attempt_index in range(max_attempts):
+        attempts_run = attempt_index + 1
+        stdout_log_mode = "w" if attempt_index == 0 else "a"
+        if save_stdout_log and episode_log_path and attempt_index > 0:
+            with redirect_process_output_to_file(episode_log_path, mode="a"):
+                print("\n" + "-" * 60)
+                print(
+                    f"[Retry] Episode {int(episode_id)} rerun attempt "
+                    f"{attempt_index + 1}/{max_attempts}"
+                )
+                print("-" * 60)
+
+        console_result = _run_single_episode_attempt(
+            base_config,
+            args,
+            episode_id,
+            profile=profile,
+            episode_log_path=episode_log_path,
+            result_path=result_path,
+            save_stdout_log=save_stdout_log,
+            stdout_log_mode=stdout_log_mode,
+        )
+        if attempt_index >= max_attempts - 1 or not _should_retry_initial_failure(console_result):
+            break
+        retry_reason = str(console_result.get("reason") or "").strip()
+        print(
+            f"[Retry] Episode {int(episode_id)} rerun because {retry_reason} "
+            f"(attempt {attempt_index + 2}/{max_attempts})",
+            flush=True,
+        )
+
+    console_result["attempts"] = attempts_run
 
     metrics = extract_episode_metrics(console_result)
     print(

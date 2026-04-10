@@ -49,9 +49,11 @@ VLM / LLM API 统一配置层。
 - [`vlm_api_config.yaml.template`](/home/charlesdonne/project/nav_ws/SpaceVLN/navigation_system/config/vlm/vlm_api_config.yaml.template)
   标准模板
 - [`vlm_api_config.yaml`](/home/charlesdonne/project/nav_ws/SpaceVLN/navigation_system/config/vlm/vlm_api_config.yaml)
-  实际运行配置
+  本地实际运行配置，不入 git
+- [`vlm_api_config_qwen_cache.yaml.template`](/home/charlesdonne/project/nav_ws/SpaceVLN/navigation_system/config/vlm/vlm_api_config_qwen_cache.yaml.template)
+  Qwen 显式缓存模板
 - [`vlm_api_config_qwen_cache.yaml`](/home/charlesdonne/project/nav_ws/SpaceVLN/navigation_system/config/vlm/vlm_api_config_qwen_cache.yaml)
-  Qwen 显式缓存专用配置
+  本地 Qwen 显式缓存配置，不入 git
 
 ## 推荐修改原则
 

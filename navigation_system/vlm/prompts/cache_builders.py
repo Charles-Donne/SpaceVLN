@@ -156,9 +156,9 @@ def build_action_cache_prompt_bundle(
     """Build the action cache prompt from dedicated templates."""
     del move_distance
     del turn_angle
+    del waypoint_summary
 
     progress_text = str(progress_summary or "").strip() or "Just started"
-    waypoint_text = str(waypoint_summary or "").strip() or "No space structure recorded yet."
     previous_action_text = str(previous_action_reason or "").strip() or "N/A (first step)"
     detected_landmark_text = str(detected_landmarks or "").strip() or "none"
     obstacle_summary = _build_obstacle_perception_summary(obstacle_distances)
@@ -175,7 +175,6 @@ def build_action_cache_prompt_bundle(
         previous_action_reason=previous_action_text,
         obstacle_perception_summary=obstacle_summary,
         landmark_perception_summary=landmark_summary,
-        waypoint_summary=waypoint_text,
         detected_landmarks=detected_landmark_text,
         allowed_action_bullets=allowed_action_bullets,
     )

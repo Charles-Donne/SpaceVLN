@@ -54,10 +54,28 @@ spacevln_setup_runtime_env() {
 spacevln_default_results_dir() {
     local python_bin="$1"
     local api_config="$2"
-    "$python_bin" - <<PY
+    local project_root
+    project_root="$(spacevln_project_root)"
+    (
+        cd "$project_root" || exit 1
+        PYTHONPATH="$project_root:${PYTHONPATH:-}" "$python_bin" - <<PY
 from navigation_system.vlm.api.api_client import build_default_results_dir_from_api_config
 print(build_default_results_dir_from_api_config("$api_config"))
 PY
+    )
+}
+
+spacevln_default_results_root() {
+    local python_bin="$1"
+    local project_root
+    project_root="$(spacevln_project_root)"
+    (
+        cd "$project_root" || exit 1
+        PYTHONPATH="$project_root:${PYTHONPATH:-}" "$python_bin" - <<PY
+from navigation_system.vlm.api.api_client import build_default_results_family_root
+print(build_default_results_family_root("vlnce"))
+PY
+    )
 }
 
 spacevln_validate_parallel_workers() {

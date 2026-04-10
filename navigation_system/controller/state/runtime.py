@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 import time
 from typing import Any, Dict, List, Optional, Sequence
 
+from navigation_system.runtime.storage.naming import build_subtask_name
+
 
 @dataclass(frozen=True)
 class VLMControllerOptions:
@@ -215,12 +217,11 @@ class EpisodeTimingTracker:
         success: bool,
         action_name: Optional[str] = None,
     ) -> None:
-        attempt_letter = chr(ord("a") + int(subtask_attempt or 0))
         self.action_records.append(
             {
                 "index": len(self.action_records) + 1,
                 "step": int(step or 0) + 1,
-                "subtask_id": f"{int(subtask_count or 0)}{attempt_letter}",
+                "subtask_id": build_subtask_name(int(subtask_count or 0) or 1),
                 "success": bool(success),
                 "duration_s": self.round_duration_s(duration_s),
                 "action": str(action_name or ""),

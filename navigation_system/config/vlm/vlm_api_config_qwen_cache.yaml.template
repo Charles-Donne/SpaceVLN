@@ -1,0 +1,35 @@
+# ======================================================
+# SpaceVLN Qwen 显式缓存 API 配置模板
+# ======================================================
+#
+# 使用方法：
+#   1. 复制此文件为 navigation_system/config/vlm/vlm_api_config_qwen_cache.yaml
+#   2. 填入你自己的 DashScope key
+#   3. 仅在显式缓存运行时使用：
+#      - vlm_navigation_qwen_cache.py
+#      - run_r2r/vlm_navigation_qwen_cache.sh
+#
+# ======================================================
+
+provider: "dashscope"
+
+dashscope:
+  api_key: "sk-your-dashscope-key"
+  base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  wire_api: "chat_completions"
+  llm_model: "qwen3.5-plus"
+  vlm_model: "qwen3.5-flash"
+
+temperature: 0.1
+
+llm_max_tokens: 4096
+llm_timeout: 120
+
+vlm_max_tokens: 300
+vlm_timeout: 30
+
+qwen_context_cache:
+  enabled: true
+  cache_type: "ephemeral"
+  print_usage: true
+  results_dir_suffix: "_cache"

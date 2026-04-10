@@ -194,14 +194,24 @@ def _draw_space_areas_in_place(
     show_labels: bool = False,
     use_display_label: bool = True,
     cache_key: Optional[Any] = None,
+    display_layer_override: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     del alpha
     cache_token = cache_key if cache_key is not None else self._active_render_cache_key
-    display_layer = self._prepare_space_area_display_layer(
-        space_area_layer,
-        output_size=image.shape[1],
-        cache_key=cache_token,
-    )
+    if display_layer_override is not None:
+        display_layer = np.asarray(display_layer_override, dtype=np.int32)
+        if display_layer.shape[:2] != image.shape[:2]:
+            display_layer = cv2.resize(
+                display_layer,
+                (image.shape[1], image.shape[0]),
+                interpolation=cv2.INTER_NEAREST,
+            )
+    else:
+        display_layer = self._prepare_space_area_display_layer(
+            space_area_layer,
+            output_size=image.shape[1],
+            cache_key=cache_token,
+        )
     if display_layer is None or not space_area_records:
         return image
 
@@ -258,7 +268,9 @@ def _draw_space_areas_in_place(
                 cv2.drawContours(image, contours, -1, color, 3)
             if show_labels:
                 label_key = "display_label" if use_display_label else "label"
-                label = str(record.get(label_key, record.get("label", "")) or "")
+                label = self._compact_space_area_overlay_label(
+                    str(record.get(label_key, record.get("label", "")) or "")
+                )
                 if label:
                     label_candidates.append(
                         {
@@ -309,6 +321,7 @@ def _overlay_space_areas(
     show_labels: bool = False,
     use_display_label: bool = True,
     cache_key: Optional[Any] = None,
+    display_layer_override: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     output = image.copy()
     return self._draw_space_areas_in_place(
@@ -320,6 +333,7 @@ def _overlay_space_areas(
         show_labels=show_labels,
         use_display_label=use_display_label,
         cache_key=cache_key,
+        display_layer_override=display_layer_override,
     )
 
 
@@ -392,6 +406,27 @@ def _compute_space_area_label_anchor(
     return int(moments["m10"] / moments["m00"]), int(moments["m01"] / moments["m00"])
 
 
+def _compact_space_area_overlay_label(
+    self,
+    label: str,
+) -> str:
+    del self
+    text = " ".join(str(label or "").split())
+    if not text:
+        return ""
+
+    links_marker = "[links:"
+    if links_marker in text:
+        text = text.split(links_marker, 1)[0].strip()
+
+    # Keep the full area type name on the map tag, but expand compact labels
+    # like `LivingRoom2` into `Living Room 2` for readability.
+    text = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", text)
+    text = re.sub(r"(?<=[A-Za-z])(?=\d)", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
 def _label_box_intersection_area(
     self,
     box_a: Tuple[int, int, int, int],
@@ -432,6 +467,36 @@ def _label_center_from_box(
     return int(round((x1 + x2) / 2.0)), int(round((y1 + y2) / 2.0))
 
 
+def _get_space_area_label_style(
+    self,
+    image_shape: Tuple[int, ...],
+) -> Dict[str, Any]:
+    del self
+    min_dim = max(1, int(min(image_shape[:2])))
+    scale_ratio = max(0.95, min(1.18, float(min_dim) / 440.0))
+    font_scale = 0.42 * scale_ratio
+    thickness = 1
+    pad_x = max(3, int(round(4 * scale_ratio)))
+    pad_top = max(2, int(round(3 * scale_ratio)))
+    pad_bottom = max(1, int(round(2 * scale_ratio)))
+    min_box_width = max(38, int(round(44 * scale_ratio)))
+    connector_threshold = 12.0 * scale_ratio
+    offset_radii = tuple(
+        max(12, int(round(radius * scale_ratio)))
+        for radius in (14, 22, 30, 42, 56, 74, 96, 124)
+    )
+    return {
+        "font_scale": font_scale,
+        "thickness": thickness,
+        "pad_x": pad_x,
+        "pad_top": pad_top,
+        "pad_bottom": pad_bottom,
+        "min_box_width": min_box_width,
+        "connector_threshold": connector_threshold,
+        "offset_radii": offset_radii,
+    }
+
+
 def _resolve_space_area_label_layout(
     self,
     image_shape: Tuple[int, ...],
@@ -446,18 +511,19 @@ def _resolve_space_area_label_layout(
     anchor_x = int(label_anchor[0])
     anchor_y = int(label_anchor[1])
     font = cv2.FONT_HERSHEY_SIMPLEX
-    font_scale = 0.45
-    thickness = 1
+    label_style = self._get_space_area_label_style(image_shape)
+    font_scale = float(label_style["font_scale"])
+    thickness = int(label_style["thickness"])
     (text_w, text_h), baseline = cv2.getTextSize(str(label), font, font_scale, thickness)
-    pad_x = 5
-    pad_top = 3
-    pad_bottom = 3
-    box_w = max(1, text_w + pad_x * 2)
+    pad_x = int(label_style["pad_x"])
+    pad_top = int(label_style["pad_top"])
+    pad_bottom = int(label_style["pad_bottom"])
+    box_w = max(int(label_style["min_box_width"]), text_w + pad_x * 2)
     box_h = max(1, text_h + baseline + pad_top + pad_bottom)
 
     candidate_offsets: List[Tuple[int, int]] = [(0, 0)]
     candidate_angles_deg = (270, 90, 180, 0, 315, 225, 45, 135, 300, 240, 120, 60, 330, 210, 150, 30)
-    for radius in (18, 30, 42, 56, 72, 92, 116, 144):
+    for radius in label_style["offset_radii"]:
         for angle_deg in candidate_angles_deg:
             angle_rad = np.deg2rad(float(angle_deg))
             offset_x = int(round(radius * np.cos(angle_rad)))
@@ -529,19 +595,20 @@ def _draw_space_area_label(
     x1, y1, x2, y2 = label_box
     draw_x2 = max(x1, x2 - 1)
     draw_y2 = max(y1, y2 - 1)
+    label_style = self._get_space_area_label_style(image.shape)
     label_bg_color = (255, 0, 0)
     label_border_color = (255, 255, 255)
     label_text_color = (255, 255, 255)
 
     if label_anchor is not None and label_center is not None:
         connector_distance = float(np.hypot(label_center[0] - label_anchor[0], label_center[1] - label_anchor[1]))
-        if connector_distance >= 14.0:
+        if connector_distance >= float(label_style["connector_threshold"]):
             cv2.line(
                 image,
                 (int(label_anchor[0]), int(label_anchor[1])),
                 (int(label_center[0]), int(label_center[1])),
                 label_bg_color,
-                2,
+                1,
                 cv2.LINE_AA,
             )
 
@@ -552,8 +619,8 @@ def _draw_space_area_label(
         str(label),
         (int(text_origin[0]), int(text_origin[1])),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.45,
+        float(label_style["font_scale"]),
         label_text_color,
-        1,
+        int(label_style["thickness"]),
         cv2.LINE_AA,
     )

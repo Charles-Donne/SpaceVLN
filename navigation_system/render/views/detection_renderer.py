@@ -8,6 +8,7 @@ from navigation_system.config.core.params.actions import (
     ACTION_SUBTASK_AUTOCOMPLETE_OPEN_DISTANCE_M,
     ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M,
 )
+from navigation_system.runtime.storage.naming import build_step_artifact_filename
 from navigation_system.space.description.direction_format import format_relative_direction
 from navigation_system.space.map.obstacle_analysis import classify_obstacle_distance_text
 from navigation_system.render.map.landmark_overlay import (
@@ -140,53 +141,9 @@ def render_detection_bbox(owner,
     candidate_entries: List[Dict[str, Any]] = []
     draw_items: List[LandmarkDrawItem] = []
     def _build_action_waypoint_entries() -> List[Dict[str, Any]]:
-        if controller is None or getattr(controller, "mapper", None) is None:
-            return []
-
-        try:
-            from navigation_system.render.views.thinking_view_renderer import ThinkingViewRenderer
-
-            map_state = controller.mapper.get_map_state()
-            waypoint_positions, waypoint_ids, waypoint_descriptions = controller.mapper.get_waypoints()
-            waypoint_info = None
-            if waypoint_positions and waypoint_ids:
-                waypoint_info = (waypoint_positions, waypoint_ids, waypoint_descriptions)
-
-            # Reuse the same waypoint visibility test as the 12-view thinking render.
-            waypoint_entries = ThinkingViewRenderer._build_waypoint_view_entries(
-                waypoint_info=waypoint_info,
-                waypoint_area_labels=map_state.get("waypoint_area_labels", []),
-                current_pose=map_state.get("full_pose"),
-                resolution_cm=float(getattr(controller.mapper, "resolution", owner.resolution)),
-                current_space_area_label=str(map_state.get("current_space_area_label", "Unknown") or "Unknown"),
-                full_map=map_state.get("full_map"),
-                crop_offset=map_state.get("crop_offset"),
-                initial_waypoint_index=map_state.get("waypoint_initial_index"),
-            )
-            waypoint_entries = ThinkingViewRenderer._apply_waypoint_visibility(
-                waypoint_entries=waypoint_entries,
-                view_angles_deg=[0.0],
-                full_map=map_state.get("full_map"),
-                current_pose=map_state.get("full_pose"),
-                resolution_cm=float(getattr(controller.mapper, "resolution", owner.resolution)),
-                crop_offset=map_state.get("crop_offset"),
-            )
-        except Exception:
-            return []
-
-        filtered_entries: List[Dict[str, Any]] = []
-        for entry in waypoint_entries:
-            if bool(entry.get("is_current_area")):
-                continue
-            filtered_entries.append(dict(entry))
-
-        filtered_entries.sort(
-            key=lambda item: (
-                float(item.get("distance_m", 1e9)),
-                int(item.get("id", 0) or 0),
-            )
-        )
-        return filtered_entries
+        # Action-stage VLM should focus on the current view, obstacle layout, and
+        # task landmarks only; keep space-structure overlays out of this image.
+        return []
 
     landmark_memory = controller.landmark_memory if controller is not None else None
 
@@ -353,7 +310,7 @@ def render_detection_bbox(owner,
                 strip = render_landmark_strip(
                     detection_vis.shape[1],
                     item_lines,
-                    font_scale=0.54,
+                    font_scale=0.58,
                     font_thickness=1,
                     compact=True,
                 )
@@ -766,7 +723,7 @@ def save_rgb(owner, step: int, episode_id: int, rgb: np.ndarray, phase: str = "a
             rgb = controller._draw_distance_rays_on_first_person_view(rgb.copy(), controller.latest_obstacle_distances)
 
     episode_dir = owner._create_episode_directories(episode_id)
-    save_path = os.path.join(episode_dir, 'rgb', f'step_{step:04d}_{phase}.png')
+    save_path = os.path.join(episode_dir, 'rgb', build_step_artifact_filename(step, phase))
     cv2.imwrite(save_path, rgb)
     return save_path
 
@@ -1020,6 +977,6 @@ def save_detection(owner,
 
     # 简化路径：data/manual_navigation/episode_X/detection/step_XXXX.png
     episode_dir = owner._create_episode_directories(episode_id)
-    save_path = os.path.join(episode_dir, 'detection', f'step_{step:04d}_{phase}.png')
+    save_path = os.path.join(episode_dir, 'detection', build_step_artifact_filename(step, phase))
     cv2.imwrite(save_path, detection_vis)
     return save_path

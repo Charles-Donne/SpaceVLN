@@ -23,6 +23,15 @@ from navigation_system.config.core.params.thresholds import (
     FLOOR_SWITCH_STABLE_STEPS,
     FLOOR_SWITCH_Z_M,
 )
+from navigation_system.config.core.params.spatial import (
+    SPACE_AREA_CURRENT_INITIAL_WAYPOINT_MAX_DISTANCE_M,
+    WAYPOINT_VISIBILITY_RADIUS_M,
+    WAYPOINT_VISIBILITY_SAMPLES,
+)
+from navigation_system.space.geometry.connectivity import (
+    build_bounded_geodesic_distance_field,
+    query_world_distance_from_field_m,
+)
 from navigation_system.space.topology.space_area_manager import SpaceAreaManager
 from navigation_system.space.topology.space_types import normalize_space_type
 from navigation_system.space.topology.waypoint_manager import WaypointManager
@@ -120,6 +129,14 @@ class SemanticMapper:
     @property
     def global_waypoint_floor_ids(self) -> List[int]:
         return self.global_waypoint_manager.get_floor_ids()
+
+    @property
+    def waypoint_initial_neighborhood_flags(self) -> List[bool]:
+        return self.waypoint_manager.get_initial_neighborhood_flags()
+
+    @property
+    def global_waypoint_initial_neighborhood_flags(self) -> List[bool]:
+        return self.global_waypoint_manager.get_initial_neighborhood_flags()
 
     @property
     def space_area_records(self) -> List[Dict[str, Any]]:
@@ -304,6 +321,7 @@ class SemanticMapper:
             "waypoint_ids": self.waypoint_ids,
             "waypoint_floor_ids": self.waypoint_manager.get_floor_ids(),
             "waypoint_area_labels": list(self.waypoint_area_display_labels),
+            "waypoint_initial_neighborhood_flags": self.waypoint_manager.get_initial_neighborhood_flags(),
             "waypoint_initial_index": self.waypoint_manager.initial_waypoint_index,
             "space_area_layer": space_area_layer,
             "space_area_records": space_area_metadata,
@@ -349,6 +367,10 @@ class SemanticMapper:
         agent_y_m = self.full_pose[1]
         pixel_y = int(round(float(agent_y_m) * 100.0 / float(self.resolution)))
         pixel_x = int(round(float(agent_x_m) * 100.0 / float(self.resolution)))
+        near_initial_neighborhood = self._compute_waypoint_near_initial_neighborhood(
+            pixel_y=pixel_y,
+            pixel_x=pixel_x,
+        )
         area_label = self.space_area_manager.update_from_waypoint(
             description=description,
             pixel_y=pixel_y,
@@ -365,6 +387,7 @@ class SemanticMapper:
             description=description,
             area_label=display_area_label,
             floor_id=self.current_floor_id,
+            near_initial_neighborhood=near_initial_neighborhood,
         )
         self.waypoint_manager.add_waypoint(
             pixel_y=pixel_y,
@@ -373,6 +396,7 @@ class SemanticMapper:
             area_label=area_label,
             floor_id=self.current_floor_id,
             waypoint_id=waypoint_id,
+            near_initial_neighborhood=near_initial_neighborhood,
         )
         return waypoint_id
 
@@ -399,6 +423,84 @@ class SemanticMapper:
     def get_global_waypoint_floor_ids(self) -> List[int]:
         """获取跨楼层 waypoint 历史的 floor_id 列表。"""
         return self.global_waypoint_manager.get_floor_ids()
+
+    def get_waypoint_initial_neighborhood_flags(self) -> List[bool]:
+        """获取当前楼层 waypoint 的 initial-neighborhood 标签。"""
+        return list(self.waypoint_initial_neighborhood_flags)
+
+    def get_global_waypoint_initial_neighborhood_flags(self) -> List[bool]:
+        """获取跨楼层 waypoint 历史的 initial-neighborhood 标签。"""
+        return list(self.global_waypoint_initial_neighborhood_flags)
+
+    def _compute_waypoint_near_initial_neighborhood(
+        self,
+        pixel_y: int,
+        pixel_x: int,
+    ) -> bool:
+        """Compute once whether the new waypoint belongs to the initial connected neighborhood."""
+        if self.global_waypoint_manager.count() == 0:
+            return True
+
+        initial_index = getattr(self.global_waypoint_manager, "initial_waypoint_index", None)
+        if initial_index is None:
+            return False
+        try:
+            initial_idx = int(initial_index)
+        except (TypeError, ValueError):
+            return False
+        if initial_idx < 0 or initial_idx >= self.global_waypoint_manager.count():
+            return False
+
+        initial_floor_ids = self.global_waypoint_manager.get_floor_ids()
+        if initial_idx < len(initial_floor_ids):
+            try:
+                initial_floor_id = int(initial_floor_ids[initial_idx] or 0)
+            except (TypeError, ValueError):
+                initial_floor_id = int(self.current_floor_id)
+            if int(initial_floor_id) != int(self.current_floor_id):
+                return False
+
+        initial_waypoint = self.global_waypoint_positions[initial_idx]
+        if initial_waypoint is None:
+            return False
+        if (int(initial_waypoint[0]), int(initial_waypoint[1])) == (int(pixel_y), int(pixel_x)):
+            return True
+
+        crop_offset = getattr(self.mapping_module, "full_map_crop_offset", None)
+        if self.full_map is not None and crop_offset is not None and self.full_pose is not None:
+            projector = RotatedMapProjector(
+                map_h=self.full_map.shape[1],
+                map_w=self.full_map.shape[2],
+                crop_offset=tuple(crop_offset),
+                agent_orientation_deg=float(self.full_pose[2]),
+            )
+            obstacle_mask = np.asarray(self.full_map[0] > 0.5, dtype=bool)
+            distance_field = build_bounded_geodesic_distance_field(
+                obstacle_mask=obstacle_mask,
+                projector=projector,
+                source_world=(int(initial_waypoint[0]), int(initial_waypoint[1])),
+                max_distance_m=float(SPACE_AREA_CURRENT_INITIAL_WAYPOINT_MAX_DISTANCE_M),
+                resolution_cm=float(self.resolution),
+            )
+            if distance_field is not None:
+                geodesic_distance_m = query_world_distance_from_field_m(
+                    distance_field=distance_field,
+                    obstacle_mask=obstacle_mask,
+                    projector=projector,
+                    target_world=(int(pixel_y), int(pixel_x)),
+                    resolution_cm=float(self.resolution),
+                    target_radius_m=WAYPOINT_VISIBILITY_RADIUS_M,
+                    target_samples=WAYPOINT_VISIBILITY_SAMPLES,
+                )
+                if geodesic_distance_m is not None:
+                    return geodesic_distance_m <= float(SPACE_AREA_CURRENT_INITIAL_WAYPOINT_MAX_DISTANCE_M) + 1e-6
+
+        distance_px = math.hypot(
+            float(int(pixel_y) - int(initial_waypoint[0])),
+            float(int(pixel_x) - int(initial_waypoint[1])),
+        )
+        distance_m = float(distance_px) * float(self.resolution) / 100.0
+        return distance_m <= float(SPACE_AREA_CURRENT_INITIAL_WAYPOINT_MAX_DISTANCE_M) + 1e-6
 
     def clear_waypoints(self):
         """清空当前楼层的所有 waypoint。"""

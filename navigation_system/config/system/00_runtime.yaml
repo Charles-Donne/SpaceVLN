@@ -14,5 +14,6 @@ PATHS:
   TENSORBOARD_DIR: data/tensorboard_dirs/
   CHECKPOINT_FOLDER: data/checkpoints/
   EVAL_CKPT_PATH_DIR: data/checkpoints/
-  RESULTS_DIR: data/logs/eval_results/
+  RESULTS_ROOT: /media/charlesdonne/1A34EB0D34EAEB29/project/nav_ws/result
+  RESULTS_DIR: ""
   VIDEO_DIR: data/logs/video/

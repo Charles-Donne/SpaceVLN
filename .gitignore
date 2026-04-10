@@ -21,12 +21,10 @@ wheels/
 *.egg
 
 # Virtual Environment
-venv/
-ENV/
-env/
-!vlnce_baselines/env/
-!vlnce_baselines/env/*.py
-.venv
+/venv/
+/ENV/
+/env/
+/.venv
 
 # IDE
 .vscode/
@@ -48,16 +46,15 @@ vlnce_baselines/detection/models/*.pt
 *.ckpt
 
 # API Keys and Secrets (CRITICAL - DO NOT COMMIT)
-vlnce_baselines/config/api/vlm_api_config.yaml
-*_config.yaml
+/navigation_system/config/vlm/vlm_api_config.yaml
+/navigation_system/config/vlm/vlm_api_config_qwen_cache.yaml
 !*_config.yaml.template
 .env
 secrets.yaml
 *.key
 
 # Data (Large datasets - DO NOT COMMIT)
-data/
-!vlnce_baselines/data/
+/data/
 datasets/
 scene_datasets/
 *.mp4

@@ -8,7 +8,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 
 PROJECT_ROOT="$(spacevln_project_root)"
-RESULTS_ROOT="$(cd "$PROJECT_ROOT/.." && pwd)/data/result/vlnce"
 CONFIG_FILE="${EXP_CONFIG:-navigation_system/config/experiments/r2r_eval.yaml}"
 
 START_ID=${1:-}
@@ -20,6 +19,7 @@ MAX_EPISODE_ID=1800
 
 PYTHON_BIN="$(spacevln_select_python)"
 spacevln_setup_runtime_env "$PYTHON_BIN"
+RESULTS_ROOT="$(spacevln_default_results_root "$PYTHON_BIN")"
 
 usage() {
     echo "用法:"
@@ -28,11 +28,11 @@ usage() {
     echo "示例:"
     echo "  bash run_r2r/vlm_report_range.sh 1500 1799"
     echo "  bash run_r2r/vlm_report_range.sh 1 50 qwen3.5-plus__qwen3.5-flash_cache"
-    echo "  bash run_r2r/vlm_report_range.sh 1500 1799 /abs/path/to/data/result/vlnce/qwen3.5-plus__qwen3.5-flash"
+    echo "  bash run_r2r/vlm_report_range.sh 1500 1799 /abs/path/to/result/vlnce/qwen3.5-plus__qwen3.5-flash"
     echo ""
     echo "说明:"
     echo "  只读取已有 log 生成部分汇总，不会重新跑 episode。"
-    echo "  第3个参数既可以传完整 results_dir，也可以直接传 data/result/vlnce 下的实验文件夹名。"
+    echo "  第3个参数既可以传完整 results_dir，也可以直接传默认 result/vlnce 下的实验文件夹名。"
 }
 
 print_available_results_dirs() {

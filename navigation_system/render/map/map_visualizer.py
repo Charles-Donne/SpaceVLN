@@ -1,7 +1,6 @@
 """Visualization orchestrator for semantic maps, detections, and render caching."""
 
 import os
-import re
 from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
@@ -9,6 +8,10 @@ import numpy as np
 from PIL import Image
 
 from navigation_system.runtime.storage.artifacts import get_episode_detail_dir
+from navigation_system.runtime.storage.naming import (
+    build_step_artifact_filename,
+    build_subtask_name_from_token,
+)
 from navigation_system.space.description.direction_format import format_relative_direction
 from navigation_system.space.geometry.map_projection import RotatedMapProjector
 from navigation_system.space.map.obstacle_analysis import (
@@ -18,6 +21,9 @@ from navigation_system.space.map.obstacle_analysis import (
     calculate_obstacle_distances_12_directions as scan_obstacle_distances_12_directions,
     calculate_obstacle_distances_from_rotated_map as scan_obstacle_distances_from_rotated_map,
 )
+from navigation_system.config.core.params.api import (
+    ACTION_VIEW_MODEL_CONTENT_WIDTH,
+)
 from navigation_system.config.core.constants import (
     color_palette,
     landmark_duplicate_angle_diff_deg,
@@ -25,6 +31,10 @@ from navigation_system.config.core.constants import (
     landmark_duplicate_iou_strict,
     landmark_duplicate_rel_dist_m,
     local_map_landmark_topk,
+)
+from navigation_system.render.image_resize import (
+    resize_image_to_width,
+    resize_strip_to_width,
 )
 
 
@@ -34,26 +44,28 @@ class MapVisualizer:
     GLOBAL_TRAJECTORY_COLOR = (0, 0, 170)
     LOCAL_TRAJECTORY_COLOR = (0, 0, 170)
     SPACE_AREA_COLOR_PALETTE: Tuple[Tuple[int, int, int], ...] = (
-        (255, 160, 80),   # blue
-        (80, 220, 255),   # yellow
-        (255, 110, 210),  # pink
-        (120, 170, 255),  # orange-peach
-        (210, 130, 255),  # violet
-        (255, 210, 90),   # cyan
+        (242, 204, 163),  # pastel blue
+        (170, 230, 255),  # butter yellow
+        (214, 186, 255),  # soft pink
+        (191, 224, 255),  # peach
+        (232, 190, 214),  # lavender
+        (186, 244, 210),  # mint
+        (255, 216, 173),  # apricot
+        (224, 214, 255),  # lilac
     )
     SPACE_TYPE_PREFERRED_COLOR_INDEX: Dict[str, int] = {
         "hallway": 0,
-        "stairs": 1,
-        "living room": 2,
-        "bedroom": 3,
-        "kitchen": 4,
-        "bathroom": 5,
-        "dining room": 1,
-        "office": 2,
-        "laundry room": 3,
-        "closet": 4,
-        "balcony": 5,
-        "garage": 0,
+        "stairs": 7,
+        "living room": 5,
+        "bedroom": 4,
+        "kitchen": 6,
+        "bathroom": 1,
+        "dining room": 2,
+        "office": 3,
+        "laundry room": 6,
+        "closet": 7,
+        "balcony": 2,
+        "garage": 3,
     }
     SPACE_TYPE_ALIAS_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
         ("hallway", ("hallway", "hall", "corridor", "passage", "entry", "entryway", "foyer", "doorway")),
@@ -107,7 +119,7 @@ class MapVisualizer:
                 confidence = 0.0
             prefix = f"#{display_id}" if display_id is not None and display_id > 0 else "#?"
             lines.append(
-                f"{prefix} {name} | {distance_text} | {direction_text} | c{confidence:.3f}"
+                f"{prefix} {name} | {distance_text} | {direction_text} | conf: {confidence:.3f}"
             )
         return lines
 
@@ -345,11 +357,10 @@ class MapVisualizer:
 
     @staticmethod
     def _normalize_artifact_phase(phase: str) -> str:
-        phase_text = re.sub(r"[^a-zA-Z0-9]+", "_", str(phase or "").strip()).strip("_").lower()
-        return phase_text or "unknown"
+        return build_subtask_name_from_token(phase, fallback=phase)
 
     def get_map_artifact_filename(self, step: int, phase: str) -> str:
-        return f"step_{int(step):04d}__{self._normalize_artifact_phase(phase)}.png"
+        return build_step_artifact_filename(step, phase, suffix=".png")
 
     def get_map_artifact_dir(self, episode_id: int, map_kind: str) -> str:
         episode_dir = self._create_episode_directories(int(episode_id))
@@ -381,7 +392,7 @@ class MapVisualizer:
         kind = str(map_kind).strip().lower()
         if kind not in {"global", "local"}:
             raise ValueError(f"Unsupported model-input map kind: {map_kind}")
-        return f"model_input__{self._normalize_artifact_phase(kind)}__{self.get_map_artifact_filename(step, phase)}"
+        return f"{build_subtask_name_from_token(phase, fallback=phase)}.png"
 
     def get_model_input_map_artifact_path(
         self,
@@ -870,9 +881,22 @@ class MapVisualizer:
                 )
 
                 detection_vis = self.draw_distance_on_action_view(detection_vis, obstacle_distances)
+                model_detection_vis = resize_image_to_width(
+                    detection_vis,
+                    ACTION_VIEW_MODEL_CONTENT_WIDTH,
+                )
+                model_landmark_strip = (
+                    resize_strip_to_width(landmark_strip, model_detection_vis.shape[1])
+                    if landmark_strip is not None else None
+                )
                 if controller is not None:
                     controller.latest_obstacle_distances = obstacle_distances
-                    controller.latest_action_detection_vis = detection_vis.copy()
+                    if model_landmark_strip is not None:
+                        controller.latest_action_detection_vis = np.vstack(
+                            [model_detection_vis, model_landmark_strip]
+                        )
+                    else:
+                        controller.latest_action_detection_vis = model_detection_vis.copy()
 
                 if landmark_strip is not None:
                     detection_vis = np.vstack([detection_vis, landmark_strip])
@@ -1075,9 +1099,11 @@ MapVisualizer._draw_space_areas_in_place = _space_area_overlay._draw_space_areas
 MapVisualizer._overlay_space_areas = _space_area_overlay._overlay_space_areas
 MapVisualizer._get_space_area_render_assets = _space_area_overlay._get_space_area_render_assets
 MapVisualizer._compute_space_area_label_anchor = _space_area_overlay._compute_space_area_label_anchor
+MapVisualizer._compact_space_area_overlay_label = _space_area_overlay._compact_space_area_overlay_label
 MapVisualizer._label_box_intersection_area = _space_area_overlay._label_box_intersection_area
 MapVisualizer._build_label_box_from_center = _space_area_overlay._build_label_box_from_center
 MapVisualizer._label_center_from_box = _space_area_overlay._label_center_from_box
+MapVisualizer._get_space_area_label_style = _space_area_overlay._get_space_area_label_style
 MapVisualizer._resolve_space_area_label_layout = _space_area_overlay._resolve_space_area_label_layout
 MapVisualizer._draw_space_area_label = _space_area_overlay._draw_space_area_label
 

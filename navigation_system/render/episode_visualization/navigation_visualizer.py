@@ -11,6 +11,8 @@ import numpy as np
 from typing import List, Dict, Optional
 from habitat.utils.visualizations import maps
 
+from navigation_system.runtime.storage.naming import build_subtask_name_from_token
+
 try:
     import imageio
     HAS_IMAGEIO = True
@@ -94,7 +96,7 @@ class NavigationVisualizer:
             current_subtask: 当前子任务指令（可选）
             distance: 到目标距离
             action: 当前执行的动作名称
-            subtask_id: 子任务ID（如"1a", "1b"等）
+            subtask_id: 子任务标识（会统一落盘成 "subtask1" 这种形式）
             
         Returns:
             保存的图像路径，失败返回None
@@ -134,9 +136,9 @@ class NavigationVisualizer:
         )
         
         # 保存（RGB格式需要转换为BGR）
-        # 文件名格式：step_0001_subtask1a.png（统一使用PNG格式）
+        # 文件名格式：step_0001_subtask1.png（统一使用PNG格式）
         if subtask_id:
-            filename = f"step_{step:04d}_subtask{subtask_id}.png"
+            filename = f"step_{step:04d}_{build_subtask_name_from_token(subtask_id)}.png"
         else:
             filename = f"step_{step:04d}.png"
         filepath = None

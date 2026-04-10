@@ -9,9 +9,6 @@
 **Landmark**:
 {landmark_perception_summary}
 
-# Space Structure
-{waypoint_summary}
-
 - **Yellow bounding box**: candidate current-view landmark detection ({detected_landmarks}); first judge whether it is valid task evidence or noise. If the label/box conflicts with the RGB scene, local geometry, obstacle layout, or task/space context, downweight or ignore it
 
 **Action space**:

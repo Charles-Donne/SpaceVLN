@@ -11,6 +11,92 @@ from navigation_system.config.core.constants import (
     local_map_landmark_topk,
 )
 
+GLOBAL_MAP_BASE_SIZE = 480
+GLOBAL_MAP_OUTPUT_SIZE = 440
+
+
+def _crop_square_image(
+    image: Optional[np.ndarray],
+    crop_box: Optional[Tuple[int, int, int, int]],
+) -> Optional[np.ndarray]:
+    if image is None:
+        return None
+    if crop_box is None:
+        return image.copy()
+
+    x1, y1, x2, y2 = [int(value) for value in crop_box]
+    height, width = image.shape[:2]
+    x1 = max(0, min(width, x1))
+    x2 = max(x1 + 1, min(width, x2))
+    y1 = max(0, min(height, y1))
+    y2 = max(y1 + 1, min(height, y2))
+    return image[y1:y2, x1:x2].copy()
+
+
+def _apply_display_ops_to_image(
+    image: Optional[np.ndarray],
+    display_ops: List[Dict[str, Any]],
+    interpolation: int = cv2.INTER_NEAREST,
+) -> Optional[np.ndarray]:
+    if image is None:
+        return None
+
+    output = image.copy()
+    for op in display_ops:
+        kind = str(op.get("kind") or "").strip().lower()
+        if kind == "crop":
+            output = _crop_square_image(output, op.get("box"))
+        elif kind == "resize":
+            output_size = int(op.get("output_size") or 0)
+            if output_size > 0 and output.shape[:2] != (output_size, output_size):
+                output = cv2.resize(output, (output_size, output_size), interpolation=interpolation)
+    return output
+
+
+def _apply_display_ops_to_point(
+    point: Tuple[float, float],
+    display_ops: List[Dict[str, Any]],
+) -> Optional[Tuple[int, int]]:
+    x = float(point[0])
+    y = float(point[1])
+    current_size = None
+
+    for op in display_ops:
+        kind = str(op.get("kind") or "").strip().lower()
+        if kind == "crop":
+            x1, y1, x2, y2 = [float(value) for value in op.get("box", (0, 0, 0, 0))]
+            if not (x1 <= x < x2 and y1 <= y < y2):
+                return None
+            x -= x1
+            y -= y1
+            current_size = int(round(min(x2 - x1, y2 - y1)))
+        elif kind == "resize":
+            input_size = float(op.get("input_size") or current_size or 0.0)
+            output_size = float(op.get("output_size") or 0.0)
+            if input_size <= 0.0 or output_size <= 0.0:
+                return None
+            x = x * output_size / input_size
+            y = y * output_size / input_size
+            current_size = int(round(output_size))
+
+    if current_size is not None and current_size > 0:
+        x = min(max(x, 0.0), float(current_size - 1))
+        y = min(max(y, 0.0), float(current_size - 1))
+    return int(round(x)), int(round(y))
+
+
+def _apply_display_ops_to_points(
+    points: List[Tuple[int, int]],
+    display_ops: List[Dict[str, Any]],
+) -> List[Tuple[int, int]]:
+    transformed_points: List[Tuple[int, int]] = []
+    for point in list(points or []):
+        transformed = _apply_display_ops_to_point(point, display_ops)
+        if transformed is not None:
+            transformed_points.append(transformed)
+    return transformed_points
+
+
 def render_global_map(owner,
                      full_map: np.ndarray,
                      trajectory_points: List[Tuple[int, int]],
@@ -94,9 +180,15 @@ def render_global_map(owner,
     sem_map_vis = np.flipud(sem_map_vis)
     sem_map_vis = np.array(sem_map_vis)
     sem_map_vis = sem_map_vis[:, :, [2, 1, 0]]  # RGB → BGR
-    sem_map_vis = cv2.resize(sem_map_vis, (480, 480), interpolation=cv2.INTER_NEAREST)
-    obstacle_mask_display = owner._build_display_obstacle_mask(full_map)
-    sem_map_vis[obstacle_mask_display] = [0, 0, 0]
+    sem_map_vis = cv2.resize(
+        sem_map_vis,
+        (GLOBAL_MAP_BASE_SIZE, GLOBAL_MAP_BASE_SIZE),
+        interpolation=cv2.INTER_NEAREST,
+    )
+    global_label_display_layer = owner._prepare_space_area_display_layer(
+        space_area_layer,
+        output_size=GLOBAL_MAP_BASE_SIZE,
+    )
     owner._draw_space_areas_in_place(
         sem_map_vis,
         space_area_layer,
@@ -104,6 +196,8 @@ def render_global_map(owner,
         fill_regions=True,
         show_labels=False,
     )
+    obstacle_mask_display = owner._build_display_obstacle_mask(full_map)
+    sem_map_vis[obstacle_mask_display] = [0, 0, 0]
 
     # ===== 阶段3: 提取Landmark位置（但不绘制）=====
     landmarks = []
@@ -128,24 +222,76 @@ def render_global_map(owner,
     # 所以这里不需要再旋转地图，直接使用即可
 
     projector = owner._build_map_projector(full_map, current_pose, crop_offset)
-    global_map_rotated = sem_map_vis.copy()
-    global_map_with_trajectory = sem_map_vis.copy()
+    display_ops: List[Dict[str, Any]] = []
+    preview_image = sem_map_vis.copy()
+
+    if owner.enable_global_map_crop and preview_image.shape[0] > GLOBAL_MAP_OUTPUT_SIZE:
+        crop_margin = max(0, (preview_image.shape[0] - GLOBAL_MAP_OUTPUT_SIZE) // 2)
+        center_crop_box = (
+            crop_margin,
+            crop_margin,
+            preview_image.shape[1] - crop_margin,
+            preview_image.shape[0] - crop_margin,
+        )
+        display_ops.append({"kind": "crop", "box": center_crop_box})
+        preview_image = _crop_square_image(preview_image, center_crop_box)
+
+    if owner.enable_adaptive_zoom:
+        zoom_crop_box = owner._compute_adaptive_zoom_box([preview_image])
+        if zoom_crop_box is not None:
+            display_ops.append({"kind": "crop", "box": zoom_crop_box})
+            preview_image = _crop_square_image(preview_image, zoom_crop_box)
+
+    if preview_image.shape[0] != GLOBAL_MAP_OUTPUT_SIZE:
+        display_ops.append(
+            {
+                "kind": "resize",
+                "input_size": int(preview_image.shape[0]),
+                "output_size": GLOBAL_MAP_OUTPUT_SIZE,
+            }
+        )
+
+    transformed_label_display_layer = _apply_display_ops_to_image(
+        global_label_display_layer,
+        display_ops,
+        interpolation=cv2.INTER_NEAREST,
+    )
+    transformed_obstacle_mask = _apply_display_ops_to_image(
+        obstacle_mask_display.astype(np.uint8) * 255,
+        display_ops,
+        interpolation=cv2.INTER_NEAREST,
+    )
+    global_map_rotated = _apply_display_ops_to_image(
+        sem_map_vis,
+        display_ops,
+        interpolation=cv2.INTER_NEAREST,
+    )
+    global_map_with_trajectory = global_map_rotated.copy()
     last_waypoint_angle = None
 
     if current_pose is not None:
-        # ===== 阶段5: 分层渲染global map：area fill -> trajectory -> area labels -> agent =====
-        # trajectory_points 是世界像素坐标，统一通过 projector 转到当前旋转显示坐标。
+        # ===== 阶段5: final 440×440 底图上叠加轨迹，避免裁剪/缩放后二次变小 =====
         if projector is not None and trajectory_points is not None and len(trajectory_points) > 1:
             trajectory_color = owner.GLOBAL_TRAJECTORY_COLOR
             display_points = projector.world_points_to_global_display(trajectory_points)
+            display_points = _apply_display_ops_to_points(display_points, display_ops)
             if len(display_points) > 1:
+                trajectory_thickness = max(
+                    3,
+                    int(round(min(global_map_with_trajectory.shape[:2]) * 0.009)),
+                )
                 cv2.polylines(
                     global_map_with_trajectory,
                     [np.array(display_points, dtype=np.int32)],
                     isClosed=False,
                     color=trajectory_color,
-                    thickness=3,
+                    thickness=trajectory_thickness,
                 )
+
+        if transformed_obstacle_mask is not None:
+            transformed_obstacle_bool = np.asarray(transformed_obstacle_mask > 127, dtype=bool)
+            global_map_rotated[transformed_obstacle_bool] = [0, 0, 0]
+            global_map_with_trajectory[transformed_obstacle_bool] = [0, 0, 0]
 
         owner._draw_space_areas_in_place(
             global_map_rotated,
@@ -153,7 +299,8 @@ def render_global_map(owner,
             space_area_records,
             fill_regions=False,
             show_labels=True,
-            use_display_label=False,
+            use_display_label=True,
+            display_layer_override=transformed_label_display_layer,
         )
         owner._draw_space_areas_in_place(
             global_map_with_trajectory,
@@ -161,32 +308,35 @@ def render_global_map(owner,
             space_area_records,
             fill_regions=False,
             show_labels=True,
-            use_display_label=False,
+            use_display_label=True,
+            display_layer_override=transformed_label_display_layer,
         )
 
-        center_x, center_y = 240, 240
+        # Anchor the agent arrow to the pre-crop agent center, then project it
+        # through crop/resize ops so adaptive zoom does not force it to the
+        # visual center of the final 440x440 map.
+        agent_display_center = _apply_display_ops_to_point(
+            (GLOBAL_MAP_BASE_SIZE / 2.0, GLOBAL_MAP_BASE_SIZE / 2.0),
+            display_ops,
+        )
+        if agent_display_center is None:
+            center_x = global_map_rotated.shape[1] // 2
+            center_y = global_map_rotated.shape[0] // 2
+        else:
+            center_x, center_y = agent_display_center
         arrow_angle = np.deg2rad(-90)
         agent_pos = (center_x, center_y, arrow_angle)
-        agent_arrow = vu.get_contour_points(agent_pos, origin=(0, 0), size=15)
+        arrow_size = max(20, int(round(min(global_map_rotated.shape[:2]) * 0.05)))
+        agent_arrow = vu.get_contour_points(agent_pos, origin=(0, 0), size=arrow_size)
+        cv2.drawContours(global_map_rotated, [agent_arrow], 0, (255, 255, 255), 1)
+        cv2.drawContours(global_map_with_trajectory, [agent_arrow], 0, (255, 255, 255), 1)
         cv2.drawContours(global_map_rotated, [agent_arrow], 0, (0, 0, 255), -1)
         cv2.drawContours(global_map_with_trajectory, [agent_arrow], 0, (0, 0, 255), -1)
 
-        # ===== 阶段6: global map 不绘制自定义 landmark，仅保留内部 landmarks 列表供后续距离/角度计算 =====
-
-        # ===== 可选：裁剪到440×440（中心区域）=====
-        # 默认关闭裁剪，保持完整的480×480地图
-        if owner.enable_global_map_crop:
-            # 从480x480裁剪中心440x440区域
-            crop_offset = (480 - 440) // 2  # = 20
-            global_map_with_trajectory = global_map_with_trajectory[crop_offset:crop_offset+440, crop_offset:crop_offset+440].copy()
-            global_map_rotated = global_map_rotated[crop_offset:crop_offset+440, crop_offset:crop_offset+440].copy()
-            # print(f"✂️  Global Map 裁剪: 480×480 → 440×440")
-        # else:
-            # print(f"📐 Global Map 尺寸: 480×480 (未裁剪，显示完整地图)")
-
-        global_map_with_trajectory, global_map_rotated = owner._apply_adaptive_zoom(
-            [global_map_with_trajectory, global_map_rotated]
-        )
+        if transformed_obstacle_mask is not None:
+            transformed_obstacle_bool = np.asarray(transformed_obstacle_mask > 127, dtype=bool)
+            global_map_rotated[transformed_obstacle_bool] = [0, 0, 0]
+            global_map_with_trajectory[transformed_obstacle_bool] = [0, 0, 0]
 
     # 添加方位标签到global map
     global_map_with_trajectory = owner.add_orientation_labels(global_map_with_trajectory)
@@ -266,8 +416,6 @@ def render_local_map(owner,
     sem_map_vis = np.array(sem_map_vis)
     sem_map_vis = sem_map_vis[:, :, [2, 1, 0]]  # RGB → BGR
     sem_map_vis = cv2.resize(sem_map_vis, (480, 480), interpolation=cv2.INTER_NEAREST)
-    obstacle_mask_resized = owner._build_display_obstacle_mask(full_map)
-    sem_map_vis[obstacle_mask_resized] = [0, 0, 0]
     owner._draw_space_areas_in_place(
         sem_map_vis,
         space_area_layer,
@@ -275,6 +423,8 @@ def render_local_map(owner,
         alpha=0.40,
         show_labels=False,
     )
+    obstacle_mask_resized = owner._build_display_obstacle_mask(full_map)
+    sem_map_vis[obstacle_mask_resized] = [0, 0, 0]
 
     # ===== 阶段3: 准备显示（地图已在提取时旋转）=====
     projector = owner._build_map_projector(full_map, current_pose, crop_offset)
@@ -470,6 +620,8 @@ def render_local_map(owner,
                     cv2.LINE_AA,
                 )
 
+    local_map[obstacle_local] = [0, 0, 0]
+
     # ===== 阶段9: 绘制朝上的箭头（最上层）=====
     arrow_color = (0, 0, 255)
     arrow_angle = np.deg2rad(-90)
@@ -502,8 +654,8 @@ def add_orientation_labels(owner, map_image: np.ndarray) -> np.ndarray:
     labeled_map = map_image.copy()
 
     font = cv2.FONT_HERSHEY_SIMPLEX
-    font_scale = 0.7  # 加粗字体
-    text_thickness = 2  # 加粗
+    font_scale = 0.58
+    text_thickness = 2
     text_color = (0, 0, 139)  # 深红色BGR
     bg_color = (255, 255, 255)  # 白色背景
 
@@ -511,8 +663,8 @@ def add_orientation_labels(owner, map_image: np.ndarray) -> np.ndarray:
     labels = {
         'FRONT': (w // 2, 20),  # 上方
         'BACK': (w // 2, h - 8),  # 下方
-        'LEFT': (40, h // 2),  # 左侧
-        'RIGHT': (w - 40, h // 2)  # 右侧
+        'LEFT': (32, h // 2),  # 左侧，进一步向外挪动
+        'RIGHT': (w - 32, h // 2)  # 右侧，进一步向外挪动
     }
 
     for text, (x, y) in labels.items():

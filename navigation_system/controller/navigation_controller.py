@@ -33,6 +33,11 @@ from navigation_system.space.description.spatial_formatter import (
     build_action_landmark_map_info,
     build_waypoint_summary,
 )
+from navigation_system.space.geometry.connectivity import (
+    build_bounded_geodesic_distance_field,
+    query_world_distance_from_field_m,
+)
+from navigation_system.space.geometry.map_projection import RotatedMapProjector
 from navigation_system.controller.base_controller import BaseNavigationController
 from navigation_system.controller.state import (
     EpisodeTimingTracker,
@@ -55,6 +60,7 @@ from navigation_system.runtime.storage.artifacts import (
     get_episode_detail_path_candidates,
 )
 from navigation_system.render.episode_visualization.navigation_visualizer import NavigationVisualizer
+from navigation_system.render.image_resize import resize_image_to_width
 from navigation_system.render.views.thinking_view_renderer import ThinkingViewRenderer
 from navigation_system.vlm.contracts.schema import (
     ACTION_MAPPING,
@@ -62,6 +68,7 @@ from navigation_system.vlm.contracts.schema import (
     get_subtask_landmark,
     normalize_subtask_payload,
 )
+from navigation_system.config.core.params.api import ACTION_VIEW_MODEL_CONTENT_WIDTH
 from navigation_system.config.core.constants import landmark_edge_depth_keywords
 from navigation_system.config.core.params.actions import (
     ACTION_SUBTASK_AUTOCOMPLETE_OPEN_DISTANCE_M as CFG_AUTOCOMPLETE_OPEN_DISTANCE_M,
@@ -74,6 +81,9 @@ from navigation_system.config.core.params.thresholds import (
     LOW_LEVEL_STAGNATION_CAP_M as CFG_LOW_LEVEL_STAGNATION_CAP_M,
     LOW_LEVEL_STAGNATION_RATIO as CFG_LOW_LEVEL_STAGNATION_RATIO,
     OBS_BLOCKED_M,
+)
+from navigation_system.config.core.params.spatial import (
+    SPACE_AREA_CURRENT_INITIAL_WAYPOINT_MAX_DISTANCE_M,
 )
 
 
@@ -228,6 +238,118 @@ class VLMNavigationController(BaseNavigationController):
             self.progress_summary = note
         else:
             self.progress_summary = f"{self.progress_summary}, {note}"
+
+    @staticmethod
+    def _merge_prompt_notices(*notice_texts: Optional[str]) -> str:
+        notices: List[str] = []
+        for raw in notice_texts:
+            text = str(raw or "").strip()
+            if text and text not in notices:
+                notices.append(text)
+        return "\n".join(notices)
+
+    @staticmethod
+    def _merge_planner_timing_infos(*timing_infos: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        merged_records: List[Dict[str, Any]] = []
+        merged_wait_duration_s = 0.0
+        for info in timing_infos:
+            if not info:
+                continue
+            merged_records.extend(list(info.get("records", []) or []))
+            merged_wait_duration_s += float(info.get("failed_retry_wait_duration_s", 0.0) or 0.0)
+        return {
+            "records": merged_records,
+            "failed_retry_wait_duration_s": merged_wait_duration_s,
+        }
+
+    def _is_in_initial_position_neighborhood(self, waypoint_summary: Optional[str] = None) -> bool:
+        summary_text = str(waypoint_summary or "")
+        if "near INITIAL POSITION Space WP#" in summary_text:
+            return True
+
+        mapper = getattr(self, "mapper", None)
+        if mapper is None:
+            return False
+
+        current_pose = getattr(mapper, "full_pose", None)
+        resolution_cm = float(getattr(mapper, "resolution", 0.0) or 0.0)
+        global_waypoint_manager = getattr(mapper, "global_waypoint_manager", None)
+        initial_waypoint_index = getattr(global_waypoint_manager, "initial_waypoint_index", None)
+        if (
+            current_pose is None
+            or len(current_pose) < 3
+            or resolution_cm <= 0.0
+            or initial_waypoint_index is None
+        ):
+            return False
+
+        waypoint_positions, _waypoint_ids, _waypoint_descs = mapper.get_global_waypoints()
+        waypoint_floor_ids = mapper.get_global_waypoint_floor_ids()
+        try:
+            initial_idx = int(initial_waypoint_index)
+        except (TypeError, ValueError):
+            return False
+        if initial_idx < 0 or initial_idx >= len(waypoint_positions):
+            return False
+
+        current_floor_id = int(getattr(mapper, "current_floor_id", 0) or 0)
+        if initial_idx < len(waypoint_floor_ids):
+            try:
+                initial_floor_id = int(waypoint_floor_ids[initial_idx] or 0)
+            except (TypeError, ValueError):
+                initial_floor_id = current_floor_id
+            if initial_floor_id != current_floor_id:
+                return False
+
+        wp_py, wp_px = waypoint_positions[initial_idx]
+        full_map = getattr(mapper, "full_map", None)
+        crop_offset = getattr(getattr(mapper, "mapping_module", None), "full_map_crop_offset", None)
+        if full_map is not None and crop_offset is not None:
+            projector = RotatedMapProjector(
+                map_h=full_map.shape[1],
+                map_w=full_map.shape[2],
+                crop_offset=crop_offset,
+                agent_orientation_deg=float(current_pose[2]),
+            )
+            obstacle_mask = np.asarray(full_map[0] > 0.5, dtype=bool)
+            current_distance_field = build_bounded_geodesic_distance_field(
+                obstacle_mask=obstacle_mask,
+                projector=projector,
+                source_world=(
+                    float(current_pose[1]) * 100.0 / resolution_cm,
+                    float(current_pose[0]) * 100.0 / resolution_cm,
+                ),
+                max_distance_m=float(SPACE_AREA_CURRENT_INITIAL_WAYPOINT_MAX_DISTANCE_M),
+                resolution_cm=resolution_cm,
+            )
+            if current_distance_field is not None:
+                distance_m = query_world_distance_from_field_m(
+                    distance_field=current_distance_field,
+                    obstacle_mask=obstacle_mask,
+                    projector=projector,
+                    target_world=(int(wp_py), int(wp_px)),
+                    resolution_cm=resolution_cm,
+                )
+                if distance_m is not None:
+                    return distance_m <= float(SPACE_AREA_CURRENT_INITIAL_WAYPOINT_MAX_DISTANCE_M) + 1e-6
+
+        curr_x_m, curr_y_m, _curr_heading = current_pose[:3]
+        curr_py = int(round(float(curr_y_m) * 100.0 / resolution_cm))
+        curr_px = int(round(float(curr_x_m) * 100.0 / resolution_cm))
+        distance_m = (
+            float(math.hypot(float(curr_py) - float(wp_py), float(curr_px) - float(wp_px)))
+            * resolution_cm
+            / 100.0
+        )
+        return distance_m <= float(SPACE_AREA_CURRENT_INITIAL_WAYPOINT_MAX_DISTANCE_M) + 1e-6
+
+    def _build_initial_position_finish_guard_notice(self) -> str:
+        return (
+            "Current localization is still at/near INITIAL POSITION "
+            f"(within about {float(SPACE_AREA_CURRENT_INITIAL_WAYPOINT_MAX_DISTANCE_M):.2f}m of the initial waypoint). "
+            "Still near INITIAL POSITION(Task start): do not set global_task_finish=true. "
+            "Execute Task first stage first."
+        )
 
     def _clear_action_stagnation_prompt_state(self) -> None:
         self.action_stagnation_retry_pending = False
@@ -1276,7 +1398,7 @@ class VLMNavigationController(BaseNavigationController):
             distance_text = f"{distance_m:.2f}m" if distance_m is not None else "Unknown"
             direction_text = format_relative_direction(angle_deg) if angle_deg is not None else "Unknown"
             lines.append(
-                f"{prefix} {name} | {distance_text} | {direction_text} | c{confidence:.3f}"
+                f"{prefix} {name} | {distance_text} | {direction_text} | conf: {confidence:.3f}"
             )
         return lines
 
@@ -1527,6 +1649,14 @@ class VLMNavigationController(BaseNavigationController):
             "waypoint_ids": waypoint_ids,
             "waypoint_descriptions": waypoint_descriptions,
             "waypoint_area_labels": waypoint_area_labels,
+            "waypoint_initial_neighborhood_flags": [
+                bool(flag)
+                for flag in map_state.get('waypoint_initial_neighborhood_flags', []) or []
+            ],
+            "global_waypoint_initial_neighborhood_flags": [
+                bool(flag)
+                for flag in self.mapper.get_global_waypoint_initial_neighborhood_flags()
+            ],
             "space_area_records": space_area_records,
             "waypoint_summary": self._get_waypoint_summary(include_area_chain=True),
         }
@@ -2337,6 +2467,8 @@ class VLMNavigationController(BaseNavigationController):
         detected_landmarks: List[str] = []
         waypoint_summary: Optional[str] = None
         previous_subtask_landmark_summary: Optional[str] = None
+        planner_timing_info_chunks: List[Dict[str, Any]] = []
+
         if mode_key == "initial":
             response, prompt = self.planner.generate_initial_subtask(
                 instruction=self.current_instruction,
@@ -2346,6 +2478,9 @@ class VLMNavigationController(BaseNavigationController):
                 local_map_image=None,
                 obstacle_distances=obstacle_distances,
                 save_dir=thinking_dir,
+            )
+            planner_timing_info_chunks.append(
+                dict(getattr(self.planner, "last_call_timing_info", {}) or {})
             )
         else:
             detected_landmarks = self._collect_thinking_detected_landmarks()
@@ -2370,8 +2505,59 @@ class VLMNavigationController(BaseNavigationController):
                 verify_replan_prompt_notice=verify_replan_prompt_notice,
                 save_dir=thinking_dir,
             )
+            planner_timing_info_chunks.append(
+                dict(getattr(self.planner, "last_call_timing_info", {}) or {})
+            )
+            if (
+                response
+                and bool(response.get("global_task_finish", False))
+                and self._is_in_initial_position_neighborhood(waypoint_summary)
+            ):
+                print(
+                    "  [WARN] Verify returned global_task_finish=true while still at/near INITIAL POSITION; "
+                    "reject and re-query once"
+                )
+                fallback_response = dict(response)
+                retry_notice = self._merge_prompt_notices(
+                    verify_replan_prompt_notice,
+                    self._build_initial_position_finish_guard_notice(),
+                )
+                retry_response, retry_prompt = self.planner.verify_and_replan(
+                    instruction=self.current_instruction,
+                    current_subtask=verify_subtask,
+                    observation_images=image_paths,
+                    direction_names=direction_names,
+                    global_map_image=global_map,
+                    local_map_image=None,
+                    detected_landmarks=detected_landmarks,
+                    waypoint_summary=waypoint_summary,
+                    previous_subtask_landmark_summary=previous_subtask_landmark_summary,
+                    obstacle_distances=obstacle_distances,
+                    verify_replan_prompt_notice=retry_notice,
+                    save_dir=thinking_dir,
+                )
+                planner_timing_info_chunks.append(
+                    dict(getattr(self.planner, "last_call_timing_info", {}) or {})
+                )
+                if retry_response:
+                    response = retry_response
+                    prompt = retry_prompt
+                else:
+                    response = fallback_response
+
+                if (
+                    response
+                    and bool(response.get("global_task_finish", False))
+                    and self._is_in_initial_position_neighborhood(waypoint_summary)
+                ):
+                    print(
+                        "  [WARN] Still at/near INITIAL POSITION after re-query; "
+                        "force global_task_finish=false"
+                    )
+                    response = dict(response)
+                    response["global_task_finish"] = False
             self.verify_replan_prompt_notice = ""
-        planner_timing_info = dict(getattr(self.planner, "last_call_timing_info", {}) or {})
+        planner_timing_info = self._merge_planner_timing_infos(*planner_timing_info_chunks)
         planner_timing_records = list(planner_timing_info.get("records", []) or [])
         for timing_record in planner_timing_records:
             is_success = bool(timing_record.get("success", False))
@@ -2475,6 +2661,13 @@ class VLMNavigationController(BaseNavigationController):
         mode_key = str(mode).strip().lower()
         is_initial = mode_key == 'initial'
         task_finished = bool(response.get('global_task_finish', False))
+        if is_initial and task_finished:
+            print(
+                "  [WARN] Initial planning returned global_task_finish=true; "
+                "force global_task_finish=false"
+            )
+            response['global_task_finish'] = False
+            task_finished = False
         phase_default = 'initial' if is_initial else ''
         previous_match_streak = int(getattr(self, 'final_goal_destination_match_streak', 0) or 0)
         (
@@ -2746,6 +2939,7 @@ class VLMNavigationController(BaseNavigationController):
 
         if self.latest_obs is not None and "rgb" in self.latest_obs:
             rgb_bgr = cv2.cvtColor(self.latest_obs["rgb"], cv2.COLOR_RGB2BGR)
+            rgb_bgr = resize_image_to_width(rgb_bgr, ACTION_VIEW_MODEL_CONTENT_WIDTH)
             return {
                 "image_array": rgb_bgr,
                 "color_space": "bgr",
@@ -2799,10 +2993,6 @@ class VLMNavigationController(BaseNavigationController):
         self._write_action_subtask_info_if_needed(subtask_id)
 
         detection_image = self._build_action_detection_image_input(last_step)
-        waypoint_summary = self._get_waypoint_summary(
-            include_area_chain=False,
-            include_path=False,
-        )
         action_landmark_map_info = build_action_landmark_map_info(
             step_landmark_entries=step_landmark_entries,
             landmark_dist_map=self.landmark_memory.get_latest_dist_map(),
@@ -2817,7 +3007,7 @@ class VLMNavigationController(BaseNavigationController):
             "obstacle_distances": obstacle_distances,
             "action_save_dir": action_save_dir,
             "detection_image": detection_image,
-            "waypoint_summary": waypoint_summary,
+            "waypoint_summary": "",
             "action_landmark_map_info": action_landmark_map_info,
         }
 
@@ -3649,6 +3839,7 @@ class VLMNavigationController(BaseNavigationController):
             waypoint_ids=wp_ids,
             waypoint_descriptions=wp_descs,
             waypoint_area_labels=self.mapper.get_global_waypoint_area_labels(),
+            waypoint_initial_neighborhood_flags=self.mapper.get_global_waypoint_initial_neighborhood_flags(),
             waypoint_floor_ids=self.mapper.get_global_waypoint_floor_ids(),
             current_pose=self.mapper.full_pose,
             resolution_cm=self.mapper.resolution,

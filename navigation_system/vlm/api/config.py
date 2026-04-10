@@ -13,9 +13,89 @@ from navigation_system.config.core.params.api import (
 )
 
 
+DEFAULT_RESULTS_ROOT_RELATIVE = os.path.join("data", "result")
+DEFAULT_RESULTS_FAMILY = "vlnce"
+DEFAULT_SYSTEM_RUNTIME_CONFIG_RELATIVE = os.path.join(
+    "navigation_system",
+    "config",
+    "system",
+    "00_runtime.yaml",
+)
+
+
 def resolve_api_config_path(config_path: str) -> str:
     """Normalize the configured unified API config path."""
     return str(config_path or "").strip()
+
+
+def _resolve_repo_root(repo_root: str = None) -> str:
+    if repo_root:
+        return os.path.abspath(repo_root)
+    return os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "..")
+    )
+
+
+def _resolve_workspace_root(repo_root: str = None) -> str:
+    return os.path.abspath(os.path.join(_resolve_repo_root(repo_root), ".."))
+
+
+def _resolve_optional_results_path(raw_path: str, repo_root: str = None) -> str:
+    text = str(raw_path or "").strip()
+    if not text:
+        return ""
+    expanded = os.path.expanduser(text)
+    if os.path.isabs(expanded):
+        return os.path.abspath(expanded)
+    return os.path.abspath(os.path.join(_resolve_workspace_root(repo_root), expanded))
+
+
+def resolve_results_root_path(results_root: str, repo_root: str = None) -> str:
+    resolved = _resolve_optional_results_path(results_root, repo_root=repo_root)
+    if resolved:
+        return resolved
+    return os.path.abspath(
+        os.path.join(_resolve_workspace_root(repo_root), DEFAULT_RESULTS_ROOT_RELATIVE)
+    )
+
+
+def resolve_results_dir_path(results_dir: str, repo_root: str = None) -> str:
+    return _resolve_optional_results_path(results_dir, repo_root=repo_root)
+
+
+def _load_system_results_root_setting(repo_root: str = None) -> str:
+    runtime_config_path = os.path.join(
+        _resolve_repo_root(repo_root),
+        DEFAULT_SYSTEM_RUNTIME_CONFIG_RELATIVE,
+    )
+    if not os.path.exists(runtime_config_path):
+        return ""
+    with open(runtime_config_path, "r", encoding="utf-8") as f:
+        raw = yaml.safe_load(f) or {}
+    return str(((raw.get("PATHS") or {}).get("RESULTS_ROOT")) or "").strip()
+
+
+def build_default_results_root(repo_root: str = None) -> str:
+    configured_root = (
+        str(os.getenv("SPACEVLN_RESULTS_ROOT", "") or "").strip()
+        or _load_system_results_root_setting(repo_root=repo_root)
+    )
+    return resolve_results_root_path(configured_root, repo_root=repo_root)
+
+
+def build_default_results_family_root(
+    family: str = DEFAULT_RESULTS_FAMILY,
+    *,
+    repo_root: str = None,
+    results_root: str = None,
+) -> str:
+    base_root = (
+        resolve_results_root_path(results_root, repo_root=repo_root)
+        if str(results_root or "").strip()
+        else build_default_results_root(repo_root=repo_root)
+    )
+    family_name = str(family or "").strip() or DEFAULT_RESULTS_FAMILY
+    return os.path.abspath(os.path.join(base_root, family_name))
 
 
 def _slugify_results_component(value: str) -> str:
@@ -23,6 +103,21 @@ def _slugify_results_component(value: str) -> str:
     text = re.sub(r"[^A-Za-z0-9._-]+", "-", text)
     text = re.sub(r"-{2,}", "-", text).strip("-._")
     return text or "unknown"
+
+
+def _build_results_component_fallback(
+    config_path: str,
+    *,
+    provider: str,
+    role: str,
+) -> str:
+    resolved_path = resolve_api_config_path(config_path)
+    config_stem = os.path.splitext(os.path.basename(resolved_path))[0] if resolved_path else ""
+    fallback = "-".join(
+        part for part in (str(provider or "").strip(), config_stem.strip(), str(role or "").strip()) if part
+    )
+    slug = _slugify_results_component(fallback)
+    return slug if slug != "unknown" else str(role or "model")
 
 
 def get_active_provider_and_models(config_path: str) -> Tuple[str, str, str]:
@@ -41,9 +136,25 @@ def get_active_provider_and_models(config_path: str) -> Tuple[str, str, str]:
 
 
 def build_model_results_dir_name(config_path: str) -> str:
-    _, llm_model, vlm_model = get_active_provider_and_models(config_path)
-    llm_slug = _slugify_results_component(llm_model)
-    vlm_slug = _slugify_results_component(vlm_model)
+    provider, llm_model, vlm_model = get_active_provider_and_models(config_path)
+    llm_slug = (
+        _slugify_results_component(llm_model)
+        if str(llm_model or "").strip()
+        else _build_results_component_fallback(
+            config_path,
+            provider=provider,
+            role="llm",
+        )
+    )
+    vlm_slug = (
+        _slugify_results_component(vlm_model)
+        if str(vlm_model or "").strip()
+        else _build_results_component_fallback(
+            config_path,
+            provider=provider,
+            role="vlm",
+        )
+    )
     if llm_slug == vlm_slug:
         return llm_slug
     return f"{llm_slug}__{vlm_slug}"
@@ -52,20 +163,15 @@ def build_model_results_dir_name(config_path: str) -> str:
 def build_default_results_dir_from_api_config(
     config_path: str,
     repo_root: str = None,
+    results_root: str = None,
 ) -> str:
-    if repo_root:
-        resolved_repo_root = os.path.abspath(repo_root)
-    else:
-        resolved_repo_root = os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "..", "..", "..")
-        )
     return os.path.abspath(
         os.path.join(
-            resolved_repo_root,
-            "..",
-            "data",
-            "result",
-            "vlnce",
+            build_default_results_family_root(
+                DEFAULT_RESULTS_FAMILY,
+                repo_root=repo_root,
+                results_root=results_root,
+            ),
             build_model_results_dir_name(config_path),
         )
     )
@@ -192,8 +298,12 @@ class APIConfig:
 
 __all__ = [
     "APIConfig",
+    "build_default_results_family_root",
+    "build_default_results_root",
     "build_default_results_dir_from_api_config",
     "build_model_results_dir_name",
     "get_active_provider_and_models",
+    "resolve_results_dir_path",
+    "resolve_results_root_path",
     "resolve_api_config_path",
 ]

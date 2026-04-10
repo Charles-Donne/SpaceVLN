@@ -6,6 +6,7 @@ LLM规划模块
 import re
 import time
 from typing import Any, Dict, List, Tuple, Optional
+from navigation_system.config.core.params.api import THINKING_IMAGE_COMPRESSION_MAX_SIZE
 from navigation_system.vlm.api.api_client import APIConfig, BaseAPIClient
 from navigation_system.vlm.prompts.builders import (
     get_initial_planning_prompt,
@@ -40,8 +41,12 @@ class LLMPlanner(BaseAPIClient):
         # 默认动作空间与interactive_navigation一致
         self.action_space = action_space or "MOVE_FORWARD (0.25m), TURN_LEFT (30°), TURN_RIGHT (30°), STOP"
         
-        # 所有 thinking 输入统一走压缩版本，便于稳定控 token。
-        self.set_compression_config(enabled=True, max_size=448, quality=75)
+        # 方向观察图压缩，global_map 保持全分辨率。
+        self.set_compression_config(
+            enabled=True,
+            max_size=THINKING_IMAGE_COMPRESSION_MAX_SIZE,
+            quality=75,
+        )
         self.last_call_timing_info = {
             "records": [],
             "failed_retry_wait_duration_s": 0.0,
@@ -244,6 +249,7 @@ class LLMPlanner(BaseAPIClient):
         # 组合图像：12方向观察 + 全局地图
         images = observation_images.copy()
         images.append(global_map_image)
+        no_compress = {len(observation_images)}
 
         return self._call_planner_with_retry(
             prompt=prompt,
@@ -251,7 +257,7 @@ class LLMPlanner(BaseAPIClient):
             direction_names=direction_names,
             mode='initial',
             save_dir=save_dir,
-            no_compress=None,
+            no_compress=no_compress,
             failure_label="LLM Planning",
         )
     
@@ -319,6 +325,7 @@ class LLMPlanner(BaseAPIClient):
         # 组合图像：当前位置12方向 + 全局地图
         images = observation_images.copy()
         images.append(global_map_image)
+        no_compress = {len(observation_images)}
 
         return self._call_planner_with_retry(
             prompt=prompt,
@@ -326,6 +333,6 @@ class LLMPlanner(BaseAPIClient):
             direction_names=direction_names,
             mode='verify',
             save_dir=save_dir,
-            no_compress=None,
+            no_compress=no_compress,
             failure_label="LLM Verify",
         )

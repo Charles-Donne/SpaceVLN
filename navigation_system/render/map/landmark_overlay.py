@@ -58,9 +58,9 @@ def draw_action_partition_lines(
         )
 
     section_bounds = [0] + sorted(boundary_xs) + [w_img]
-    section_labels = ["Left 30deg", "Front 0deg", "Right 30deg"]
+    section_labels = ["Left 30", "Front 0", "Right 30"]
     font = cv2.FONT_HERSHEY_SIMPLEX
-    font_scale = 0.56
+    font_scale = 0.62
     font_thickness = 1
     text_color = (255, 0, 0)
     bg_color = (255, 255, 255)
@@ -73,12 +73,12 @@ def draw_action_partition_lines(
         text_size, baseline = cv2.getTextSize(label, font, font_scale, font_thickness)
         text_w, text_h = text_size
         center_x = (left + right) // 2
-        text_x = max(left + 3, min(center_x - text_w // 2, right - text_w - 3))
-        text_y = max(text_h + 7, 17)
+        text_x = max(left + 2, min(center_x - text_w // 2, right - text_w - 2))
+        text_y = max(text_h + 4, 14)
         cv2.rectangle(
             image,
-            (text_x - 2, text_y - text_h - 2),
-            (text_x + text_w + 2, text_y + baseline + 1),
+            (text_x - 1, text_y - text_h - 1),
+            (text_x + text_w + 1, text_y + baseline),
             bg_color,
             -1,
         )
@@ -109,7 +109,7 @@ def draw_landmark_labels(
     image: np.ndarray,
     draw_items: Sequence[LandmarkDrawItem],
     color: Tuple[int, int, int],
-    font_scale: float = 0.62,
+    font_scale: float = 0.58,
     font_thickness: int = 2,
     pad: int = 5,
     avoid_boxes: Optional[Sequence[Tuple[int, int, int, int]]] = None,
@@ -274,7 +274,7 @@ def build_landmark_strip_lines(
                     LandmarkStripSegment(f"{display_prefix}{display_name}{suffix}", name_color),
                     LandmarkStripSegment(f" {distance_m:.1f}m", value_color),
                     LandmarkStripSegment(f" {format_relative_direction(angle_deg)}", value_color),
-                    LandmarkStripSegment(f" c{float(entry.get('confidence', 0.0)):.2f}", value_color),
+                    LandmarkStripSegment(f" conf: {float(entry.get('confidence', 0.0)):.2f}", value_color),
                 ),
             ),
         ))
@@ -321,7 +321,7 @@ def build_landmark_strip_lines(
                     LandmarkStripSegment(f"{display_prefix}{display_name}{suffix}", name_color),
                     LandmarkStripSegment(f" {float(distance_m):.1f}m", value_color),
                     LandmarkStripSegment(f" {format_relative_direction(float(angle_deg))}", value_color),
-                    LandmarkStripSegment(f" c{confidence:.2f}", value_color),
+                    LandmarkStripSegment(f" conf: {confidence:.2f}", value_color),
                 ),
             ),
         ))
@@ -479,12 +479,12 @@ def render_landmark_strip(
 
     font = cv2.FONT_HERSHEY_SIMPLEX
     sample_size = cv2.getTextSize("Ag", font, font_scale, font_thickness)[0]
-    line_h = sample_size[1] + (6 if compact else 10)
-    strip_pad = 4 if compact else 6
-    card_margin_x = 6 if compact else 8
-    card_gap_y = 3 if compact else 6
-    card_pad_x = 6 if compact else 8
-    card_pad_y = 3 if compact else 6
+    line_h = sample_size[1] + (4 if compact else 10)
+    strip_pad = 2 if compact else 6
+    card_margin_x = 4 if compact else 8
+    card_gap_y = 2 if compact else 6
+    card_pad_x = 4 if compact else 8
+    card_pad_y = 2 if compact else 6
     card_inner_w = max(40, image_width - (card_margin_x * 2) - (card_pad_x * 2) - 2)
 
     wrapped_per_item: List[List[List[LandmarkStripSegment]]] = []

@@ -1,6 +1,5 @@
 """Runtime profiles that wire together result dirs, model stacks, and post-run hooks."""
 
-import os
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional
 
@@ -12,8 +11,6 @@ from navigation_system.vlm.api.qwen_context_cache_client import (
 )
 from navigation_system.vlm.reporting.cache_report import (
     build_cache_report,
-    render_cache_report,
-    write_cache_report_json,
 )
 from navigation_system.vlm.runtime_factory import (
     build_default_navigation_model_stack,
@@ -29,18 +26,9 @@ DEFAULT_QWEN_CACHE_API_CONFIG = "navigation_system/config/vlm/vlm_api_config_qwe
 class NavigationRuntimeProfile:
     name: str
     default_api_config_path: str
-    default_results_dir_builder: Callable[[str], str]
+    default_results_dir_builder: Callable[..., str]
     model_stack_builder: Callable[..., Any]
     post_run_hook: Optional[Callable[[Any, Any], None]] = None
-
-
-def _write_text_report(report_text: str, output_path: str) -> str:
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    with open(output_path, "w", encoding="utf-8") as f:
-        f.write(report_text)
-        if not report_text.endswith("\n"):
-            f.write("\n")
-    return output_path
 
 
 def _maybe_generate_qwen_cache_report(args, config) -> None:
@@ -58,12 +46,6 @@ def _maybe_generate_qwen_cache_report(args, config) -> None:
 
     if report.overall.request_count <= 0:
         return
-
-    json_path = os.path.join(results_dir, "cache_report_latest.json")
-    txt_path = os.path.join(results_dir, "cache_report_latest.txt")
-    report_text = render_cache_report(report)
-    write_cache_report_json(report, json_path)
-    _write_text_report(report_text, txt_path)
 
     overall = report.overall
     output_speed = (
@@ -91,7 +73,6 @@ def _maybe_generate_qwen_cache_report(args, config) -> None:
             f"req={overall.request_count} | reported=0 "
             "| cache metrics unavailable in current artifacts"
         )
-    print(f"[VLM][cache][report] {txt_path}")
 
 
 STANDARD_RUNTIME_PROFILE = NavigationRuntimeProfile(

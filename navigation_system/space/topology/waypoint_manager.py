@@ -16,6 +16,7 @@ class WaypointManager:
         self.descriptions: List[str] = []
         self.area_labels: List[str] = []
         self.floor_ids: List[int] = []
+        self.initial_neighborhood_flags: List[bool] = []
         self.counter = 0
         self.initial_waypoint_index: Optional[int] = 0
 
@@ -27,6 +28,7 @@ class WaypointManager:
         area_label: str = "",
         floor_id: Optional[int] = None,
         waypoint_id: Optional[int] = None,
+        near_initial_neighborhood: bool = False,
     ) -> int:
         """Append a waypoint while preserving the full chronological history."""
         if waypoint_id is None:
@@ -40,6 +42,7 @@ class WaypointManager:
         self.descriptions.append(description)
         self.area_labels.append(area_label)
         self.floor_ids.append(int(floor_id) if floor_id is not None else 0)
+        self.initial_neighborhood_flags.append(bool(near_initial_neighborhood))
         return int(waypoint_id)
 
     def get_waypoints(self) -> Tuple[List[Tuple[int, int]], List[int], List[str]]:
@@ -50,6 +53,9 @@ class WaypointManager:
 
     def get_floor_ids(self) -> List[int]:
         return list(self.floor_ids)
+
+    def get_initial_neighborhood_flags(self) -> List[bool]:
+        return [bool(flag) for flag in self.initial_neighborhood_flags]
 
     def clear(self) -> None:
         self.reset()
@@ -64,6 +70,7 @@ class WaypointManager:
             "descriptions": [str(text) for text in self.descriptions],
             "area_labels": [str(label) for label in self.area_labels],
             "floor_ids": [int(floor_id) for floor_id in self.floor_ids],
+            "initial_neighborhood_flags": [bool(flag) for flag in self.initial_neighborhood_flags],
             "counter": int(self.counter),
             "initial_waypoint_index": (
                 int(self.initial_waypoint_index)
@@ -91,6 +98,15 @@ class WaypointManager:
             self.floor_ids = [0 for _ in self.ids]
         if len(self.floor_ids) < len(self.ids):
             self.floor_ids.extend([0 for _ in range(len(self.ids) - len(self.floor_ids))])
+        raw_initial_flags = list(state.get("initial_neighborhood_flags", []) or [])
+        self.initial_neighborhood_flags = [
+            bool(raw_initial_flags[index])
+            for index in range(min(len(raw_initial_flags), len(self.ids)))
+        ]
+        if len(self.initial_neighborhood_flags) < len(self.ids):
+            self.initial_neighborhood_flags.extend(
+                [False for _ in range(len(self.ids) - len(self.initial_neighborhood_flags))]
+            )
         self.counter = int(state.get("counter", len(self.ids)) or len(self.ids))
         initial_index = state.get("initial_waypoint_index", 0)
         self.initial_waypoint_index = (

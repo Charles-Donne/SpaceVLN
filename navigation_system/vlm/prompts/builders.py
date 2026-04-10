@@ -223,16 +223,14 @@ def get_action_execution_prompt(
     turn_angle: int = 30,
 ) -> str:
     """Render the action-execution prompt."""
+    del waypoint_summary
     if not progress_summary:
         progress_summary = "Just started"
-    if not waypoint_summary:
-        waypoint_summary = "No space structure recorded yet."
 
     return ACTION_EXECUTION_PROMPT.format(
         subtask_destination=next_waypoint,
         subtask_instruction=subtask_instruction,
         progress_summary=progress_summary,
-        waypoint_summary=waypoint_summary,
         previous_action_reason=previous_action_reason or "N/A (first step)",
         detected_landmarks=detected_landmarks or "none",
         obstacle_perception_summary=_build_obstacle_perception_summary(obstacle_distances),

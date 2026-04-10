@@ -266,7 +266,7 @@ class ActionExecutor(BaseAPIClient):
             first_person_image: 第一人称RGB图像路径
             action_mapping: 动作名称到ID的映射
             progress_summary: 当前子任务进度摘要
-            waypoint_summary: waypoint历史摘要（含相对当前pose的方向和距离）
+            waypoint_summary: 兼容保留字段，action prompt当前不再使用
             detection_image: 目标检测图像路径（可选）
             detected_landmarks: 已检测landmark类别字符串（可选）
             previous_action_reason: 上一步的action_analysis（可选）

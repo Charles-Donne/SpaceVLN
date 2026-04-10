@@ -57,6 +57,9 @@ def sync_runtime_panels(config: CN) -> CN:
         config.EVAL_CKPT_PATH_DIR = str(
             getattr(paths_panel, "EVAL_CKPT_PATH_DIR", getattr(config, "EVAL_CKPT_PATH_DIR", "")) or ""
         )
+        config.RESULTS_ROOT = str(
+            getattr(paths_panel, "RESULTS_ROOT", getattr(config, "RESULTS_ROOT", "")) or ""
+        )
         config.RESULTS_DIR = str(
             getattr(paths_panel, "RESULTS_DIR", getattr(config, "RESULTS_DIR", "")) or ""
         )

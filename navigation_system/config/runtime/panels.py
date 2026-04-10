@@ -59,7 +59,8 @@ def build_path_panel() -> CN:
     cfg.TENSORBOARD_DIR = "data/tensorboard_dirs/"
     cfg.CHECKPOINT_FOLDER = "data/checkpoints/"
     cfg.EVAL_CKPT_PATH_DIR = "data/checkpoints/"
-    cfg.RESULTS_DIR = "data/logs/eval_results/"
+    cfg.RESULTS_ROOT = "data/result/"
+    cfg.RESULTS_DIR = ""
     cfg.VIDEO_DIR = "data/logs/video/"
     return cfg
 
@@ -86,8 +87,8 @@ def build_space_panel() -> CN:
 
     cfg.SENSOR = CN()
     cfg.SENSOR.HFOV_DEG = 79.0
-    cfg.SENSOR.FRAME_WIDTH = 160
-    cfg.SENSOR.FRAME_HEIGHT = 120
+    cfg.SENSOR.FRAME_WIDTH = 640
+    cfg.SENSOR.FRAME_HEIGHT = 480
     cfg.SENSOR.AGENT_HEIGHT_M = 0.88
     cfg.SENSOR.DEVICE_ID = 0
     cfg.SENSOR.NUM_ENVIRONMENTS = 1
