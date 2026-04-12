@@ -169,8 +169,11 @@ def _run_single_episode_attempt(
                 "result_detail_file": result_path,
                 "episode_log_path": episode_log_path,
             }
-    except Exception as exc:
+    except BaseException as exc:
         import traceback
+
+        if isinstance(exc, KeyboardInterrupt):
+            raise
 
         error_msg = str(exc)
         timing_summary = {}

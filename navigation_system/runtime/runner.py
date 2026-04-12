@@ -1,6 +1,7 @@
 """Thin runtime orchestrator for SpaceVLN navigation."""
 
 import argparse
+import os
 from typing import List
 
 from navigation_system.runtime.episode_selection import (
@@ -97,6 +98,15 @@ def run_navigation_from_args(
     profile: NavigationRuntimeProfile = STANDARD_RUNTIME_PROFILE,
 ) -> int:
     config = load_runtime_config(args, profile=profile)
+    results_dir = str(getattr(config, "RESULTS_DIR", "") or "").strip()
+    if results_dir:
+        try:
+            os.makedirs(results_dir, exist_ok=True)
+        except Exception as exc:
+            print(f"\n❌ 结果目录不可写: {results_dir}")
+            print(f"   具体错误: {exc}")
+            print("   可通过 --results-dir 指定一个当前用户可写的目录重新运行。")
+            return 1
     episode_ids = resolve_episode_ids(args, config)
     episode_ids = filter_episode_ids(args, config, episode_ids)
 
@@ -132,11 +142,25 @@ def run_navigation_from_args(
                 )
             )
 
+    failed_results = [item for item in results_summary if not bool(item.get("success", False))]
+    if failed_results:
+        print("\n⚠️ 以下 episodes 运行失败:", flush=True)
+        for item in failed_results:
+            episode_id = item.get("episode_id", "?")
+            error = str(item.get("error") or "").strip()
+            reason = str(item.get("reason") or "").strip()
+            parts = [f"Episode {episode_id}"]
+            if reason:
+                parts.append(f"reason={reason}")
+            if error:
+                parts.append(f"error={error}")
+            print("   " + " | ".join(parts), flush=True)
+
     del results_summary
     maybe_generate_report(args, config, verbose=False)
     if profile.post_run_hook is not None:
         profile.post_run_hook(args, config)
-    return 0
+    return 1 if failed_results else 0
 
 
 __all__ = [

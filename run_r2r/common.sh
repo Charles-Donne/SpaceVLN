@@ -31,6 +31,27 @@ spacevln_env_root() {
     cd "$python_dir/.." && pwd
 }
 
+spacevln_prepend_colon_var() {
+    local var_name="$1"
+    local value="$2"
+    local current_value="${!var_name:-}"
+
+    if [[ -z "$value" ]]; then
+        return
+    fi
+
+    if [[ -z "$current_value" ]]; then
+        export "$var_name=$value"
+        return
+    fi
+
+    if [[ ":$current_value:" == *":$value:"* ]]; then
+        return
+    fi
+
+    export "$var_name=$value:$current_value"
+}
+
 spacevln_setup_runtime_env() {
     local python_bin="$1"
 
@@ -46,8 +67,24 @@ spacevln_setup_runtime_env() {
 
     if [[ "$python_bin" == "$HOME/anaconda3/envs/"*"/bin/python" ]]; then
         local env_root
+        local torch_lib
+        local preload_libs=()
         env_root="$(spacevln_env_root "$python_bin")"
-        export LD_LIBRARY_PATH="$env_root/lib:$env_root/lib/python3.8/site-packages/torch/lib:${LD_LIBRARY_PATH:-}"
+        torch_lib="$env_root/lib/python3.8/site-packages/torch/lib"
+
+        if [[ -d "$torch_lib" ]]; then
+            spacevln_prepend_colon_var LD_LIBRARY_PATH "$torch_lib"
+        fi
+
+        if [[ -f "$env_root/lib/libstdc++.so.6" ]]; then
+            preload_libs+=("$env_root/lib/libstdc++.so.6")
+        fi
+        if [[ -f "$env_root/lib/libgcc_s.so.1" ]]; then
+            preload_libs+=("$env_root/lib/libgcc_s.so.1")
+        fi
+        if [[ ${#preload_libs[@]} -gt 0 ]]; then
+            spacevln_prepend_colon_var LD_PRELOAD "$(IFS=:; printf '%s' "${preload_libs[*]}")"
+        fi
     fi
 }
 

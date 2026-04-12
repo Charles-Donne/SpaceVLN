@@ -5,9 +5,10 @@ import math
 import os
 from typing import Any, Dict, List, Optional
 
-from navigation_system.config import get_config
-from navigation_system.config.core.params.thresholds import EVAL_SUCCESS_DISTANCE_M
-from navigation_system.runtime.storage.artifacts import iter_all_episode_log_paths
+from navigation_system.runtime.storage.artifacts import (
+    get_episode_log_path,
+    iter_all_episode_log_paths,
+)
 
 
 def check_inf_nan(value: Any) -> Any:
@@ -118,6 +119,17 @@ def _compute_timing_metrics(results: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def _load_result_payload(filepath: str) -> Optional[Dict[str, Any]]:
+    filename = os.path.basename(filepath)
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except Exception as exc:
+        print(f"⚠️  读取文件失败 {filename}: {exc}")
+        return None
+    return _normalize_report_item(payload)
+
+
 def load_results(results_dir: str) -> List[Dict[str, Any]]:
     log_dir = os.path.join(results_dir, "log")
     if not os.path.exists(log_dir):
@@ -127,15 +139,11 @@ def load_results(results_dir: str) -> List[Dict[str, Any]]:
     result_mtime_by_episode: Dict[str, float] = {}
     for filepath in iter_all_episode_log_paths(results_dir):
         filename = os.path.basename(filepath)
-        try:
-            with open(filepath, "r", encoding="utf-8") as f:
-                payload = json.load(f)
-        except Exception as exc:
-            print(f"⚠️  读取文件失败 {filename}: {exc}")
+        payload = _load_result_payload(filepath)
+        if payload is None:
             continue
 
         episode_key = str(payload.get("episode_id", filename))
-        payload = _normalize_report_item(payload)
         current_mtime = os.path.getmtime(filepath)
         previous_mtime = result_mtime_by_episode.get(episode_key, float("-inf"))
         if episode_key not in results_by_episode or current_mtime >= previous_mtime:
@@ -150,6 +158,28 @@ def load_results(results_dir: str) -> List[Dict[str, Any]]:
             return (1, str(episode_id))
 
     return sorted(results_by_episode.values(), key=_episode_sort_key)
+
+
+def load_results_in_episode_range(
+    results_dir: str,
+    *,
+    start_episode_id: int,
+    end_episode_id: int,
+) -> List[Dict[str, Any]]:
+    log_dir = os.path.join(results_dir, "log")
+    if not os.path.exists(log_dir):
+        return []
+
+    results: List[Dict[str, Any]] = []
+    for episode_id in range(int(start_episode_id), int(end_episode_id) + 1):
+        filepath = get_episode_log_path(results_dir, episode_id)
+        if not os.path.exists(filepath):
+            continue
+        payload = _load_result_payload(filepath)
+        if payload is None:
+            continue
+        results.append(payload)
+    return results
 
 
 def _episode_id_as_int(item: Dict[str, Any]) -> Optional[int]:
@@ -266,13 +296,17 @@ def print_summary(metrics: Dict[str, Any]) -> None:
 
 
 def _resolve_success_distance_m(exp_config: Optional[str]) -> float:
+    default_success_distance_m = 3.0
     if not exp_config:
-        return float(EVAL_SUCCESS_DISTANCE_M)
+        return default_success_distance_m
     try:
+        from navigation_system.config import get_config
+        from navigation_system.config.core.params.thresholds import EVAL_SUCCESS_DISTANCE_M
+
         config = get_config(exp_config, [])
         return float(getattr(config.EVAL, "SUCCESS_DISTANCE_M", EVAL_SUCCESS_DISTANCE_M))
     except Exception:
-        return float(EVAL_SUCCESS_DISTANCE_M)
+        return default_success_distance_m
 
 
 def print_debug_info(metrics: Dict[str, Any], success_distance_m: float) -> None:
@@ -501,21 +535,38 @@ def generate_results_report(
     if verbose:
         print(f"📂 加载结果: {results_dir}")
 
-    all_results = load_results(results_dir)
-    if not all_results:
-        raise FileNotFoundError(f"未找到任何episode结果: {os.path.join(results_dir, 'log')}")
+    use_direct_range_load = start_episode_id is not None and end_episode_id is not None
+    if use_direct_range_load:
+        results = load_results_in_episode_range(
+            results_dir,
+            start_episode_id=int(start_episode_id),
+            end_episode_id=int(end_episode_id),
+        )
+    else:
+        all_results = load_results(results_dir)
+        results = filter_results_by_episode_range(
+            all_results,
+            start_episode_id=start_episode_id,
+            end_episode_id=end_episode_id,
+        )
 
-    results = filter_results_by_episode_range(
-        all_results,
-        start_episode_id=start_episode_id,
-        end_episode_id=end_episode_id,
-    )
     if not results:
         if start_episode_id is not None or end_episode_id is not None:
             raise FileNotFoundError(
                 f"未找到指定范围内的episode结果: [{start_episode_id}, {end_episode_id}]"
             )
         raise FileNotFoundError(f"未找到任何episode结果: {os.path.join(results_dir, 'log')}")
+    if start_episode_id is not None or end_episode_id is not None:
+        filtered_results = filter_results_by_episode_range(
+            results,
+            start_episode_id=start_episode_id,
+            end_episode_id=end_episode_id,
+        )
+        if not filtered_results:
+            raise FileNotFoundError(
+                f"未找到指定范围内的episode结果: [{start_episode_id}, {end_episode_id}]"
+            )
+        results = filtered_results
 
     report_output_dir = _resolve_report_output_dir(
         results_dir,
@@ -526,22 +577,18 @@ def generate_results_report(
 
     if verbose:
         if start_episode_id is not None or end_episode_id is not None:
-            print(
-                f"✅ 总共加载 {len(all_results)} 个episode，"
-                f"范围过滤后保留 {len(results)} 个episode "
-                f"([{start_episode_id}, {end_episode_id}])"
-            )
+            print(f"✅ 加载了 {len(results)} 个episode ([{start_episode_id}, {end_episode_id}])")
             print(f"📁 部分报告输出目录: {report_output_dir}")
         else:
             print(f"✅ 加载了 {len(results)} 个episode")
 
     metrics = compute_metrics(results)
     saved_paths: Dict[str, str] = {}
-    success_distance_m = _resolve_success_distance_m(exp_config)
 
     if verbose:
         print_summary(metrics)
         if debug:
+            success_distance_m = _resolve_success_distance_m(exp_config)
             print_debug_info(metrics, success_distance_m)
 
     if save:
