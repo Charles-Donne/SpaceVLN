@@ -1,0 +1,26 @@
+name: no-landmark
+description: "Landmark perception ablation: remove landmark-related prompt/image inputs only."
+
+thinking_prompt:
+  include_detected_landmarks: true
+  include_waypoint_summary: true
+  include_previous_subtask_landmark_summary: false
+  include_verify_notice: true
+
+action_prompt:
+  include_progress_summary: true
+  include_previous_action_reason: true
+  include_detected_landmarks: false
+  include_obstacle_summary: true
+  include_landmark_map_info: false
+
+thinking_image:
+  include_detection_boxes: false
+  include_obstacle_text: true
+  include_landmark_strip: false
+  include_space_waypoint_strip: true
+  include_last_visited_marker: true
+  include_global_map_space_structure: true
+
+action_image:
+  use_detection_overlay: false
