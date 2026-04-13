@@ -125,6 +125,7 @@ def _run_single_episode_attempt(
     stdout_log_mode: str,
 ) -> Dict[str, Any]:
     controller = None
+    episode_initialized = False
     console_result: Dict[str, Any] = {
         "episode_id": int(episode_id),
         "success": False,
@@ -149,6 +150,7 @@ def _run_single_episode_attempt(
                 profile=profile,
             )
             controller.reset_episode(episode_id=episode_id)
+            episode_initialized = True
 
             result = controller.run_vlm_navigation(max_subtask_steps=args.max_subtask_steps)
             total_steps = result.get("total_steps", result.get("steps", 0))
@@ -184,7 +186,7 @@ def _run_single_episode_attempt(
                 timing_summary = controller._build_episode_timing_summary()
             except Exception:
                 timing_summary = {}
-        if controller is not None:
+        if controller is not None and episode_initialized:
             try:
                 finalized_steps = int(getattr(controller, "current_step", 0) or 0)
                 final_metrics = controller.finish_episode(success=False, stop_action=True)

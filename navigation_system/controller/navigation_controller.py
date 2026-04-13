@@ -1742,7 +1742,15 @@ class VLMNavigationController(BaseNavigationController):
             for old_episode_dir in get_episode_detail_path_candidates(self.config.RESULTS_DIR, episode_id):
                 if os.path.exists(old_episode_dir):
                     print(f"[Reset] 清理旧数据: {old_episode_dir}")
-                    shutil.rmtree(old_episode_dir)
+                    try:
+                        shutil.rmtree(old_episode_dir)
+                    except PermissionError as exc:
+                        raise PermissionError(
+                            "Cannot remove stale episode outputs before reset: "
+                            f"{old_episode_dir}. This is usually caused by files created "
+                            "by another user or by a Docker container running as root. "
+                            "Fix the ownership or delete the stale directory first."
+                        ) from exc
         
         # 调用父类重置
         super().reset_episode(episode_id)
