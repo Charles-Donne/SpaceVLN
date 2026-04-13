@@ -13,6 +13,38 @@ spacevln_ablation_normalize_preset() {
     printf '%s\n' "$value"
 }
 
+spacevln_ablation_canonical_label() {
+    local normalized
+    normalized="$(spacevln_ablation_normalize_preset "$1")"
+
+    case "$normalized" in
+        ""|default|full|all)
+            printf '%s\n' "default"
+            ;;
+        landmark|no_landmark|without_landmark)
+            printf '%s\n' "landmark"
+            ;;
+        space|space_structure|no_space_structure|without_space_structure)
+            printf '%s\n' "space_structure"
+            ;;
+        planning_reasoning|planning|no_planning_reasoning|without_planning_reasoning)
+            printf '%s\n' "planning_reasoning"
+            ;;
+        action_reasoning|action|no_action_reasoning|without_action_reasoning)
+            printf '%s\n' "action_reasoning"
+            ;;
+        planning_action_reasoning|planning_action|no_planning_action_reasoning|without_planning_action_reasoning|reasoning|no_reasoning|without_reasoning)
+            printf '%s\n' "planning_action_reasoning"
+            ;;
+        both|none|no_landmark_no_space_structure|without_both)
+            printf '%s\n' "both"
+            ;;
+        *)
+            printf '%s\n' "$normalized"
+            ;;
+    esac
+}
+
 spacevln_ablation_resolve_preset_path() {
     local normalized
     normalized="$(spacevln_ablation_normalize_preset "$1")"
@@ -26,6 +58,15 @@ spacevln_ablation_resolve_preset_path() {
             ;;
         space|space_structure|no_space_structure|without_space_structure)
             printf '%s\n' "navigation_system/ablation/configs/no_space_structure.yaml"
+            ;;
+        planning_reasoning|planning|no_planning_reasoning|without_planning_reasoning)
+            printf '%s\n' "navigation_system/ablation/configs/no_planning_reasoning.yaml"
+            ;;
+        action_reasoning|action|no_action_reasoning|without_action_reasoning)
+            printf '%s\n' "navigation_system/ablation/configs/no_action_reasoning.yaml"
+            ;;
+        planning_action_reasoning|planning_action|no_planning_action_reasoning|without_planning_action_reasoning|reasoning|no_reasoning|without_reasoning)
+            printf '%s\n' "navigation_system/ablation/configs/no_planning_action_reasoning.yaml"
             ;;
         both|none|no_landmark_no_space_structure|without_both)
             printf '%s\n' "navigation_system/ablation/configs/no_landmark_no_space_structure.yaml"
@@ -51,11 +92,17 @@ spacevln_ablation_print_usage() {
   default            使用隔离目录，但不做消融
   landmark           去掉 landmark 感知输入
   space_structure    去掉 space structure 输入
+  planning_reasoning 去掉 planning 推理 prompt 段
+  action_reasoning   去掉 action 决策 prompt 段
+  planning_action_reasoning 去掉 planning + action 两侧 reasoning
   both               同时去掉 landmark 和 space structure
 
 示例:
   bash run_r2r/${script_name} landmark 1 100 260 4
   bash run_r2r/${script_name} space_structure 1 100 260 4
+  bash run_r2r/${script_name} planning_reasoning 1 100 260 4
+  bash run_r2r/${script_name} action_reasoning 1 100 260 4
+  bash run_r2r/${script_name} planning_action_reasoning 1 100 260 4
   bash run_r2r/${script_name} both 1 1420 260 4
   bash run_r2r/${script_name} --ablation no_landmark 1 100 260 4
 
@@ -79,7 +126,7 @@ spacevln_ablation_label_from_config_path() {
     local preset_path=""
     local resolved_preset_path=""
 
-    for label in default landmark space_structure both; do
+    for label in default landmark space_structure planning_reasoning action_reasoning planning_action_reasoning both; do
         case "$label" in
             default)
                 preset_path="$(spacevln_ablation_default_config)"
@@ -90,6 +137,15 @@ spacevln_ablation_label_from_config_path() {
             space_structure)
                 preset_path="navigation_system/ablation/configs/no_space_structure.yaml"
                 ;;
+            planning_reasoning)
+                preset_path="navigation_system/ablation/configs/no_planning_reasoning.yaml"
+                ;;
+            action_reasoning)
+                preset_path="navigation_system/ablation/configs/no_action_reasoning.yaml"
+                ;;
+            planning_action_reasoning)
+                preset_path="navigation_system/ablation/configs/no_planning_action_reasoning.yaml"
+                ;;
             both)
                 preset_path="navigation_system/ablation/configs/no_landmark_no_space_structure.yaml"
                 ;;
@@ -99,6 +155,13 @@ spacevln_ablation_label_from_config_path() {
         if [[ "$resolved_config" == "$resolved_preset_path" ]]; then
             printf '%s\n' "$label"
             return 0
+        fi
+        if [[ "$label" == "planning_action_reasoning" ]]; then
+            resolved_preset_path="$(spacevln_ablation_resolve_config_path "navigation_system/ablation/configs/no_reasoning.yaml" "$project_root")" || true
+            if [[ -n "${resolved_preset_path:-}" && "$resolved_config" == "$resolved_preset_path" ]]; then
+                printf '%s\n' "$label"
+                return 0
+            fi
         fi
     done
 
@@ -184,7 +247,7 @@ spacevln_ablation_parse_cli() {
 
     local preset_path=""
     if preset_path="$(spacevln_ablation_resolve_preset_path "$raw_value" 2>/dev/null)"; then
-        SPACEVLN_ABLATION_SELECTED_PRESET="$(spacevln_ablation_normalize_preset "$raw_value")"
+        SPACEVLN_ABLATION_SELECTED_PRESET="$(spacevln_ablation_canonical_label "$raw_value")"
         SPACEVLN_ABLATION_RESOLVED_CONFIG="$(spacevln_ablation_resolve_config_path "$preset_path" "$project_root")" || return 1
         return 0
     fi

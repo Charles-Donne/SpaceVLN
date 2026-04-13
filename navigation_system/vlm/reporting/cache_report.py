@@ -241,6 +241,49 @@ def build_cache_report(results_dir: str) -> CacheRunReport:
     )
 
 
+def print_cache_report_summary(results_dir: str) -> Optional[CacheRunReport]:
+    resolved_results_dir = str(results_dir or "").strip()
+    if not resolved_results_dir:
+        return None
+
+    try:
+        report = build_cache_report(resolved_results_dir)
+    except Exception as exc:
+        print(f"⚠️  无法生成缓存报告: {exc}")
+        return None
+
+    if report.overall.request_count <= 0:
+        return None
+
+    overall = report.overall
+    output_speed = (
+        float(overall.output_tokens) / float(overall.total_duration_s)
+        if overall.total_duration_s > 0
+        else 0.0
+    )
+    reported_ratio = (
+        float(overall.cache_reported_requests) / float(overall.request_count)
+        if overall.request_count > 0
+        else 0.0
+    )
+    if overall.cache_reported_requests > 0:
+        print(
+            "[VLM][cache][overall] "
+            f"req={overall.request_count} "
+            f"| reported={reported_ratio * 100:.1f}% "
+            f"| hit={overall.weighted_cache_hit_ratio * 100:.1f}% "
+            f"| cost={overall.cost_ratio:.3f}x "
+            f"| speed={output_speed:.1f} tok/s"
+        )
+    else:
+        print(
+            "[VLM][cache][overall] "
+            f"req={overall.request_count} | reported=0 "
+            "| cache metrics unavailable in current artifacts"
+        )
+    return report
+
+
 def render_cache_report(report: CacheRunReport) -> str:
     lines = [
         "VLM Cache Report",
@@ -325,6 +368,7 @@ __all__ = [
     "CacheRequestRecord",
     "CacheRunReport",
     "build_cache_report",
+    "print_cache_report_summary",
     "render_cache_report",
     "write_cache_report_json",
 ]

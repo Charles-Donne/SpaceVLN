@@ -14,7 +14,7 @@
 provider: "dashscope"
 
 dashscope:
-  api_key: "sk-your-dashscope-key"
+  api_key: "env:DASHSCOPE_API_KEY"
   base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
   wire_api: "chat_completions"
   llm_model: "qwen3.5-plus"

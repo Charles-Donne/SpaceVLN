@@ -1,6 +1,6 @@
 """SpaceVLN ablation navigation runner."""
 
-from navigation_system.ablation.runner import (
+from navigation_system.ablation.runtime.runner import (
     build_arg_parser,
     run_navigation_from_args,
 )

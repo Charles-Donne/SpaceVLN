@@ -1,0 +1,26 @@
+name: no-planning-reasoning
+description: "Planning reasoning ablation: remove explicit planning reasoning/process/example prompt sections only."
+
+thinking_prompt:
+  include_detected_landmarks: true
+  include_waypoint_summary: true
+  include_previous_subtask_landmark_summary: true
+  include_verify_notice: true
+
+action_prompt:
+  include_progress_summary: true
+  include_previous_action_reason: true
+  include_detected_landmarks: true
+  include_obstacle_summary: true
+  include_landmark_map_info: true
+
+thinking_image:
+  include_detection_boxes: true
+  include_obstacle_text: true
+  include_landmark_strip: true
+  include_space_waypoint_strip: true
+  include_last_visited_marker: true
+  include_global_map_space_structure: true
+
+action_image:
+  use_detection_overlay: true

@@ -1,6 +1,6 @@
 """SpaceVLN ablation runner for the Qwen explicit-cache runtime."""
 
-from navigation_system.ablation.runner_qwen_cache import (
+from navigation_system.ablation.runtime.runner_qwen_cache import (
     build_arg_parser,
     run_navigation_from_args,
 )

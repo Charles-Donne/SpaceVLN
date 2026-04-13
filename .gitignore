@@ -46,9 +46,8 @@ vlnce_baselines/detection/models/*.pt
 *.ckpt
 
 # API Keys and Secrets (CRITICAL - DO NOT COMMIT)
-/navigation_system/config/vlm/vlm_api_config.yaml
-/navigation_system/config/vlm/vlm_api_config_qwen_cache.yaml
-!*_config.yaml.template
+/navigation_system/config/vlm/*.yaml
+!/navigation_system/config/vlm/*.yaml.template
 .env
 secrets.yaml
 *.key

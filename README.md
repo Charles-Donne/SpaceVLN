@@ -1,17 +1,108 @@
 # SpaceVLN
 
-SpaceVLN 是一个在 Habitat 上运行的分层视觉语言导航系统。当前仓库已经按“单机单项目”使用场景收缩过一轮，主链路集中在规划、动作、建图、结果保存和报告生成这几层，不再保留旧的交互式入口和历史兼容脚本。
+SpaceVLN is a modular vision-language navigation system for continuous VLN-CE evaluation in Habitat. The repository integrates hierarchical language-conditioned planning, action selection, explicit spatial structure modeling, landmark-centric perception, grounded visual reasoning, batch evaluation utilities, and an isolated ablation subsystem for controlled analysis.
 
-## 1. 环境准备
+The implementation is built on ideas and engineering components inherited from prior embodied navigation systems, in particular `NaVid-VLN-CE` and `CA-Nav`, while adapting the full runtime to a Habitat-based continuous evaluation stack with GroundingDINO/SAM-style perception and a reorganized experimental interface.
 
-仓库默认按 `conda + Python 3.8` 使用，建议新建独立环境 `spacevln`：
+## Abstract
+
+## Overview
+
+This repository is intended to serve as an experimental research codebase rather than a minimal demo. Relative to the upstream projects it builds upon, the current codebase emphasizes:
+
+- a unified navigation runtime for planner/action VLM inference;
+- explicit `space structure` and `landmark` representations for navigation state;
+- modular rendering for thinking views, action views, and replay artifacts;
+- persistent run artifacts for qualitative analysis and failure diagnosis;
+- isolated ablation experiments that do not modify the original system prompts in place.
+
+The repository is **not** a line-by-line reproduction of any single upstream project. Instead, it consolidates and adapts ideas from:
+
+- `NaVid-VLN-CE`: <https://github.com/jzhzhang/NaVid-VLN-CE>
+- `CA-Nav-code`: <https://github.com/Chenkehan21/CA-Nav-code>
+- `Habitat-Lab`: <https://github.com/facebookresearch/habitat-lab>
+- `Habitat-Sim`: <https://github.com/facebookresearch/habitat-sim>
+- `GroundingDINO`: <https://github.com/IDEA-Research/GroundingDINO>
+- `Grounded-Segment-Anything`: <https://github.com/IDEA-Research/Grounded-Segment-Anything>
+- `VLN-CE`: <https://github.com/jacobkrantz/VLN-CE>
+
+## Validated Software Stack
+
+The current SpaceVLN codebase is organized around a **legacy but validated Habitat stack** rather than the latest Habitat releases.
+
+### Core stack used by this repository
+
+- Python: `3.8`
+- Habitat-Lab: `0.1.7`
+- Habitat-Sim: `0.1.7`
+- GroundingDINO: `0.1.0`
+- PyTorch: install a CUDA-compatible build for your machine
+- Python package snapshot: synchronized from the validated `spatial_agent` conda environment
+
+### Important note
+
+The official current Habitat documentation now targets newer Python versions. However, this repository imports legacy `habitat`, `habitat_baselines`, and `habitat_sim` interfaces that are consistent with the `0.1.7` generation of Habitat-Lab / Habitat-Sim. For reproducibility, we recommend staying on that stack unless you explicitly plan to port the code.
+
+## Repository Layout
+
+```text
+SpaceVLN/
+├── navigation_system/
+│   ├── controller/        # navigation control loop
+│   ├── vlm/               # planner, executor, prompts, API clients
+│   ├── space/             # map, topology, landmarks, spatial descriptors
+│   ├── render/            # thinking/action visual inputs and replay outputs
+│   ├── runtime/           # runners, batch execution, reports, storage
+│   ├── detection/         # GroundingDINO + SAM / RepViT-SAM integration
+│   └── ablation/          # isolated ablation subsystem
+├── habitat_extensions/    # Habitat task, sensors, measures, simulator extensions
+├── run_r2r/               # shell entrypoints for evaluation and reporting
+├── docs/                  # architecture and deployment notes
+└── vlm_navigation*.py     # Python entrypoints
+```
+
+## Recommended Workspace Layout
+
+The default configuration assumes the following workspace organization:
+
+```text
+nav_ws/
+├── SpaceVLN/
+├── habitat-lab/
+├── GroundingDINO/
+└── data/
+    ├── datasets/
+    ├── scene_datasets/
+    └── model/
+        └── grounded_sam/
+```
+
+By default, SpaceVLN expects:
+
+- Habitat/VLN datasets under `../data/datasets/`
+- scene assets under `../data/scene_datasets/`
+- detection checkpoints under `../data/model/grounded_sam/`
+- a local editable `habitat-lab` source tree at `../habitat-lab`
+- a local editable `GroundingDINO` source tree at `../GroundingDINO`
+
+If your directory layout differs, update:
+
+- `habitat_extensions/config/spacevln_task.yaml`
+- `navigation_system/config/system/00_runtime.yaml`
+- `navigation_system/config/system/10_detection_models.yaml`
+
+## Installation
+
+### 1. Create a Python environment
 
 ```bash
-conda create -n spacevln python=3.8 -y
+conda create -n spacevln python=3.8 cmake=3.14.0 -y
 conda activate spacevln
 ```
 
-先安装与你机器 CUDA 匹配的 PyTorch。当前工作环境使用的是 CUDA 12.1 版本组合：
+### 2. Install PyTorch
+
+Install a CUDA-compatible PyTorch build appropriate for your machine. One tested example is:
 
 ```bash
 pip install --extra-index-url https://download.pytorch.org/whl/cu121 \
@@ -20,116 +111,146 @@ pip install --extra-index-url https://download.pytorch.org/whl/cu121 \
   torchaudio==2.1.2+cu121
 ```
 
-再安装仓库依赖：
+If you use a different CUDA runtime, replace the wheels accordingly.
+
+### 3. Install Habitat-Sim
+
+For this repository, `habitat-sim==0.1.7` via conda is the recommended installation path.
 
 ```bash
-cd /home/charlesdonne/project/nav_ws/SpaceVLN
+conda install habitat-sim=0.1.7 headless withbullet -c conda-forge -c aihabitat
+```
+
+Remarks:
+
+- `headless` is recommended for servers and multi-GPU machines.
+- `withbullet` is recommended for consistency with Habitat installation guidance.
+- If you require a display-attached build, adjust the conda flags accordingly.
+
+### 4. Clone sibling source repositories
+
+Clone the external source repositories expected by the current SpaceVLN workspace layout:
+
+```bash
+cd ..
+git clone https://github.com/facebookresearch/habitat-lab.git
+git clone https://github.com/IDEA-Research/GroundingDINO.git
+```
+
+Notes:
+
+- the current `requirements.txt` installs both repositories in editable mode from sibling paths;
+- the validated Habitat-Lab source tree used with this system exposes both `habitat` and `habitat_baselines`.
+
+### 5. Install SpaceVLN Python dependencies
+
+Before installation, set `CUDA_HOME` for GroundingDINO compilation:
+
+```bash
+export CUDA_HOME=/path/to/your/cuda
+```
+
+Then return to SpaceVLN and install the validated dependency snapshot:
+
+```bash
+cd ../SpaceVLN
 pip install -r requirements.txt
 ```
 
-`requirements.txt` 里默认依赖本地 Habitat：
+This requirements file is intentionally aligned with the currently validated `spatial_agent` environment. The README still recommends creating a fresh environment named `spacevln`, but the version pins are synchronized from that validated runtime snapshot.
+
+## Data and Checkpoints
+
+### Navigation datasets
+
+The default task configuration reads:
+
+- `../data/datasets/R2R_VLNCE_v1-3_preprocessed/val_unseen.json.gz`
+- `../data/datasets/R2R_VLNCE_v1-3_preprocessed/val_unseen_gt.json.gz`
+- `../data/scene_datasets/`
+
+These paths are defined in `habitat_extensions/config/spacevln_task.yaml`.
+
+### Detection checkpoints
+
+Detection model paths are defined in:
+
+- `navigation_system/config/system/10_detection_models.yaml`
+
+The expected layout is:
 
 ```text
--e ../habitat-lab
+../data/model/grounded_sam/
+├── GroundingDINO_SwinT_OGC.py
+├── groundingdino_swint_ogc.pth
+├── sam_vit_h_4b8939.pth
+└── repvit_sam.pt
 ```
 
-所以请确认同级目录存在可用的 [`habitat-lab`](/home/charlesdonne/project/nav_ws/habitat-lab)。
+Notes:
 
-## 2. 模型与数据
+- `GroundingDINO_SwinT_OGC.py` can be copied from the GroundingDINO repository, or the config path can be redirected to the source tree.
+- If RepViT-SAM is unavailable, set `USE_REPVIT_SAM: false` in `navigation_system/config/system/10_detection_models.yaml`.
 
-运行前需要准备两类外部资源：
+## API Configuration
 
-- Habitat 数据与 R2R/SpaceVLN 评测数据。
-- GroundedSAM / RepViT-SAM 权重。
+SpaceVLN does not commit active provider credentials. Create local configuration files from the templates in `navigation_system/config/vlm/`.
 
-默认路径定义在 [`10_detection_models.yaml`](/home/charlesdonne/project/nav_ws/SpaceVLN/navigation_system/config/system/10_detection_models.yaml)：
-
-- `DETECTION.MODEL.GROUNDING_DINO_CONFIG_PATH`
-- `DETECTION.MODEL.GROUNDING_DINO_CHECKPOINT_PATH`
-- `DETECTION.MODEL.SAM_CHECKPOINT_PATH`
-- `DETECTION.MODEL.REPVIT_SAM_CHECKPOINT_PATH`
-
-如果你的权重路径不同，直接改 [`10_detection_models.yaml`](/home/charlesdonne/project/nav_ws/SpaceVLN/navigation_system/config/system/10_detection_models.yaml) 即可。
-
-## 3. API 配置
-
-标准运行使用统一配置文件：
-
-[`vlm_api_config.yaml.template`](/home/charlesdonne/project/nav_ws/SpaceVLN/navigation_system/config/vlm/vlm_api_config.yaml.template)
-
-复制一份后填写：
+### Standard runtime
 
 ```bash
 cp navigation_system/config/vlm/vlm_api_config.yaml.template \
    navigation_system/config/vlm/vlm_api_config.yaml
 ```
 
-当前支持三类 provider：
+### Qwen explicit-cache runtime
 
-- `dashscope`
-- `openrouter`
-- `openai`
-
-OpenAI 兼容接口建议填写：
-
-```yaml
-provider: "openai"
-
-openai:
-  api_key: "env:OPENAI_API_KEY"
-  base_url: "https://your-openai-compatible-endpoint"
-  wire_api: "responses"
-  llm_model: "gpt-5.4"
-  vlm_model: "gpt-5.4-nano"
-  reasoning_effort: "none"
+```bash
+cp navigation_system/config/vlm/vlm_api_config_qwen_cache.yaml.template \
+   navigation_system/config/vlm/vlm_api_config_qwen_cache.yaml
 ```
 
-Qwen 显式上下文缓存单独使用：
+Both templates are written to prefer environment variables such as:
 
-- [`vlm_api_config_qwen_cache.yaml`](/home/charlesdonne/project/nav_ws/SpaceVLN/navigation_system/config/vlm/vlm_api_config_qwen_cache.yaml)
-- [`vlm_navigation_qwen_cache.py`](/home/charlesdonne/project/nav_ws/SpaceVLN/vlm_navigation_qwen_cache.py)
-- [`vlm_navigation_qwen_cache.sh`](/home/charlesdonne/project/nav_ws/SpaceVLN/run_r2r/vlm_navigation_qwen_cache.sh)
-- [`profiles.py`](/home/charlesdonne/project/nav_ws/SpaceVLN/navigation_system/runtime/profiles.py)
+- `OPENAI_API_KEY`
+- `DASHSCOPE_API_KEY`
+- `OPENROUTER_API_KEY`
 
-缓存配置块示例：
+## Running Evaluation
 
-```yaml
-qwen_context_cache:
-  enabled: true
-  cache_type: "ephemeral"
-  print_usage: false
-  results_dir_suffix: "_cache"
-```
-
-## 4. 运行方式
-
-标准运行：
+### Standard evaluation
 
 ```bash
 bash run_r2r/vlm_navigation.sh 1 10 260 4
 ```
 
-如果想切换实验面板，可以直接覆盖：
+This runs:
 
-```bash
-EXP_CONFIG=navigation_system/config/experiments/r2r_eval.yaml \
-bash run_r2r/vlm_navigation.sh 1 10 260 4
-```
+- starting episode ID: `1`
+- number of episodes: `10`
+- max episode steps: `260`
+- parallel workers: `4`
 
-含义：
-
-- 从 episode `1` 开始
-- 连续跑 `10` 个 episode
-- 每个 episode 最多 `260` 步
-- 并行 `4` 个 worker
-
-缓存版运行：
+### Qwen explicit-cache evaluation
 
 ```bash
 bash run_r2r/vlm_navigation_qwen_cache.sh 1 10 260 4
 ```
 
-也支持直接传完整 CLI 参数：
+### Single-episode evaluation
+
+```bash
+bash run_r2r/vlm_navigation.sh 832
+bash run_r2r/vlm_navigation.sh 832 300
+```
+
+### Random evaluation
+
+```bash
+bash run_r2r/vlm_navigation.sh random 20 260 all 4
+```
+
+### Direct Python entrypoint
 
 ```bash
 python vlm_navigation.py \
@@ -141,184 +262,108 @@ python vlm_navigation.py \
   --vlm-api-config navigation_system/config/vlm/vlm_api_config.yaml
 ```
 
-报告生成：
+Help menus:
 
 ```bash
-bash run_r2r/vlm_report_range.sh 1 100
-bash run_r2r/vlm_report_range.sh 1 100 qwen3.5-plus__qwen3.5-flash_cache
+bash run_r2r/vlm_navigation.sh --help
+bash run_r2r/vlm_navigation_qwen_cache.sh --help
 ```
 
-报告脚本也会默认读取 `EXP_CONFIG`，用于同步 `SUCCESS_DISTANCE_M` 这类评测参数。
+## Ablation Studies
 
-## 5. 结果目录
+The ablation subsystem is isolated under `navigation_system/ablation/` and is designed to perform **subtractive ablations** without modifying the original main-system prompt templates in place.
 
-结果根目录会按模型组合自动生成：
+Supported presets include:
+
+- `landmark`
+- `space_structure`
+- `planning_reasoning`
+- `action_reasoning`
+- `planning_action_reasoning`
+- `both`
+
+Example commands:
+
+```bash
+bash run_r2r/vlm_navigation_ablation.sh landmark 1 100 260 4
+bash run_r2r/vlm_navigation_ablation.sh planning_action_reasoning 1 100 260 4
+bash run_r2r/vlm_navigation_ablation_qwen_cache.sh space_structure 1 100 260 4
+```
+
+Further details are documented in:
+
+- `navigation_system/ablation/README.md`
+
+## Results and Artifacts
+
+The runtime resolves result directories in the following order:
+
+1. `SPACEVLN_RESULTS_ROOT`
+2. `PATHS.RESULTS_ROOT` in `navigation_system/config/system/00_runtime.yaml`
+3. the default workspace-relative fallback under `data/result/vlnce/`
+
+Standard runs are stored as:
 
 ```text
-data/result/vlnce/<planner>__<action>/
+data/result/vlnce/<planner>__<executor>/
 ```
 
-显式缓存版会额外带后缀：
+Qwen cache runs are stored as:
 
 ```text
-data/result/vlnce/<planner>__<action>_cache/
+data/result/vlnce/<planner>__<executor>_cache/
 ```
 
-当前结果布局是：
+Ablation runs are stored as:
 
 ```text
-data/result/vlnce/planner__action/
-├── detail/
-│   └── 1-100/
-│       └── episode_1/
-│           ├── thinking/
-│           ├── action/
-│           ├── visualization/
-│           └── records/
-│               └── result.json
-└── log/
-    └── 1-100/
-        └── episode_1.json
+data/result/vlnce/ablation/<ablation_name>/<model_name>/
 ```
 
-`detail/episode_x` 下保留的重点产物：
+Stored artifacts may include:
 
-- `thinking/subtask_*`
-  - `prompt.md` 或 `system_prompt.md + user_prompt.md`
-  - 模型真实看到的图片副本
-  - `vlm_info.json`
-  - 解析后的 `response.json`
-- `action/subtask_*`
-  - 动作模型输入输出
-- `visualization/`
-  - 导航逐步可视化
-  - `navigation.gif`
-- `records/result.json`
-  - 当前这次 episode 的完整结果
+- planner/action prompts and responses
+- per-request `vlm_info.json`
+- visualization frames and replay GIFs
+- per-episode result logs
+- ablation manifests for ablation runs
 
-`log/episode_x.json` 保存每个 episode 的最佳摘要结果，报告程序只依赖这一层。
+## Configuration Entry Points
 
-## 6. 保存策略
+For day-to-day experiments, the most important files are:
 
-当前默认策略已经收缩过：
+- `navigation_system/config/experiments/r2r_eval.yaml`
+- `navigation_system/config/system/00_runtime.yaml`
+- `navigation_system/config/system/10_detection_models.yaml`
+- `navigation_system/config/system/20_space_sensor.yaml`
+- `navigation_system/config/vlm/vlm_api_config.yaml`
+- `navigation_system/config/vlm/vlm_api_config_qwen_cache.yaml`
 
-- 保留模型输入输出调试产物。
-- 保留导航 GIF；默认在 GIF 成功生成后自动清理 `visualization/` 里的逐帧 PNG 以节省空间。
-- 保留 `result.json` 与 `log/episode_x.json`。
-- 默认不再额外保存整段 stdout 文本日志。
-- 默认不再保存 `waypoint_memory.json`。
-- 默认不再额外保存第二份 episode result 副本。
+See also:
 
-这些开关统一由实验面板控制，推荐修改入口是：
+- `navigation_system/config/README.md`
+- `docs/ARCHITECTURE.md`
 
-- [`r2r_eval.yaml`](/home/charlesdonne/project/nav_ws/SpaceVLN/navigation_system/config/experiments/r2r_eval.yaml)
-  - 主实验面板，按 `TASK / PATHS / OUTPUT / CONTROL / EVAL` 分区，只放当前实验覆盖项。
-- [`navigation_system/config/system/00_runtime.yaml`](/home/charlesdonne/project/nav_ws/SpaceVLN/navigation_system/config/system/00_runtime.yaml)
-  - 系统默认任务入口、GPU/并行环境与目录。
-- [`navigation_system/config/system/10_detection_models.yaml`](/home/charlesdonne/project/nav_ws/SpaceVLN/navigation_system/config/system/10_detection_models.yaml)
-  - 检测模型路径与开关。
-- [`navigation_system/config/system/20_space_sensor.yaml`](/home/charlesdonne/project/nav_ws/SpaceVLN/navigation_system/config/system/20_space_sensor.yaml)
-  - 相机 HFOV、分辨率与 agent height 等传感器参数。
-- [`navigation_system/config/README.md`](/home/charlesdonne/project/nav_ws/SpaceVLN/navigation_system/config/README.md)
-  - 配置分层说明。
-- [`default.py`](/home/charlesdonne/project/nav_ws/SpaceVLN/navigation_system/config/runtime/default.py)
-  - 运行时装配层，不建议把这里当成日常实验入口。
+## Docker
 
-例如如果你想重新打开 stdout 文本日志，只需要把：
+SpaceVLN previously had an internal Dockerized deployment workflow. However:
 
-```yaml
-OUTPUT:
-  LOGS:
-    SAVE_EPISODE_STDOUT: true
-```
+- the current repository does **not** include the historical Dockerfile;
+- the current repository does **not** include the associated `.dockerignore`;
+- `docs/dockerhub.md` is therefore retained only as a historical deployment note, not as a canonical build instruction.
 
-写到实验 yaml 即可。
+If a public Docker workflow is needed again, the Docker artifacts should be restored and versioned explicitly in the repository.
 
-## 7. 当前架构
+## Reproducibility Notes
 
-主链路目录如下：
+To keep the repository maintainable and sharable:
 
-```text
-SpaceVLN/
-├── run_r2r/
-│   ├── common.sh
-│   ├── vlm_navigation.sh
-│   ├── vlm_navigation_qwen_cache.sh
-│   └── vlm_report_range.sh
-├── navigation_system/
-│   ├── controller/
-│   ├── vlm/
-│   ├── detection/
-│   ├── space/
-│   │   ├── map/
-│   │   ├── topology/
-│   │   ├── landmarks/
-│   │   ├── geometry/
-│   │   └── description/
-│   ├── render/
-│   │   ├── map/
-│   │   ├── views/
-│   │   └── episode_visualization/
-│   ├── runtime/
-│   │   ├── storage/
-│   │   └── ...
-│   ├── env/
-│   └── config/
-├── vlm_navigation.py
-├── docs/
-│   └── ARCHITECTURE.md
-└── vlm_navigation_qwen_cache.py
-```
+- no active API keys are committed;
+- no user-specific absolute paths are committed;
+- large datasets and checkpoints are not committed;
+- local VLM configuration files are created from templates;
+- `requirements.txt` is synchronized from a validated working environment instead of being reduced to a speculative minimal set.
 
-模块职责：
+## Acknowledgements
 
-- `controller/`
-  负责 navigation 主控、thinking/action 切换、停止/恢复策略和 controller 自身运行态。
-- `vlm/`
-  负责模型接口、prompt、planner、action executor、cache 与 VLM 统计。
-- `detection/`
-  负责 GroundedSAM / RepViT-SAM 检测与分割。
-- `space/`
-  负责空间世界模型。
-  - `map/`：语义地图和地图分析
-  - `topology/`：空间区域、连接关系、waypoint
-  - `landmarks/`：landmark memory、landmark world instance、landmark 选择
-  - `geometry/`：depth、pose、rotation、projection
-  - `description/`：给 VLM 的空间文本描述
-- `render/`
-  负责所有渲染输出。
-  - `map/`：地图渲染
-  - `views/`：给模型的输入图
-  - `episode_visualization/`：整段导航回放与 GIF
-- `runtime/`
-  负责 CLI、批量运行、结果路径、结果汇总。
-- `env/`
-  负责 Habitat 环境注册和构造。
-- `config/`
-  负责配置、参数和实验 yaml。
-
-## 8. 运行流程
-
-系统主循环是：
-
-1. 环视并更新地图。
-2. Planner 根据多视角图像和 global map 生成下一子任务。
-3. Action model 根据 detection 视图与结构化上下文输出动作。
-4. 执行动作并更新地图。
-5. 到达子任务边界后重新 verify / replan。
-6. 直到任务完成或 episode 预算耗尽。
-
-缓存版与标准版的差异只有两点：
-
-- planner/action adapter 不同。
-- 结果目录后缀不同，并且缓存版会额外保存缓存命中统计。
-
-## 9. 当前清理结论
-
-这轮整理后，仓库已经统一成 `controller / vlm / detection / space / render / runtime / env / config` 这套骨架，并去掉了旧的 `controllers / mapping / visualization / utils` 目录。
-
-如果后面还要继续做更深一轮瘦身，优先建议沿着这三条继续做：
-
-- 继续拆 [`navigation_controller.py`](/home/charlesdonne/project/nav_ws/SpaceVLN/navigation_system/controller/navigation_controller.py)
-- 继续收紧 detail 产物种类
-- 继续把 detection / render 里的大文件再拆细一层
+This codebase builds on the open-source efforts of the Habitat, VLN-CE, GroundingDINO, Grounded-Segment-Anything, NaVid-VLN-CE, and CA-Nav communities. Please consult the original repositories for licensing terms, model usage constraints, and dataset licenses before redistributing derived artifacts or checkpoints.

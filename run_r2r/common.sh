@@ -140,6 +140,18 @@ spacevln_mode_arg() {
     esac
 }
 
+spacevln_is_help_request() {
+    local arg=""
+    for arg in "$@"; do
+        case "$arg" in
+            -h|--help|help)
+                return 0
+                ;;
+        esac
+    done
+    return 1
+}
+
 spacevln_dispatch_navigation_cli() {
     local project_root="$1"
     local python_bin="$2"
@@ -157,6 +169,13 @@ spacevln_dispatch_navigation_cli() {
     if [ ! -f "$config_file" ]; then
         echo "❌ Habitat 配置不存在: $config_file"
         exit 1
+    fi
+
+    if spacevln_is_help_request "${cli_args[@]}"; then
+        exec "$python_bin" "$entry_script" \
+            --exp-config "$config_file" \
+            --vlm-api-config "$api_config" \
+            "${cli_args[@]}"
     fi
 
     if [ ! -f "$api_config" ]; then

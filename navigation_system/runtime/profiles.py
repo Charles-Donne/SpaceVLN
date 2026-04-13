@@ -10,7 +10,7 @@ from navigation_system.vlm.api.qwen_context_cache_client import (
     build_default_qwen_context_cache_results_dir,
 )
 from navigation_system.vlm.reporting.cache_report import (
-    build_cache_report,
+    print_cache_report_summary,
 )
 from navigation_system.vlm.runtime_factory import (
     build_default_navigation_model_stack,
@@ -35,44 +35,7 @@ def _maybe_generate_qwen_cache_report(args, config) -> None:
     results_dir = str(
         getattr(args, "results_dir", "") or getattr(config, "RESULTS_DIR", "") or ""
     ).strip()
-    if not results_dir:
-        return
-
-    try:
-        report = build_cache_report(results_dir)
-    except Exception as exc:
-        print(f"⚠️  无法生成缓存报告: {exc}")
-        return
-
-    if report.overall.request_count <= 0:
-        return
-
-    overall = report.overall
-    output_speed = (
-        float(overall.output_tokens) / float(overall.total_duration_s)
-        if overall.total_duration_s > 0
-        else 0.0
-    )
-    reported_ratio = (
-        float(overall.cache_reported_requests) / float(overall.request_count)
-        if overall.request_count > 0
-        else 0.0
-    )
-    if overall.cache_reported_requests > 0:
-        print(
-            "[VLM][cache][overall] "
-            f"req={overall.request_count} "
-            f"| reported={reported_ratio * 100:.1f}% "
-            f"| hit={overall.weighted_cache_hit_ratio * 100:.1f}% "
-            f"| cost={overall.cost_ratio:.3f}x "
-            f"| speed={output_speed:.1f} tok/s"
-        )
-    else:
-        print(
-            "[VLM][cache][overall] "
-            f"req={overall.request_count} | reported=0 "
-            "| cache metrics unavailable in current artifacts"
-        )
+    print_cache_report_summary(results_dir)
 
 
 STANDARD_RUNTIME_PROFILE = NavigationRuntimeProfile(

@@ -13,9 +13,11 @@ from typing import Any, Dict, Optional
 
 import yaml
 
+from navigation_system.ablation.presets import get_ablation_config_root
+
 
 ABLATION_CONFIG_ENV = "SPACEVLN_ABLATION_CONFIG"
-_DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "configs" / "default.yaml"
+_DEFAULT_CONFIG_PATH = get_ablation_config_root() / "default.yaml"
 
 
 def _safe_bool(value: Any, default: bool) -> bool:
