@@ -1,4 +1,4 @@
-"""Qwen planner runtime with DashScope explicit context cache."""
+"""Planner runtime with DashScope explicit context cache."""
 
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -12,17 +12,17 @@ from navigation_system.vlm.contracts.schema import get_next_waypoint
 from navigation_system.vlm.api.qwen_context_cache_client import QwenContextCacheMixin
 
 
-class QwenContextCachePlanner(QwenContextCacheMixin, LLMPlanner):
+class ContextCachePlanner(QwenContextCacheMixin, LLMPlanner):
     """Planner variant that reuses a long stable system prompt via explicit cache."""
 
     def __init__(
         self,
-        config_path: str = "navigation_system/config/vlm/vlm_api_config_qwen_cache.yaml",
+        config_path: str = "navigation_system/config/vlm/vlm_api_config_context_cache.yaml",
         action_space: str = None,
     ):
         super().__init__(config_path=config_path, action_space=action_space)
         self._init_qwen_context_cache(config_path)
-        print(f"  LLMPlanner(Cache): {self.config.model} | explicit-context-cache")
+        print(f"  LLMPlanner(ContextCache): {self.config.model} | explicit-context-cache")
 
     def call_api(
         self,

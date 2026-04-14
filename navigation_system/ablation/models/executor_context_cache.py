@@ -1,32 +1,37 @@
-"""Qwen action runtime with DashScope explicit context cache."""
+"""Explicit-cache action executor wrapper for ablation runs."""
+
+from __future__ import annotations
 
 import os
 from typing import Any, Dict, Optional, Sequence, Tuple
 
+from navigation_system.ablation.prompts.cache import build_action_cache_prompt_bundle
+from navigation_system.ablation.config import AblationSpec, load_ablation_spec
+from navigation_system.vlm.api.qwen_context_cache_client import QwenContextCacheMixin
 from navigation_system.vlm.execution.executor import ActionExecutor
 from navigation_system.vlm.prompts.common import ExplicitCachePromptBundle
-from navigation_system.vlm.prompts.cache_builders import (
-    build_action_cache_prompt_bundle,
-)
-from navigation_system.vlm.api.qwen_context_cache_client import QwenContextCacheMixin
 
 
-class QwenContextCacheActionExecutor(QwenContextCacheMixin, ActionExecutor):
-    """Action executor variant that reuses a long stable system prompt via explicit cache."""
+class AblationContextCacheActionExecutor(QwenContextCacheMixin, ActionExecutor):
+    """Ablation action executor variant that preserves the explicit-cache runtime."""
 
     def __init__(
         self,
-        config_path: str = "navigation_system/config/vlm/vlm_api_config_qwen_cache.yaml",
+        config_path: str = "navigation_system/config/vlm/vlm_api_config_context_cache.yaml",
         turn_angle: float = 30.0,
         move_distance: float = 0.25,
+        ablation_spec: Optional[AblationSpec] = None,
     ):
+        self.ablation_spec = ablation_spec or load_ablation_spec()
         super().__init__(
             config_path=config_path,
             turn_angle=turn_angle,
             move_distance=move_distance,
         )
         self._init_qwen_context_cache(config_path)
-        print(f"  ActionVLM(Cache): {self.config.model} | explicit-context-cache")
+        print(
+            f"  AblationAction(ContextCache): {self.ablation_spec.slug} | explicit-context-cache"
+        )
 
     def call_api(
         self,
@@ -75,6 +80,9 @@ class QwenContextCacheActionExecutor(QwenContextCacheMixin, ActionExecutor):
             obstacle_distances=obstacle_distances,
             landmark_map_info=landmark_map_info,
             allowed_action_names=allowed_action_names,
+            move_distance=self.move_distance,
+            turn_angle=int(self.turn_angle),
+            spec=self.ablation_spec,
         )
 
         images = []
@@ -93,7 +101,6 @@ class QwenContextCacheActionExecutor(QwenContextCacheMixin, ActionExecutor):
         if not response:
             print("✗ No response from VLM")
             return None, None, None, 0, 0.0, ""
-
         if not self.validate_response(response):
             return None, None, None, 0, 0.0, ""
 
@@ -144,3 +151,8 @@ class QwenContextCacheActionExecutor(QwenContextCacheMixin, ActionExecutor):
             info = action_name
         print(f"  Action: {info} | {response.get('reasoning', '')[:60]}")
         return action_id, action_name, response, degrees, meters, prompt_bundle.full_prompt
+
+
+__all__ = [
+    "AblationContextCacheActionExecutor",
+]

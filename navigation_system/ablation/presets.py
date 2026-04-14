@@ -32,62 +32,52 @@ def get_ablation_template_root() -> Path:
     return get_ablation_root() / "templates"
 
 
+def _normalize_preset_token(name: Optional[str]) -> str:
+    return str(name or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
 _PRESET_DEFINITIONS: tuple[AblationPresetDefinition, ...] = (
     AblationPresetDefinition(
         key="default",
         slug="default",
         config_filename="default.yaml",
         description="Run the isolated ablation runtime without removing any cues.",
-        aliases=("full", "all"),
     ),
     AblationPresetDefinition(
         key="landmark",
         slug="no-landmark",
         config_filename="no_landmark.yaml",
         description="Remove landmark perception inputs only.",
-        aliases=("no_landmark", "without_landmark"),
     ),
     AblationPresetDefinition(
         key="space_structure",
         slug="no-space-structure",
         config_filename="no_space_structure.yaml",
         description="Remove space-structure prompt and render inputs only.",
-        aliases=("space", "no_space_structure", "without_space_structure"),
     ),
     AblationPresetDefinition(
         key="planning_reasoning",
         slug="no-planning-reasoning",
         config_filename="no_planning_reasoning.yaml",
         description="Remove explicit planning reasoning prompt sections only.",
-        aliases=("planning", "no_planning_reasoning", "without_planning_reasoning"),
     ),
     AblationPresetDefinition(
         key="action_reasoning",
         slug="no-action-reasoning",
         config_filename="no_action_reasoning.yaml",
         description="Remove explicit action reasoning prompt sections only.",
-        aliases=("action", "no_action_reasoning", "without_action_reasoning"),
     ),
     AblationPresetDefinition(
         key="planning_action_reasoning",
         slug="no-planning-action-reasoning",
         config_filename="no_planning_action_reasoning.yaml",
         description="Remove explicit planning and action reasoning prompt sections.",
-        aliases=(
-            "planning_action",
-            "no_planning_action_reasoning",
-            "without_planning_action_reasoning",
-            "reasoning",
-            "no_reasoning",
-            "without_reasoning",
-        ),
     ),
     AblationPresetDefinition(
         key="both",
         slug="no-landmark-no-space-structure",
         config_filename="no_landmark_no_space_structure.yaml",
         description="Remove both landmark and space-structure inputs.",
-        aliases=("none", "no_landmark_no_space_structure", "without_both"),
     ),
 )
 
@@ -96,22 +86,17 @@ _PRESETS_BY_KEY: Dict[str, AblationPresetDefinition] = {
 }
 _PRESET_ALIASES: Dict[str, str] = {}
 for _preset in _PRESET_DEFINITIONS:
-    _PRESET_ALIASES[_preset.key] = _preset.key
-    _PRESET_ALIASES[_preset.slug] = _preset.key
+    _PRESET_ALIASES[_normalize_preset_token(_preset.key)] = _preset.key
+    _PRESET_ALIASES[_normalize_preset_token(_preset.slug)] = _preset.key
     for _alias in _preset.aliases:
-        _PRESET_ALIASES[_alias] = _preset.key
-
-_TEMPLATE_SLUG_ALIASES: Dict[str, str] = {
-    "no-reasoning": "no-planning-action-reasoning",
-}
-
+        _PRESET_ALIASES[_normalize_preset_token(_alias)] = _preset.key
 
 def iter_ablation_presets() -> Iterable[AblationPresetDefinition]:
     return iter(_PRESET_DEFINITIONS)
 
 
 def resolve_ablation_preset_key(name: Optional[str]) -> Optional[str]:
-    normalized = str(name or "").strip().lower().replace("-", "_").replace(" ", "_")
+    normalized = _normalize_preset_token(name)
     if not normalized:
         return None
     return _PRESET_ALIASES.get(normalized)
@@ -125,8 +110,7 @@ def get_ablation_preset(name: Optional[str]) -> Optional[AblationPresetDefinitio
 
 
 def resolve_ablation_template_slug(slug: str) -> str:
-    normalized = str(slug or "").strip()
-    return _TEMPLATE_SLUG_ALIASES.get(normalized, normalized)
+    return str(slug or "").strip()
 
 
 def detect_ablation_preset_key_from_slug(slug: Optional[str]) -> Optional[str]:

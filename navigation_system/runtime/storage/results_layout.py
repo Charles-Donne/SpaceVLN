@@ -11,6 +11,12 @@ import yaml
 
 DEFAULT_RESULTS_ROOT_RELATIVE = os.path.join("data", "result")
 DEFAULT_RESULTS_FAMILY = "vlnce"
+DEFAULT_CONTEXT_CACHE_API_CONFIG = os.path.join(
+    "navigation_system",
+    "config",
+    "vlm",
+    "vlm_api_config_context_cache.yaml",
+)
 DEFAULT_SYSTEM_RUNTIME_CONFIG_RELATIVE = os.path.join(
     "navigation_system",
     "config",
@@ -21,7 +27,22 @@ DEFAULT_SYSTEM_RUNTIME_CONFIG_RELATIVE = os.path.join(
 
 def resolve_api_config_path(config_path: str) -> str:
     """Normalize the configured unified API config path."""
-    return str(config_path or "").strip()
+    normalized = str(config_path or "").strip()
+    if not normalized:
+        return ""
+
+    repo_root = _resolve_repo_root()
+    expanded = os.path.expanduser(normalized)
+    if os.path.isabs(expanded):
+        return os.path.abspath(expanded) if os.path.exists(expanded) else expanded
+
+    repo_candidate = os.path.abspath(os.path.join(repo_root, expanded))
+    if os.path.exists(repo_candidate):
+        return repo_candidate
+    if os.path.exists(expanded):
+        return os.path.abspath(expanded)
+
+    return normalized
 
 
 def _resolve_repo_root(repo_root: str = None) -> str:
@@ -175,7 +196,7 @@ def build_default_results_dir_from_api_config(
     )
 
 
-def build_default_qwen_context_cache_results_dir(
+def build_default_context_cache_results_dir(
     config_path: str,
     repo_root: str = None,
     results_root: str = None,
@@ -195,10 +216,11 @@ def build_default_qwen_context_cache_results_dir(
 
 
 __all__ = [
+    "DEFAULT_CONTEXT_CACHE_API_CONFIG",
     "DEFAULT_RESULTS_FAMILY",
     "DEFAULT_RESULTS_ROOT_RELATIVE",
     "DEFAULT_SYSTEM_RUNTIME_CONFIG_RELATIVE",
-    "build_default_qwen_context_cache_results_dir",
+    "build_default_context_cache_results_dir",
     "build_default_results_dir_from_api_config",
     "build_default_results_family_root",
     "build_default_results_root",

@@ -73,7 +73,7 @@ vlm_timeout:    30      # Action 需要快速响应
 
 # ======================================================
 # 可选: Qwen 显式上下文缓存
-# 仅对 `vlm_navigation_qwen_cache.py` / `run_r2r/vlm_navigation_qwen_cache.sh` 生效
+# 仅对统一入口中的 `--runtime context_cache` 生效
 # ======================================================
 qwen_context_cache:
   enabled: false

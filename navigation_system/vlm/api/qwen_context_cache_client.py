@@ -76,7 +76,7 @@ class QwenCacheUsageSummary:
         return payload
 
 
-def build_default_qwen_context_cache_results_dir(
+def build_default_context_cache_results_dir(
     config_path: str,
     repo_root: Optional[str] = None,
     results_root: Optional[str] = None,

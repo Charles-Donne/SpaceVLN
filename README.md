@@ -203,11 +203,11 @@ cp navigation_system/config/vlm/vlm_api_config.yaml.template \
    navigation_system/config/vlm/vlm_api_config.yaml
 ```
 
-### Qwen explicit-cache runtime
+### Explicit-context-cache runtime
 
 ```bash
-cp navigation_system/config/vlm/vlm_api_config_qwen_cache.yaml.template \
-   navigation_system/config/vlm/vlm_api_config_qwen_cache.yaml
+cp navigation_system/config/vlm/vlm_api_config_context_cache.yaml.template \
+   navigation_system/config/vlm/vlm_api_config_context_cache.yaml
 ```
 
 Both templates are written to prefer environment variables such as:
@@ -231,10 +231,10 @@ This runs:
 - max episode steps: `260`
 - parallel workers: `4`
 
-### Qwen explicit-cache evaluation
+### Explicit-context-cache evaluation
 
 ```bash
-bash run_r2r/vlm_navigation_qwen_cache.sh 1 10 260 4
+bash run_r2r/vlm_navigation.sh --runtime context_cache 1 10 260 4
 ```
 
 ### Single-episode evaluation
@@ -255,6 +255,7 @@ bash run_r2r/vlm_navigation.sh random 20 260 all 4
 ```bash
 python vlm_navigation.py \
   --exp-config navigation_system/config/experiments/r2r_eval.yaml \
+  --runtime standard \
   --episode-id 1 \
   --num-episodes 10 \
   --max-steps 260 \
@@ -266,7 +267,6 @@ Help menus:
 
 ```bash
 bash run_r2r/vlm_navigation.sh --help
-bash run_r2r/vlm_navigation_qwen_cache.sh --help
 ```
 
 ## Ablation Studies
@@ -285,9 +285,9 @@ Supported presets include:
 Example commands:
 
 ```bash
-bash run_r2r/vlm_navigation_ablation.sh landmark 1 100 260 4
-bash run_r2r/vlm_navigation_ablation.sh planning_action_reasoning 1 100 260 4
-bash run_r2r/vlm_navigation_ablation_qwen_cache.sh space_structure 1 100 260 4
+bash run_r2r/vlm_navigation.sh --ablation landmark 1 100 260 4
+bash run_r2r/vlm_navigation.sh --ablation planning_action_reasoning 1 100 260 4
+bash run_r2r/vlm_navigation.sh --runtime context_cache --ablation space_structure 1 100 260 4
 ```
 
 Further details are documented in:
@@ -308,7 +308,7 @@ Standard runs are stored as:
 data/result/vlnce/<planner>__<executor>/
 ```
 
-Qwen cache runs are stored as:
+Context-cache runs are stored as:
 
 ```text
 data/result/vlnce/<planner>__<executor>_cache/
@@ -337,7 +337,7 @@ For day-to-day experiments, the most important files are:
 - `navigation_system/config/system/10_detection_models.yaml`
 - `navigation_system/config/system/20_space_sensor.yaml`
 - `navigation_system/config/vlm/vlm_api_config.yaml`
-- `navigation_system/config/vlm/vlm_api_config_qwen_cache.yaml`
+- `navigation_system/config/vlm/vlm_api_config_context_cache.yaml`
 
 See also:
 

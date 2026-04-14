@@ -11,10 +11,10 @@ vlm/
 │   └── qwen_context_cache_client.py
 ├── planning/
 │   ├── planner.py
-│   └── planner_qwen_cache.py
+│   └── planner_context_cache.py
 ├── execution/
 │   ├── executor.py
-│   └── executor_qwen_cache.py
+│   └── executor_context_cache.py
 ├── prompts/
 │   ├── builders.py
 │   ├── cache_builders.py
@@ -44,7 +44,7 @@ vlm/
 - `reporting/`
   - 汇总缓存命中和请求时延。
 - `runtime_factory.py`
-  - 统一创建标准版与 Qwen 显式缓存版模型栈。
+  - 统一创建标准版与 `context_cache` 模型栈。
 
 ## 明确不放在 VLM 里的内容
 

@@ -18,25 +18,25 @@ spacevln_ablation_canonical_label() {
     normalized="$(spacevln_ablation_normalize_preset "$1")"
 
     case "$normalized" in
-        ""|default|full|all)
+        ""|default)
             printf '%s\n' "default"
             ;;
-        landmark|no_landmark|without_landmark)
+        landmark)
             printf '%s\n' "landmark"
             ;;
-        space|space_structure|no_space_structure|without_space_structure)
+        space_structure)
             printf '%s\n' "space_structure"
             ;;
-        planning_reasoning|planning|no_planning_reasoning|without_planning_reasoning)
+        planning_reasoning)
             printf '%s\n' "planning_reasoning"
             ;;
-        action_reasoning|action|no_action_reasoning|without_action_reasoning)
+        action_reasoning)
             printf '%s\n' "action_reasoning"
             ;;
-        planning_action_reasoning|planning_action|no_planning_action_reasoning|without_planning_action_reasoning|reasoning|no_reasoning|without_reasoning)
+        planning_action_reasoning)
             printf '%s\n' "planning_action_reasoning"
             ;;
-        both|none|no_landmark_no_space_structure|without_both)
+        both)
             printf '%s\n' "both"
             ;;
         *)
@@ -50,25 +50,25 @@ spacevln_ablation_resolve_preset_path() {
     normalized="$(spacevln_ablation_normalize_preset "$1")"
 
     case "$normalized" in
-        ""|default|full|all)
+        ""|default)
             printf '%s\n' "$(spacevln_ablation_default_config)"
             ;;
-        landmark|no_landmark|without_landmark)
+        landmark)
             printf '%s\n' "navigation_system/ablation/configs/no_landmark.yaml"
             ;;
-        space|space_structure|no_space_structure|without_space_structure)
+        space_structure)
             printf '%s\n' "navigation_system/ablation/configs/no_space_structure.yaml"
             ;;
-        planning_reasoning|planning|no_planning_reasoning|without_planning_reasoning)
+        planning_reasoning)
             printf '%s\n' "navigation_system/ablation/configs/no_planning_reasoning.yaml"
             ;;
-        action_reasoning|action|no_action_reasoning|without_action_reasoning)
+        action_reasoning)
             printf '%s\n' "navigation_system/ablation/configs/no_action_reasoning.yaml"
             ;;
-        planning_action_reasoning|planning_action|no_planning_action_reasoning|without_planning_action_reasoning|reasoning|no_reasoning|without_reasoning)
+        planning_action_reasoning)
             printf '%s\n' "navigation_system/ablation/configs/no_planning_action_reasoning.yaml"
             ;;
-        both|none|no_landmark_no_space_structure|without_both)
+        both)
             printf '%s\n' "navigation_system/ablation/configs/no_landmark_no_space_structure.yaml"
             ;;
         *)
@@ -104,11 +104,7 @@ spacevln_ablation_print_usage() {
   bash run_r2r/${script_name} action_reasoning 1 100 260 4
   bash run_r2r/${script_name} planning_action_reasoning 1 100 260 4
   bash run_r2r/${script_name} both 1 1420 260 4
-  bash run_r2r/${script_name} --ablation no_landmark 1 100 260 4
-
-兼容旧写法:
-  ABLATION_CONFIG=navigation_system/ablation/configs/no_landmark.yaml \\
-  bash run_r2r/${script_name} 1 100 260 4
+  bash run_r2r/${script_name} --ablation landmark 1 100 260 4
 
 说明:
   episode_args 与原脚本保持一致，例如:
@@ -155,13 +151,6 @@ spacevln_ablation_label_from_config_path() {
         if [[ "$resolved_config" == "$resolved_preset_path" ]]; then
             printf '%s\n' "$label"
             return 0
-        fi
-        if [[ "$label" == "planning_action_reasoning" ]]; then
-            resolved_preset_path="$(spacevln_ablation_resolve_config_path "navigation_system/ablation/configs/no_reasoning.yaml" "$project_root")" || true
-            if [[ -n "${resolved_preset_path:-}" && "$resolved_config" == "$resolved_preset_path" ]]; then
-                printf '%s\n' "$label"
-                return 0
-            fi
         fi
     done
 
@@ -239,7 +228,7 @@ spacevln_ablation_parse_cli() {
                 return 1
             else
                 SPACEVLN_ABLATION_FORWARD_ARGS=("$@")
-                raw_value="${ABLATION_CONFIG:-${SPACEVLN_ABLATION_CONFIG:-$(spacevln_ablation_default_config)}}"
+                raw_value="${SPACEVLN_ABLATION_CONFIG:-$(spacevln_ablation_default_config)}"
                 config_source="env"
             fi
             ;;

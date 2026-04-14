@@ -1,16 +1,115 @@
-"""
-VLM Navigation Runner
-=====================
-Thin CLI entrypoint for SpaceVLN batch navigation.
-"""
+"""Unified SpaceVLN navigation entrypoint."""
 
-from navigation_system.runtime.runner import build_arg_parser, run_navigation_from_args
+from __future__ import annotations
+
+import os
+import sys
+
+from navigation_system.ablation.presets import get_ablation_preset
+from navigation_system.ablation.runtime.profiles import (
+    ABLATION_CONTEXT_CACHE_RUNTIME_PROFILE,
+    ABLATION_STANDARD_RUNTIME_PROFILE,
+)
+from navigation_system.ablation.runtime.runner import (
+    run_navigation_from_args as run_ablation_navigation_from_args,
+)
+from navigation_system.runtime.profiles import (
+    CONTEXT_CACHE_RUNTIME_PROFILE,
+    STANDARD_RUNTIME_PROFILE,
+)
+from navigation_system.runtime.runner import (
+    build_arg_parser,
+    run_navigation_from_args,
+)
+
+
+RUNTIME_CHOICES = ("standard", "context_cache")
+
+
+def _augment_parser(parser) -> None:
+    parser.add_argument(
+        "--runtime",
+        type=str,
+        choices=RUNTIME_CHOICES,
+        default="standard",
+        help="运行时模式：standard 或 context_cache",
+    )
+    parser.add_argument(
+        "--ablation",
+        "--preset",
+        "--ablation-preset",
+        type=str,
+        dest="ablation_preset",
+        default=None,
+        help="消融预设名或消融 yaml 路径",
+    )
+    parser.add_argument(
+        "--ablation-config",
+        type=str,
+        default=None,
+        help="消融实验配置文件路径",
+    )
+
+
+def _resolve_ablation_config(raw_value: str | None) -> str | None:
+    text = str(raw_value or "").strip()
+    if not text:
+        return None
+
+    preset = get_ablation_preset(text)
+    if preset is not None:
+        candidate = str(preset.config_path)
+    else:
+        candidate = os.path.abspath(text)
+
+    if not os.path.isabs(candidate):
+        candidate = os.path.abspath(candidate)
+
+    if not os.path.exists(candidate):
+        raise FileNotFoundError(f"消融配置不存在: {text}")
+    return candidate
+
+
+def _resolve_runtime_profile(runtime_name: str):
+    normalized = str(runtime_name or "standard").strip().lower()
+    if normalized == "context_cache":
+        return CONTEXT_CACHE_RUNTIME_PROFILE
+    return STANDARD_RUNTIME_PROFILE
+
+
+def _resolve_ablation_runtime_profile(runtime_name: str):
+    normalized = str(runtime_name or "standard").strip().lower()
+    if normalized == "context_cache":
+        return ABLATION_CONTEXT_CACHE_RUNTIME_PROFILE
+    return ABLATION_STANDARD_RUNTIME_PROFILE
 
 
 def main() -> int:
-    parser = build_arg_parser()
+    argv = list(sys.argv[1:])
+    parser = build_arg_parser(profile=STANDARD_RUNTIME_PROFILE)
+    _augment_parser(parser)
     args = parser.parse_args()
-    return run_navigation_from_args(args)
+
+    api_config_explicit = any(
+        arg == "--vlm-api-config"
+        or arg.startswith("--vlm-api-config=")
+        or arg == "--config"
+        or arg.startswith("--config=")
+        for arg in argv
+    )
+    if not api_config_explicit and getattr(args, "runtime", "standard") == "context_cache":
+        args.vlm_api_config = CONTEXT_CACHE_RUNTIME_PROFILE.default_api_config_path
+
+    ablation_config = _resolve_ablation_config(
+        getattr(args, "ablation_config", None) or getattr(args, "ablation_preset", None)
+    )
+    if ablation_config:
+        args.ablation_config = ablation_config
+        profile = _resolve_ablation_runtime_profile(getattr(args, "runtime", "standard"))
+        return run_ablation_navigation_from_args(args, profile=profile)
+
+    profile = _resolve_runtime_profile(getattr(args, "runtime", "standard"))
+    return run_navigation_from_args(args, profile=profile)
 
 
 if __name__ == "__main__":

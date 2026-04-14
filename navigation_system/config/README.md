@@ -57,10 +57,10 @@
   - 标准模板。
 - `navigation_system/config/vlm/vlm_api_config.yaml`
   - 本地实际运行配置，不入 git。
-- `navigation_system/config/vlm/vlm_api_config_qwen_cache.yaml.template`
-  - Qwen 显式缓存模板。
-- `navigation_system/config/vlm/vlm_api_config_qwen_cache.yaml`
-  - 本地 Qwen 缓存配置，不入 git。
+- `navigation_system/config/vlm/vlm_api_config_context_cache.yaml.template`
+  - 显式缓存模板。
+- `navigation_system/config/vlm/vlm_api_config_context_cache.yaml`
+  - 本地显式缓存配置，不入 git。
 
 ## 推荐修改原则
 

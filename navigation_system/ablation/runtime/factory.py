@@ -1,12 +1,12 @@
 """Ablation-specific model-stack builders."""
 
 from navigation_system.ablation.models.executor import AblationActionExecutor
-from navigation_system.ablation.models.executor_qwen_cache import (
-    AblationQwenContextCacheActionExecutor,
+from navigation_system.ablation.models.executor_context_cache import (
+    AblationContextCacheActionExecutor,
 )
 from navigation_system.ablation.models.planner import AblationLLMPlanner
-from navigation_system.ablation.models.planner_qwen_cache import (
-    AblationQwenContextCachePlanner,
+from navigation_system.ablation.models.planner_context_cache import (
+    AblationContextCachePlanner,
 )
 from navigation_system.vlm.interfaces import NavigationModelStack
 from navigation_system.vlm.runtime_factory import (
@@ -44,7 +44,7 @@ def build_ablation_navigation_model_stack(
     )
 
 
-def build_ablation_qwen_context_cache_navigation_model_stack(
+def build_ablation_context_cache_navigation_model_stack(
     *,
     config_path: str,
     action_space: str,
@@ -53,14 +53,14 @@ def build_ablation_qwen_context_cache_navigation_model_stack(
     save_request_artifacts: bool,
 ) -> NavigationModelStack:
     planner = _build_planner(
-        AblationQwenContextCachePlanner,
+        AblationContextCachePlanner,
         config_path=config_path,
         action_space=action_space,
         save_request_artifacts=save_request_artifacts,
         label="Ablation Cached LLM Planner",
     )
     action_executor = _build_action_executor(
-        AblationQwenContextCacheActionExecutor,
+        AblationContextCacheActionExecutor,
         config_path=config_path,
         turn_angle=turn_angle,
         move_distance=move_distance,
@@ -75,5 +75,5 @@ def build_ablation_qwen_context_cache_navigation_model_stack(
 
 __all__ = [
     "build_ablation_navigation_model_stack",
-    "build_ablation_qwen_context_cache_navigation_model_stack",
+    "build_ablation_context_cache_navigation_model_stack",
 ]

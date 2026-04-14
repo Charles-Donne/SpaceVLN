@@ -1,4 +1,4 @@
-"""Qwen explicit-cache planner wrapper for ablation runs."""
+"""Explicit-cache planner wrapper for ablation runs."""
 
 from __future__ import annotations
 
@@ -15,19 +15,21 @@ from navigation_system.vlm.planning.planner import LLMPlanner
 from navigation_system.vlm.prompts.common import ExplicitCachePromptBundle
 
 
-class AblationQwenContextCachePlanner(QwenContextCacheMixin, LLMPlanner):
+class AblationContextCachePlanner(QwenContextCacheMixin, LLMPlanner):
     """Ablation planner variant that preserves the explicit-cache runtime."""
 
     def __init__(
         self,
-        config_path: str = "navigation_system/config/vlm/vlm_api_config_qwen_cache.yaml",
+        config_path: str = "navigation_system/config/vlm/vlm_api_config_context_cache.yaml",
         action_space: str = None,
         ablation_spec: Optional[AblationSpec] = None,
     ):
         self.ablation_spec = ablation_spec or load_ablation_spec()
         super().__init__(config_path=config_path, action_space=action_space)
         self._init_qwen_context_cache(config_path)
-        print(f"  AblationPlanner(Cache): {self.ablation_spec.slug} | explicit-context-cache")
+        print(
+            f"  AblationPlanner(ContextCache): {self.ablation_spec.slug} | explicit-context-cache"
+        )
 
     def call_api(
         self,
@@ -125,5 +127,5 @@ class AblationQwenContextCachePlanner(QwenContextCacheMixin, LLMPlanner):
 
 
 __all__ = [
-    "AblationQwenContextCachePlanner",
+    "AblationContextCachePlanner",
 ]

@@ -8,7 +8,7 @@ from typing import Optional
 
 from navigation_system.runtime.storage.results_layout import (
     DEFAULT_RESULTS_FAMILY,
-    build_default_qwen_context_cache_results_dir,
+    build_default_context_cache_results_dir,
     build_default_results_dir_from_api_config,
     build_default_results_family_root,
     build_default_results_root,
@@ -48,7 +48,7 @@ def build_ablation_manifest_dir(results_dir: str) -> Path:
 
 __all__ = [
     "DEFAULT_RESULTS_FAMILY",
-    "build_default_qwen_context_cache_results_dir",
+    "build_default_context_cache_results_dir",
     "build_default_results_dir_from_api_config",
     "build_default_results_family_root",
     "build_default_results_root",

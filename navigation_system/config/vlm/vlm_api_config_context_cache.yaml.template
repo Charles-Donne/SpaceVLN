@@ -1,13 +1,17 @@
 # ======================================================
-# SpaceVLN Qwen 显式缓存 API 配置模板
+# SpaceVLN explicit-context-cache API 配置模板
 # ======================================================
 #
 # 使用方法：
-#   1. 复制此文件为 navigation_system/config/vlm/vlm_api_config_qwen_cache.yaml
-#   2. 填入你自己的 DashScope key
-#   3. 仅在显式缓存运行时使用：
-#      - vlm_navigation_qwen_cache.py
-#      - run_r2r/vlm_navigation_qwen_cache.sh
+#   1. 复制此文件为 navigation_system/config/vlm/vlm_api_config_context_cache.yaml
+#   2. 填入你自己的 provider / key
+#   3. 当前显式缓存实现已验证的后端是 DashScope Qwen：
+#      - python vlm_navigation.py --runtime context_cache ...
+#      - bash run_r2r/vlm_navigation.sh --runtime context_cache ...
+#
+# 说明：
+#   - 外层入口统一为单一 `vlm_navigation.py` / `run_r2r/vlm_navigation.sh`；
+#   - 底层缓存实现目前仍要求 DashScope + 支持 explicit cache 的 Qwen 模型。
 #
 # ======================================================
 

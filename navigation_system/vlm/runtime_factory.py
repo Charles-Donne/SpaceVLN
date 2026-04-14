@@ -1,14 +1,12 @@
 """Build pluggable planner/action model stacks for navigation runtime."""
 
-from typing import Optional
-
 from navigation_system.vlm.execution.executor import ActionExecutor
-from navigation_system.vlm.execution.executor_qwen_cache import (
-    QwenContextCacheActionExecutor,
+from navigation_system.vlm.execution.executor_context_cache import (
+    ContextCacheActionExecutor,
 )
 from navigation_system.vlm.interfaces import NavigationModelStack
 from navigation_system.vlm.planning.planner import LLMPlanner
-from navigation_system.vlm.planning.planner_qwen_cache import QwenContextCachePlanner
+from navigation_system.vlm.planning.planner_context_cache import ContextCachePlanner
 
 
 def _configure_component(component, *, save_request_artifacts: bool):
@@ -91,7 +89,7 @@ def build_default_navigation_model_stack(
     )
 
 
-def build_qwen_context_cache_navigation_model_stack(
+def build_context_cache_navigation_model_stack(
     *,
     config_path: str,
     action_space: str,
@@ -99,16 +97,16 @@ def build_qwen_context_cache_navigation_model_stack(
     move_distance: float,
     save_request_artifacts: bool,
 ) -> NavigationModelStack:
-    """Build the Qwen explicit-cache planner + action executor stack."""
+    """Build the explicit-cache planner + action executor stack."""
     planner = _build_planner(
-        QwenContextCachePlanner,
+        ContextCachePlanner,
         config_path=config_path,
         action_space=action_space,
         save_request_artifacts=save_request_artifacts,
         label="Cached LLM Planner",
     )
     action_executor = _build_action_executor(
-        QwenContextCacheActionExecutor,
+        ContextCacheActionExecutor,
         config_path=config_path,
         turn_angle=turn_angle,
         move_distance=move_distance,
@@ -123,5 +121,5 @@ def build_qwen_context_cache_navigation_model_stack(
 
 __all__ = [
     "build_default_navigation_model_stack",
-    "build_qwen_context_cache_navigation_model_stack",
+    "build_context_cache_navigation_model_stack",
 ]

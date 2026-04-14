@@ -115,6 +115,10 @@ PY
     )
 }
 
+spacevln_default_context_cache_api_config() {
+    printf '%s\n' "navigation_system/config/vlm/vlm_api_config_context_cache.yaml"
+}
+
 spacevln_validate_parallel_workers() {
     local workers="$1"
     if ! [[ "$workers" =~ ^[0-9]+$ ]] || [ "$workers" -lt 1 ]; then
@@ -160,9 +164,15 @@ spacevln_dispatch_navigation_cli() {
     local api_config="$5"
     local api_missing_message="$6"
     local api_missing_hint="$7"
-    shift 7
+    local extra_args_name="${8:-}"
+    shift 8
 
     local cli_args=("$@")
+    local extra_args=()
+    if [[ -n "$extra_args_name" ]]; then
+        local -n _spacevln_extra_args_ref="$extra_args_name"
+        extra_args=("${_spacevln_extra_args_ref[@]}")
+    fi
 
     cd "$project_root" || exit 1
 
@@ -175,6 +185,7 @@ spacevln_dispatch_navigation_cli() {
         exec "$python_bin" "$entry_script" \
             --exp-config "$config_file" \
             --vlm-api-config "$api_config" \
+            "${extra_args[@]}" \
             "${cli_args[@]}"
     fi
 
@@ -190,6 +201,7 @@ spacevln_dispatch_navigation_cli() {
         exec "$python_bin" "$entry_script" \
             --exp-config "$config_file" \
             --vlm-api-config "$api_config" \
+            "${extra_args[@]}" \
             "$@"
     }
 

@@ -13,7 +13,7 @@
 ```text
 navigation_system/ablation/
 ├── configs/        # 消融 yaml 预设
-├── presets.py      # canonical preset 注册表与别名
+├── presets.py      # canonical preset 注册表
 ├── templates/      # 从主系统完整复制并裁剪后的静态 prompt
 ├── prompts/        # prompt / cache prompt 构建
 ├── models/         # controller / planner / executor 适配层
@@ -89,59 +89,56 @@ navigation_system/ablation/
 - 同时覆盖：
   - 非 cache：`planning_initial.prompt.md` / `planning_verify.prompt.md` / `action_execution.prompt.md`
   - cache：`cache/planning_initial.*.prompt.md` / `cache/planning_verify.*.prompt.md` / `cache/action.*.prompt.md`
-- 兼容旧别名：`navigation_system/ablation/configs/no_reasoning.yaml` 仍可用，但会解析到同一个 `no-planning-action-reasoning` 预设
 
 ## 入口
 
-- `vlm_navigation_ablation.py`
-- `run_r2r/vlm_navigation_ablation.sh`
-- `vlm_navigation_ablation_qwen_cache.py`
-- `run_r2r/vlm_navigation_ablation_qwen_cache.sh`
+- `vlm_navigation.py --ablation ...`
+- `run_r2r/vlm_navigation.sh --ablation ...`
 
 ## 用法
 
 ```bash
-bash run_r2r/vlm_navigation_ablation.sh landmark 1 10
+bash run_r2r/vlm_navigation.sh --ablation landmark 1 10
 ```
 
 ```bash
-bash run_r2r/vlm_navigation_ablation.sh space_structure 1 10
+bash run_r2r/vlm_navigation.sh --ablation space_structure 1 10
 ```
 
 ```bash
-bash run_r2r/vlm_navigation_ablation.sh planning_reasoning 1 10
+bash run_r2r/vlm_navigation.sh --ablation planning_reasoning 1 10
 ```
 
 ```bash
-bash run_r2r/vlm_navigation_ablation.sh action_reasoning 1 10
+bash run_r2r/vlm_navigation.sh --ablation action_reasoning 1 10
 ```
 
 ```bash
-bash run_r2r/vlm_navigation_ablation.sh planning_action_reasoning 1 10
+bash run_r2r/vlm_navigation.sh --ablation planning_action_reasoning 1 10
 ```
 
 ```bash
-bash run_r2r/vlm_navigation_ablation.sh both 1 10
+bash run_r2r/vlm_navigation.sh --ablation both 1 10
 ```
 
-也支持显式参数写法：
+显式缓存 + 消融：
 
 ```bash
-bash run_r2r/vlm_navigation_ablation.sh --ablation no_landmark 1 10
+bash run_r2r/vlm_navigation.sh --runtime context_cache --ablation landmark 1 10
 ```
 
-也兼容旧的环境变量写法：
+也支持直接给 yaml 路径：
 
 ```bash
-ABLATION_CONFIG=navigation_system/ablation/configs/no_landmark.yaml \
-bash run_r2r/vlm_navigation_ablation.sh 1 10
+bash run_r2r/vlm_navigation.sh \
+  --ablation navigation_system/ablation/configs/no_landmark.yaml \
+  1 10
 ```
 
 查看脚本提示：
 
 ```bash
-bash run_r2r/vlm_navigation_ablation.sh --help
-bash run_r2r/vlm_navigation_ablation_qwen_cache.sh --help
+bash run_r2r/vlm_navigation.sh --help
 ```
 
 检查 ablation prompt 树是否完整：

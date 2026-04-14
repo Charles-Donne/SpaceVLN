@@ -15,7 +15,7 @@ from navigation_system.vlm.api.api_client import (
 from navigation_system.vlm.api.qwen_context_cache_client import (
     QwenContextCacheMixin,
     QwenContextCacheSettings,
-    build_default_qwen_context_cache_results_dir,
+    build_default_context_cache_results_dir,
     supports_qwen_explicit_context_cache,
 )
 
@@ -24,7 +24,7 @@ __all__ = [
     "BaseAPIClient",
     "QwenContextCacheMixin",
     "QwenContextCacheSettings",
-    "build_default_qwen_context_cache_results_dir",
+    "build_default_context_cache_results_dir",
     "build_default_results_family_root",
     "build_default_results_root",
     "build_default_results_dir_from_api_config",
