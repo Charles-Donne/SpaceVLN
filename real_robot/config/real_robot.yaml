@@ -1,0 +1,43 @@
+# Default SpaceVLN real-robot configuration
+# Tuned for OAK-D Lite plus a low-level odometry / orientation stream.
+
+ros_version: ros2
+node_name: spacevln_real
+pose_source: odometry
+capture_mode: stream
+use_imu_orientation: false
+require_fresh_frame_after_action: true
+action_status_required: true
+observation_timeout_s: 3.0
+action_timeout_s: 20.0
+sync_tolerance_s: 0.20
+
+buffers:
+  image_queue_size: 8
+  pose_queue_size: 32
+
+camera:
+  name: oak-d-lite
+  rgb_width: 640
+  rgb_height: 480
+  hfov_deg: 69.0
+  min_depth_m: 0.4
+  max_depth_m: 8.0
+
+control:
+  forward_step_m: 0.25
+  turn_angle_deg: 30.0
+  linear_speed_mps: 0.15
+  angular_speed_deg_s: 45.0
+
+topics:
+  rgb: /oak/rgb/image_raw
+  rgb_camera_info: /oak/rgb/camera_info
+  depth: /oak/stereo/image_raw
+  depth_camera_info: /oak/stereo/camera_info
+  imu: /oak/imu/data
+  odom: /odom
+  pose: ""
+  action_cmd: /spacevln/action_cmd
+  action_status: /spacevln/action_status
+  capture_request: /spacevln/capture/request

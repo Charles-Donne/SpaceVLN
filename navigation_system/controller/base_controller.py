@@ -38,7 +38,7 @@ from navigation_system.runtime.device import get_device
 class BaseNavigationController:
     """封装底层环境交互与感知建图能力的基础导航控制器。"""
     
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, envs=None):
         # print("[Init] 配置MAP参数...")
         self.config = ConfigHelper.setup_navigation_config(config)
         self.device = get_device(self.config.TORCH_GPU_ID)
@@ -57,19 +57,22 @@ class BaseNavigationController:
         self.map_shape = (map_size_cm // self.resolution, map_size_cm // self.resolution)
         
         # print("[Init] 初始化Habitat环境...")
-        ensure_env_registered()
-        env_class = get_env_class(self.config.ENV_NAME)
-        if env_class is None:
-            raise RuntimeError(
-                f"Habitat environment '{self.config.ENV_NAME}' is not registered. "
-                "Please check navigation_system.env.zero_shot_env."
+        if envs is None:
+            ensure_env_registered()
+            env_class = get_env_class(self.config.ENV_NAME)
+            if env_class is None:
+                raise RuntimeError(
+                    f"Habitat environment '{self.config.ENV_NAME}' is not registered. "
+                    "Please check navigation_system.env.zero_shot_env."
+                )
+            self.envs = construct_envs(
+                self.config,
+                env_class,
+                auto_reset_done=False,
+                episodes_allowed=self.config.TASK_CONFIG.DATASET.EPISODES_ALLOWED,
             )
-        self.envs = construct_envs(
-            self.config,
-            env_class,
-            auto_reset_done=False,
-            episodes_allowed=self.config.TASK_CONFIG.DATASET.EPISODES_ALLOWED,
-        )
+        else:
+            self.envs = envs
         # print(f"[Init] 环境初始化完成，episodes: {self.envs.number_of_episodes}")
         
         # print("[Init] 初始化GroundedSAM...")

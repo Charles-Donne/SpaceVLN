@@ -121,6 +121,7 @@ class VLMNavigationController(BaseNavigationController):
         config: Config,
         config_path: str = "navigation_system/config/vlm/vlm_api_config.yaml",
         model_stack_builder: Optional[NavigationModelStackBuilder] = None,
+        envs=None,
     ):
         """
         初始化VLM导航控制器
@@ -130,7 +131,7 @@ class VLMNavigationController(BaseNavigationController):
             config_path: 统一API配置文件路径（同时设置LLM和VLM）
         """
         # 调用父类初始化（初始化环境、检测、建图、可视化）
-        super().__init__(config)
+        super().__init__(config, envs=envs)
         
         # 初始化VLM模块
 # print("\n[Init] 初始化VLM模块...")
