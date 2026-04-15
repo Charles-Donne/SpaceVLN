@@ -9,7 +9,7 @@ thinking_prompt:
 
 action_prompt:
   include_progress_summary: true
-  include_previous_action_reason: true
+  include_previous_action_reason: false
   include_detected_landmarks: false
   include_obstacle_summary: true
   include_landmark_map_info: false

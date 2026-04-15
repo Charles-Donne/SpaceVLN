@@ -159,12 +159,24 @@ def render_global_map(owner,
 
     # Layer 1: 已探索自由空间（浅灰色）
     explored_free_mask = np.logical_and(explored_mask, ~obstacle_mask)
+    explored_free_mask = owner._refine_render_region_mask(
+        explored_free_mask,
+        close_kernel_size=5,
+        min_component_area=18,
+        hole_fill_area=28,
+    )
     semantic_map[explored_free_mask] = 2
 
-    # Layer 2: Floor（浅绿色）
+    # Layer 2: Floor（渲染时做额外平滑，避免毛刺和小孔）
     # 使用 mapper 预计算的 floor（由 explored/obstacle 直接得到，避免额外语义扫描）
     if floor is not None:
         floor_display_mask = np.logical_and(floor.astype(bool), explored_mask)
+        floor_display_mask = owner._refine_render_region_mask(
+            floor_display_mask,
+            close_kernel_size=7,
+            min_component_area=42,
+            hole_fill_area=84,
+        )
         semantic_map[floor_display_mask] = 5  # 浅绿色
 
     # 轨迹与 waypoint 都在后续用 OpenCV 叠加；这里不再读取 Channel 2 的旧残留逻辑
@@ -193,6 +205,7 @@ def render_global_map(owner,
         sem_map_vis,
         space_area_layer,
         space_area_records,
+        alpha=1.0,
         fill_regions=True,
         show_labels=False,
     )
@@ -282,6 +295,7 @@ def render_global_map(owner,
                     isClosed=False,
                     color=trajectory_color,
                     thickness=trajectory_thickness,
+                    lineType=cv2.LINE_AA,
                 )
 
         owner._draw_space_areas_in_place(
@@ -380,12 +394,24 @@ def render_local_map(owner,
 
     # Layer 1: 已探索自由空间（浅灰色）
     explored_free_mask = np.logical_and(explored_mask, ~obstacle_mask)
+    explored_free_mask = owner._refine_render_region_mask(
+        explored_free_mask,
+        close_kernel_size=5,
+        min_component_area=18,
+        hole_fill_area=28,
+    )
     semantic_map[explored_free_mask] = 2
 
-    # Layer 2: Floor（浅绿色）
+    # Layer 2: Floor（渲染时做额外平滑，避免毛刺和小孔）
     # 使用 mapper 预计算的 floor（与 render_global_map 逻辑一致）
     if floor is not None:
         floor_display_mask = np.logical_and(floor.astype(bool), explored_mask)
+        floor_display_mask = owner._refine_render_region_mask(
+            floor_display_mask,
+            close_kernel_size=7,
+            min_component_area=42,
+            hole_fill_area=84,
+        )
         semantic_map[floor_display_mask] = 5
 
     # Layer 3: 不渲染轨迹和waypoint（后续用OpenCV绘制轨迹）
@@ -406,7 +432,7 @@ def render_local_map(owner,
         sem_map_vis,
         space_area_layer,
         space_area_records,
-        alpha=0.40,
+        alpha=1.0,
         show_labels=False,
     )
     obstacle_mask_resized = owner._build_display_obstacle_mask(full_map)
@@ -520,12 +546,20 @@ def render_local_map(owner,
     # ===== 阶段6.5: 绘制轨迹线（在 obstacle 之后，确保轨迹位于其上）=====
     if len(trajectory_display_points) > 1:
         trajectory_color = owner.LOCAL_TRAJECTORY_COLOR
-        for i in range(len(trajectory_display_points) - 1):
-            pt1 = trajectory_display_points[i]
-            pt2 = trajectory_display_points[i + 1]
-            if (0 <= pt1[0] < 480 and 0 <= pt1[1] < 480 and
-                0 <= pt2[0] < 480 and 0 <= pt2[1] < 480):
-                cv2.line(local_map, pt1, pt2, trajectory_color, thickness=3)
+        valid_points = [
+            (int(point[0]), int(point[1]))
+            for point in trajectory_display_points
+            if 0 <= int(point[0]) < 480 and 0 <= int(point[1]) < 480
+        ]
+        if len(valid_points) > 1:
+            cv2.polylines(
+                local_map,
+                [np.array(valid_points, dtype=np.int32)],
+                isClosed=False,
+                color=trajectory_color,
+                thickness=4,
+                lineType=cv2.LINE_AA,
+            )
 
     # ===== 绘制0.5m半径圆圈（深绿色，标识当前位置附近区域）=====
     # 480像素 = 12m，所以1m = 40像素，0.5m = 20像素

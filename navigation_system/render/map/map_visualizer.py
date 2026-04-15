@@ -41,19 +41,21 @@ from navigation_system.render.image_resize import (
 class MapVisualizer:
     """Thin coordinator that owns render policy, caching, and save orchestration."""
 
-    GLOBAL_TRAJECTORY_COLOR = (0, 0, 170)
-    LOCAL_TRAJECTORY_COLOR = (0, 0, 170)
+    GLOBAL_TRAJECTORY_COLOR = (160, 32, 214)
+    LOCAL_TRAJECTORY_COLOR = (178, 48, 230)
     SPACE_AREA_COLOR_PALETTE: Tuple[Tuple[int, int, int], ...] = (
-        (255, 219, 182),  # powder blue
-        (186, 214, 255),  # peach
-        (199, 190, 255),  # rose pink
-        (255, 203, 224),  # lavender
-        (179, 236, 255),  # butter yellow
-        (200, 240, 193),  # mint
-        (171, 195, 244),  # soft coral
-        (235, 231, 189),  # aqua
-        (255, 206, 199),  # periwinkle
-        (224, 196, 232),  # mauve
+        (223, 214, 247),  # blush pink
+        (196, 217, 248),  # soft peach
+        (246, 204, 220),  # lavender rose
+        (250, 214, 200),  # powder blue
+        (216, 200, 246),  # pink lilac
+        (188, 223, 250),  # cream apricot
+        (232, 210, 239),  # mauve
+        (204, 218, 255),  # periwinkle
+        (205, 228, 244),  # pastel sky
+        (197, 212, 242),  # soft coral
+        (215, 208, 250),  # airy violet
+        (181, 226, 248),  # buttercream
     )
     SPACE_TYPE_PREFERRED_COLOR_INDEX: Dict[str, int] = {
         "hallway": 0,
@@ -269,6 +271,95 @@ class MapVisualizer:
         if cache_token is not None:
             self._render_cache["obstacle_mask_display"][cache_token] = obstacle_mask.copy()
         return obstacle_mask
+
+    @staticmethod
+    def _remove_small_binary_components(
+        mask_uint8: np.ndarray,
+        min_component_area: int,
+    ) -> np.ndarray:
+        if min_component_area <= 1:
+            return mask_uint8 > 0
+
+        working = (np.asarray(mask_uint8, dtype=np.uint8) > 0).astype(np.uint8)
+        if working.size == 0 or np.count_nonzero(working) == 0:
+            return working.astype(bool)
+
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(working, connectivity=8)
+        cleaned = np.zeros_like(working, dtype=np.uint8)
+        for label_idx in range(1, int(num_labels)):
+            area = int(stats[label_idx, cv2.CC_STAT_AREA] or 0)
+            if area >= int(min_component_area):
+                cleaned[labels == label_idx] = 1
+        return cleaned.astype(bool)
+
+    @staticmethod
+    def _fill_small_binary_holes(
+        mask_uint8: np.ndarray,
+        max_hole_area: int,
+    ) -> np.ndarray:
+        if max_hole_area <= 0:
+            return np.asarray(mask_uint8, dtype=np.uint8) > 0
+
+        working = ((np.asarray(mask_uint8, dtype=np.uint8) > 0).astype(np.uint8) * 255)
+        if working.size == 0:
+            return working.astype(bool)
+
+        inverse = cv2.bitwise_not(working)
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
+            (inverse > 0).astype(np.uint8),
+            connectivity=8,
+        )
+        height, width = working.shape[:2]
+        filled = working.copy()
+        for label_idx in range(1, int(num_labels)):
+            area = int(stats[label_idx, cv2.CC_STAT_AREA] or 0)
+            if area <= 0 or area > int(max_hole_area):
+                continue
+            x = int(stats[label_idx, cv2.CC_STAT_LEFT] or 0)
+            y = int(stats[label_idx, cv2.CC_STAT_TOP] or 0)
+            w = int(stats[label_idx, cv2.CC_STAT_WIDTH] or 0)
+            h = int(stats[label_idx, cv2.CC_STAT_HEIGHT] or 0)
+            touches_border = x <= 0 or y <= 0 or (x + w) >= width or (y + h) >= height
+            if touches_border:
+                continue
+            filled[labels == label_idx] = 255
+        return filled > 0
+
+    def _refine_render_region_mask(
+        self,
+        mask: np.ndarray,
+        *,
+        close_kernel_size: int = 5,
+        open_kernel_size: int = 0,
+        min_component_area: int = 0,
+        hole_fill_area: int = 0,
+    ) -> np.ndarray:
+        mask_uint8 = ((np.asarray(mask, dtype=np.uint8) > 0).astype(np.uint8) * 255)
+        if mask_uint8.size == 0 or np.count_nonzero(mask_uint8) == 0:
+            return mask_uint8.astype(bool)
+
+        if int(min_component_area) > 1:
+            mask_uint8 = (
+                self._remove_small_binary_components(mask_uint8, int(min_component_area)).astype(np.uint8) * 255
+            )
+
+        if int(close_kernel_size) > 1:
+            close_kernel = cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE,
+                (int(close_kernel_size), int(close_kernel_size)),
+            )
+            mask_uint8 = cv2.morphologyEx(mask_uint8, cv2.MORPH_CLOSE, close_kernel)
+
+        if int(open_kernel_size) > 1:
+            open_kernel = cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE,
+                (int(open_kernel_size), int(open_kernel_size)),
+            )
+            mask_uint8 = cv2.morphologyEx(mask_uint8, cv2.MORPH_OPEN, open_kernel)
+
+        refined = self._remove_small_binary_components(mask_uint8, int(min_component_area))
+        refined = self._fill_small_binary_holes(refined.astype(np.uint8) * 255, int(hole_fill_area))
+        return refined.astype(bool)
 
     @staticmethod
     def _compute_adaptive_zoom_box(

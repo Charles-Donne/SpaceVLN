@@ -356,30 +356,114 @@ class SpaceAreaManager:
         if projector is None or full_map is None:
             return
 
+        obstacle_mask = np.asarray(full_map[0] > 0.5, dtype=bool)
         for record in self.space_area_records:
-            filtered_pixels: Set[Tuple[int, int]] = set()
-            for world_py, world_px in set(record.get("pixels", set()) or set()):
-                if self._world_pixel_is_traversible_with_projector(
-                    pixel_y=int(world_py),
-                    pixel_x=int(world_px),
-                    full_map=full_map,
-                    projector=projector,
-                ):
-                    filtered_pixels.add((int(world_py), int(world_px)))
+            filtered_pixels = self._filter_record_pixels_against_current_visibility(
+                record=record,
+                obstacle_mask=obstacle_mask,
+                projector=projector,
+            )
 
             if not filtered_pixels:
                 for world_py, world_px in self._record_waypoint_points(record):
-                    if self._world_pixel_is_traversible_with_projector(
-                        pixel_y=int(world_py),
-                        pixel_x=int(world_px),
-                        full_map=full_map,
-                        projector=projector,
+                    rotated = projector.world_to_rotated_pixel(float(world_py), float(world_px))
+                    if rotated is None:
+                        continue
+                    row = int(round(rotated[0]))
+                    col = int(round(rotated[1]))
+                    if (
+                        0 <= row < obstacle_mask.shape[0]
+                        and 0 <= col < obstacle_mask.shape[1]
+                        and not bool(obstacle_mask[row, col])
                     ):
                         filtered_pixels.add((int(world_py), int(world_px)))
 
             record["pixels"] = filtered_pixels
             if filtered_pixels:
                 record["center_world_px"] = self._compute_record_center_from_pixels(record)
+
+    def _filter_record_pixels_against_current_visibility(
+        self,
+        record: Dict[str, Any],
+        obstacle_mask: np.ndarray,
+        projector: RotatedMapProjector,
+    ) -> Set[Tuple[int, int]]:
+        anchor_world_points: List[Tuple[int, int]] = []
+        anchor_rotated_points: List[Tuple[int, int]] = []
+        seen_anchor_rotated: Set[Tuple[int, int]] = set()
+
+        for candidate in self._record_waypoint_points(record):
+            world_py = int(candidate[0])
+            world_px = int(candidate[1])
+            rotated = projector.world_to_rotated_pixel(float(world_py), float(world_px))
+            if rotated is None:
+                continue
+            row = int(round(rotated[0]))
+            col = int(round(rotated[1]))
+            if not (0 <= row < obstacle_mask.shape[0] and 0 <= col < obstacle_mask.shape[1]):
+                continue
+            if bool(obstacle_mask[row, col]):
+                continue
+            rotated_point = (row, col)
+            if rotated_point in seen_anchor_rotated:
+                continue
+            seen_anchor_rotated.add(rotated_point)
+            anchor_world_points.append((world_py, world_px))
+            anchor_rotated_points.append(rotated_point)
+
+        if not anchor_rotated_points:
+            center = tuple(record.get("center_world_px", (0, 0)))
+            center_py = int(center[0])
+            center_px = int(center[1])
+            rotated = projector.world_to_rotated_pixel(float(center_py), float(center_px))
+            if rotated is not None:
+                row = int(round(rotated[0]))
+                col = int(round(rotated[1]))
+                if (
+                    0 <= row < obstacle_mask.shape[0]
+                    and 0 <= col < obstacle_mask.shape[1]
+                    and not bool(obstacle_mask[row, col])
+                ):
+                    anchor_world_points.append((center_py, center_px))
+                    anchor_rotated_points.append((row, col))
+
+        if not anchor_rotated_points:
+            return set()
+
+        anchor_world_set = set(anchor_world_points)
+        filtered_pixels: Set[Tuple[int, int]] = set()
+        for candidate in set(record.get("pixels", set()) or set()):
+            world_py = int(candidate[0])
+            world_px = int(candidate[1])
+            rotated = projector.world_to_rotated_pixel(float(world_py), float(world_px))
+            if rotated is None:
+                continue
+            row = int(round(rotated[0]))
+            col = int(round(rotated[1]))
+            if not (0 <= row < obstacle_mask.shape[0] and 0 <= col < obstacle_mask.shape[1]):
+                continue
+            if bool(obstacle_mask[row, col]):
+                continue
+
+            world_point = (world_py, world_px)
+            if world_point in anchor_world_set:
+                filtered_pixels.add(world_point)
+                continue
+
+            for anchor_row, anchor_col in anchor_rotated_points:
+                if (row, col) == (anchor_row, anchor_col):
+                    filtered_pixels.add(world_point)
+                    break
+                if self._line_is_clear(
+                    obstacle_mask=obstacle_mask,
+                    start_row=float(anchor_row),
+                    start_col=float(anchor_col),
+                    end_row=float(row),
+                    end_col=float(col),
+                ):
+                    filtered_pixels.add(world_point)
+                    break
+        return filtered_pixels
 
     def _consolidate_same_type_records(
         self,

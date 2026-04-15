@@ -52,8 +52,6 @@ class ContextCacheActionExecutor(QwenContextCacheMixin, ActionExecutor):
         waypoint_summary: str = "",
         detection_image: Any = None,
         detected_landmarks: str = None,
-        previous_action_reason: str = "",
-        controller_action_notice: str = "",
         obstacle_distances: Dict[str, str] = None,
         landmark_map_info: str = None,
         allowed_action_names: Optional[Sequence[str]] = None,
@@ -72,8 +70,6 @@ class ContextCacheActionExecutor(QwenContextCacheMixin, ActionExecutor):
             progress_summary=progress_summary,
             waypoint_summary=waypoint_summary,
             detected_landmarks=detected_landmarks,
-            previous_action_reason=previous_action_reason,
-            controller_action_notice=controller_action_notice,
             obstacle_distances=obstacle_distances,
             landmark_map_info=landmark_map_info,
             allowed_action_names=allowed_action_names,
@@ -105,6 +101,8 @@ class ContextCacheActionExecutor(QwenContextCacheMixin, ActionExecutor):
             return None, None, None, 0, 0.0, ""
 
         action_name, value = parsed_action
+        action_variant = self._extract_action_variant(response.get("action"))
+        response["_action_variant"] = action_variant
         normalized_allowed_actions = None
         if allowed_action_names:
             normalized_allowed_actions = {
@@ -131,7 +129,7 @@ class ContextCacheActionExecutor(QwenContextCacheMixin, ActionExecutor):
         meters = 0.0
         if action_name in ["TURN_LEFT", "TURN_RIGHT"]:
             degrees = int(value)
-            response["action"] = f"{action_name} {degrees}deg"
+            response["action"] = f"{self._format_turn_action_label(action_name, action_variant)} {degrees}deg"
         elif action_name == "MOVE_FORWARD":
             meters = float(value)
             response["action"] = f"{action_name} {meters:g}m"

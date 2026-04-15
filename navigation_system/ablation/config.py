@@ -72,7 +72,7 @@ class ThinkingPromptAblation:
 class ActionPromptAblation:
     include_status_block: bool = True
     include_progress_summary: bool = True
-    include_previous_action_reason: bool = True
+    include_previous_action_reason: bool = False
     include_detected_landmarks: bool = True
     include_obstacle_summary: bool = True
     include_landmark_map_info: bool = True
@@ -83,7 +83,7 @@ class ActionPromptAblation:
         return cls(
             include_status_block=_safe_bool(payload.get("include_status_block"), True),
             include_progress_summary=_safe_bool(payload.get("include_progress_summary"), True),
-            include_previous_action_reason=_safe_bool(payload.get("include_previous_action_reason"), True),
+            include_previous_action_reason=_safe_bool(payload.get("include_previous_action_reason"), False),
             include_detected_landmarks=_safe_bool(payload.get("include_detected_landmarks"), True),
             include_obstacle_summary=_safe_bool(payload.get("include_obstacle_summary"), True),
             include_landmark_map_info=_safe_bool(payload.get("include_landmark_map_info"), True),

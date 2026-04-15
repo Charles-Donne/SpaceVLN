@@ -72,6 +72,24 @@ class ActionExecutor(BaseAPIClient):
                 return float(allowed)
         return None
 
+    @staticmethod
+    def _extract_action_variant(action_raw: Any) -> str:
+        command = str(action_raw or "").strip().upper().replace("DEGREES", "DEG")
+        if command.startswith("TURN_LEFT_AVOID") or command.startswith("TURN_RIGHT_AVOID"):
+            return "avoid_obstacle"
+        if command.startswith("TURN_LEFT_ALIGN") or command.startswith("TURN_RIGHT_ALIGN"):
+            return "align_destination"
+        return ""
+
+    @staticmethod
+    def _format_turn_action_label(action_name: str, action_variant: str) -> str:
+        action_name_upper = str(action_name or "").strip().upper()
+        if action_variant == "avoid_obstacle":
+            return f"{action_name_upper}_AVOID"
+        if action_variant == "align_destination":
+            return f"{action_name_upper}_ALIGN"
+        return action_name_upper
+
     def _parse_action_command(self, response: Dict) -> Optional[Tuple[str, float]]:
         """Parse normalized action command strings from the VLM response."""
         action_raw = str(response.get('action', '')).strip()
@@ -83,6 +101,20 @@ class ActionExecutor(BaseAPIClient):
         if command == 'STOP':
             return 'STOP', 0.0
 
+        if command.startswith('TURN_LEFT_AVOID'):
+            suffix = command[len('TURN_LEFT_AVOID'):].strip().replace('DEG', '').strip()
+            normalized = self._normalize_allowed_value(suffix, self.VALID_TURN_VALUES)
+            if normalized is None:
+                return None
+            return 'TURN_LEFT', float(normalized)
+
+        if command.startswith('TURN_LEFT_ALIGN'):
+            suffix = command[len('TURN_LEFT_ALIGN'):].strip().replace('DEG', '').strip()
+            normalized = self._normalize_allowed_value(suffix, self.VALID_TURN_VALUES)
+            if normalized is None:
+                return None
+            return 'TURN_LEFT', float(normalized)
+
         if command.startswith('TURN_LEFT'):
             suffix = command[len('TURN_LEFT'):].strip().replace('DEG', '').strip()
             if not suffix and 'value' in response:
@@ -92,6 +124,20 @@ class ActionExecutor(BaseAPIClient):
             if normalized is None:
                 return None
             return 'TURN_LEFT', float(normalized)
+
+        if command.startswith('TURN_RIGHT_AVOID'):
+            suffix = command[len('TURN_RIGHT_AVOID'):].strip().replace('DEG', '').strip()
+            normalized = self._normalize_allowed_value(suffix, self.VALID_TURN_VALUES)
+            if normalized is None:
+                return None
+            return 'TURN_RIGHT', float(normalized)
+
+        if command.startswith('TURN_RIGHT_ALIGN'):
+            suffix = command[len('TURN_RIGHT_ALIGN'):].strip().replace('DEG', '').strip()
+            normalized = self._normalize_allowed_value(suffix, self.VALID_TURN_VALUES)
+            if normalized is None:
+                return None
+            return 'TURN_RIGHT', float(normalized)
 
         if command.startswith('TURN_RIGHT'):
             suffix = command[len('TURN_RIGHT'):].strip().replace('DEG', '').strip()
@@ -252,8 +298,6 @@ class ActionExecutor(BaseAPIClient):
                      waypoint_summary: str = "",
                      detection_image: Any = None,
                      detected_landmarks: str = None,
-                     previous_action_reason: str = "",
-                     controller_action_notice: str = "",
                      obstacle_distances: Dict[str, str] = None,
                      landmark_map_info: str = None,
                      allowed_action_names: Optional[Sequence[str]] = None,
@@ -270,8 +314,6 @@ class ActionExecutor(BaseAPIClient):
             waypoint_summary: 兼容保留字段，action prompt当前不再使用
             detection_image: 目标检测图像路径（可选）
             detected_landmarks: 已检测landmark类别字符串（可选）
-            previous_action_reason: 上一步的action_analysis（可选）
-            controller_action_notice: 当前这一步必须 obey 的控制器约束（可选）
             obstacle_distances: 预计算的障碍物距离字典 {'front': 'X.XXm', 'left_30': ..., ...}
             
         Returns:
@@ -292,8 +334,6 @@ class ActionExecutor(BaseAPIClient):
             progress_summary=progress_summary,
             waypoint_summary=waypoint_summary,
             detected_landmarks=detected_landmarks,
-            previous_action_reason=previous_action_reason,
-            controller_action_notice=controller_action_notice,
             obstacle_distances=obstacle_distances,
             landmark_map_info=landmark_map_info,
             allowed_action_names=allowed_action_names,
@@ -330,6 +370,8 @@ class ActionExecutor(BaseAPIClient):
             return None, None, None, 0, 0.0, ""
 
         action_name, value = parsed_action
+        action_variant = self._extract_action_variant(response.get("action"))
+        response["_action_variant"] = action_variant
         normalized_allowed_actions = None
         if allowed_action_names:
             normalized_allowed_actions = {
@@ -357,7 +399,7 @@ class ActionExecutor(BaseAPIClient):
         meters = 0
         if action_name in ['TURN_LEFT', 'TURN_RIGHT']:
             degrees = int(value)
-            response['action'] = f"{action_name} {degrees}deg"
+            response['action'] = f"{self._format_turn_action_label(action_name, action_variant)} {degrees}deg"
         elif action_name == 'MOVE_FORWARD':
             meters = float(value)
             response['action'] = f"{action_name} {meters:g}m"

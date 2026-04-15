@@ -184,9 +184,9 @@ def _build_allowed_action_output(allowed_action_names=None) -> str:
             ]
         )
     if "TURN_LEFT" in ordered:
-        choices.append("TURN_LEFT 30deg")
+        choices.extend(["TURN_LEFT_AVOID 30deg", "TURN_LEFT_ALIGN 30deg"])
     if "TURN_RIGHT" in ordered:
-        choices.append("TURN_RIGHT 30deg")
+        choices.extend(["TURN_RIGHT_AVOID 30deg", "TURN_RIGHT_ALIGN 30deg"])
     if "STOP" in ordered:
         choices.append("STOP")
     return " | ".join(choices)
@@ -199,14 +199,103 @@ def _build_allowed_action_bullets(allowed_action_names=None) -> str:
         lines.append("- `MOVE_FORWARD {0.25m, 0.5m, 0.75m, 1.0m, 1.25m}`")
     turn_parts = []
     if "TURN_LEFT" in ordered:
-        turn_parts.append("`TURN_LEFT 30deg`")
+        turn_parts.append("`TURN_LEFT_AVOID 30deg` | `TURN_LEFT_ALIGN 30deg`")
     if "TURN_RIGHT" in ordered:
-        turn_parts.append("`TURN_RIGHT 30deg`")
+        turn_parts.append("`TURN_RIGHT_AVOID 30deg` | `TURN_RIGHT_ALIGN 30deg`")
     if turn_parts:
         lines.append("- " + " | ".join(turn_parts))
     if "STOP" in ordered:
         lines.append("- `STOP`")
     return "\n".join(lines)
+
+
+def _normalize_action_prompt_text(prompt: str) -> str:
+    normalized = str(prompt or "")
+    literal_replacements = (
+        (
+            "use nearby landmarks, valid detections, `Subtask Progress`, `Previous Step Analysis`, and current image content",
+            "use nearby landmarks, valid detections, `Subtask Progress`, and current image content",
+        ),
+        (
+            "use `Subtask Progress`, `Previous Step Analysis`, and current image content",
+            "use `Subtask Progress` and current image content",
+        ),
+        (
+            "Use `Subtask Progress` and `Previous Step Analysis` to avoid repeating a finished turn:",
+            "Use `Subtask Progress` to avoid repeating a finished turn:",
+        ),
+        (
+            "If `Subtask Progress` contains `(warning: front route blocked; forced stop)` or `Previous Step Analysis` says the last forward step was blocked, do not push into that same FRONT route on this call; choose `STOP` only if arrival is already satisfied, otherwise choose a side turn.",
+            "If `Subtask Progress` contains `(warning: front route blocked; forced stop)`, do not push into that same FRONT route on this call; choose `STOP` only if arrival is already satisfied, otherwise choose a side turn.",
+        ),
+        (
+            "On that retry, only `TURN_LEFT 30deg`, `TURN_RIGHT 30deg`, or valid `STOP` are allowed.",
+            "On that retry, choose only a side turn from the action space or valid `STOP`; use an `*_AVOID` turn for obstacle clearing and an `*_ALIGN` turn for destination re-alignment.",
+        ),
+        (
+            "A close valid side landmark/destination usually beats weak generic avoidance: if it is clearly on the left, prefer `TURN_LEFT 30deg`; if clearly on the right, prefer `TURN_RIGHT 30deg`.",
+            "A close valid side landmark/destination usually beats weak generic avoidance: if it is clearly on the left, prefer `TURN_LEFT_ALIGN 30deg`; if clearly on the right, prefer `TURN_RIGHT_ALIGN 30deg`.",
+        ),
+        (
+            "A clearly side-offset destination usually beats weak generic avoidance: if it is clearly on the left, prefer `TURN_LEFT 30deg`; if clearly on the right, prefer `TURN_RIGHT 30deg`.",
+            "A clearly side-offset destination usually beats weak generic avoidance: if it is clearly on the left, prefer `TURN_LEFT_ALIGN 30deg`; if clearly on the right, prefer `TURN_RIGHT_ALIGN 30deg`.",
+        ),
+        (
+            "If `Subtask Progress` is empty / `Just started` and `Previous Step Analysis` is empty / `N/A (first step)`, treat the current facing as aligned;",
+            "If `Subtask Progress` is empty / `Just started`, treat the current facing as aligned;",
+        ),
+        (
+            "If `Previous Step Analysis` shows the last action already turned toward the destination or already turned to avoid an obstacle and re-align the route, treat that reorientation as finished.",
+            "If `Subtask Progress` already records that the last step turned for destination alignment or obstacle avoidance, treat that reorientation as finished.",
+        ),
+        (
+            "If `Controller Notice` says the current FRONT retry is blocked or `Subtask Progress` carries the blocked-front warning, do not answer with another forward into that same blocked FRONT route on this retry unless current evidence clearly shows it has reopened or it is the correct stair run.",
+            "If `Subtask Progress` carries the blocked-front warning, do not answer with another forward into that same FRONT route on this retry unless current evidence clearly shows it has reopened or it is the correct stair run.",
+        ),
+        (
+            "Always read `Subtask Progress` and `Previous Step Analysis` to judge stage completion, route relation, and whether the last turn already aligned the agent.",
+            "Use `Subtask Progress` as last-step memory to judge stage completion, route relation, and whether the previous action already finished the needed turn.",
+        ),
+        (
+            "Use `Subtask Progress` and `Previous Step Analysis` only as route-state hints; if they say the front route was blocked on the last call, do not push into that same blocked FRONT route again immediately.",
+            "Use `Subtask Progress` only as last-step memory; if it says the front route was blocked on the last call, do not push into that same FRONT route again immediately.",
+        ),
+        (
+            "compare Left 30deg and Right 30deg",
+            "compare left-turn and right-turn options",
+        ),
+        (
+            '"action": "TURN_LEFT 30deg"',
+            '"action": "TURN_LEFT_AVOID 30deg"',
+        ),
+        (
+            "Output `action` only from the fixed action space: `TURN_LEFT 30deg` / `TURN_RIGHT 30deg` / `MOVE_FORWARD {{0.25m, 0.5m, 0.75m, 1.0m, 1.25m}}` / `STOP`.",
+            "Output `action` only from the fixed action space: `TURN_LEFT_AVOID 30deg` / `TURN_LEFT_ALIGN 30deg` / `TURN_RIGHT_AVOID 30deg` / `TURN_RIGHT_ALIGN 30deg` / `MOVE_FORWARD {{0.25m, 0.5m, 0.75m, 1.0m, 1.25m}}` / `STOP`.",
+        ),
+        (
+            "Output `action` only from the fixed action space: `TURN_LEFT 30deg` / `TURN_RIGHT 30deg` / `MOVE_FORWARD {0.25m, 0.5m, 0.75m, 1.0m, 1.25m}` / `STOP`.",
+            "Output `action` only from the fixed action space: `TURN_LEFT_AVOID 30deg` / `TURN_LEFT_ALIGN 30deg` / `TURN_RIGHT_AVOID 30deg` / `TURN_RIGHT_ALIGN 30deg` / `MOVE_FORWARD {0.25m, 0.5m, 0.75m, 1.0m, 1.25m}` / `STOP`.",
+        ),
+        (
+            "toward the current-stage destination",
+            "toward the current destination",
+        ),
+    )
+    for old, new in literal_replacements:
+        normalized = normalized.replace(old, new)
+
+    normalized = re.sub(
+        r"(?m)^- \*\*Current-stage only\*\*:.*$",
+        "- **Focus**: rely on the current `Instruction`, current `Destination`, visible landmark/route cues, obstacle layout, and `Subtask Progress`.",
+        normalized,
+    )
+    normalized = re.sub(
+        r"(?m)^(\s*)a\. \*\*Destination-first stage following\*\*:.*$",
+        r"\1a. **Current cues first**: focus on the current `Instruction`, current `Destination`, visible landmark/route cues, obstacle layout, and `Subtask Progress`. Choose the route that really leads to the destination rather than the nearest open side or most obvious reference cue.",
+        normalized,
+    )
+    normalized = re.sub(r"\n{3,}", "\n\n", normalized)
+    return normalized
 
 
 def get_action_execution_prompt(
@@ -215,8 +304,6 @@ def get_action_execution_prompt(
     progress_summary: str = "",
     waypoint_summary: str = "",
     detected_landmarks: str = None,
-    previous_action_reason: str = "",
-    controller_action_notice: str = "",
     obstacle_distances=None,
     landmark_map_info: str = None,
     allowed_action_names=None,
@@ -228,12 +315,10 @@ def get_action_execution_prompt(
     if not progress_summary:
         progress_summary = "Just started"
 
-    return ACTION_EXECUTION_PROMPT.format(
+    return _normalize_action_prompt_text(ACTION_EXECUTION_PROMPT.format(
         subtask_destination=next_waypoint,
         subtask_instruction=subtask_instruction,
         progress_summary=progress_summary,
-        previous_action_reason=previous_action_reason or "N/A (first step)",
-        controller_action_notice=controller_action_notice or "None",
         detected_landmarks=detected_landmarks or "none",
         obstacle_perception_summary=_build_obstacle_perception_summary(obstacle_distances),
         landmark_perception_summary=_build_landmark_perception_summary(
@@ -249,7 +334,7 @@ def get_action_execution_prompt(
         solid_autocomplete_m=_fmt_threshold_m(ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M),
         move_distance=move_distance,
         turn_angle=turn_angle,
-    )
+    ))
 
 
 __all__ = [
@@ -260,6 +345,7 @@ __all__ = [
     "_build_allowed_action_bullets",
     "_build_allowed_action_output",
     "_build_landmark_perception_summary",
+    "_normalize_action_prompt_text",
     "_build_obstacle_perception_summary",
     "_fmt_threshold_m",
     "_get_verify_view_count",

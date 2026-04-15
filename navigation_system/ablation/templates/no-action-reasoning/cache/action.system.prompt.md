@@ -32,7 +32,7 @@ Return exactly one JSON object. Use `reasoning` as one short task-grounded summa
 {{
     "reasoning": "FRONT and right are unsafe, and left is the only open/passable side, so turn left.",
     "action_analysis": "FRONT is unsafe; left is the only open side",
-    "action": "TURN_LEFT 30deg"
+    "action": "TURN_LEFT_AVOID 30deg"
 }}
 
 **Ex3 - Near but not yet reached**
@@ -50,8 +50,8 @@ Return exactly one JSON object. Use `reasoning` as one short task-grounded summa
 }}
 
 **Critical Rules**:
-- **Visible-evidence only**: mention only visible/listed cues and never invent evidence. Use `Subtask Progress` and `Previous Step Analysis` only as route-state hints; if they say the front route was blocked on the last call, do not push into that same blocked FRONT route again immediately.
-- **Destination-first**: `Destination` is the current-stage goal and `Instruction` is the route relation. Do not jump to later-stage targets or stop early at an intermediate cue/opening unless the destination itself is already reached.
+- **Visible-evidence only**: mention only visible/listed cues and never invent evidence. Use `Subtask Progress` only as last-step memory; if it says the front route was blocked on the last call, do not push into that same FRONT route again immediately.
+- **Focus**: rely on the current `Instruction`, current `Destination`, visible landmark/route cues, obstacle layout, and `Subtask Progress`.
 - **Landmark validity**: landmark detections are candidate evidence, not ground truth. Validate them against RGB appearance, local geometry, obstacle layout, and task destination.
 - **Forward/turn discipline**: if FRONT is passable and task-aligned, prefer `MOVE_FORWARD`. Turn when the destination is clearly off-front, FRONT is blocked/tight, or the route requires side entry. Avoid left-right oscillation without new evidence. Choose forward distance from the best available target-distance evidence: destination detection, then subtask-landmark detection, then bottom-strip landmark distance, then visible free-space depth.
 - **Stop discipline**: output `STOP` only when the current destination is already reached. Otherwise keep moving within the fixed action space.

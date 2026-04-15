@@ -145,8 +145,6 @@ def build_action_cache_prompt_bundle(
     progress_summary: Optional[str],
     waypoint_summary: Optional[str],
     detected_landmarks: Optional[str],
-    previous_action_reason: Optional[str],
-    controller_action_notice: Optional[str],
     obstacle_distances: Optional[Dict[str, str]],
     landmark_map_info: Optional[str],
     allowed_action_names: Optional[Sequence[str]],
@@ -173,11 +171,6 @@ def build_action_cache_prompt_bundle(
         if resolved_spec.action_prompt.include_progress_summary
         else ""
     )
-    prompt_previous_action_reason = (
-        previous_action_reason
-        if resolved_spec.action_prompt.include_previous_action_reason
-        else ""
-    )
     prompt_detected_landmarks = (
         detected_landmarks
         if resolved_spec.action_prompt.include_detected_landmarks
@@ -195,8 +188,6 @@ def build_action_cache_prompt_bundle(
     )
 
     progress_text = str(prompt_progress_summary or "").strip() or "Just started"
-    previous_action_text = str(prompt_previous_action_reason or "").strip() or "N/A (first step)"
-    controller_notice_text = str(controller_action_notice or "").strip() or "None"
     detected_landmark_text = str(prompt_detected_landmarks or "").strip() or "none"
     obstacle_summary = standard_cache_builders._build_obstacle_perception_summary(
         prompt_obstacle_distances
@@ -209,7 +200,7 @@ def build_action_cache_prompt_bundle(
         allowed_action_names
     )
 
-    system_prompt = system_template.format(
+    system_prompt = standard_cache_builders._normalize_action_prompt_text(system_template.format(
         obs_blocked_m=standard_cache_builders._fmt_threshold_m(standard_cache_builders.OBS_BLOCKED_M),
         obs_risky_m=standard_cache_builders._fmt_threshold_m(standard_cache_builders.OBS_RISKY_M),
         obs_open_m=standard_cache_builders._fmt_threshold_m(standard_cache_builders.OBS_OPEN_M),
@@ -219,18 +210,16 @@ def build_action_cache_prompt_bundle(
         open_autocomplete_m=standard_cache_builders._fmt_threshold_m(
             standard_cache_builders.ACTION_SUBTASK_AUTOCOMPLETE_OPEN_DISTANCE_M
         ),
-    )
-    user_prompt = user_template.format(
+    ))
+    user_prompt = standard_cache_builders._normalize_action_prompt_text(user_template.format(
         subtask_destination=next_waypoint,
         subtask_instruction=subtask_instruction,
         progress_summary=progress_text,
-        previous_action_reason=previous_action_text,
-        controller_action_notice=controller_notice_text,
         obstacle_perception_summary=obstacle_summary,
         landmark_perception_summary=landmark_summary,
         detected_landmarks=detected_landmark_text,
         allowed_action_bullets=allowed_action_bullets,
-    )
+    ))
     full_prompt = compose_full_prompt(system_prompt, user_prompt)
     return ExplicitCachePromptBundle(
         system_prompt=system_prompt,

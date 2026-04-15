@@ -25,19 +25,20 @@ def _space_area_color_preference_order(
     area_id: int,
     space_type: str,
 ) -> List[int]:
-    del area_id
     palette_len = len(self.SPACE_AREA_COLOR_PALETTE)
     normalized_type = self._normalize_space_area_type(space_type)
     preferred_index = self.SPACE_TYPE_PREFERRED_COLOR_INDEX.get(normalized_type)
+    seed = 0
+    for index, ch in enumerate(normalized_type):
+        seed += (index + 17) * ord(ch)
     if preferred_index is None:
-        seed = 0
-        for index, ch in enumerate(normalized_type):
-            seed += (index + 17) * ord(ch)
         preferred_index = seed % max(1, palette_len)
     preferred_index = int(preferred_index) % max(1, palette_len)
-    fallback_order = [preferred_index]
+    variant_shift = (int(area_id) * 3 + seed) % max(1, palette_len)
+    start_index = (preferred_index + variant_shift) % max(1, palette_len)
+    fallback_order = [start_index]
     for offset in range(1, palette_len):
-        fallback_order.append((preferred_index + offset) % palette_len)
+        fallback_order.append((start_index + offset) % palette_len)
     return fallback_order
 
 
@@ -125,12 +126,17 @@ def _resolve_space_area_colors(
 
     color_assignments: Dict[int, Tuple[int, int, int]] = {}
     palette = list(self.SPACE_AREA_COLOR_PALETTE)
+    assigned_type_colors: Dict[str, set] = {}
     for area_id in ordered_area_ids:
+        normalized_type = self._normalize_space_area_type(
+            str(record_by_id.get(int(area_id), {}).get("space_type", ""))
+        )
         neighbor_colors = {
             color_assignments[neighbor_id]
             for neighbor_id in adjacency.get(int(area_id), set())
             if neighbor_id in color_assignments
         }
+        same_type_colors = assigned_type_colors.get(normalized_type, set())
         preference_order = self._space_area_color_preference_order(
             area_id=int(area_id),
             space_type=str(record_by_id.get(int(area_id), {}).get("space_type", "")),
@@ -138,12 +144,19 @@ def _resolve_space_area_colors(
         chosen_color = None
         for color_index in preference_order:
             candidate = palette[int(color_index) % len(palette)]
-            if candidate not in neighbor_colors:
+            if candidate not in neighbor_colors and candidate not in same_type_colors:
                 chosen_color = candidate
                 break
         if chosen_color is None:
+            for color_index in preference_order:
+                candidate = palette[int(color_index) % len(palette)]
+                if candidate not in neighbor_colors:
+                    chosen_color = candidate
+                    break
+        if chosen_color is None:
             chosen_color = palette[preference_order[0] % len(palette)]
         color_assignments[int(area_id)] = chosen_color
+        assigned_type_colors.setdefault(normalized_type, set()).add(chosen_color)
     return color_assignments
 
 
@@ -173,8 +186,10 @@ def _refine_space_area_mask(self, mask: np.ndarray) -> np.ndarray:
     if mask_uint8.size == 0 or np.count_nonzero(mask_uint8) == 0:
         return mask
 
-    kernel = np.ones((5, 5), dtype=np.uint8)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
     closed = cv2.morphologyEx(mask_uint8, cv2.MORPH_CLOSE, kernel)
+    closed = self._remove_small_binary_components(closed, 28).astype(np.uint8) * 255
+    closed = self._fill_small_binary_holes(closed, 48).astype(np.uint8) * 255
     contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
         return closed > 127
@@ -252,6 +267,14 @@ def _draw_space_areas_in_place(
             output_size=int(image.shape[1]),
             cache_token=cache_token,
         )
+        if image is not None and image.ndim == 3 and image.shape[:2] == mask.shape:
+            drawable_mask = np.any(image != 0, axis=2)
+            clipped_mask = np.logical_and(mask, drawable_mask)
+            if np.count_nonzero(clipped_mask) != np.count_nonzero(mask):
+                mask = clipped_mask
+                mask_uint8 = (mask.astype(np.uint8) * 255)
+                contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                label_anchor = self._compute_space_area_label_anchor(mask_uint8, contours)
         if not np.any(mask):
             continue
         color = tuple(
@@ -270,7 +293,7 @@ def _draw_space_areas_in_place(
                 image[mask] = np.clip(blended, 0.0, 255.0).astype(np.uint8)
 
         if contours:
-            contour_color = tuple(max(0, min(255, int(round(channel * 0.78)))) for channel in color)
+            contour_color = tuple(int(channel) for channel in color)
             if fill_regions:
                 cv2.drawContours(image, contours, -1, contour_color, 2)
             if show_labels:
@@ -480,14 +503,14 @@ def _get_space_area_label_style(
 ) -> Dict[str, Any]:
     del self
     min_dim = max(1, int(min(image_shape[:2])))
-    scale_ratio = max(0.95, min(1.18, float(min_dim) / 440.0))
-    font_scale = 0.42 * scale_ratio
-    thickness = 1
-    pad_x = max(3, int(round(4 * scale_ratio)))
-    pad_top = max(2, int(round(3 * scale_ratio)))
-    pad_bottom = max(1, int(round(2 * scale_ratio)))
-    min_box_width = max(38, int(round(44 * scale_ratio)))
-    connector_threshold = 12.0 * scale_ratio
+    scale_ratio = max(0.98, min(1.24, float(min_dim) / 440.0))
+    font_scale = 0.50 * scale_ratio
+    thickness = max(1, int(round(1.35 * scale_ratio)))
+    pad_x = max(5, int(round(6 * scale_ratio)))
+    pad_top = max(3, int(round(4 * scale_ratio)))
+    pad_bottom = max(2, int(round(3 * scale_ratio)))
+    min_box_width = max(48, int(round(56 * scale_ratio)))
+    connector_threshold = 14.0 * scale_ratio
     offset_radii = tuple(
         max(12, int(round(radius * scale_ratio)))
         for radius in (14, 22, 30, 42, 56, 74, 96, 124)

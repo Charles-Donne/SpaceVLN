@@ -15,6 +15,7 @@ from navigation_system.config.core.params.thresholds import (
 from navigation_system.vlm.prompts.builders import (
     _build_allowed_action_bullets,
     _build_landmark_perception_summary,
+    _normalize_action_prompt_text,
     _build_obstacle_perception_summary,
     _fmt_threshold_m,
 )
@@ -146,8 +147,6 @@ def build_action_cache_prompt_bundle(
     progress_summary: Optional[str],
     waypoint_summary: Optional[str],
     detected_landmarks: Optional[str],
-    previous_action_reason: Optional[str],
-    controller_action_notice: Optional[str],
     obstacle_distances: Optional[Dict[str, str]],
     landmark_map_info: Optional[str],
     allowed_action_names: Optional[Sequence[str]],
@@ -160,8 +159,6 @@ def build_action_cache_prompt_bundle(
     del waypoint_summary
 
     progress_text = str(progress_summary or "").strip() or "Just started"
-    previous_action_text = str(previous_action_reason or "").strip() or "N/A (first step)"
-    controller_notice_text = str(controller_action_notice or "").strip() or "None"
     detected_landmark_text = str(detected_landmarks or "").strip() or "none"
     obstacle_summary = _build_obstacle_perception_summary(obstacle_distances)
     landmark_summary = _build_landmark_perception_summary(
@@ -169,18 +166,16 @@ def build_action_cache_prompt_bundle(
         landmark_map_info=landmark_map_info,
     )
     allowed_action_bullets = _build_allowed_action_bullets(allowed_action_names)
-    system_prompt = _render_action_system_prompt()
-    user_prompt = ACTION_CACHE_USER_PROMPT.format(
+    system_prompt = _normalize_action_prompt_text(_render_action_system_prompt())
+    user_prompt = _normalize_action_prompt_text(ACTION_CACHE_USER_PROMPT.format(
         subtask_destination=next_waypoint,
         subtask_instruction=subtask_instruction,
         progress_summary=progress_text,
-        previous_action_reason=previous_action_text,
-        controller_action_notice=controller_notice_text,
         obstacle_perception_summary=obstacle_summary,
         landmark_perception_summary=landmark_summary,
         detected_landmarks=detected_landmark_text,
         allowed_action_bullets=allowed_action_bullets,
-    )
+    ))
     full_prompt = compose_full_prompt(system_prompt, user_prompt)
     return ExplicitCachePromptBundle(
         system_prompt=system_prompt,

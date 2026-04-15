@@ -122,8 +122,6 @@ def get_action_execution_prompt(
     progress_summary: str = "",
     waypoint_summary: str = "",
     detected_landmarks: str = None,
-    previous_action_reason: str = "",
-    controller_action_notice: str = "",
     obstacle_distances=None,
     landmark_map_info: str = None,
     allowed_action_names=None,
@@ -138,11 +136,6 @@ def get_action_execution_prompt(
     prompt_progress_summary = (
         progress_summary
         if resolved_spec.action_prompt.include_progress_summary
-        else ""
-    )
-    prompt_previous_action_reason = (
-        previous_action_reason
-        if resolved_spec.action_prompt.include_previous_action_reason
         else ""
     )
     prompt_detected_landmarks = (
@@ -163,14 +156,12 @@ def get_action_execution_prompt(
     if not prompt_progress_summary:
         prompt_progress_summary = "Just started"
 
-    return template.format(
+    return standard_builders._normalize_action_prompt_text(template.format(
         subtask_destination=next_waypoint,
         subtask_instruction=subtask_instruction,
         progress_summary=prompt_progress_summary,
         waypoint_summary=waypoint_summary,
         detected_landmarks=prompt_detected_landmarks or "none",
-        previous_action_reason=prompt_previous_action_reason or "N/A (first step)",
-        controller_action_notice=controller_action_notice or "None",
         obstacle_perception_summary=standard_builders._build_obstacle_perception_summary(
             prompt_obstacle_distances
         ),
@@ -191,7 +182,7 @@ def get_action_execution_prompt(
         ),
         move_distance=move_distance,
         turn_angle=turn_angle,
-    )
+    ))
 
 
 __all__ = [
