@@ -30,10 +30,16 @@ spacevln_ablation_canonical_label() {
         planning_reasoning)
             printf '%s\n' "planning_reasoning"
             ;;
+        thinking_reasoning)
+            printf '%s\n' "planning_reasoning"
+            ;;
         action_reasoning)
             printf '%s\n' "action_reasoning"
             ;;
         planning_action_reasoning)
+            printf '%s\n' "planning_action_reasoning"
+            ;;
+        thinking_action_reasoning|all_reasoning)
             printf '%s\n' "planning_action_reasoning"
             ;;
         both)
@@ -59,13 +65,13 @@ spacevln_ablation_resolve_preset_path() {
         space_structure)
             printf '%s\n' "navigation_system/ablation/configs/no_space_structure.yaml"
             ;;
-        planning_reasoning)
+        planning_reasoning|thinking_reasoning)
             printf '%s\n' "navigation_system/ablation/configs/no_planning_reasoning.yaml"
             ;;
         action_reasoning)
             printf '%s\n' "navigation_system/ablation/configs/no_action_reasoning.yaml"
             ;;
-        planning_action_reasoning)
+        planning_action_reasoning|thinking_action_reasoning|all_reasoning)
             printf '%s\n' "navigation_system/ablation/configs/no_planning_action_reasoning.yaml"
             ;;
         both)
@@ -92,17 +98,21 @@ spacevln_ablation_print_usage() {
   default            使用隔离目录，但不做消融
   landmark           去掉 landmark 感知输入
   space_structure    去掉 space structure 输入
-  planning_reasoning 去掉 planning 推理 prompt 段
-  action_reasoning   去掉 action 决策 prompt 段
-  planning_action_reasoning 去掉 planning + action 两侧 reasoning
+  planning_reasoning / thinking_reasoning
+                     去掉 thinking(planning) 侧推理流程/推理提示，保留关键约束、例子、格式
+  action_reasoning   去掉 action 侧推理流程/推理提示，保留关键约束、例子、格式
+  planning_action_reasoning / thinking_action_reasoning / all_reasoning
+                     同时去掉 thinking(planning) + action 两侧推理流程/推理提示
   both               同时去掉 landmark 和 space structure
 
 示例:
   bash run_r2r/${script_name} landmark 1 100 260 4
   bash run_r2r/${script_name} space_structure 1 100 260 4
   bash run_r2r/${script_name} planning_reasoning 1 100 260 4
+  bash run_r2r/${script_name} thinking_reasoning 1 100 260 4
   bash run_r2r/${script_name} action_reasoning 1 100 260 4
   bash run_r2r/${script_name} planning_action_reasoning 1 100 260 4
+  bash run_r2r/${script_name} thinking_action_reasoning 1 100 260 4
   bash run_r2r/${script_name} both 1 1420 260 4
   bash run_r2r/${script_name} --ablation landmark 1 100 260 4
 

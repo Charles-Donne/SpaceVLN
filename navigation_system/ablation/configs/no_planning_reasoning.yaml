@@ -1,5 +1,5 @@
 name: no-planning-reasoning
-description: "Planning reasoning ablation: remove explicit planning reasoning/process/example prompt sections only."
+description: "Thinking/planning reasoning ablation: remove reasoning flow and reasoning-specific guidance while keeping key constraints, examples, and output format."
 
 thinking_prompt:
   include_detected_landmarks: true

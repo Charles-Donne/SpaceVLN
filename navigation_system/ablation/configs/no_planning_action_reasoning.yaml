@@ -1,5 +1,5 @@
 name: no-planning-action-reasoning
-description: "Planning + action reasoning ablation: remove explicit reasoning/process/example prompt sections in both modules."
+description: "Thinking/planning + action reasoning ablation: remove reasoning flow and reasoning-specific guidance in both modules while keeping key constraints, examples, and output format."
 
 thinking_prompt:
   include_detected_landmarks: true

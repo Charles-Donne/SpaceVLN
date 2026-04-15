@@ -26,11 +26,11 @@ dashscope:
 
 temperature: 0.1
 
-llm_max_tokens: 4096
-llm_timeout: 120
+llm_max_tokens: 2000
+llm_timeout: 35
 
-vlm_max_tokens: 300
-vlm_timeout: 30
+vlm_max_tokens: 500
+vlm_timeout: 6
 
 qwen_context_cache:
   enabled: true

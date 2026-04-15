@@ -35,23 +35,35 @@ navigation_system/ablation/
 
 ## 六种预设
 
+这六个消融分成两大部分，且两部分彼此独立：
+
+- **空间感知消融**
+  - `landmark`
+  - `space_structure`
+  - `both`
+- **空间推理消融**
+  - `planning_reasoning` / `thinking_reasoning`
+  - `action_reasoning`
+  - `planning_action_reasoning` / `thinking_action_reasoning`
+
 - `navigation_system/ablation/configs/no_landmark.yaml`
-  - 去掉 landmark 感知相关输入
+  - 统一去掉 thinking + action 两侧的 landmark detection 输入与渲染
 - `navigation_system/ablation/configs/no_space_structure.yaml`
-  - 去掉 space structure 相关输入
+  - 去掉 space structure 文本输入以及相关地图/12-view 渲染
 - `navigation_system/ablation/configs/no_planning_reasoning.yaml`
-  - 只去掉 planning 侧显式分步推理 prompt 段
+  - 只去掉 thinking(planning) 侧推理流程与推理提示，保留关键约束/例子/格式
 - `navigation_system/ablation/configs/no_action_reasoning.yaml`
-  - 只去掉 action 侧显式决策推理 prompt 段
+  - 只去掉 action 侧推理流程与推理提示，保留关键约束/例子/格式
 - `navigation_system/ablation/configs/no_planning_action_reasoning.yaml`
-  - planning + action 两边都去掉显式分步 reasoning / process prompt 段
+  - thinking(planning) + action 两边都去掉推理流程与推理提示，保留关键约束/例子/格式
 - `navigation_system/ablation/configs/no_landmark_no_space_structure.yaml`
-  - landmark 和 space structure 都去掉
+  - landmark detection 与 space structure 都去掉
 
 ## 消融含义
 
 ### `landmark` 消融
 
+- thinking 侧不再给 landmark detection 文本输入
 - thinking 图里不再给 landmark detection box / landmark strip
 - verify 时不再给 previous-subtask landmark summary
 - action prompt 不再给 `detected_landmarks` / `landmark_map_info`
@@ -59,7 +71,7 @@ navigation_system/ablation/
 
 ### `space structure` 消融
 
-- verify prompt 不再给 `Space Structure` 文本摘要
+- verify / replanning prompt 不再给 `Space Structure` 文本输入
 - thinking 图里不再给 `Space Waypoint / Current Area / last visited marker`
 - thinking 用的 global map 不再画 space-structure overlay
 
@@ -67,28 +79,26 @@ navigation_system/ablation/
 
 ### `planning reasoning` 消融
 
-- 只改 planning 侧模板
-- 包括：
-  - 非 cache：`planning_initial.prompt.md` / `planning_verify.prompt.md`
-  - cache：`cache/planning_initial.system.prompt.md` / `cache/planning_verify.system.prompt.md`
-- action 侧模板保持原样
+- 也可称为 `thinking reasoning` 消融
+- 只改 thinking(planning) 侧模板
+- 删除我们设计的推理流程、任务进度定位/推理分析提示等 reasoning-specific 提示
+- 保留系统稳定运行所需的关键约束、输出格式、示例、动作/阶段边界约束
+- 不改 landmark / space structure / 图像渲染等空间感知输入
 
 ### `action reasoning` 消融
 
 - 只改 action 侧模板
-- 包括：
-  - 非 cache：`action_execution.prompt.md`
-  - cache：`cache/action.system.prompt.md`
-- planning 侧模板保持原样
+- 删除 action 侧推理流程与分析提示
+- 保留关键约束、输出格式、示例、动作空间约束
+- 不改 landmark / space structure / 图像渲染等空间感知输入
 
 ### `planning-action reasoning` 消融
 
-- 不改输入源，不关 landmark / space structure / 图像渲染
-- 只在 `ablation/templates/no-planning-action-reasoning/` 里删除 planning + action 两侧显式分步 `Reasoning` / `Process` prompt 段
-- 保留原有 JSON 字段约束；`reasoning` 字段仍保留，但改成**简短任务摘要**，不再要求展开分步推理
-- 同时覆盖：
-  - 非 cache：`planning_initial.prompt.md` / `planning_verify.prompt.md` / `action_execution.prompt.md`
-  - cache：`cache/planning_initial.*.prompt.md` / `cache/planning_verify.*.prompt.md` / `cache/action.*.prompt.md`
+- 也可称为 `thinking-action reasoning` / `all reasoning` 消融
+- 不改 landmark / space structure / 图像渲染等空间感知输入
+- 同时删除 thinking(planning) + action 两侧的推理流程与 reasoning-specific 提示
+- 保留原有 JSON 字段约束；`reasoning` 字段仍保留，但只要求**简短任务摘要**
+- 同时覆盖非 cache + cache 两套模板
 
 ## 入口
 
@@ -110,11 +120,19 @@ bash run_r2r/vlm_navigation.sh --ablation planning_reasoning 1 10
 ```
 
 ```bash
+bash run_r2r/vlm_navigation.sh --ablation thinking_reasoning 1 10
+```
+
+```bash
 bash run_r2r/vlm_navigation.sh --ablation action_reasoning 1 10
 ```
 
 ```bash
 bash run_r2r/vlm_navigation.sh --ablation planning_action_reasoning 1 10
+```
+
+```bash
+bash run_r2r/vlm_navigation.sh --ablation thinking_action_reasoning 1 10
 ```
 
 ```bash

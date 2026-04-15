@@ -1,8 +1,8 @@
 name: no-landmark
-description: "Landmark perception ablation: remove landmark-related prompt/image inputs only."
+description: "Landmark perception ablation: remove both thinking-side and action-side landmark detection inputs/renders."
 
 thinking_prompt:
-  include_detected_landmarks: true
+  include_detected_landmarks: false
   include_waypoint_summary: true
   include_previous_subtask_landmark_summary: false
   include_verify_notice: true

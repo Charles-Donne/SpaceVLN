@@ -47,7 +47,7 @@ _PRESET_DEFINITIONS: tuple[AblationPresetDefinition, ...] = (
         key="landmark",
         slug="no-landmark",
         config_filename="no_landmark.yaml",
-        description="Remove landmark perception inputs only.",
+        description="Remove both thinking-side and action-side landmark detection inputs/renders.",
     ),
     AblationPresetDefinition(
         key="space_structure",
@@ -59,19 +59,21 @@ _PRESET_DEFINITIONS: tuple[AblationPresetDefinition, ...] = (
         key="planning_reasoning",
         slug="no-planning-reasoning",
         config_filename="no_planning_reasoning.yaml",
-        description="Remove explicit planning reasoning prompt sections only.",
+        description="Remove thinking/planning reasoning flow prompts while keeping key constraints and format.",
+        aliases=("thinking_reasoning", "thinking-planning_reasoning"),
     ),
     AblationPresetDefinition(
         key="action_reasoning",
         slug="no-action-reasoning",
         config_filename="no_action_reasoning.yaml",
-        description="Remove explicit action reasoning prompt sections only.",
+        description="Remove action reasoning flow prompts while keeping key constraints and format.",
     ),
     AblationPresetDefinition(
         key="planning_action_reasoning",
         slug="no-planning-action-reasoning",
         config_filename="no_planning_action_reasoning.yaml",
-        description="Remove explicit planning and action reasoning prompt sections.",
+        description="Remove both thinking/planning and action reasoning flow prompts while keeping key constraints and format.",
+        aliases=("thinking_action_reasoning", "thinking-action_reasoning", "thinking_action", "all_reasoning"),
     ),
     AblationPresetDefinition(
         key="both",

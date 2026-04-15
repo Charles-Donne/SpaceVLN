@@ -277,9 +277,9 @@ Supported presets include:
 
 - `landmark`
 - `space_structure`
-- `planning_reasoning`
+- `planning_reasoning` / `thinking_reasoning`
 - `action_reasoning`
-- `planning_action_reasoning`
+- `planning_action_reasoning` / `thinking_action_reasoning`
 - `both`
 
 Example commands:
@@ -287,6 +287,7 @@ Example commands:
 ```bash
 bash run_r2r/vlm_navigation.sh --ablation landmark 1 100 260 4
 bash run_r2r/vlm_navigation.sh --ablation planning_action_reasoning 1 100 260 4
+bash run_r2r/vlm_navigation.sh --ablation thinking_reasoning 1 100 260 4
 bash run_r2r/vlm_navigation.sh --runtime context_cache --ablation space_structure 1 100 260 4
 ```
 

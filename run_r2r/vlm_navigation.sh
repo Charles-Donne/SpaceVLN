@@ -41,6 +41,7 @@ episode_args 与原来保持一致，例如:
   bash run_r2r/vlm_navigation.sh 1 10 260 4
   bash run_r2r/vlm_navigation.sh --runtime context_cache 1 10 260 4
   bash run_r2r/vlm_navigation.sh --ablation landmark 1 100 260 4
+  bash run_r2r/vlm_navigation.sh --ablation thinking_reasoning 1 100 260 4
   bash run_r2r/vlm_navigation.sh --runtime context_cache --ablation space_structure 1 100 260 4
 EOF
 }
