@@ -146,6 +146,7 @@ def build_action_cache_prompt_bundle(
     waypoint_summary: Optional[str],
     detected_landmarks: Optional[str],
     previous_action_reason: Optional[str],
+    controller_action_notice: Optional[str],
     obstacle_distances: Optional[Dict[str, str]],
     landmark_map_info: Optional[str],
     allowed_action_names: Optional[Sequence[str]],
@@ -195,6 +196,7 @@ def build_action_cache_prompt_bundle(
 
     progress_text = str(prompt_progress_summary or "").strip() or "Just started"
     previous_action_text = str(prompt_previous_action_reason or "").strip() or "N/A (first step)"
+    controller_notice_text = str(controller_action_notice or "").strip() or "None"
     detected_landmark_text = str(prompt_detected_landmarks or "").strip() or "none"
     obstacle_summary = standard_cache_builders._build_obstacle_perception_summary(
         prompt_obstacle_distances
@@ -223,6 +225,7 @@ def build_action_cache_prompt_bundle(
         subtask_instruction=subtask_instruction,
         progress_summary=progress_text,
         previous_action_reason=previous_action_text,
+        controller_action_notice=controller_notice_text,
         obstacle_perception_summary=obstacle_summary,
         landmark_perception_summary=landmark_summary,
         detected_landmarks=detected_landmark_text,

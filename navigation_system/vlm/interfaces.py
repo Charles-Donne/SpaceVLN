@@ -53,6 +53,7 @@ class ActionExecutorLike(Protocol):
         detection_image: Any = None,
         detected_landmarks: str = None,
         previous_action_reason: str = "",
+        controller_action_notice: str = "",
         obstacle_distances: Dict[str, str] = None,
         landmark_map_info: str = None,
         allowed_action_names: Optional[Sequence[str]] = None,

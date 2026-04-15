@@ -253,6 +253,7 @@ class ActionExecutor(BaseAPIClient):
                      detection_image: Any = None,
                      detected_landmarks: str = None,
                      previous_action_reason: str = "",
+                     controller_action_notice: str = "",
                      obstacle_distances: Dict[str, str] = None,
                      landmark_map_info: str = None,
                      allowed_action_names: Optional[Sequence[str]] = None,
@@ -270,6 +271,7 @@ class ActionExecutor(BaseAPIClient):
             detection_image: 目标检测图像路径（可选）
             detected_landmarks: 已检测landmark类别字符串（可选）
             previous_action_reason: 上一步的action_analysis（可选）
+            controller_action_notice: 当前这一步必须 obey 的控制器约束（可选）
             obstacle_distances: 预计算的障碍物距离字典 {'front': 'X.XXm', 'left_30': ..., ...}
             
         Returns:
@@ -291,6 +293,7 @@ class ActionExecutor(BaseAPIClient):
             waypoint_summary=waypoint_summary,
             detected_landmarks=detected_landmarks,
             previous_action_reason=previous_action_reason,
+            controller_action_notice=controller_action_notice,
             obstacle_distances=obstacle_distances,
             landmark_map_info=landmark_map_info,
             allowed_action_names=allowed_action_names,

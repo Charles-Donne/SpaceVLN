@@ -544,6 +544,114 @@ class VLMNavigationController(BaseNavigationController):
         )
 
     @staticmethod
+    def _sanitize_action_memory_value(value: Optional[str]) -> str:
+        text = re.sub(r"[\r\n|]+", " ", str(value or "")).strip()
+        text = re.sub(r"\s{2,}", " ", text)
+        return text or "destination"
+
+    @staticmethod
+    def _format_action_memory_distance_text(distance_m: Optional[float]) -> str:
+        if distance_m is None:
+            return "unknown"
+        return f"{float(distance_m):.2f}m"
+
+    @staticmethod
+    def _raw_action_analysis_suggests_obstacle_avoidance(raw_action_analysis: Optional[str]) -> bool:
+        text_norm = str(raw_action_analysis or "").strip().lower()
+        if not text_norm:
+            return False
+        keywords = (
+            "obstacle",
+            "blocked",
+            "unsafe",
+            "only open side",
+            "blocked-front",
+            "front route",
+            "recovery",
+            "retry",
+            "safer side",
+        )
+        return any(keyword in text_norm for keyword in keywords)
+
+    def _get_previous_action_memory_target_snapshot(
+        self,
+        step_landmark_entries: Optional[Sequence[Dict[str, Any]]] = None,
+    ) -> Tuple[str, Optional[float]]:
+        entries = self._sort_action_landmark_entries(step_landmark_entries or [])
+        candidate_names = self._get_current_subtask_landmark_candidates()
+        for entry in entries:
+            raw_name = str(entry.get("name") or "").strip()
+            if raw_name and self._landmark_matches_current_subtask_destination(
+                raw_name,
+                candidate_names=candidate_names,
+            ):
+                return (
+                    self._sanitize_action_memory_value(
+                        self._format_previous_subtask_landmark_name(raw_name, entry=entry)
+                    ),
+                    self._safe_float(entry.get("distance_m")),
+                )
+
+        fallback_target = (
+            self._get_current_subtask_landmark_display_name()
+            or self._get_next_waypoint_field(getattr(self, "current_subtask", None))
+            or "destination"
+        )
+        return self._sanitize_action_memory_value(fallback_target), None
+
+    def _build_previous_action_memory(
+        self,
+        *,
+        action_name: Optional[str],
+        raw_action_analysis: Optional[str],
+        planned_meters: Optional[float],
+        step_landmark_entries: Optional[Sequence[Dict[str, Any]]] = None,
+    ) -> str:
+        action_name_upper = str(action_name or "").strip().upper()
+        if not action_name_upper:
+            return ""
+
+        target_name, target_distance_m = self._get_previous_action_memory_target_snapshot(
+            step_landmark_entries=step_landmark_entries,
+        )
+        target_distance_text = self._format_action_memory_distance_text(target_distance_m)
+
+        if action_name_upper == "STOP":
+            return (
+                "LAST_STEP_STOP_AT_TARGET"
+                f" | target={target_name}"
+                f" | target_distance={target_distance_text}"
+            )
+
+        if action_name_upper in ("TURN_LEFT", "TURN_RIGHT"):
+            turn_side = "LEFT" if action_name_upper == "TURN_LEFT" else "RIGHT"
+            if self._raw_action_analysis_suggests_obstacle_avoidance(raw_action_analysis):
+                return (
+                    "LAST_STEP_AVOID_OBSTACLE"
+                    f" | turn={turn_side}"
+                    " | obstacle=FRONT blocked"
+                )
+            return (
+                "LAST_STEP_ALIGN_DESTINATION"
+                f" | turn={turn_side}"
+                f" | target={target_name}"
+                f" | target_distance={target_distance_text}"
+            )
+
+        if action_name_upper == "MOVE_FORWARD":
+            move_m = self._safe_float(planned_meters)
+            if move_m is None or move_m <= 0.0:
+                move_m = float(self.move_distance)
+            return (
+                "LAST_STEP_FORWARD_TO_TARGET"
+                f" | move={float(move_m):.2f}m"
+                f" | target={target_name}"
+                f" | target_distance={target_distance_text}"
+            )
+
+        return ""
+
+    @staticmethod
     def _extract_side_hint(text: Optional[str]) -> Optional[str]:
         text_norm = str(text or "").strip().lower()
         if not text_norm:
@@ -563,6 +671,13 @@ class VLMNavigationController(BaseNavigationController):
             getattr(self, "previous_action_reason", ""),
             getattr(self, "action_stagnation_retry_notice_text", ""),
         ):
+            canonical_match = re.search(
+                r"LAST_STEP_AVOID_OBSTACLE\s*\|\s*turn=(LEFT|RIGHT)",
+                str(text or ""),
+                flags=re.IGNORECASE,
+            )
+            if canonical_match:
+                return str(canonical_match.group(1)).upper()
             match = re.search(
                 r"forced obstacle-avoidance turn to the (left|right)",
                 str(text or ""),
@@ -1720,17 +1835,11 @@ class VLMNavigationController(BaseNavigationController):
             self._append_progress_note(
                 f"got stuck after repeated forward steps, then turned around and retreated {retreated_m:.2f}m before replanning"
             )
-            self.previous_action_reason = (
-                f"The agent was stuck after repeated low-level MOVE_FORWARD steps, so the system turned around 180deg, "
-                f"retreated {retreated_m:.2f}m, and restarted thinking from the new heading."
-            )
         else:
             self._append_progress_note(
                 "got stuck after repeated forward steps, then turned around and triggered replan"
             )
-            self.previous_action_reason = (
-                "The agent was stuck after repeated low-level MOVE_FORWARD steps, so the system turned around 180deg and restarted thinking."
-            )
+        self.previous_action_reason = ""
 
         self.pose_before_action = self._get_agent_pose()
         return retreated_m, episode_done
@@ -3026,6 +3135,7 @@ class VLMNavigationController(BaseNavigationController):
         action_subtask_instruction: str,
         progress_summary_for_prompt: str,
         previous_action_reason_for_prompt: str,
+        controller_action_notice_for_prompt: str,
         allowed_action_names: Optional[Sequence[str]],
     ) -> Tuple[Optional[int], Optional[str], Optional[Dict[str, Any]], int, float]:
         """Run the action VLM once, including blocked-front controller recovery."""
@@ -3057,6 +3167,7 @@ class VLMNavigationController(BaseNavigationController):
                 detection_image=action_context["detection_image"],
                 detected_landmarks=action_context["detected_landmarks"],
                 previous_action_reason=previous_action_reason_for_prompt,
+                controller_action_notice=controller_action_notice_for_prompt,
                 obstacle_distances=action_context["obstacle_distances"],
                 landmark_map_info=action_context["action_landmark_map_info"],
                 allowed_action_names=allowed_action_names,
@@ -3112,7 +3223,7 @@ class VLMNavigationController(BaseNavigationController):
             )
             action_id = None
             action_name = None
-            previous_action_reason_for_prompt = (
+            controller_action_notice_for_prompt = (
                 f"{self.action_stagnation_retry_notice_text} "
                 "The previous response still chose `MOVE_FORWARD`, which is forbidden for this blocked-front retry. "
                 "Do not output `MOVE_FORWARD` on this call. Choose `TURN_LEFT 30deg` or `TURN_RIGHT 30deg`, "
@@ -3207,17 +3318,12 @@ class VLMNavigationController(BaseNavigationController):
         force_forward_after_turns_pending = bool(
             getattr(self, "action_force_forward_after_turns_pending", False)
         ) and (not self.action_stagnation_retry_pending)
+        previous_action_reason_for_prompt = self.previous_action_reason
+        controller_action_notice_for_prompt = ""
         if self.action_stagnation_retry_pending and self.action_stagnation_retry_notice_text:
-            previous_action_reason_for_prompt = self.action_stagnation_retry_notice_text
+            controller_action_notice_for_prompt = self.action_stagnation_retry_notice_text
         elif force_forward_after_turns_pending and self.action_force_forward_after_turns_notice_text:
-            if self.previous_action_reason:
-                previous_action_reason_for_prompt = (
-                    f"{self.action_force_forward_after_turns_notice_text} {self.previous_action_reason}"
-                ).strip()
-            else:
-                previous_action_reason_for_prompt = self.action_force_forward_after_turns_notice_text
-        else:
-            previous_action_reason_for_prompt = self.previous_action_reason
+            controller_action_notice_for_prompt = self.action_force_forward_after_turns_notice_text
         allowed_action_names = (
             ("TURN_LEFT", "TURN_RIGHT", "STOP")
             if self.action_stagnation_retry_pending
@@ -3257,6 +3363,7 @@ class VLMNavigationController(BaseNavigationController):
                 action_subtask_instruction=action_subtask_instruction,
                 progress_summary_for_prompt=progress_summary_for_prompt,
                 previous_action_reason_for_prompt=previous_action_reason_for_prompt,
+                controller_action_notice_for_prompt=controller_action_notice_for_prompt,
                 allowed_action_names=allowed_action_names,
             )
 
@@ -3274,18 +3381,20 @@ class VLMNavigationController(BaseNavigationController):
         self.last_action_name = action_name
         self._update_action_consecutive_turn_state(action_name)
 
-        # 保存当前的action_analysis作为下一次的previous_action_reason
-        if self.action_stagnation_retry_pending and str(action_name or "").upper() in ("TURN_LEFT", "TURN_RIGHT"):
-            self.previous_action_reason = self._build_post_avoidance_turn_notice(action_name)
-            self._clear_action_stagnation_prompt_state()
+        if response:
+            self.previous_action_reason = self._build_previous_action_memory(
+                action_name=action_name,
+                raw_action_analysis=response.get("action_analysis"),
+                planned_meters=meters,
+                step_landmark_entries=action_context.get("step_landmark_entries"),
+            )
         else:
-            if response and 'action_analysis' in response:
-                self.previous_action_reason = response['action_analysis']
-            else:
-                self.previous_action_reason = ""
-            if str(action_name or "").upper() == "STOP":
-                self._reset_blocked_front_controller_recovery_state()
-                self._clear_action_stagnation_prompt_state()
+            self.previous_action_reason = ""
+        if self.action_stagnation_retry_pending and str(action_name or "").upper() in ("TURN_LEFT", "TURN_RIGHT"):
+            self._clear_action_stagnation_prompt_state()
+        if str(action_name or "").upper() == "STOP":
+            self._reset_blocked_front_controller_recovery_state()
+            self._clear_action_stagnation_prompt_state()
         
         # 检查是否停止
         should_stop = (action_name == "STOP")
@@ -3413,10 +3522,7 @@ class VLMNavigationController(BaseNavigationController):
                         self._append_progress_note(
                             "front route stayed blocked after repeated blocked-front retries, so ended the current action stage and triggered replan"
                         )
-                        self.previous_action_reason = (
-                            "The current front route stayed blocked after repeated blocked-front retries, "
-                            "so the controller stopped action execution and returned to thinking for a new route."
-                        )
+                        self.previous_action_reason = ""
                         self._clear_action_stagnation_prompt_state()
                     return 'thinking'
 
@@ -3540,12 +3646,7 @@ class VLMNavigationController(BaseNavigationController):
                     f"(auto-stop threshold {float(auto_completed_subtask.get('stop_distance_m', self.ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M)):.2f}m), "
                     'so ended the current subtask and triggered replan'
                 )
-                self.previous_action_reason = (
-                    f"Displayed destination landmark {auto_completed_subtask['name']} ({landmark_kind}) was within "
-                    f"{auto_completed_subtask['distance_m']:.2f}m "
-                    f"(threshold {float(auto_completed_subtask.get('stop_distance_m', self.ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M)):.2f}m), "
-                    'so the system ended the current subtask and started thinking'
-                )
+                self.previous_action_reason = ""
                 return 'thinking'
 
             if replan_for_stagnation:
@@ -3561,7 +3662,6 @@ class VLMNavigationController(BaseNavigationController):
                     latest_actual_meters=latest_actual_meters,
                     stagnation_threshold_m=stagnation_threshold_m,
                 )
-                self.previous_action_reason = self.action_stagnation_retry_notice_text
                 print(
                     "[ActionStagnation] Blocked low-level forward step: "
                     f"latest actual movement {latest_actual_meters:.2f}m <= {stagnation_threshold_m:.2f}m | "

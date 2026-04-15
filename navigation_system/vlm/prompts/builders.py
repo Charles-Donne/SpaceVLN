@@ -216,6 +216,7 @@ def get_action_execution_prompt(
     waypoint_summary: str = "",
     detected_landmarks: str = None,
     previous_action_reason: str = "",
+    controller_action_notice: str = "",
     obstacle_distances=None,
     landmark_map_info: str = None,
     allowed_action_names=None,
@@ -232,6 +233,7 @@ def get_action_execution_prompt(
         subtask_instruction=subtask_instruction,
         progress_summary=progress_summary,
         previous_action_reason=previous_action_reason or "N/A (first step)",
+        controller_action_notice=controller_action_notice or "None",
         detected_landmarks=detected_landmarks or "none",
         obstacle_perception_summary=_build_obstacle_perception_summary(obstacle_distances),
         landmark_perception_summary=_build_landmark_perception_summary(
