@@ -29,11 +29,12 @@ def construct_envs(
     :return: VectorEnv object created according to specification.
     """
 
-    num_envs_per_gpu = config.NUM_ENVIRONMENTS
-    if isinstance(config.SIMULATOR_GPU_IDS, list):
-        gpus = config.SIMULATOR_GPU_IDS
+    runtime_config = config.RUNTIME
+    num_envs_per_gpu = int(runtime_config.NUM_ENVIRONMENTS)
+    if isinstance(runtime_config.SIMULATOR_GPU_IDS, list):
+        gpus = runtime_config.SIMULATOR_GPU_IDS
     else:
-        gpus = [config.SIMULATOR_GPU_IDS]
+        gpus = [runtime_config.SIMULATOR_GPU_IDS]
     num_gpus = len(gpus)
     num_envs = num_gpus * num_envs_per_gpu
 
@@ -87,7 +88,7 @@ def construct_envs(
 
             task_config.SIMULATOR.HABITAT_SIM_V0.GPU_DEVICE_ID = gpus[i]
 
-            task_config.SIMULATOR.AGENT_0.SENSORS = config.SENSORS
+            task_config.SIMULATOR.AGENT_0.SENSORS = config.TASK.SENSORS
 
             proc_config.freeze()
             configs.append(proc_config) 

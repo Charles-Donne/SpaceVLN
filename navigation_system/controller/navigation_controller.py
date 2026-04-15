@@ -1740,7 +1740,7 @@ class VLMNavigationController(BaseNavigationController):
         # 清理之前episode的输出目录
         if episode_id is not None:
             import shutil
-            for old_episode_dir in get_episode_detail_path_candidates(self.config.RESULTS_DIR, episode_id):
+            for old_episode_dir in get_episode_detail_path_candidates(self.config.PATHS.RESULTS_DIR, episode_id):
                 if os.path.exists(old_episode_dir):
                     print(f"[Reset] 清理旧数据: {old_episode_dir}")
                     try:
@@ -1758,7 +1758,7 @@ class VLMNavigationController(BaseNavigationController):
         
         # 初始化SaveManager（使用RESULTS_DIR作为输出根目录）
         self.save_manager = SaveManager(
-            self.config.RESULTS_DIR,
+            self.config.PATHS.RESULTS_DIR,
             self.current_episode_id,
             save_waypoint_memory=self.runtime_options.save_waypoint_memory,
         )
@@ -1787,7 +1787,7 @@ class VLMNavigationController(BaseNavigationController):
     @property
     def episode_dir(self) -> str:
         """获取当前episode的输出目录（动态属性，自动根据current_episode_id生成）"""
-        return get_episode_detail_dir(self.config.RESULTS_DIR, self.current_episode_id)
+        return get_episode_detail_dir(self.config.PATHS.RESULTS_DIR, self.current_episode_id)
 
     @classmethod
     def _normalize_landmark_candidate(cls, text: Optional[str]) -> Optional[str]:

@@ -161,7 +161,7 @@ def filter_episode_ids(args, config, episode_ids: List[int]) -> List[int]:
     if not args.skip_sr1:
         return episode_ids
 
-    results_dir = os.path.abspath(args.results_dir or config.RESULTS_DIR or "")
+    results_dir = os.path.abspath(args.results_dir or config.PATHS.RESULTS_DIR or "")
     if not results_dir:
         return episode_ids
 

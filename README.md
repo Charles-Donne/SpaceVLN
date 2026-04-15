@@ -300,24 +300,24 @@ The runtime resolves result directories in the following order:
 
 1. `SPACEVLN_RESULTS_ROOT`
 2. `PATHS.RESULTS_ROOT` in `navigation_system/config/system/00_runtime.yaml`
-3. the default workspace-relative fallback under `data/result/vlnce/`
+3. the default workspace-relative fallback under `result/vlnce/`
 
 Standard runs are stored as:
 
 ```text
-data/result/vlnce/<planner>__<executor>/
+result/vlnce/<planner>__<executor>/
 ```
 
 Context-cache runs are stored as:
 
 ```text
-data/result/vlnce/<planner>__<executor>_cache/
+result/vlnce/<planner>__<executor>_cache/
 ```
 
 Ablation runs are stored as:
 
 ```text
-data/result/vlnce/ablation/<ablation_name>/<model_name>/
+result/vlnce/ablation/<ablation_name>/<model_name>/
 ```
 
 Stored artifacts may include:
@@ -346,13 +346,22 @@ See also:
 
 ## Docker
 
-SpaceVLN previously had an internal Dockerized deployment workflow. However:
+The repository now includes a full-workspace Docker build at `../Dockerfile.spacevln`.
 
-- the current repository does **not** include the historical Dockerfile;
-- the current repository does **not** include the associated `.dockerignore`;
-- `docs/dockerhub.md` is therefore retained only as a historical deployment note, not as a canonical build instruction.
+- build context: the `nav_ws/` workspace root
+- bundled into the image: `data/`, `GroundingDINO/`, `habitat-lab/`, and `SpaceVLN/`
+- default result root in-container: `/workspace/result`
+- default result root on bare-metal runs from the same workspace: `nav_ws/result`
+- API config templates are copied into place during image build; provide real keys via environment variables such as `DASHSCOPE_API_KEY`, `OPENAI_API_KEY`, or `OPENROUTER_API_KEY`
 
-If a public Docker workflow is needed again, the Docker artifacts should be restored and versioned explicitly in the repository.
+Typical build command:
+
+```bash
+cd ..
+docker buildx build --platform linux/amd64 -f Dockerfile.spacevln -t spacevln:v1 .
+```
+
+See `docs/dockerhub.md` for a complete build / smoke-test / push workflow.
 
 ## Reproducibility Notes
 

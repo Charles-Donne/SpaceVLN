@@ -1,25 +1,30 @@
 # SpaceVLN Docker Hub 部署说明
 
-> 注意：当前仓库**没有提交** `Dockerfile.spacevln` 与 `.dockerignore`。  
-> 本文档保留为历史部署流程参考，方便后续恢复 Docker 构建链路；它不是 fresh clone 后立即可执行的保证文档。
+当前仓库已经提交并维护了可直接构建的全量镜像工作流。
 
-这套打包方案默认做的是“轻镜像”，并且采用下面这套更稳定的组合：
+这套方案以 `nav_ws/` 为 build context，并把下面这些目录一起打进镜像：
 
-- `habitat-sim`：使用官方 Conda headless 预编译包 `0.1.7`。
-- `habitat-lab`：使用当前工作区里的本地源码目录，再按官方依赖方式安装。
-- `GroundingDINO`：使用当前工作区里的本地源码目录。
-- `SpaceVLN`：使用当前工作区里的本地源码目录。
-- 镜像里不包含本地 `data/` 数据集、模型权重和你当前的 API key 配置文件。
-- 这样推到 Docker Hub 更安全，也更适合在别的服务器上重复部署。
+- `data/`
+- `GroundingDINO/`
+- `habitat-lab/`
+- `SpaceVLN/`
+
+同时保留下面的约束：
+
+- 真实 API key 不写入镜像；
+- 构建时会把 `SpaceVLN/navigation_system/config/vlm/*.yaml.template` 复制成运行时占位配置；
+- 运行时默认结果目录是 `/workspace/result`；
+- 宿主机默认结果目录是 `nav_ws/result`，不再依赖任何用户本机绝对路径。
 
 ## 1. 目录要求
 
-如果你要恢复这套流程，构建上下文必须是当前工作区根目录，也就是同时包含这些目录和文件：
+构建上下文必须是当前工作区根目录，也就是同时包含这些目录和文件：
 
 ```text
 nav_ws/
 ├── Dockerfile.spacevln
 ├── .dockerignore
+├── data/
 ├── SpaceVLN/
 ├── habitat-lab/
 └── GroundingDINO/
@@ -27,8 +32,7 @@ nav_ws/
 
 说明：
 
-- 这里不再要求把本地 `habitat-sim` 编译产物一起打包。
-- Docker 内部会直接通过 `conda install -c aihabitat -c conda-forge habitat-sim=0.1.7=py3.8_headless_linux_856d4b08c1a2632626bf0d205bf46471a99502b7` 安装官方 headless 版本。
+- 运行时真正使用的二进制 `habitat-sim` 通过 Conda headless 包安装；
 - 如果在线 `conda install` 网络不稳定，可以提前把离线包放到 `vendor/conda/` 目录。当前 Dockerfile 会优先使用这个文件：
 
 ```text
@@ -85,10 +89,9 @@ docker pull <你的DockerHub用户名>/spacevln:v1
 
 假设目标服务器上已经准备好了：
 
-- 数据目录：`/srv/spacevln/data`
-- API 配置文件：`/srv/spacevln/vlm_api_config.yaml`
-- 输出目录：`/srv/spacevln/output`
 - NVIDIA 驱动和 NVIDIA Container Toolkit
+- 可选：单独挂载一个结果输出目录
+- 可选：单独挂载一个自定义 API 配置文件
 
 可以这样启动：
 
@@ -96,19 +99,20 @@ docker pull <你的DockerHub用户名>/spacevln:v1
 docker run --rm -it \
   --gpus all \
   -e OPENAI_API_KEY=your_openai_key_if_needed \
-  -v /srv/spacevln/data:/workspace/data \
-  -v /srv/spacevln/vlm_api_config.yaml:/workspace/SpaceVLN/navigation_system/config/vlm/vlm_api_config.yaml:ro \
-  -v /srv/spacevln/output:/workspace/output \
+  -e DASHSCOPE_API_KEY=your_dashscope_key_if_needed \
+  -e OPENROUTER_API_KEY=your_openrouter_key_if_needed \
+  -v /srv/spacevln/result:/workspace/result \
   <你的DockerHub用户名>/spacevln:v1 \
-  bash run_r2r/vlm_navigation.sh 1 10 260 1
+  bash -lc "cd /workspace/SpaceVLN && bash run_r2r/vlm_navigation.sh 1 10 260 1"
 ```
 
 说明：
 
 - 容器内默认工作目录是 `/workspace/SpaceVLN`。
-- `SPACEVLN_RESULTS_ROOT` 已经在镜像里默认设成 `/workspace/output`。
+- `SPACEVLN_RESULTS_ROOT` 已经在镜像里默认设成 `/workspace/result`。
 - 检测模型路径默认会去找 `/workspace/data/model/...`。
 - Habitat 数据默认会去找 `/workspace/data/datasets/...` 和 `/workspace/data/scene_datasets/...`。
+- 如果你不挂载 `/workspace/result`，结果就写在容器内部镜像层。
 
 ## 5. API 配置建议
 
@@ -142,22 +146,17 @@ openrouter:
   api_key: "env:OPENROUTER_API_KEY"
 ```
 
-## 6. 如果你想把数据也一起打进镜像
+## 6. 当前镜像内容
 
-默认不建议，因为你当前工作区的 `data/` 大约有 25G，镜像会非常大，推送 Docker Hub 会很慢。
+当前 `Dockerfile.spacevln` 已经是“全量镜像”模式：
 
-如果你确实要做“全量镜像”：
+- `data/` 会进入 `/workspace/data`
+- `GroundingDINO/` 会进入 `/workspace/GroundingDINO`
+- `habitat-lab/` 会进入 `/workspace/habitat-lab`
+- `habitat-sim/` 会进入 `/workspace/habitat-sim`
+- `SpaceVLN/` 会进入 `/workspace/SpaceVLN`
 
-1. 从 `.dockerignore` 里删掉 `data/`。
-2. 在 `Dockerfile.spacevln` 里增加一行：
-
-```dockerfile
-COPY data /workspace/data
-```
-
-3. 重新构建并推送。
-
-这种方式更便携，但镜像体积会明显增大，不适合频繁更新。
+因此镜像体积会比较大，但好处是换环境后可以直接运行，不需要再单独搬运数据目录。
 
 ## 7. 构建失败后的清理建议
 

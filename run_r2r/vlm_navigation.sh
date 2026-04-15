@@ -18,6 +18,10 @@ spacevln_navigation_print_usage() {
   --runtime standard        标准运行（默认）
   --runtime context_cache   显式 context cache 运行
 
+保存:
+  --results-root DIR        只覆盖总根目录，仍自动保存到 vlnce/模型名 或 vlnce/ablation/消融项/模型名
+  --results-dir DIR         高级：直接覆盖最终目录，不再自动追加结构化子目录
+
 消融:
   --ablation landmark
   --ablation space_structure
@@ -48,6 +52,7 @@ spacevln_setup_runtime_env "$PYTHON_BIN"
 CONFIG_FILE="${EXP_CONFIG:-navigation_system/config/experiments/r2r_eval.yaml}"
 RUNTIME_MODE="standard"
 ABLATION_RAW=""
+RESULT_PATH_ARGS=()
 FORWARD_ARGS=()
 
 while [[ $# -gt 0 ]]; do
@@ -80,6 +85,30 @@ while [[ $# -gt 0 ]]; do
             ABLATION_RAW="${1#*=}"
             shift
             ;;
+        --results-root)
+            if [[ $# -lt 2 ]]; then
+                echo "❌ --results-root 后面需要目录" >&2
+                exit 1
+            fi
+            RESULT_PATH_ARGS+=(--results-root "$2")
+            shift 2
+            ;;
+        --results-root=*)
+            RESULT_PATH_ARGS+=(--results-root "${1#*=}")
+            shift
+            ;;
+        --results-dir)
+            if [[ $# -lt 2 ]]; then
+                echo "❌ --results-dir 后面需要目录" >&2
+                exit 1
+            fi
+            RESULT_PATH_ARGS+=(--results-dir "$2")
+            shift 2
+            ;;
+        --results-dir=*)
+            RESULT_PATH_ARGS+=(--results-dir "${1#*=}")
+            shift
+            ;;
         *)
             FORWARD_ARGS+=("$1")
             shift
@@ -107,7 +136,7 @@ else
     API_MISSING_HINT="请从 navigation_system/config/vlm/vlm_api_config.yaml.template 复制并配置"
 fi
 
-EXTRA_ARGS=(--runtime "$RUNTIME_MODE")
+EXTRA_ARGS=(--runtime "$RUNTIME_MODE" "${RESULT_PATH_ARGS[@]}")
 
 if [[ -n "$ABLATION_RAW" ]]; then
     if preset_path="$(spacevln_ablation_resolve_preset_path "$ABLATION_RAW" 2>/dev/null)"; then

@@ -41,7 +41,7 @@ class BaseNavigationController:
     def __init__(self, config: Config, envs=None):
         # print("[Init] 配置MAP参数...")
         self.config = ConfigHelper.setup_navigation_config(config)
-        self.device = get_device(self.config.TORCH_GPU_ID)
+        self.device = get_device(self.config.RUNTIME.TORCH_GPU_ID)
         if self.device.type == "cuda":
             torch.cuda.set_device(self.device)
         
@@ -87,7 +87,7 @@ class BaseNavigationController:
         
         # print("[Init] 初始化Map Visualizer...")
         self.visualizer = MapVisualizer(
-            self.config.RESULTS_DIR, 
+            self.config.PATHS.RESULTS_DIR,
             self.resolution, 
             self.map_shape,
             enable_global_map_crop=bool(self.render_map_config.ENABLE_GLOBAL_CROP),
@@ -1097,7 +1097,7 @@ class BaseNavigationController:
     @property
     def current_episode_dir(self) -> str:
         """Return the current episode output directory if the subclass uses RESULTS_DIR layout."""
-        return get_episode_detail_dir(self.config.RESULTS_DIR, self.current_episode_id)
+        return get_episode_detail_dir(self.config.PATHS.RESULTS_DIR, self.current_episode_id)
     
     def finish_episode(self, success: bool = False, stop_action: bool = False) -> dict:
         """

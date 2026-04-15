@@ -35,7 +35,7 @@ class NavigationRuntimeProfile:
 
 def _maybe_generate_context_cache_report(args, config) -> None:
     results_dir = str(
-        getattr(args, "results_dir", "") or getattr(config, "RESULTS_DIR", "") or ""
+        getattr(args, "results_dir", "") or getattr(config.PATHS, "RESULTS_DIR", "") or ""
     ).strip()
     print_cache_report_summary(results_dir)
 

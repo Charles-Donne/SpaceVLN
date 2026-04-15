@@ -192,7 +192,7 @@ def run_single_episode(
         "failed_wasted_duration_s": 0.0,
         "error": None,
     }
-    results_dir = os.path.abspath(str(base_config.RESULTS_DIR or os.getcwd()))
+    results_dir = os.path.abspath(str(base_config.PATHS.RESULTS_DIR or os.getcwd()))
     save_stdout_log = save_episode_stdout_log_enabled(base_config)
     episode_log_path = (
         get_episode_records_log_path(results_dir, episode_id)

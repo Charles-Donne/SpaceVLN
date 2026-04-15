@@ -43,7 +43,18 @@ def build_arg_parser(
     )
     parser.add_argument("--num-episodes", type=int, default=1, help="运行Episode数量（连续或随机）")
     parser.add_argument("--random", action="store_true", help="随机选择episodes而非连续运行")
-    parser.add_argument("--results-dir", type=str, default=None, help="结果保存目录")
+    parser.add_argument(
+        "--results-root",
+        type=str,
+        default=None,
+        help="结果总根目录；运行时自动追加 vlnce/ablation/消融项/模型名",
+    )
+    parser.add_argument(
+        "--results-dir",
+        type=str,
+        default=None,
+        help="最终结果目录（高级覆盖项；指定后不会再自动追加 vlnce/ablation/消融项/模型名）",
+    )
 
     parser.add_argument(
         "--vlm-api-config",
@@ -89,7 +100,7 @@ def build_arg_parser(
 
 
 def maybe_generate_report(args: argparse.Namespace, config, verbose: bool = True) -> None:
-    results_dir = args.results_dir or config.RESULTS_DIR
+    results_dir = args.results_dir or config.PATHS.RESULTS_DIR
     if not results_dir:
         return
     try:
@@ -168,7 +179,7 @@ def run_navigation_from_args(
     profile: AblationRuntimeProfile = ABLATION_STANDARD_RUNTIME_PROFILE,
 ) -> int:
     config, resolved_ablation_config = prepare_ablation_runtime(args, profile=profile)
-    results_dir = str(getattr(config, "RESULTS_DIR", "") or "").strip()
+    results_dir = str(getattr(config.PATHS, "RESULTS_DIR", "") or "").strip()
     if results_dir:
         try:
             ensure_results_dir_ready(

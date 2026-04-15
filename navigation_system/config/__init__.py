@@ -2,10 +2,14 @@
 
 Layout:
 - `system/`: external deployment defaults such as GPU, model paths, task paths, and camera/sensor setup
-- `runtime/`: structured panels plus synchronization into Habitat/runtime-derived fields
+- `runtime/`: single config assembly entrypoint plus internal derived Habitat/map fields
 - `core/`: static constants, categories, and algorithm/behavior default parameters
 - `experiments/`: experiment YAML control panels
 - `vlm/`: canonical VLM API config templates
+
+The config system only exposes structured sections such as `TASK`, `RUNTIME`,
+`PATHS`, `DETECTION`, `SPACE`, `RENDER`, `OUTPUT`, `CONTROL`, and `EVAL`.
+Legacy flat compatibility fields are intentionally not part of the public API.
 """
 
 from importlib import import_module

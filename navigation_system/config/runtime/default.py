@@ -1,74 +1,171 @@
+"""Single-source runtime config assembly for SpaceVLN."""
+
 import os
 from typing import List, Optional, Union
 
 import habitat_baselines.config.default
-from habitat.config.default import Config as CN
 from habitat.config.default import CONFIG_FILE_SEPARATOR
+from habitat.config.default import Config as CN
 from habitat_extensions.config.default import get_extended_config as get_task_config
 
+from navigation_system.config.core.setup import apply_runtime_derived_fields
+from navigation_system.config.core.params.detection import (
+    DEFAULT_BOX_THRESHOLD,
+    DEFAULT_TEXT_THRESHOLD,
+)
+from navigation_system.config.core.params.rendering import (
+    DEFAULT_DEBUG_SAVE_RENDERINGS,
+    DEFAULT_ENABLE_ADAPTIVE_ZOOM,
+    DEFAULT_ENABLE_GLOBAL_MAP_CROP,
+)
+from navigation_system.config.core.params.spatial import (
+    DEFAULT_ENABLE_MULTI_FLOOR_TOPOLOGY,
+    DEFAULT_MAP_CENTER_RESET_STEPS,
+    DEFAULT_MAP_DU_SCALE,
+    DEFAULT_MAP_GLOBAL_DOWNSCALING,
+    DEFAULT_MAP_MIN_Z_CM,
+    DEFAULT_MAP_RESOLUTION_CM,
+    DEFAULT_MAP_SIZE_CM,
+    DEFAULT_MAP_VISION_RANGE,
+    DEFAULT_MAX_SEMANTIC_CATEGORIES,
+    DEFAULT_STAIR_CLEAR_RADIUS_M,
+)
 from navigation_system.config.core.params.thresholds import (
     EVAL_SUCCESS_DISTANCE_M,
+    FLOOR_SAME_Z_M,
+    FLOOR_SWITCH_STABLE_STEPS,
+    FLOOR_SWITCH_Z_M,
+    LOW_LEVEL_STAGNATION_CAP_M,
+    LOW_LEVEL_STAGNATION_RATIO,
+    SEM_MAP_CAT_THRESH,
+    SEM_MAP_EXP_THRESH,
+    SEM_MAP_OBS_THRESH,
 )
-from navigation_system.config.runtime.panels import (
-    build_path_panel,
-    build_control_panel,
-    build_detection_panel,
-    build_eval_panel,
-    build_output_panel,
-    build_render_panel,
-    build_runtime_panel,
-    build_space_panel,
-    build_task_panel,
-)
-from navigation_system.config.runtime.sync import sync_runtime_panels
 
-
-# -----------------------------------------------------------------------------
-# EXPERIMENT CONFIG
-# -----------------------------------------------------------------------------
-_C = CN()
-_C.TASK_CONFIG = CN()  # task_config will be stored as a config node
-_C.TRAINER_NAME = "ZS-Evaluator"
-_C.ENV_NAME = "VLNCEZeroShotEnv"
-_C.VIDEO_OPTION = []  # options: "disk", "tensorboard"
-
-# -----------------------------------------------------------------------------
-# SPACEVLN PANELS
-# -----------------------------------------------------------------------------
-_C.TASK = build_task_panel()
-_C.RUNTIME = build_runtime_panel()
-_C.PATHS = build_path_panel()
-_C.DETECTION = build_detection_panel()
-_C.SPACE = build_space_panel()
-_C.RENDER = build_render_panel()
-_C.OUTPUT = build_output_panel()
-_C.CONTROL = build_control_panel()
-_C.EVAL = build_eval_panel()
-
-# Internal derived node kept for Habitat/map-runtime wiring.
-_C.MAP = CN()
-
-# Internal flattened fields retained for Habitat/Baselines compatibility.
-_C.BASE_TASK_CONFIG_PATH = _C.TASK.BASE_TASK_CONFIG_PATH
-_C.SENSORS = list(_C.TASK.SENSORS)
-_C.SIMULATOR_GPU_IDS = list(_C.RUNTIME.SIMULATOR_GPU_IDS)
-_C.TORCH_GPU_ID = int(_C.RUNTIME.TORCH_GPU_ID)
-_C.TORCH_GPU_IDS = list(_C.RUNTIME.TORCH_GPU_IDS)
-_C.GPU_NUMBERS = int(_C.RUNTIME.GPU_NUMBERS)
-_C.NUM_ENVIRONMENTS = int(_C.RUNTIME.NUM_ENVIRONMENTS)
-_C.TENSORBOARD_DIR = _C.PATHS.TENSORBOARD_DIR
-_C.CHECKPOINT_FOLDER = _C.PATHS.CHECKPOINT_FOLDER
-_C.EVAL_CKPT_PATH_DIR = _C.PATHS.EVAL_CKPT_PATH_DIR
-_C.RESULTS_ROOT = _C.PATHS.RESULTS_ROOT
-_C.RESULTS_DIR = _C.PATHS.RESULTS_DIR
-_C.VIDEO_DIR = _C.PATHS.VIDEO_DIR
-_C.KEYBOARD_CONTROL = int(_C.RUNTIME.KEYBOARD_CONTROL)
 
 _DEFAULT_DEPLOYMENT_CONFIG_FILENAMES = (
     "00_runtime.yaml",
     "10_detection_models.yaml",
     "20_space_sensor.yaml",
 )
+
+
+def _build_space_defaults() -> CN:
+    cfg = CN()
+
+    cfg.SENSOR = CN()
+
+    cfg.MAP = CN()
+    cfg.MAP.RESOLUTION_CM = DEFAULT_MAP_RESOLUTION_CM
+    cfg.MAP.SIZE_CM = DEFAULT_MAP_SIZE_CM
+    cfg.MAP.GLOBAL_DOWNSCALING = DEFAULT_MAP_GLOBAL_DOWNSCALING
+    cfg.MAP.VISION_RANGE = DEFAULT_MAP_VISION_RANGE
+    cfg.MAP.DU_SCALE = DEFAULT_MAP_DU_SCALE
+    cfg.MAP.CATEGORY_THRESHOLD = SEM_MAP_CAT_THRESH
+    cfg.MAP.EXPLORED_THRESHOLD = SEM_MAP_EXP_THRESH
+    cfg.MAP.OBSTACLE_THRESHOLD = SEM_MAP_OBS_THRESH
+    cfg.MAP.MAX_SEMANTIC_CATEGORIES = DEFAULT_MAX_SEMANTIC_CATEGORIES
+    cfg.MAP.CENTER_RESET_STEPS = DEFAULT_MAP_CENTER_RESET_STEPS
+    cfg.MAP.MIN_Z_CM = DEFAULT_MAP_MIN_Z_CM
+    cfg.MAP.VISUALIZE = False
+    cfg.MAP.PRINT_IMAGES = False
+
+    cfg.TOPOLOGY = CN()
+    cfg.TOPOLOGY.ENABLE_MULTI_FLOOR = DEFAULT_ENABLE_MULTI_FLOOR_TOPOLOGY
+    cfg.TOPOLOGY.FLOOR_Z_TOLERANCE_M = FLOOR_SAME_Z_M
+    cfg.TOPOLOGY.FLOOR_Z_SWITCH_THRESHOLD_M = FLOOR_SWITCH_Z_M
+    cfg.TOPOLOGY.FLOOR_SWITCH_STABLE_STEPS = FLOOR_SWITCH_STABLE_STEPS
+    cfg.TOPOLOGY.STAIR_CLEAR_RADIUS_M = DEFAULT_STAIR_CLEAR_RADIUS_M
+    return cfg
+
+
+def _build_render_defaults() -> CN:
+    cfg = CN()
+    cfg.MAP = CN()
+    cfg.MAP.ENABLE_GLOBAL_CROP = DEFAULT_ENABLE_GLOBAL_MAP_CROP
+    cfg.MAP.ENABLE_ADAPTIVE_ZOOM = DEFAULT_ENABLE_ADAPTIVE_ZOOM
+    cfg.MAP.DEBUG_SAVE_RENDERINGS = DEFAULT_DEBUG_SAVE_RENDERINGS
+    return cfg
+
+
+def _build_output_defaults() -> CN:
+    cfg = CN()
+
+    cfg.REQUESTS = CN()
+    cfg.REQUESTS.SAVE_VLM_ARTIFACTS = True
+
+    cfg.MAPS = CN()
+    cfg.MAPS.SAVE_STEP_ARTIFACTS = False
+
+    cfg.REPLAY = CN()
+    cfg.REPLAY.SAVE_STEP_IMAGES = True
+    cfg.REPLAY.SAVE_GIF = True
+    cfg.REPLAY.CLEANUP_STEP_IMAGES_AFTER_GIF = True
+
+    cfg.LOGS = CN()
+    cfg.LOGS.SAVE_EPISODE_STDOUT = False
+
+    cfg.STATE = CN()
+    cfg.STATE.SAVE_WAYPOINT_MEMORY = False
+    return cfg
+
+
+def _build_control_defaults() -> CN:
+    cfg = CN()
+
+    cfg.RECOVERY = CN()
+    cfg.RECOVERY.ENABLE_AUTO_RETREAT = False
+    cfg.RECOVERY.STOP_EARLY_IF_REVERSE_BLOCKED = False
+    cfg.RECOVERY.ACTION_STAGNATION_REPLAN_STREAK = 3
+
+    cfg.STAGNATION = CN()
+    cfg.STAGNATION.LOW_LEVEL_RATIO = LOW_LEVEL_STAGNATION_RATIO
+    cfg.STAGNATION.LOW_LEVEL_CAP_M = LOW_LEVEL_STAGNATION_CAP_M
+
+    cfg.STOPPING = CN()
+    cfg.STOPPING.FINAL_DESTINATION_MATCH_AUTOSTOP_STREAK = 3
+    cfg.STOPPING.FINAL_DESTINATION_MATCH_AUTOSTOP_RADIUS_M = 1.0
+    return cfg
+
+
+def _build_eval_defaults() -> CN:
+    cfg = CN()
+    cfg.SPLIT = "val_unseen"
+    cfg.USE_CKPT_CONFIG = False
+    cfg.EPISODE_COUNT = 5000
+    cfg.SAVE_RESULTS = True
+    cfg.SUCCESS_DISTANCE_M = EVAL_SUCCESS_DISTANCE_M
+    return cfg
+
+
+def _build_base_config() -> CN:
+    cfg = CN()
+    cfg.TASK_CONFIG = CN()
+    cfg.TRAINER_NAME = "ZS-Evaluator"
+    cfg.ENV_NAME = "VLNCEZeroShotEnv"
+    cfg.VIDEO_OPTION = []
+
+    cfg.TASK = CN()
+    cfg.RUNTIME = CN()
+    cfg.PATHS = CN()
+
+    cfg.DETECTION = CN()
+    cfg.DETECTION.MODEL = CN()
+    cfg.DETECTION.THRESHOLDS = CN()
+    cfg.DETECTION.THRESHOLDS.BOX = DEFAULT_BOX_THRESHOLD
+    cfg.DETECTION.THRESHOLDS.TEXT = DEFAULT_TEXT_THRESHOLD
+
+    cfg.SPACE = _build_space_defaults()
+    cfg.RENDER = _build_render_defaults()
+    cfg.OUTPUT = _build_output_defaults()
+    cfg.CONTROL = _build_control_defaults()
+    cfg.EVAL = _build_eval_defaults()
+
+    cfg.MAP = CN()
+    return cfg
+
+
+_C = _build_base_config()
 
 
 def _resolve_default_deployment_config_paths() -> List[str]:
@@ -112,7 +209,8 @@ def _sync_task_success_distance(task_config: CN, success_distance_m: float) -> N
 
 
 def _refresh_task_config_if_needed(config: CN, prev_task_config: str) -> str:
-    current_task_config = str(getattr(config, "BASE_TASK_CONFIG_PATH", "") or "").strip()
+    task_panel = getattr(config, "TASK", CN())
+    current_task_config = str(getattr(task_panel, "BASE_TASK_CONFIG_PATH", "") or "").strip()
     if not current_task_config:
         return prev_task_config
 
@@ -131,7 +229,8 @@ def _refresh_task_config_if_needed(config: CN, prev_task_config: str) -> str:
 
 def purge_keys(config: CN, keys: List[str]) -> None:
     for k in keys:
-        del config[k]
+        if k in config:
+            del config[k]
         config.register_deprecated_key(k)
 
 
@@ -139,21 +238,11 @@ def get_config(
     config_paths: Optional[Union[List[str], str]] = None,
     opts: Optional[list] = None,
 ) -> CN:
-    """Create a unified config with default values. Initialized from the
-    habitat_baselines default config. Overwritten by values from
-    `config_paths` and overwritten by options from `opts`.
-    Args:
-        config_paths: List of config paths or string that contains comma
-        separated list of config paths.
-        opts: Config options (keys, values) in a list (e.g., passed from
-        command line into the config. For example, `opts = ['FOO.BAR',
-        0.5]`. Argument can be used for parameter sweeping or quick tests.
-    """
+    """Create a SpaceVLN config from system defaults, experiment YAML, and opts."""
     config = CN()
     config.merge_from_other_cfg(habitat_baselines.config.default._C)
     purge_keys(config, ["SIMULATOR_GPU_ID", "TEST_EPISODE_COUNT"])
     config.merge_from_other_cfg(_C.clone())
-    sync_runtime_panels(config)
 
     prev_task_config = ""
     merged_config_paths: List[str] = _resolve_default_deployment_config_paths()
@@ -169,19 +258,30 @@ def get_config(
     if merged_config_paths:
         for config_path in merged_config_paths:
             config.merge_from_file(config_path)
-            sync_runtime_panels(config)
             prev_task_config = _refresh_task_config_if_needed(config, prev_task_config)
-            sync_runtime_panels(config)
     else:
         prev_task_config = _refresh_task_config_if_needed(config, prev_task_config)
-        sync_runtime_panels(config)
 
     if opts:
         config.CMD_TRAILING_OPTS = opts
         config.merge_from_list(opts)
-        sync_runtime_panels(config)
         prev_task_config = _refresh_task_config_if_needed(config, prev_task_config)
 
-    sync_runtime_panels(config)
+    apply_runtime_derived_fields(config)
+    purge_keys(
+        config,
+        [
+            "BASE_TASK_CONFIG_PATH",
+            "SENSORS",
+            "SIMULATOR_GPU_IDS",
+            "TORCH_GPU_ID",
+            "NUM_ENVIRONMENTS",
+            "RESULTS_ROOT",
+            "RESULTS_DIR",
+        ],
+    )
     config.freeze()
     return config
+
+
+__all__ = ["apply_runtime_derived_fields", "get_config"]

@@ -7,7 +7,7 @@ import os
 from typing import Any, Dict, List, Tuple
 
 from navigation_system.config import ConfigHelper, get_config
-from navigation_system.config.runtime.sync import sync_runtime_panels
+from navigation_system.config.runtime.default import apply_runtime_derived_fields
 from navigation_system.controller.navigation_controller import VLMNavigationController
 from navigation_system.runtime.episode_io import (
     build_episode_console_summary,
@@ -27,6 +27,7 @@ from navigation_system.runtime.profiles import (
 from navigation_system.vlm.api.api_client import (
     resolve_api_config_path,
     resolve_results_dir_path,
+    resolve_results_root_path,
 )
 
 INITIAL_FAILURE_RETRY_REASONS = {
@@ -40,30 +41,25 @@ def load_runtime_config(
     profile: NavigationRuntimeProfile = STANDARD_RUNTIME_PROFILE,
 ):
     config = get_config(args.exp_config, [])
+    paths_config = config.PATHS
     resolved_results_dir = resolve_results_dir_path(
         str(getattr(args, "results_dir", "") or "").strip()
     )
-    configured_results_dir = resolve_results_dir_path(
-        str(getattr(config, "RESULTS_DIR", "") or "").strip()
-    )
-    configured_results_root = str(getattr(config, "RESULTS_ROOT", "") or "").strip()
+    configured_results_root = str(getattr(paths_config, "RESULTS_ROOT", "") or "").strip()
+    env_results_root = str(os.getenv("SPACEVLN_RESULTS_ROOT", "") or "").strip()
+    cli_results_root = str(getattr(args, "results_root", "") or "").strip()
+    selected_results_root = cli_results_root or env_results_root or configured_results_root
     if not resolved_results_dir:
-        if configured_results_dir:
-            resolved_results_dir = configured_results_dir
-        else:
-            resolved_results_dir = profile.default_results_dir_builder(
-                args.vlm_api_config,
-                results_root=configured_results_root or None,
-            )
+        resolved_results_dir = profile.default_results_dir_builder(
+            args.vlm_api_config,
+            results_root=selected_results_root or None,
+        )
     config.defrost()
-    if hasattr(config, "PATHS"):
-        config.PATHS.RESULTS_ROOT = configured_results_root
-    config.RESULTS_DIR = resolved_results_dir
-    if hasattr(config, "PATHS"):
-        config.PATHS.RESULTS_DIR = resolved_results_dir
+    config.PATHS.RESULTS_ROOT = resolve_results_root_path(selected_results_root)
+    config.PATHS.RESULTS_DIR = resolved_results_dir
     if args.max_steps is not None:
         config.TASK_CONFIG.ENVIRONMENT.MAX_EPISODE_STEPS = args.max_steps
-    sync_runtime_panels(config)
+    apply_runtime_derived_fields(config)
     output_logs = getattr(getattr(config, "OUTPUT", None), "LOGS", None)
     if output_logs is not None:
         args.save_episode_stdout_log = bool(
@@ -246,7 +242,7 @@ def run_single_episode(
         "failed_wasted_duration_s": 0.0,
         "error": None,
     }
-    results_dir = os.path.abspath(str(base_config.RESULTS_DIR or os.getcwd()))
+    results_dir = os.path.abspath(str(base_config.PATHS.RESULTS_DIR or os.getcwd()))
     save_stdout_log = save_episode_stdout_log_enabled(base_config)
     episode_log_path = (
         get_episode_records_log_path(results_dir, episode_id)
