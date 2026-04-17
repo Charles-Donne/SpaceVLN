@@ -6,7 +6,7 @@
 
 - `data/`
 - `GroundingDINO/`
-- `habitat-lab/`
+- `vlnce/habitat-lab/`
 - `SpaceVLN/`
 
 同时保留下面的约束：
@@ -26,7 +26,8 @@ nav_ws/
 ├── .dockerignore
 ├── data/
 ├── SpaceVLN/
-├── habitat-lab/
+├── vlnce/
+│   └── habitat-lab/
 └── GroundingDINO/
 ```
 
@@ -152,8 +153,8 @@ openrouter:
 
 - `data/` 会进入 `/workspace/data`
 - `GroundingDINO/` 会进入 `/workspace/GroundingDINO`
-- `habitat-lab/` 会进入 `/workspace/habitat-lab`
-- `habitat-sim/` 会进入 `/workspace/habitat-sim`
+- `vlnce/habitat-lab/` 会进入 `/workspace/vlnce/habitat-lab`
+- `habitat-sim` 运行时来自 Conda 包，不依赖 `/workspace` 下的源码目录
 - `SpaceVLN/` 会进入 `/workspace/SpaceVLN`
 
 因此镜像体积会比较大，但好处是换环境后可以直接运行，不需要再单独搬运数据目录。

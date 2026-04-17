@@ -52,6 +52,33 @@ spacevln_prepend_colon_var() {
     export "$var_name=$value:$current_value"
 }
 
+spacevln_habitat_sim_ext_dir() {
+    local python_bin="$1"
+    "$python_bin" - <<'PY'
+import glob
+import os
+import site
+
+candidates = []
+for site_dir in site.getsitepackages():
+    candidates.extend(
+        glob.glob(
+            os.path.join(
+                site_dir, "habitat_sim-*.egg", "habitat_sim", "_ext"
+            )
+        )
+    )
+    candidates.extend(
+        glob.glob(os.path.join(site_dir, "habitat_sim", "_ext"))
+    )
+
+for path in candidates:
+    if os.path.isdir(path):
+        print(path)
+        break
+PY
+}
+
 spacevln_setup_runtime_env() {
     local python_bin="$1"
 
@@ -74,6 +101,12 @@ spacevln_setup_runtime_env() {
 
         if [[ -d "$torch_lib" ]]; then
             spacevln_prepend_colon_var LD_LIBRARY_PATH "$torch_lib"
+        fi
+
+        local habitat_sim_ext
+        habitat_sim_ext="$(spacevln_habitat_sim_ext_dir "$python_bin")"
+        if [[ -n "$habitat_sim_ext" && -d "$habitat_sim_ext" ]]; then
+            spacevln_prepend_colon_var LD_LIBRARY_PATH "$habitat_sim_ext"
         fi
 
         if [[ -f "$env_root/lib/libstdc++.so.6" ]]; then

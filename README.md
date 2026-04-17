@@ -68,7 +68,12 @@ The default configuration assumes the following workspace organization:
 ```text
 nav_ws/
 ├── SpaceVLN/
-├── habitat-lab/
+├── vlnce/
+│   ├── habitat-lab/
+│   └── habitat-sim/
+├── ovon/
+│   ├── habitat-lab-v0.2.3/
+│   └── habitat-sim-v0.2.3/
 ├── GroundingDINO/
 └── data/
     ├── datasets/
@@ -82,7 +87,7 @@ By default, SpaceVLN expects:
 - Habitat/VLN datasets under `../data/datasets/`
 - scene assets under `../data/scene_datasets/`
 - detection checkpoints under `../data/model/grounded_sam/`
-- a local editable `habitat-lab` source tree at `../habitat-lab`
+- a local editable `habitat-lab` source tree at `../vlnce/habitat-lab`
 - a local editable `GroundingDINO` source tree at `../GroundingDINO`
 
 If your directory layout differs, update:
@@ -133,7 +138,8 @@ Clone the external source repositories expected by the current SpaceVLN workspac
 
 ```bash
 cd ..
-git clone https://github.com/facebookresearch/habitat-lab.git
+mkdir -p vlnce
+git clone https://github.com/facebookresearch/habitat-lab.git vlnce/habitat-lab
 git clone https://github.com/IDEA-Research/GroundingDINO.git
 ```
 
@@ -350,7 +356,7 @@ See also:
 The repository now includes a full-workspace Docker build at `../Dockerfile.spacevln`.
 
 - build context: the `nav_ws/` workspace root
-- bundled into the image: `data/`, `GroundingDINO/`, `habitat-lab/`, and `SpaceVLN/`
+- bundled into the image: `data/`, `GroundingDINO/`, `vlnce/habitat-lab/`, and `SpaceVLN/`
 - default result root in-container: `/workspace/result`
 - default result root on bare-metal runs from the same workspace: `nav_ws/result`
 - API config templates are copied into place during image build; provide real keys via environment variables such as `DASHSCOPE_API_KEY`, `OPENAI_API_KEY`, or `OPENROUTER_API_KEY`

@@ -8,7 +8,7 @@
 #   2. install CUDA-compatible PyTorch manually
 #   3. install `habitat-sim==0.1.7` via conda
 #   4. clone sibling source trees:
-#        ../habitat-lab
+#        ../vlnce/habitat-lab
 #        ../GroundingDINO
 #   5. export CUDA_HOME
 #   6. run `pip install -r requirements.txt`
@@ -44,7 +44,7 @@ supervision==0.4.0
 timm==1.0.25
 tomli==2.4.0
 -e ../GroundingDINO
--e ../habitat-lab
+-e ../vlnce/habitat-lab
 
 # CUDA-enabled PyTorch build used in the validated environment (install manually).
 # torch==2.1.2+cu121
