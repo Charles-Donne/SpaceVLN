@@ -25,8 +25,10 @@ import numpy as np
 from typing import Dict, Any, List, Tuple, Optional, Sequence
 from datetime import datetime
 
-from habitat import Config
-from habitat.sims.habitat_simulator.actions import HabitatSimActions
+try:
+    from habitat import Config
+except ImportError:  # Habitat 0.2.x no longer exports Config
+    from typing import Any as Config
 
 from navigation_system.space.description.direction_format import format_relative_direction
 from navigation_system.space.description.spatial_formatter import (
@@ -38,6 +40,7 @@ from navigation_system.space.geometry.connectivity import (
     query_world_distance_from_field_m,
 )
 from navigation_system.space.geometry.map_projection import RotatedMapProjector
+from navigation_system.controller.action_compat import resolve_habitat_action
 from navigation_system.controller.base_controller import BaseNavigationController
 from navigation_system.controller.state import (
     EpisodeTimingTracker,
@@ -842,7 +845,7 @@ class VLMNavigationController(BaseNavigationController):
                 ),
             )
             return {
-                "action_id": HabitatSimActions.STOP,
+                "action_id": resolve_habitat_action("STOP"),
                 "action_name": "STOP",
                 "response": response,
                 "degrees": 0,
@@ -888,7 +891,9 @@ class VLMNavigationController(BaseNavigationController):
             ),
         )
         return {
-            "action_id": HabitatSimActions.TURN_LEFT if selected_side == "LEFT" else HabitatSimActions.TURN_RIGHT,
+            "action_id": resolve_habitat_action("TURN_LEFT")
+            if selected_side == "LEFT"
+            else resolve_habitat_action("TURN_RIGHT"),
             "action_name": turn_action_name,
             "response": response,
             "degrees": int(self.turn_angle),
@@ -931,7 +936,7 @@ class VLMNavigationController(BaseNavigationController):
                 ),
             )
             return {
-                "action_id": HabitatSimActions.STOP,
+                "action_id": resolve_habitat_action("STOP"),
                 "action_name": "STOP",
                 "response": response,
                 "degrees": 0,
@@ -960,7 +965,7 @@ class VLMNavigationController(BaseNavigationController):
                 ),
             )
             return {
-                "action_id": HabitatSimActions.STOP,
+                "action_id": resolve_habitat_action("STOP"),
                 "action_name": "STOP",
                 "response": response,
                 "degrees": 0,
@@ -983,7 +988,7 @@ class VLMNavigationController(BaseNavigationController):
             ),
         )
         return {
-            "action_id": HabitatSimActions.MOVE_FORWARD,
+            "action_id": resolve_habitat_action("MOVE_FORWARD"),
             "action_name": "MOVE_FORWARD",
             "response": response,
             "degrees": 0,
@@ -1838,7 +1843,7 @@ class VLMNavigationController(BaseNavigationController):
 
         for _ in range(turn_steps):
             result = self.step_with_vlm(
-                HabitatSimActions.TURN_RIGHT,
+                resolve_habitat_action("TURN_RIGHT"),
                 action_name="AUTO_RETREAT_TURN_RIGHT",
                 save_vis=True,
                 enable_landmark_detection=False,
@@ -1853,7 +1858,7 @@ class VLMNavigationController(BaseNavigationController):
                 break
             pose_before_step = self._get_agent_pose()
             result = self.step_with_vlm(
-                HabitatSimActions.MOVE_FORWARD,
+                resolve_habitat_action("MOVE_FORWARD"),
                 action_name="AUTO_RETREAT_FORWARD",
                 save_vis=True,
                 enable_landmark_detection=False,
@@ -2420,7 +2425,7 @@ class VLMNavigationController(BaseNavigationController):
 
         self.nav_visualizer.save_step_visualization(
             observations=obs,
-            info=info or {},
+            info=self._build_nav_visualizer_info(info),
             step=look_step,
             instruction=self.current_instruction,
             current_subtask=subtask_text,
@@ -2987,29 +2992,60 @@ class VLMNavigationController(BaseNavigationController):
                 - action_sequence: 动作序列，每个动作为 {"action": "TURN_LEFT/RIGHT", "degrees": 30}
         """
         import re
-        
-        match = re.search(r'Left (\d+)(?:deg|°)|Right (\d+)(?:deg|°)|Back (\d+)(?:deg|°)?|Front', waypoint_direction)
-        
-        if not match:
-            print(f"  [WARN] Cannot parse waypoint_direction: {waypoint_direction}")
-            return False, []
-        
+
+        waypoint_direction = str(waypoint_direction or "").strip()
+        match = re.search(
+            r'Left (\d+)(?:deg|°)|Right (\d+)(?:deg|°)|Back (\d+)(?:deg|°)?|Front',
+            waypoint_direction,
+        )
+
         angle = 0
         direction = None
-        
-        if 'Left' in waypoint_direction:
-            angle = int(match.group(1))
-            direction = 'LEFT'
-        elif 'Right' in waypoint_direction:
-            angle = int(match.group(2))
-            direction = 'RIGHT'
-        elif 'Back' in waypoint_direction:
-            angle = 180
-            direction = 'LEFT'
-        elif 'Front' in waypoint_direction:
-            return True, []
+
+        if match:
+            if 'Left' in waypoint_direction:
+                angle = int(match.group(1))
+                direction = 'LEFT'
+            elif 'Right' in waypoint_direction:
+                angle = int(match.group(2))
+                direction = 'RIGHT'
+            elif 'Back' in waypoint_direction:
+                angle = 180
+                direction = 'LEFT'
+            elif 'Front' in waypoint_direction:
+                return True, []
         else:
-            print(f"  [WARN] Unrecognized direction: {waypoint_direction}")
+            image_match = re.search(r'IMAGE\s*(\d+)', waypoint_direction, re.IGNORECASE)
+            image_index = None
+            if image_match:
+                try:
+                    image_index = int(image_match.group(1))
+                except (TypeError, ValueError):
+                    image_index = None
+            if image_index is not None:
+                image_to_angle = {
+                    1: 0,
+                    2: 30,
+                    3: 60,
+                    4: 90,
+                    5: 120,
+                    6: 150,
+                    7: 180,
+                    8: -150,
+                    9: -120,
+                    10: -90,
+                    11: -60,
+                    12: -30,
+                }
+                signed_angle = image_to_angle.get(image_index)
+                if signed_angle is not None:
+                    if signed_angle == 0:
+                        return True, []
+                    direction = 'LEFT' if signed_angle > 0 else 'RIGHT'
+                    angle = abs(int(signed_angle))
+
+        if direction is None or angle < 0:
+            print(f"  [WARN] Cannot parse waypoint_direction: {waypoint_direction}")
             return False, []
         
         num_turns = angle // 30
@@ -3031,9 +3067,9 @@ class VLMNavigationController(BaseNavigationController):
             action_name = action_dict['action']
             
             if action_name == 'TURN_LEFT':
-                action_id = HabitatSimActions.TURN_LEFT
+                action_id = resolve_habitat_action("TURN_LEFT")
             elif action_name == 'TURN_RIGHT':
-                action_id = HabitatSimActions.TURN_RIGHT
+                action_id = resolve_habitat_action("TURN_RIGHT")
             else:
                 print(f"    [WARN] Unknown action: {action_name}")
                 continue
@@ -3057,8 +3093,8 @@ class VLMNavigationController(BaseNavigationController):
             return True
 
         refresh_steps = (
-            (HabitatSimActions.TURN_RIGHT, "OBS_REFRESH_TURN_RIGHT", "turn-right"),
-            (HabitatSimActions.TURN_LEFT, "OBS_REFRESH_TURN_LEFT", "turn-left"),
+            (resolve_habitat_action("TURN_RIGHT"), "OBS_REFRESH_TURN_RIGHT", "turn-right"),
+            (resolve_habitat_action("TURN_LEFT"), "OBS_REFRESH_TURN_LEFT", "turn-left"),
         )
         for action_id, action_name, warning_suffix in refresh_steps:
             refresh_result = self.step_with_vlm(
@@ -3474,7 +3510,7 @@ class VLMNavigationController(BaseNavigationController):
             
             self.nav_visualizer.save_step_visualization(
                 observations=self.latest_obs,
-                info=self.latest_info or {},
+                info=self._build_nav_visualizer_info(self.latest_info),
                 step=self.current_step,
                 instruction=self.current_instruction,
                 current_subtask=subtask_text,
@@ -3596,6 +3632,9 @@ class VLMNavigationController(BaseNavigationController):
                     if not hasattr(self, 'dtg_history'):
                         self.dtg_history = []
                     self.dtg_history.append(dtg)
+
+                if self._attempt_goal_distance_autostop():
+                    return 'complete'
 
                 if result['done']:
                     print('[WARN] Episode done (Habitat)')
@@ -3781,7 +3820,7 @@ class VLMNavigationController(BaseNavigationController):
             subtask_id = self._current_subtask_run_id()
             self.nav_visualizer.save_step_visualization(
                 observations=self.latest_obs,
-                info=self.latest_info or {},
+                info=self._build_nav_visualizer_info(self.latest_info),
                 step=self.current_step,
                 instruction=self.current_instruction,
                 current_subtask=subtask_text,
@@ -3791,6 +3830,12 @@ class VLMNavigationController(BaseNavigationController):
             )
 
         gif_path = None
+        topdown_path = None
+        if self.nav_visualizer and (
+            self.runtime_options.save_navigation_step_images
+            or self.runtime_options.save_navigation_gif
+        ):
+            topdown_path = self.nav_visualizer.save_final_top_down_map()
         if self.nav_visualizer and self.runtime_options.save_navigation_gif:
             gif_path = self.nav_visualizer.save_gif(fps=2)
             if (
@@ -3829,9 +3874,41 @@ class VLMNavigationController(BaseNavigationController):
             'thinking_api_summary': episode_timing_summary['thinking_api_summary'],
             'action_api_summary': episode_timing_summary['action_api_summary'],
             'gif_path': gif_path,
+            'topdown_path': topdown_path,
             'result_file': final_result,
             'reason': failure_reason,
         }
+
+    def _build_nav_visualizer_info(self, info: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        payload = dict(info or {})
+        if (
+            "global_map_input" not in payload and
+            getattr(self, "latest_global_map_input", None) is not None
+        ):
+            payload["global_map_input"] = self.latest_global_map_input
+        return payload
+
+    def _should_autostop_from_goal_distance(self) -> bool:
+        return False
+
+    def _attempt_goal_distance_autostop(self) -> bool:
+        if not self._should_autostop_from_goal_distance():
+            return False
+        print(
+            "[AutoGoalStop] distance_to_goal is already within the success radius; "
+            "issuing STOP immediately."
+        )
+        result = self.step_with_vlm(
+            resolve_habitat_action("STOP"),
+            action_name="AUTO_GOAL_STOP",
+            save_vis=True,
+            enable_landmark_detection=False,
+        )
+        if result.get("done", False):
+            print("[AutoGoalStop] STOP executed and episode finished.")
+            return True
+        print("[AutoGoalStop] STOP was issued but episode did not finish; continue.")
+        return False
 
     def _estimate_fallback_success_spl(self, path_length: float) -> float:
         shortest_path_distance = float(getattr(self, 'initial_distance_to_goal', 0.0) or 0.0)

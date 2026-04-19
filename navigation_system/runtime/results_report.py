@@ -3,7 +3,8 @@ import csv
 import json
 import math
 import os
-from typing import Any, Dict, List, Optional
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from navigation_system.runtime.storage.artifacts import (
     get_episode_log_path,
@@ -124,27 +125,78 @@ def _load_result_payload(filepath: str) -> Optional[Dict[str, Any]]:
     try:
         with open(filepath, "r", encoding="utf-8") as f:
             payload = json.load(f)
+    except FileNotFoundError:
+        return None
     except Exception as exc:
         print(f"⚠️  读取文件失败 {filename}: {exc}")
         return None
     return _normalize_report_item(payload)
 
 
-def load_results(results_dir: str) -> List[Dict[str, Any]]:
+def _bounded_load_workers(load_workers: int, item_count: int) -> int:
+    try:
+        parsed_workers = int(load_workers)
+    except (TypeError, ValueError):
+        parsed_workers = 1
+    return max(1, min(parsed_workers, max(1, int(item_count))))
+
+
+def _load_payloads(filepaths: Iterable[str], load_workers: int = 1) -> List[Optional[Dict[str, Any]]]:
+    filepath_list = list(filepaths)
+    worker_count = _bounded_load_workers(load_workers, len(filepath_list))
+    if worker_count <= 1:
+        return [_load_result_payload(filepath) for filepath in filepath_list]
+
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        return list(executor.map(_load_result_payload, filepath_list))
+
+
+def _load_payload_with_mtime(filepath: str) -> Optional[Tuple[str, Dict[str, Any], float]]:
+    payload = _load_result_payload(filepath)
+    if payload is None:
+        return None
+    try:
+        current_mtime = os.path.getmtime(filepath)
+    except OSError:
+        current_mtime = float("-inf")
+    return filepath, payload, current_mtime
+
+
+def _load_payloads_with_mtime(
+    filepaths: Iterable[str],
+    load_workers: int = 1,
+) -> List[Tuple[str, Dict[str, Any], float]]:
+    filepath_list = list(filepaths)
+    worker_count = _bounded_load_workers(load_workers, len(filepath_list))
+    if worker_count <= 1:
+        loaded_items = [_load_payload_with_mtime(filepath) for filepath in filepath_list]
+    else:
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            loaded_items = list(executor.map(_load_payload_with_mtime, filepath_list))
+    return [item for item in loaded_items if item is not None]
+
+
+def _default_load_workers() -> int:
+    raw_value = os.environ.get("SPACEVLN_REPORT_WORKERS", "1")
+    try:
+        return max(1, int(raw_value))
+    except (TypeError, ValueError):
+        return 1
+
+
+def load_results(results_dir: str, *, load_workers: int = 1) -> List[Dict[str, Any]]:
     log_dir = os.path.join(results_dir, "log")
     if not os.path.exists(log_dir):
         return []
 
     results_by_episode: Dict[str, Dict[str, Any]] = {}
     result_mtime_by_episode: Dict[str, float] = {}
-    for filepath in iter_all_episode_log_paths(results_dir):
+    for filepath, payload, current_mtime in _load_payloads_with_mtime(
+        iter_all_episode_log_paths(results_dir),
+        load_workers=load_workers,
+    ):
         filename = os.path.basename(filepath)
-        payload = _load_result_payload(filepath)
-        if payload is None:
-            continue
-
         episode_key = str(payload.get("episode_id", filename))
-        current_mtime = os.path.getmtime(filepath)
         previous_mtime = result_mtime_by_episode.get(episode_key, float("-inf"))
         if episode_key not in results_by_episode or current_mtime >= previous_mtime:
             results_by_episode[episode_key] = payload
@@ -165,21 +217,21 @@ def load_results_in_episode_range(
     *,
     start_episode_id: int,
     end_episode_id: int,
+    load_workers: int = 1,
 ) -> List[Dict[str, Any]]:
     log_dir = os.path.join(results_dir, "log")
     if not os.path.exists(log_dir):
         return []
 
-    results: List[Dict[str, Any]] = []
-    for episode_id in range(int(start_episode_id), int(end_episode_id) + 1):
-        filepath = get_episode_log_path(results_dir, episode_id)
-        if not os.path.exists(filepath):
-            continue
-        payload = _load_result_payload(filepath)
-        if payload is None:
-            continue
-        results.append(payload)
-    return results
+    episode_filepaths = (
+        get_episode_log_path(results_dir, episode_id)
+        for episode_id in range(int(start_episode_id), int(end_episode_id) + 1)
+    )
+    return [
+        payload
+        for payload in _load_payloads(episode_filepaths, load_workers=load_workers)
+        if payload is not None
+    ]
 
 
 def _episode_id_as_int(item: Dict[str, Any]) -> Optional[int]:
@@ -528,12 +580,15 @@ def generate_results_report(
     end_episode_id: Optional[int] = None,
     output_dir: Optional[str] = None,
     exp_config: Optional[str] = None,
+    load_workers: int = 1,
 ) -> Dict[str, Any]:
     if not os.path.exists(results_dir):
         raise FileNotFoundError(f"目录不存在: {results_dir}")
 
     if verbose:
         print(f"📂 加载结果: {results_dir}")
+        if int(load_workers) > 1:
+            print(f"⚙️  并行读取 workers: {int(load_workers)}")
 
     use_direct_range_load = start_episode_id is not None and end_episode_id is not None
     if use_direct_range_load:
@@ -541,9 +596,10 @@ def generate_results_report(
             results_dir,
             start_episode_id=int(start_episode_id),
             end_episode_id=int(end_episode_id),
+            load_workers=load_workers,
         )
     else:
-        all_results = load_results(results_dir)
+        all_results = load_results(results_dir, load_workers=load_workers)
         results = filter_results_by_episode_range(
             all_results,
             start_episode_id=start_episode_id,
@@ -623,6 +679,12 @@ def build_results_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--start-id", type=int, default=None, help="只统计起始 episode ID")
     parser.add_argument("--end-id", type=int, default=None, help="只统计结束 episode ID")
     parser.add_argument("--output-dir", type=str, default=None, help="报告输出目录")
+    parser.add_argument(
+        "--load-workers",
+        type=int,
+        default=_default_load_workers(),
+        help="并行读取 episode JSON 的线程数（默认读取 SPACEVLN_REPORT_WORKERS，未设置时为 1）",
+    )
     return parser
 
 
@@ -640,6 +702,7 @@ def run_results_report_from_args(args: argparse.Namespace) -> int:
             end_episode_id=args.end_id,
             output_dir=args.output_dir,
             exp_config=args.exp_config,
+            load_workers=args.load_workers,
         )
         return 0
     except FileNotFoundError as exc:

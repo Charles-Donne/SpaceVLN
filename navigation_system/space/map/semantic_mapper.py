@@ -14,8 +14,33 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
 import torch
-from skimage.morphology import binary_closing as _binary_closing_compat
-from skimage.morphology import disk, remove_small_objects
+from scipy import ndimage
+
+try:
+    from skimage.morphology import binary_closing as _binary_closing_compat
+    from skimage.morphology import disk, remove_small_objects
+except ImportError:
+    def disk(radius):
+        radius = int(max(0, radius))
+        yy, xx = np.ogrid[-radius : radius + 1, -radius : radius + 1]
+        return (xx * xx + yy * yy) <= radius * radius
+
+    def remove_small_objects(arr, min_size=64, connectivity=1):
+        arr_bool = np.asarray(arr).astype(bool)
+        if min_size <= 0:
+            return arr_bool
+        structure = ndimage.generate_binary_structure(arr_bool.ndim, max(1, int(connectivity)))
+        labeled, num = ndimage.label(arr_bool, structure=structure)
+        if num == 0:
+            return arr_bool
+        counts = np.bincount(labeled.ravel())
+        keep = counts >= int(min_size)
+        keep[0] = False
+        return keep[labeled]
+
+    def _binary_closing_compat(arr, selem=None):
+        structure = np.asarray(selem if selem is not None else disk(1)).astype(bool)
+        return ndimage.binary_closing(np.asarray(arr).astype(bool), structure=structure)
 
 from navigation_system.config.core.constants import mapping_classes
 from navigation_system.config.core.params.thresholds import (

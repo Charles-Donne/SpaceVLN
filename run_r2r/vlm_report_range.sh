@@ -19,7 +19,8 @@ MAX_EPISODE_ID=1800
 
 PYTHON_BIN="$(spacevln_select_python)"
 spacevln_setup_runtime_env "$PYTHON_BIN"
-RESULTS_ROOT="$(spacevln_default_results_root "$PYTHON_BIN")"
+RESULTS_ROOT=""
+REPORT_LOAD_WORKERS="${SPACEVLN_REPORT_WORKERS:-8}"
 
 usage() {
     echo "用法:"
@@ -36,6 +37,9 @@ usage() {
 }
 
 print_available_results_dirs() {
+    if [ -z "$RESULTS_ROOT" ]; then
+        RESULTS_ROOT="$(spacevln_default_results_root "$PYTHON_BIN")"
+    fi
     echo "可选实验目录:"
     if [ ! -d "$RESULTS_ROOT" ]; then
         echo "  (results 根目录不存在: $RESULTS_ROOT)"
@@ -74,6 +78,9 @@ resolve_results_dir() {
         return 0
     fi
 
+    if [ -z "$RESULTS_ROOT" ]; then
+        RESULTS_ROOT="$(spacevln_default_results_root "$PYTHON_BIN")"
+    fi
     if [ -d "$RESULTS_ROOT/$raw_arg" ]; then
         printf '%s\n' "$RESULTS_ROOT/$raw_arg"
         return 0
@@ -113,9 +120,17 @@ if [ "$END_ID" -lt "$START_ID" ]; then
     exit 1
 fi
 
+if ! [[ "$REPORT_LOAD_WORKERS" =~ ^[0-9]+$ ]] || [ "$REPORT_LOAD_WORKERS" -lt 1 ]; then
+    echo "❌ SPACEVLN_REPORT_WORKERS 必须是大于等于 1 的正整数: $REPORT_LOAD_WORKERS"
+    exit 1
+fi
+
 cd "$PROJECT_ROOT"
 
-DEFAULT_RESULTS_DIR="$(spacevln_default_results_dir "$PYTHON_BIN" "navigation_system/config/vlm/vlm_api_config.yaml")"
+DEFAULT_RESULTS_DIR=""
+if [ -z "$RESULTS_DIR_ARG" ]; then
+    DEFAULT_RESULTS_DIR="$(spacevln_default_results_dir "$PYTHON_BIN" "navigation_system/config/vlm/vlm_api_config.yaml")"
+fi
 
 RESULTS_DIR="$(resolve_results_dir "$RESULTS_DIR_ARG" "$DEFAULT_RESULTS_DIR")"
 
@@ -133,10 +148,12 @@ echo "📊 生成部分结果报告"
 echo "   Range: $START_ID-$END_ID"
 echo "   Source: $RESULTS_DIR"
 echo "   Output: $RESULTS_DIR/reports/$START_ID-$END_ID"
+echo "   Load workers: $REPORT_LOAD_WORKERS"
 
 "$PYTHON_BIN" -m navigation_system.runtime.results_report \
     --path "$RESULTS_DIR" \
     --exp-config "$CONFIG_FILE" \
     --save \
     --start-id "$START_ID" \
-    --end-id "$END_ID"
+    --end-id "$END_ID" \
+    --load-workers "$REPORT_LOAD_WORKERS"

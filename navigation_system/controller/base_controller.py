@@ -9,9 +9,16 @@ import torch
 from typing import Dict, Any, List, Optional, Tuple
 from types import SimpleNamespace
 from torchvision import transforms
-from habitat import Config
+try:
+    from habitat import Config
+except ImportError:  # Habitat 0.2.x no longer exports Config
+    from typing import Any as Config
 from habitat.core.simulator import Observations
-from habitat_baselines.common.environments import get_env_class
+
+try:
+    from habitat_baselines.common.environments import get_env_class
+except ImportError:  # Habitat 0.2.x path/layout differs; only needed when constructing envs here.
+    get_env_class = None
 
 from navigation_system.detection import GroundedSAM
 from navigation_system.space import SemanticMapper, SemanticProcessor
@@ -30,6 +37,7 @@ from navigation_system.vlm.contracts.schema import DIRECTION_CONFIG
 from navigation_system.runtime.storage.artifacts import get_episode_detail_dir
 from navigation_system.runtime.storage.naming import build_step_artifact_filename
 from navigation_system.config.core import ConfigHelper, create_category_config
+from navigation_system.controller.action_compat import resolve_habitat_action
 from navigation_system.controller.state import DetectedClassRegistry
 from navigation_system.env import construct_envs, ensure_env_registered
 from navigation_system.runtime.device import get_device
@@ -58,6 +66,11 @@ class BaseNavigationController:
         
         # print("[Init] 初始化Habitat环境...")
         if envs is None:
+            if get_env_class is None:
+                raise RuntimeError(
+                    "Habitat baseline env registry helper is unavailable in this environment. "
+                    "Pass a pre-built env adapter into BaseNavigationController."
+                )
             ensure_env_registered()
             env_class = get_env_class(self.config.ENV_NAME)
             if env_class is None:
@@ -651,11 +664,9 @@ class BaseNavigationController:
     def look_around(self) -> None:
         """360度环视建图(12步×30°)，步数0-11"""
 # print("🔄 360°环视...", end="", flush=True)
-        
-        from habitat.sims.habitat_simulator.actions import HabitatSimActions
-        
+
         for step in range(12):
-            actions = [{"action": HabitatSimActions.TURN_LEFT}]
+            actions = [{"action": resolve_habitat_action("TURN_LEFT")}]
             step_data = self._safe_env_step(actions, context=f"lookaround scan {step + 1}/12")
             if step_data is None:
                 print(" [WARN] Episode ended early")
@@ -703,8 +714,6 @@ class BaseNavigationController:
         prepare_thinking_detection: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """Run the shared 12-step lookaround scan and cache the resulting map/render state."""
-        from habitat.sims.habitat_simulator.actions import HabitatSimActions
-
         debug_save_renderings = bool(self.render_map_config.DEBUG_SAVE_RENDERINGS)
         self.latest_lookaround_end_reason = ""
         lookaround_images: List[np.ndarray] = []
@@ -720,7 +729,7 @@ class BaseNavigationController:
             look_step = self.current_step
 
             step_data = self._safe_env_step(
-                [{"action": HabitatSimActions.TURN_LEFT}],
+                [{"action": resolve_habitat_action("TURN_LEFT")}],
                 context=f"lookaround step {look_index}/12",
             )
             if step_data is None:

@@ -47,6 +47,7 @@ class NavigationVisualizer:
         self.output_dir = output_dir
         self.visualization_dir = None
         self.video_frames = []
+        self.last_top_down_map = None
         self.save_step_images = bool(save_step_images)
         self.keep_frames_for_gif = bool(keep_frames_for_gif)
         if self.save_step_images or self.keep_frames_for_gif:
@@ -63,6 +64,7 @@ class NavigationVisualizer:
         if self.save_step_images or self.keep_frames_for_gif:
             os.makedirs(self.visualization_dir, exist_ok=True)
         self.video_frames = []
+        self.last_top_down_map = None
 
     @staticmethod
     def _safe_overlay_text(text: Optional[str], fallback: str) -> str:
@@ -107,20 +109,8 @@ class NavigationVisualizer:
         # 获取第一人称RGB
         rgb = observations["rgb"]
         
-        # 获取俯视图（完全按照Sub-VLM-VLN的实现）
-        if "top_down_map_vlnce" in info and info["top_down_map_vlnce"] is not None:
-            try:
-                top_down_map = maps.colorize_draw_agent_and_fit_to_height(
-                    info["top_down_map_vlnce"], rgb.shape[0]
-                )
-            except Exception as e:
-                print(f"⚠️  [Step {step}] 俯视图渲染失败: {e}")
-                top_down_map = np.zeros_like(rgb)
-        else:
-            # 如果没有地图，创建空白占位并警告
-            if step == 1:  # 只在第一步警告，避免重复输出
-                print(f"⚠️  info中没有top_down_map_vlnce，请确保config中启用了TOP_DOWN_MAP_VLNCE测量")
-            top_down_map = np.zeros_like(rgb)
+        top_down_map = self._extract_top_down_map(info or {}, rgb, step)
+        self.last_top_down_map = top_down_map.copy() if top_down_map is not None else None
         
         # 拼接：左边RGB + 右边俯视图
         combined = np.concatenate((rgb, top_down_map), axis=1)
@@ -150,6 +140,54 @@ class NavigationVisualizer:
             self.video_frames.append(combined)
         
         return filepath
+
+    def _extract_top_down_map(self, info: Dict, rgb: np.ndarray, step: int) -> np.ndarray:
+        """Resolve the best available top-down / trajectory map for the current step."""
+        for key in ("top_down_map_vlnce", "top_down_map"):
+            if key not in info or info[key] is None:
+                continue
+            try:
+                return maps.colorize_draw_agent_and_fit_to_height(info[key], rgb.shape[0])
+            except Exception as exc:
+                print(f"⚠️  [Step {step}] {key} 渲染失败: {exc}")
+
+        fallback = info.get("global_map_input")
+        fallback_meta = fallback if isinstance(fallback, dict) else {}
+        if isinstance(fallback, dict):
+            fallback = fallback.get("image_array")
+        if isinstance(fallback, np.ndarray) and fallback.size > 0:
+            image = fallback
+            if image.ndim == 2:
+                image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+            elif image.ndim == 3 and image.shape[-1] == 3:
+                color_space = str(fallback_meta.get("color_space", "bgr")).lower()
+                if color_space == "bgr":
+                    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            return cv2.resize(
+                image,
+                (rgb.shape[0], rgb.shape[0]),
+                interpolation=cv2.INTER_AREA,
+            )
+
+        if step == 1:
+            print("⚠️  info中没有 top_down_map/top_down_map_vlnce，且没有 global_map fallback")
+        return np.zeros_like(rgb)
+
+    def save_final_top_down_map(self, output_path: str = None) -> Optional[str]:
+        """Persist the final top-down/trajectory map as a standalone image."""
+        if self.last_top_down_map is None or not self.visualization_dir:
+            return None
+        if output_path is None:
+            output_path = os.path.join(self.visualization_dir, "topdown_trajectory_final.png")
+        try:
+            image = self.last_top_down_map
+            if image.dtype != np.uint8:
+                image = image.astype(np.uint8)
+            cv2.imwrite(output_path, cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+            return output_path if os.path.exists(output_path) else None
+        except Exception as exc:
+            print(f"⚠️  Failed to save final top-down map: {exc}")
+            return None
     
     def _add_text_overlay(self,
                           image: np.ndarray,
@@ -319,3 +357,4 @@ class NavigationVisualizer:
     def clear_frames(self):
         """清空视频帧列表"""
         self.video_frames = []
+        self.last_top_down_map = None

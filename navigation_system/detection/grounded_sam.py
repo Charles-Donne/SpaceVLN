@@ -7,7 +7,10 @@ import cv2
 import torch
 import numpy as np
 
-from habitat import Config
+try:
+    from habitat import Config
+except ImportError:  # Habitat 0.2.x no longer exports Config
+    from typing import Any as Config
 
 import supervision as sv
 from groundingdino.util.inference import Model
@@ -111,6 +114,22 @@ class GroundedSAM(Segment):
             detections.mask = masks
             
         return detections
+
+    def _empty_segment_result(
+        self,
+        image: VisualObservation,
+        reason: str = "",
+    ) -> Tuple[np.ndarray, List[str], np.ndarray, sv.Detections]:
+        height, width = image.shape[:2]
+        detections = sv.Detections(
+            xyxy=np.empty((0, 4), dtype=np.float32),
+            confidence=np.empty((0,), dtype=np.float32),
+            class_id=np.empty((0,), dtype=int),
+        )
+        detections.mask = np.empty((0, height, width), dtype=np.float32)
+        if reason:
+            print(f"[WARN] GroundedSAM detection skipped: {reason}")
+        return detections.mask, [], image.copy(), detections
     
     @torch.no_grad()
     def segment(self, image: VisualObservation, **kwargs) -> Tuple[np.ndarray, List[str], np.ndarray]:
@@ -123,14 +142,20 @@ class GroundedSAM(Segment):
             mask_annotator = None
         labels = []
         # t1 = time.time()
-        detections = self.grounding_dino_model.predict_with_classes(
-            image=image,
-            classes=classes,
-            box_threshold=self.box_threshold,
-            text_threshold=self.text_threshold
-        )
+        try:
+            detections = self.grounding_dino_model.predict_with_classes(
+                image=image,
+                classes=classes,
+                box_threshold=self.box_threshold,
+                text_threshold=self.text_threshold
+            )
+        except Exception as exc:
+            return self._empty_segment_result(image, type(exc).__name__)
         # t2 = time.time()
         detections = self._process_detections(detections)
+
+        if len(detections.xyxy) == 0:
+            return self._empty_segment_result(image)
         
         # 兼容不同版本的 supervision：使用属性而不是迭代
         for i in range(len(detections.xyxy)):

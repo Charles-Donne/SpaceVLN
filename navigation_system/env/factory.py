@@ -5,8 +5,16 @@ from typing import List, Optional, Type, Union
 
 import habitat
 from habitat import logger
-from habitat_baselines.utils.env_utils import make_env_fn
-from habitat import Config, Env, RLEnv, VectorEnv, make_dataset
+from habitat import Env, RLEnv, VectorEnv, make_dataset
+try:
+    from habitat import Config
+except ImportError:  # Habitat 0.2.x no longer exports Config
+    from typing import Any as Config
+
+try:
+    from habitat_baselines.utils.env_utils import make_env_fn
+except ImportError:  # Habitat 0.2.x path/layout differs; only needed when constructing vector envs here.
+    make_env_fn = None
 
 random.seed(0)
 
@@ -28,6 +36,11 @@ def construct_envs(
     :param auto_reset_done: Whether or not to automatically reset the env on done
     :return: VectorEnv object created according to specification.
     """
+    if make_env_fn is None:
+        raise RuntimeError(
+            "Habitat baseline env_utils.make_env_fn is unavailable in this environment. "
+            "Pass a pre-built env adapter instead of calling construct_envs()."
+        )
 
     runtime_config = config.RUNTIME
     num_envs_per_gpu = int(runtime_config.NUM_ENVIRONMENTS)

@@ -1,7 +1,10 @@
 """Focused runtime config mutation helpers for SpaceVLN navigation."""
 
 from typing import List, Optional
-from habitat import Config
+try:
+    from habitat import Config
+except ImportError:  # Habitat 0.2.x no longer exports Config
+    from typing import Any as Config
 
 
 def _bool_list(values) -> list:

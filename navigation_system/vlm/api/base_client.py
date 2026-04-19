@@ -58,10 +58,17 @@ class BaseAPIClient(ABC):
         """Whether the current provider likely supports OpenAI-compatible JSON mode."""
         base_url = str(getattr(self.config, 'base_url', '') or '').lower()
         provider = str(getattr(self.config, 'provider', '') or '').lower()
+        # NOTE:
+        # OpenRouter's Qwen/Alibaba route is reachable in this environment, but
+        # `response_format={"type":"json_object"}` causes the connection to be
+        # reset before a valid HTTP response is returned. We therefore keep
+        # OpenRouter on plain-text JSON prompting and parse locally instead of
+        # requesting provider-side JSON mode.
+        if 'openrouter' in base_url or provider == 'openrouter':
+            return False
         return (
             'dashscope' in base_url
-            or 'openrouter' in base_url
-            or provider in {'dashscope', 'openrouter', 'openai'}
+            or provider in {'dashscope', 'openai'}
         )
 
     def _build_response_format(self) -> Optional[Dict[str, Any]]:

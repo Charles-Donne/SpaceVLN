@@ -1,7 +1,11 @@
 from typing import Any, Dict, Tuple, Union
 
 import habitat
-from habitat import Config, Dataset
+from habitat import Dataset
+try:
+    from habitat import Config
+except ImportError:  # Habitat 0.2.x no longer exports Config
+    from typing import Any as Config
 from habitat.core.simulator import Observations
 from habitat_baselines.common.baseline_registry import baseline_registry
 from habitat_extensions.pose_utils import get_sim_location

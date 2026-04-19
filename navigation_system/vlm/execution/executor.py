@@ -416,3 +416,86 @@ class ActionExecutor(BaseAPIClient):
         print(f"  Action: {info} | {response.get('reasoning', '')[:60]}")
 
         return action_id, action_name, response, degrees, meters, prompt
+
+    def _decide_action_from_prompt(
+        self,
+        *,
+        prompt: str,
+        first_person_image: Any,
+        detection_image: Any,
+        action_mapping: Dict[str, int],
+        allowed_action_names: Optional[Sequence[str]],
+        save_dir: str,
+    ) -> Tuple[Optional[int], Optional[str], Optional[Dict], int, float, str]:
+        images = []
+        action_image_input = detection_image if detection_image is not None else first_person_image
+        if isinstance(action_image_input, str):
+            if action_image_input and os.path.exists(action_image_input):
+                images.append(action_image_input)
+            else:
+                print(f"  [WARN] No detection image found")
+        elif action_image_input is not None:
+            images.append(action_image_input)
+        else:
+            print(f"  [WARN] No detection image found")
+
+        response = self.call_api(prompt, images, save_dir=save_dir)
+
+        if not response:
+            print("✗ No response from VLM")
+            return None, None, None, 0, 0.0, ""
+
+        if not self.validate_response(response):
+            return None, None, None, 0, 0.0, ""
+
+        parsed_action = self._parse_action_command(response)
+        if parsed_action is None:
+            print(f"✗ Invalid action command: {response.get('action')}")
+            return None, None, None, 0, 0.0, ""
+
+        action_name, value = parsed_action
+        action_variant = self._extract_action_variant(response.get("action"))
+        response["_action_variant"] = action_variant
+        normalized_allowed_actions = None
+        if allowed_action_names:
+            normalized_allowed_actions = {
+                str(name or "").strip().upper()
+                for name in allowed_action_names
+                if str(name or "").strip()
+            }
+        if normalized_allowed_actions and action_name not in normalized_allowed_actions:
+            print(
+                f"✗ Forbidden action under current constraint: {action_name} | "
+                f"Allowed: {sorted(normalized_allowed_actions)}"
+            )
+            response["_forbidden_action_name"] = action_name
+            response["_allowed_action_names"] = sorted(normalized_allowed_actions)
+            return None, action_name, response, 0, 0.0, prompt
+
+        if action_name not in action_mapping:
+            print(f"✗ Invalid action: {action_name}")
+            print(f"✗ Valid actions: {list(action_mapping.keys())}")
+            return None, None, None, 0, 0.0, ""
+
+        action_id = action_mapping[action_name]
+
+        degrees = 0
+        meters = 0
+        if action_name in ['TURN_LEFT', 'TURN_RIGHT']:
+            degrees = int(value)
+            response['action'] = f"{self._format_turn_action_label(action_name, action_variant)} {degrees}deg"
+        elif action_name == 'MOVE_FORWARD':
+            meters = float(value)
+            response['action'] = f"{action_name} {meters:g}m"
+        elif action_name == 'STOP':
+            response['action'] = 'STOP'
+
+        if action_name in ('TURN_LEFT', 'TURN_RIGHT'):
+            info = f"{action_name} {degrees}°"
+        elif action_name == 'MOVE_FORWARD':
+            info = f"{action_name} {meters}m"
+        else:
+            info = action_name
+        print(f"  Action: {info} | {response.get('reasoning', '')[:60]}")
+
+        return action_id, action_name, response, degrees, meters, prompt

@@ -11,7 +11,10 @@ def ensure_env_registered() -> None:
     if _ENV_REGISTRATION_DONE:
         return
 
-    # Import side effect: registers `VLNCEZeroShotEnv` into Habitat baseline registry.
+    import habitat_extensions.habitat_simulator as _habitat_simulator  # noqa: F401
+    import habitat_extensions.measures as _measures  # noqa: F401
+    import habitat_extensions.sensors as _sensors  # noqa: F401
+    import habitat_extensions.task as _task  # noqa: F401
     from navigation_system.env import zero_shot_env as _zero_shot_env  # noqa: F401
 
     _ENV_REGISTRATION_DONE = True
