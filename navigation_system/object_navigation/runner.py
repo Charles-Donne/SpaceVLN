@@ -22,7 +22,20 @@ from navigation_system.object_navigation.controller import (
 )
 from navigation_system.object_navigation.env_adapter import SingleOVONVectorEnvAdapter
 from navigation_system.object_navigation.runtime_config import build_objectnav_runtime_config
+from navigation_system.object_navigation.runtime_factory import (
+    build_ovon_context_cache_navigation_model_stack,
+    build_ovon_navigation_model_stack,
+)
+from navigation_system.object_navigation.thresholds import OVON_SUCCESS_DISTANCE_M
 from navigation_system.runtime.episode_io import load_json_if_exists
+from navigation_system.runtime.results_report import generate_results_report
+from navigation_system.runtime.storage.results_layout import (
+    build_model_results_dir_name,
+    resolve_api_config_path,
+)
+
+
+RUNTIME_CHOICES = ("standard", "context_cache")
 
 
 def _nav_ws_root() -> Path:
@@ -30,7 +43,48 @@ def _nav_ws_root() -> Path:
 
 
 def _default_results_dir() -> str:
-    return str((_nav_ws_root() / "result" / "objectnav" / "ovon_smoke").resolve())
+    return str((_nav_ws_root() / "result" / "ovon" / "ovon_smoke").resolve())
+
+
+def _default_api_config(runtime: str) -> str:
+    runtime_name = str(runtime or "context_cache").strip().lower()
+    file_name = (
+        "vlm_api_config_context_cache.yaml"
+        if runtime_name == "context_cache"
+        else "vlm_api_config.yaml"
+    )
+    return str(
+        (
+            _nav_ws_root()
+            / "SpaceVLN"
+            / "navigation_system"
+            / "config"
+            / "vlm"
+            / file_name
+        ).resolve()
+    )
+
+
+def _default_results_dir_for_runtime(runtime: str, api_config_path: str) -> str:
+    runtime_name = str(runtime or "context_cache").strip().lower()
+    suffix = "_cache" if runtime_name == "context_cache" else ""
+    model_dir = build_model_results_dir_name(api_config_path)
+    return str(
+        (
+            _nav_ws_root()
+            / "result"
+            / "ovon"
+            / f"{model_dir}{suffix}"
+        ).resolve()
+    )
+
+
+def _select_model_stack_builder(runtime: str):
+    return (
+        build_ovon_context_cache_navigation_model_stack
+        if str(runtime or "").strip().lower() == "context_cache"
+        else build_ovon_navigation_model_stack
+    )
 
 
 def _parse_episode_ids(raw: str | None) -> List[int]:
@@ -68,6 +122,14 @@ def _prepare_ovon_config(
         config.habitat.simulator.scene_dataset = str(
             (_nav_ws_root() / "data" / "scene_datasets" / "hm3d" / "hm3d_annotated_basis.scene_dataset_config.json").resolve()
         )
+        if hasattr(config.habitat.task.measurements, "success"):
+            config.habitat.task.measurements.success.success_distance = float(
+                OVON_SUCCESS_DISTANCE_M
+            )
+        if hasattr(config.habitat.task.lab_sensors, "objnav_explorer"):
+            config.habitat.task.lab_sensors.objnav_explorer.success_distance = float(
+                OVON_SUCCESS_DISTANCE_M
+            )
 
         for sensor_name, sensor_cfg in config.habitat.task.lab_sensors.items():
             cache_path = getattr(sensor_cfg, "cache", None)
@@ -102,6 +164,7 @@ def _prepare_ovon_config(
 
         if not hasattr(config.habitat.task.measurements, "top_down_map"):
             config.habitat.task.measurements["top_down_map"] = TopDownMapMeasurementConfig()
+        config.habitat.task.measurements.top_down_map.draw_goal_aabbs = False
 
         if hasattr(config.habitat.task.measurements, "frontier_exploration_map"):
             config.habitat.task.measurements.pop("frontier_exploration_map")
@@ -151,7 +214,9 @@ def _run_one_episode(
     episode_id: int,
     results_dir: str,
     max_subtask_steps: int,
+    save_step_images: bool,
     save_gif: bool,
+    model_stack_builder,
 ):
     dataset = _load_dataset_for_episodes(ovon_config, [episode_id])
     if len(dataset.episodes) < 1:
@@ -179,12 +244,14 @@ def _run_one_episode(
                 or 80
             ),
         ),
+        save_step_images=save_step_images,
         save_gif=save_gif,
     )
 
     controller = OVONObjectNavigationController(
         runtime_config,
         config_path=api_config_path,
+        model_stack_builder=model_stack_builder,
         envs=adapter,
     )
 
@@ -218,9 +285,68 @@ def _coalesce_metric(saved_metrics: dict, saved_key: str, runtime_result: dict, 
     return default
 
 
+def _resolve_success_distance_from_ovon_config(ovon_config) -> float:
+    try:
+        return float(
+            getattr(
+                getattr(getattr(ovon_config.habitat.task.measurements, "success"), "success_distance"),
+                "__float__",
+                lambda: OVON_SUCCESS_DISTANCE_M,
+            )()
+        )
+    except Exception:
+        try:
+            return float(
+                getattr(ovon_config.habitat.task.measurements.success, "success_distance")
+            )
+        except Exception:
+            return float(OVON_SUCCESS_DISTANCE_M)
+
+
+def _build_aggregate(all_results: Sequence[dict]) -> dict:
+    count = len(list(all_results or []))
+    if count <= 0:
+        return {
+            "episodes": 0,
+            "success_rate": 0.0,
+            "oracle_success_rate": 0.0,
+            "avg_steps": 0.0,
+            "avg_distance_to_goal": 0.0,
+            "avg_spl": 0.0,
+            "avg_soft_spl": 0.0,
+        }
+
+    rows = list(all_results)
+    return {
+        "episodes": count,
+        "successes": sum(1 for item in rows if bool(item.get("success", False))),
+        "oracle_successes": sum(
+            1 for item in rows if int(item.get("oracle_success", 0) or 0) > 0
+        ),
+        "success_rate": sum(1 for item in rows if bool(item.get("success", False))) / count,
+        "oracle_success_rate": sum(
+            1 for item in rows if int(item.get("oracle_success", 0) or 0) > 0
+        )
+        / count,
+        "avg_steps": sum(float(item.get("steps", 0) or 0) for item in rows) / count,
+        "avg_distance_to_goal": (
+            sum(float(item.get("distance_to_goal", -1.0) or -1.0) for item in rows) / count
+        ),
+        "avg_spl": sum(float(item.get("spl", 0.0) or 0.0) for item in rows) / count,
+        "avg_soft_spl": sum(float(item.get("soft_spl", 0.0) or 0.0) for item in rows) / count,
+    }
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run a small-batch OVON evaluation with the SpaceVLN controller",
+    )
+    parser.add_argument(
+        "--runtime",
+        type=str,
+        choices=RUNTIME_CHOICES,
+        default="context_cache",
+        help="runtime profile for OVON: standard or context_cache",
     )
     parser.add_argument(
         "--exp-config",
@@ -230,7 +356,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--vlm-api-config",
         type=str,
-        default=str((_nav_ws_root() / "SpaceVLN" / "navigation_system" / "config" / "vlm" / "vlm_api_config.yaml").resolve()),
+        default=None,
     )
     parser.add_argument(
         "--data-path",
@@ -241,16 +367,43 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--episode-ids", type=str, default=None)
     parser.add_argument("--num-episodes", type=int, default=1)
     parser.add_argument("--gpu-id", type=int, default=0)
-    parser.add_argument("--max-steps", type=int, default=80)
+    parser.add_argument("--max-steps", type=int, default=500)
     parser.add_argument("--max-subtask-steps", type=int, default=4)
-    parser.add_argument("--results-dir", type=str, default=_default_results_dir())
+    parser.add_argument("--results-dir", type=str, default=None)
+    parser.set_defaults(save_step_images=True)
+    parser.add_argument(
+        "--save-step-images",
+        dest="save_step_images",
+        action="store_true",
+        help="save per-step visualization PNGs under detail/<bucket>/episode_xxx/visualization",
+    )
+    parser.add_argument(
+        "--no-save-step-images",
+        dest="save_step_images",
+        action="store_false",
+        help="disable per-step visualization PNG saving",
+    )
     parser.add_argument("--save-gif", action="store_true")
+    parser.add_argument(
+        "--no-report",
+        action="store_true",
+        help="skip CE-style aggregate report generation",
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
+    args.vlm_api_config = resolve_api_config_path(
+        str(args.vlm_api_config or _default_api_config(args.runtime))
+    )
+    args.results_dir = str(
+        args.results_dir
+        or _default_results_dir_for_runtime(args.runtime, args.vlm_api_config)
+        or _default_results_dir()
+    )
+    model_stack_builder = _select_model_stack_builder(args.runtime)
 
     ovon_config = _prepare_ovon_config(
         exp_config=args.exp_config,
@@ -277,15 +430,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     all_results = []
 
     for episode_id in episode_ids:
-        episode_results_dir = str((Path(args.results_dir) / f"episode_{episode_id}").resolve())
         print(f"\n[OVON-ObjectNav] Running episode {episode_id}")
         result = _run_one_episode(
             ovon_config=ovon_config,
             api_config_path=args.vlm_api_config,
             episode_id=episode_id,
-            results_dir=episode_results_dir,
+            results_dir=args.results_dir,
             max_subtask_steps=args.max_subtask_steps,
+            save_step_images=bool(args.save_step_images),
             save_gif=bool(args.save_gif),
+            model_stack_builder=model_stack_builder,
         )
         saved_metrics = _resolve_saved_metrics(result)
         all_results.append(
@@ -351,9 +505,46 @@ def main(argv: Sequence[str] | None = None) -> int:
             }
         )
 
+    aggregate = _build_aggregate(all_results)
+    summary_payload = {
+        "meta": {
+            "runtime": str(args.runtime),
+            "split": str(args.split),
+            "data_path": str(Path(args.data_path).resolve()),
+            "exp_config": str(Path(args.exp_config).resolve()),
+            "vlm_api_config": str(args.vlm_api_config),
+            "results_dir": str(Path(args.results_dir).resolve()),
+            "success_distance_m": _resolve_success_distance_from_ovon_config(ovon_config),
+            "max_episode_steps": int(
+                getattr(ovon_config.habitat.environment, "max_episode_steps", 0) or 0
+            ),
+            "benchmark_note": (
+                "This run follows the local naokiyokoyama/ovon repo eval stack: "
+                f"STOP + distance_to_goal < success_distance, with success_distance={_resolve_success_distance_from_ovon_config(ovon_config):.2f} in the loaded config."
+            ),
+        },
+        "aggregate": aggregate,
+        "episodes": all_results,
+    }
+
     summary_path = Path(args.results_dir) / "summary.json"
     with summary_path.open("w", encoding="utf-8") as file:
+        json.dump(summary_payload, file, ensure_ascii=False, indent=2)
+
+    episodes_path = Path(args.results_dir) / "episodes.json"
+    with episodes_path.open("w", encoding="utf-8") as file:
         json.dump(all_results, file, ensure_ascii=False, indent=2)
+
+    if not bool(args.no_report):
+        try:
+            generate_results_report(
+                args.results_dir,
+                save=True,
+                verbose=True,
+                exp_config=args.exp_config,
+            )
+        except Exception as exc:
+            print(f"[WARN] Failed to generate CE-style aggregate report: {exc}")
 
     successes = sum(1 for item in all_results if item["success"])
     print(

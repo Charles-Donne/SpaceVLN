@@ -177,6 +177,12 @@ The default task configuration reads:
 
 These paths are defined in `habitat_extensions/config/spacevln_task.yaml`.
 
+Path policy recommendation:
+
+- keep dataset paths as workspace-relative defaults (do not hardcode absolute paths in repo configs);
+- keep workspace default mount point at `nav_ws/data`;
+- if data must live on another disk, keep config unchanged and create a symlink at `nav_ws/data`.
+
 ### Detection checkpoints
 
 Detection model paths are defined in:
@@ -275,6 +281,93 @@ Help menus:
 bash run_r2r/vlm_navigation.sh --help
 ```
 
+### CLI Output Policy
+
+Default runtime output is intentionally compact:
+
+- keep: episode start/end lines, failure/error diagnostics, final run summary;
+- suppress: verbose per-request cache hit/cost logs in command line.
+
+For context-cache runs, cache statistics are still persisted to result artifacts:
+
+- `result/.../reports/cache/cache_report.json`
+- `result/.../reports/cache/cache_report.txt`
+
+### Unified Path Policy
+
+To keep repository structure upload-friendly and team-consistent:
+
+- use default workspace paths for both read/write:
+  - data root: `nav_ws/data`
+  - result root: `nav_ws/result`
+- keep `--results-root` / `--results-dir` interfaces for compatibility only;
+- for daily runs, do not override paths in commands.
+
+If you need to place heavy data/results on another disk, keep defaults in config and create symlinks from default workspace paths to absolute target paths.
+
+### Symlink Storage Setup
+
+Use the helper script:
+
+```bash
+bash run_r2r/setup_storage_symlinks.sh --help
+```
+
+Common examples:
+
+```bash
+# move only result storage to another disk (recommended first step)
+bash run_r2r/setup_storage_symlinks.sh \
+  --result-target /abs/path/to/nav_ws_storage/result \
+  --backup-existing
+
+# move both data and result storage to another disk
+bash run_r2r/setup_storage_symlinks.sh \
+  --disk-root /abs/path/to/nav_ws_storage \
+  --both \
+  --backup-existing
+
+# preview operations only
+bash run_r2r/setup_storage_symlinks.sh \
+  --disk-root /abs/path/to/nav_ws_storage \
+  --both \
+  --backup-existing \
+  --dry-run
+```
+
+This keeps code/config paths unified while allowing storage placement on large disks.
+
+### Reporting Existing Episode Logs
+
+Use the reporting entrypoint to summarize already-generated episode logs without rerunning navigation:
+
+```bash
+bash run_r2r/vlm_report_range.sh --help
+```
+
+Common examples:
+
+```bash
+# report a fixed id range for one model directory
+bash run_r2r/vlm_report_range.sh 1500 1799 qwen3.5-plus__qwen3.5-flash_cache
+
+# report all available logged episodes in one model directory
+bash run_r2r/vlm_report_range.sh all all qwen3.5-plus__qwen3.5-flash_cache
+
+# report all available logged episodes under results root (all models)
+bash run_r2r/vlm_report_range.sh --start-id all --end-id all --results all
+
+# report multiple models in one command
+bash run_r2r/vlm_report_range.sh --results qwen3.5-plus__qwen3.5-flash_cache,gemini2.5pro__gemini2.5flash
+```
+
+Notes:
+
+- The script no longer enforces a hardcoded `1800` upper bound in shell logic; it resolves episode bounds from the selected test dataset in `--exp-config`.
+- `all` is supported for both `start-id` and `end-id`.
+- If both bounds are omitted, it reports over all currently existing logs.
+- `results` accepts an absolute path, an existing relative path, a model directory name under `result/vlnce/`, a comma-separated list, or `all`.
+
 ## Ablation Studies
 
 The ablation subsystem is isolated under `navigation_system/ablation/` and is designed to perform **subtractive ablations** without modifying the original main-system prompt templates in place.
@@ -306,8 +399,14 @@ Further details are documented in:
 The runtime resolves result directories in the following order:
 
 1. `SPACEVLN_RESULTS_ROOT`
-2. `PATHS.RESULTS_ROOT` in `navigation_system/config/system/00_runtime.yaml`
-3. the default workspace-relative fallback under `result/vlnce/`
+2. `PATHS.RESULTS_ROOT` in `navigation_system/config/system/00_runtime.yaml` (empty by default)
+3. fallback to workspace default `nav_ws/result/vlnce/`
+
+Recommended practice:
+
+- keep `PATHS.RESULTS_ROOT` empty in repo config;
+- keep run commands on default paths;
+- move storage via symlinks rather than command-level path overrides.
 
 Standard runs are stored as:
 

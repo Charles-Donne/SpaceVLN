@@ -1,6 +1,6 @@
 """OVON-specific thresholds and prompt/detection defaults."""
 
-OVON_SUCCESS_DISTANCE_M = 0.25
+OVON_SUCCESS_DISTANCE_M = 1.0
 OVON_ARRIVAL_NEAR_M = 0.35
 
 OVON_AUTOCOMPLETE_OPENING_M = 0.25

@@ -1,4 +1,5 @@
 import math
+import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -52,13 +53,24 @@ def _clean_area_label(area_label: str) -> str:
     clean_area = str(area_label or "Unknown").strip() or "Unknown"
     if " [links:" in clean_area:
         clean_area = clean_area.split(" [links:", 1)[0].strip()
+    clean_area = _strip_visual_brackets(clean_area)
     return clean_area or "Unknown"
 
 
 def _clean_waypoint_description(description: str) -> str:
-    return str(
+    cleaned = str(
         strip_space_type_variant_suffixes(description) or description or ""
     ).strip()
+    return _strip_visual_brackets(cleaned)
+
+
+def _strip_visual_brackets(text: str) -> str:
+    cleaned = str(text or "").strip()
+    if not cleaned:
+        return cleaned
+    cleaned = re.sub(r"[\[\【]\s*([^\[\]【】]+?)\s*[\]\】]", r"\1", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
 
 
 def _split_waypoint_description(description: str) -> Tuple[str, str]:
@@ -329,7 +341,80 @@ def _is_waypoint_overlapping_current_display(
         full_map=full_map,
         crop_offset=crop_offset,
     )
-    return clear_path is True
+    return clear_path is not False
+
+
+def _resolve_last_distinct_waypoint_index(
+    waypoint_positions: Sequence[Tuple[int, int]],
+    current_pose: Optional[Sequence[float]],
+    resolution_cm: float,
+    full_map: Optional[np.ndarray],
+    crop_offset: Optional[Tuple[int, int]],
+    obstacle_mask: Optional[np.ndarray] = None,
+    projector: Optional[RotatedMapProjector] = None,
+    current_distance_field: Optional[np.ndarray] = None,
+) -> Optional[int]:
+    if current_pose is None or not waypoint_positions:
+        return None
+
+    for waypoint_index in range(len(waypoint_positions) - 1, -1, -1):
+        if not _is_waypoint_overlapping_current_display(
+            waypoint_index=waypoint_index,
+            waypoint_positions=waypoint_positions,
+            current_pose=current_pose,
+            resolution_cm=resolution_cm,
+            full_map=full_map,
+            crop_offset=crop_offset,
+            obstacle_mask=obstacle_mask,
+            projector=projector,
+            current_distance_field=current_distance_field,
+        ):
+            return int(waypoint_index)
+    return None
+
+
+def resolve_last_distinct_waypoint_index(
+    waypoint_positions: Sequence[Tuple[int, int]],
+    current_pose: Optional[Sequence[float]],
+    resolution_cm: float,
+    full_map: Optional[np.ndarray],
+    crop_offset: Optional[Tuple[int, int]],
+) -> Optional[int]:
+    obstacle_mask = (
+        np.asarray(full_map[0] > 0.5, dtype=bool)
+        if full_map is not None and current_pose is not None and crop_offset is not None
+        else None
+    )
+    projector = (
+        _build_projector(full_map, current_pose, crop_offset)
+        if obstacle_mask is not None
+        else None
+    )
+    current_distance_field = None
+    if obstacle_mask is not None and projector is not None and current_pose is not None:
+        current_distance_field = build_bounded_geodesic_distance_field(
+            obstacle_mask=obstacle_mask,
+            projector=projector,
+            source_world=(
+                float(current_pose[1]) * 100.0 / float(resolution_cm),
+                float(current_pose[0]) * 100.0 / float(resolution_cm),
+            ),
+            max_distance_m=max(
+                float(SPACE_AREA_CURRENT_WAYPOINT_MAX_DISTANCE_M),
+                float(SPACE_AREA_CURRENT_INITIAL_WAYPOINT_MAX_DISTANCE_M),
+            ),
+            resolution_cm=resolution_cm,
+        )
+    return _resolve_last_distinct_waypoint_index(
+        waypoint_positions=waypoint_positions,
+        current_pose=current_pose,
+        resolution_cm=resolution_cm,
+        full_map=full_map,
+        crop_offset=crop_offset,
+        obstacle_mask=obstacle_mask,
+        projector=projector,
+        current_distance_field=current_distance_field,
+    )
 
 
 def _find_current_area_waypoint_anchor_index(
@@ -811,15 +896,30 @@ def build_waypoint_summary(
         initial_waypoint_index=current_floor_initial_index,
         skip_current_overlap=True,
     )
+    current_floor_last_distinct_local_index = _resolve_last_distinct_waypoint_index(
+        waypoint_positions=current_floor_positions,
+        current_pose=current_pose,
+        resolution_cm=resolution_cm,
+        full_map=full_map,
+        crop_offset=crop_offset,
+        obstacle_mask=obstacle_mask,
+        projector=projector,
+        current_distance_field=current_distance_field,
+    )
     last_visible_global_index = (
-        current_floor_global_indices[current_floor_visible_local_indices[-1]]
-        if current_floor_visible_local_indices
+        current_floor_global_indices[current_floor_last_distinct_local_index]
+        if current_floor_last_distinct_local_index is not None
         else None
     )
     current_floor_display_global_indices = [
         current_floor_global_indices[index]
         for index in current_floor_visible_local_indices
     ]
+    if (
+        last_visible_global_index is not None
+        and last_visible_global_index not in current_floor_display_global_indices
+    ):
+        current_floor_display_global_indices.append(last_visible_global_index)
     if current_pose is not None:
         current_floor_display_global_indices.sort(
             key=lambda index: (

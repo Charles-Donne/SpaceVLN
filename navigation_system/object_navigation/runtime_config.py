@@ -76,7 +76,7 @@ def _node(data: Dict[str, Any]) -> ConfigNode:
 def build_objectnav_runtime_config(
     *,
     results_dir: str,
-    max_episode_steps: int = 80,
+    max_episode_steps: int = 500,
     frame_width: int = 640,
     frame_height: int = 480,
     hfov_deg: float = 79.0,
@@ -175,7 +175,7 @@ def build_objectnav_runtime_config(
                 "REPLAY": {
                     "SAVE_STEP_IMAGES": bool(save_step_images),
                     "SAVE_GIF": bool(save_gif),
-                    "CLEANUP_STEP_IMAGES_AFTER_GIF": False,
+                    "CLEANUP_STEP_IMAGES_AFTER_GIF": bool(save_gif and not save_step_images),
                 },
                 "LOGS": {
                     "SAVE_EPISODE_STDOUT": False,

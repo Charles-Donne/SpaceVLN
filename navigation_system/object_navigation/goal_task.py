@@ -139,12 +139,7 @@ def build_raw_object_goal_instruction(
     child_categories: Sequence[str] | None = None,
 ) -> str:
     category = _normalize_text(object_category)
-    children = _dedupe_keep_order(child_categories or [])
-
-    lines = [f"Object goal: {category}"]
-    if children:
-        lines.append(f"Goal aliases: {', '.join(children)}")
-    return "\n".join(lines).strip()
+    return f"Navigate to the target object: {category}"
 
 
 def parse_object_goal_instruction(instruction: str) -> tuple[str, tuple[str, ...]]:
@@ -153,7 +148,15 @@ def parse_object_goal_instruction(instruction: str) -> tuple[str, tuple[str, ...
     for raw_line in str(instruction or "").splitlines():
         line = raw_line.strip()
         lower = line.lower()
-        if lower.startswith("object goal:"):
+        if lower.startswith("global task:"):
+            line = line.split(":", 1)[1].strip()
+            lower = line.lower()
+
+        if lower.startswith("navigate to the target object:"):
+            goal = _normalize_text(line.split(":", 1)[1])
+        elif lower.startswith("object goal:"):
+            goal = _normalize_text(line.split(":", 1)[1])
+        elif lower.startswith("target object:"):
             goal = _normalize_text(line.split(":", 1)[1])
         elif lower.startswith("goal aliases:"):
             alias_text = line.split(":", 1)[1]

@@ -335,6 +335,9 @@ def build_landmark_strip_lines(
             or entry.get("area_label")
             or f"WP#{int(entry.get('id', 0) or 0)}"
         ).strip() or "Unknown"
+        waypoint_label = waypoint_label.replace("【", "[").replace("】", "]")
+        waypoint_label = re.sub(r"\[\s*([^\[\]]+?)\s*\]", r"\1", waypoint_label)
+        waypoint_label = re.sub(r"\s+", " ", waypoint_label).strip() or "Unknown"
         distance_m = float(entry.get("distance_m", 1e9))
         angle_deg = float(entry.get("relative_bearing_deg", entry.get("angle_deg", 0.0)))
         note_parts: List[str] = []

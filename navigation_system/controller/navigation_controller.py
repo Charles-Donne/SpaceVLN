@@ -443,8 +443,14 @@ class VLMNavigationController(BaseNavigationController):
                 else "30deg"
             )
             if variant == "avoid_obstacle":
-                return f"prev TURN_{side.upper()}_AVOID {degree_text}"
-            return f"prev TURN_{side.upper()}_ALIGN {degree_text}"
+                return (
+                    f"last step TURN_{side.upper()}_AVOID {degree_text} "
+                    "to avoid obstacle"
+                )
+            return (
+                f"last step TURN_{side.upper()}_ALIGN {degree_text} "
+                "to align destination landmark"
+            )
 
         if action_name_upper == "STOP":
             return "prev STOP at destination"
@@ -798,7 +804,6 @@ class VLMNavigationController(BaseNavigationController):
         *,
         action_name: str,
         reasoning: str,
-        action_analysis: str,
     ) -> Dict[str, Any]:
         action_name_upper = str(action_name or "").upper()
         if action_name_upper in ("TURN_LEFT", "TURN_RIGHT"):
@@ -809,13 +814,26 @@ class VLMNavigationController(BaseNavigationController):
             action_text = "STOP"
         payload = {
             "reasoning": reasoning,
-            "action_analysis": action_analysis,
             "action": action_text,
             "controller_forced_recovery": True,
         }
-        if action_name_upper in ("TURN_LEFT", "TURN_RIGHT"):
-            payload["_action_variant"] = "avoid_obstacle"
         return payload
+
+    @staticmethod
+    def _build_action_response_artifact_payload(
+        response: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        payload = dict(response or {})
+        allowed_keys = (
+            "reasoning",
+            "action",
+            "controller_forced_recovery",
+        )
+        return {
+            key: payload[key]
+            for key in allowed_keys
+            if key in payload
+        }
 
     def _build_forced_blocked_front_recovery_action(
         self,
@@ -839,9 +857,6 @@ class VLMNavigationController(BaseNavigationController):
                     f"The destination landmark {auto_completed_subtask['name']} is already within "
                     f"{distance_m:.2f}m, which satisfies the auto-stop threshold {threshold_m:.2f}m, "
                     "so stop instead of forcing another obstacle-recovery move."
-                ),
-                action_analysis=(
-                    f"Destination landmark {auto_completed_subtask['name']} is already reached, so stop now"
                 ),
             )
             return {
@@ -886,9 +901,6 @@ class VLMNavigationController(BaseNavigationController):
                 )
                 + ". Use one side turn now, then let the next action call continue forward only if the new FRONT route is passable and still task-aligned."
             ),
-            action_analysis=(
-                f"FRONT retry stayed blocked, so force {turn_action_name} toward the safer destination-side recovery path"
-            ),
         )
         return {
             "action_id": resolve_habitat_action("TURN_LEFT")
@@ -931,9 +943,6 @@ class VLMNavigationController(BaseNavigationController):
                     f"{distance_m:.2f}m, which satisfies the auto-stop threshold {threshold_m:.2f}m, "
                     "so stop instead of forcing another movement."
                 ),
-                action_analysis=(
-                    f"Destination landmark {auto_completed_subtask['name']} is already reached, so stop now"
-                ),
             )
             return {
                 "action_id": resolve_habitat_action("STOP"),
@@ -959,10 +968,6 @@ class VLMNavigationController(BaseNavigationController):
                     f"blocked ({front_distance_text}). Do not keep spinning in place; end this action stage and "
                     "return to thinking for a new route."
                 ),
-                action_analysis=(
-                    "Three consecutive turn actions already happened and FRONT is still blocked, "
-                    "so stop the current action stage and replan"
-                ),
             )
             return {
                 "action_id": resolve_habitat_action("STOP"),
@@ -982,9 +987,6 @@ class VLMNavigationController(BaseNavigationController):
                 "Three consecutive turn actions have already happened. "
                 f"The current FRONT route is still passable ({front_distance_text}), so force one short forward step "
                 "instead of allowing another in-place turn."
-            ),
-            action_analysis=(
-                "Three consecutive turn actions already happened, so force one short forward step before any more turning"
             ),
         )
         return {
@@ -1925,18 +1927,13 @@ class VLMNavigationController(BaseNavigationController):
         # print(f"[Reset] Episode {self.current_episode_id} 重置完成")
         
         # 初始化NavigationVisualizer（用于RGB+俯视图拼接和GIF生成）
-        self.nav_visualizer = None
-        if (
-            self.runtime_options.save_navigation_step_images
-            or self.runtime_options.save_navigation_gif
-        ):
-            visualization_dir = os.path.join(self.episode_dir, 'visualization')
-            self.nav_visualizer = NavigationVisualizer(
-                visualization_dir,
-                save_step_images=self.runtime_options.save_navigation_step_images,
-                keep_frames_for_gif=self.runtime_options.save_navigation_gif,
-            )
-            self.nav_visualizer.setup_maps_dir(self.episode_dir)
+        visualization_dir = os.path.join(self.episode_dir, 'visualization')
+        self.nav_visualizer = NavigationVisualizer(
+            visualization_dir,
+            save_step_images=self.runtime_options.save_navigation_step_images,
+            keep_frames_for_gif=self.runtime_options.save_navigation_gif,
+        )
+        self.nav_visualizer.setup_maps_dir(self.episode_dir)
         
     @property
     def episode_dir(self) -> str:
@@ -2286,7 +2283,9 @@ class VLMNavigationController(BaseNavigationController):
         if waypoint_text is None:
             return None
 
-        cleaned = strip_space_type_variant_suffixes(str(waypoint_text)).strip()
+        cleaned = self._strip_visual_brackets_from_text(
+            strip_space_type_variant_suffixes(str(waypoint_text)).strip()
+        )
         if not cleaned:
             return cleaned
 
@@ -2319,11 +2318,13 @@ class VLMNavigationController(BaseNavigationController):
 
     @staticmethod
     def _sanitize_next_waypoint_text(next_waypoint_text: Optional[str]) -> Optional[str]:
-        """Keep next_waypoint in single `[space]'s [landmark]` form."""
+        """Keep next_waypoint in single `space's landmark` form."""
         if next_waypoint_text is None:
             return None
 
-        cleaned = strip_space_type_variant_suffixes(str(next_waypoint_text)).strip()
+        cleaned = VLMNavigationController._strip_visual_brackets_from_text(
+            strip_space_type_variant_suffixes(str(next_waypoint_text)).strip()
+        )
         if not cleaned:
             return cleaned
 
@@ -2375,6 +2376,16 @@ class VLMNavigationController(BaseNavigationController):
 
         return f"{space_part}'s {chosen_local_part}".strip()
 
+    @staticmethod
+    def _strip_visual_brackets_from_text(text: Optional[str]) -> str:
+        cleaned = str(text or "").strip()
+        if not cleaned:
+            return cleaned
+        cleaned = cleaned.replace("【", "[").replace("】", "]")
+        cleaned = re.sub(r"\[\s*([^\[\]]+?)\s*\]", r"\1", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        return cleaned
+
     def _sanitize_planner_response(self, response: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """Normalize planner outputs while keeping the full view-prefixed instruction."""
         if not response:
@@ -2390,7 +2401,9 @@ class VLMNavigationController(BaseNavigationController):
             "subtask_landmark",
         ):
             if isinstance(response.get(key), str):
-                response[key] = strip_space_type_variant_suffixes(response.get(key))
+                response[key] = self._strip_visual_brackets_from_text(
+                    strip_space_type_variant_suffixes(response.get(key))
+                )
         response["current_waypoint"] = self._sanitize_current_waypoint_text(
             response.get("current_waypoint")
         )
@@ -3430,13 +3443,21 @@ class VLMNavigationController(BaseNavigationController):
         
         # 保存response（API返回后，到同一个save_dir）
         with open(os.path.join(action_context["action_save_dir"], "response.json"), 'w', encoding='utf-8') as f:
-            json.dump(response, f, ensure_ascii=False, indent=2)
+            json.dump(
+                self._build_action_response_artifact_payload(response),
+                f,
+                ensure_ascii=False,
+                indent=2,
+            )
         
         # 保存planned action参数，供后续计算actual progress使用
         self.last_planned_degrees = degrees
         self.last_planned_meters = meters
         self.last_action_name = action_name
-        self.last_action_semantic_variant = str((response or {}).get("_action_variant") or "")
+        self.last_action_semantic_variant = str(
+            self.action_executor._extract_action_variant((response or {}).get("action"))
+            or ""
+        )
         self._update_action_consecutive_turn_state(action_name)
 
         if self.action_stagnation_retry_pending and str(action_name or "").upper() in ("TURN_LEFT", "TURN_RIGHT"):
@@ -3831,10 +3852,7 @@ class VLMNavigationController(BaseNavigationController):
 
         gif_path = None
         topdown_path = None
-        if self.nav_visualizer and (
-            self.runtime_options.save_navigation_step_images
-            or self.runtime_options.save_navigation_gif
-        ):
+        if self.nav_visualizer:
             topdown_path = self.nav_visualizer.save_final_top_down_map()
         if self.nav_visualizer and self.runtime_options.save_navigation_gif:
             gif_path = self.nav_visualizer.save_gif(fps=2)

@@ -39,13 +39,13 @@ def build_arg_parser(
         "--results-root",
         type=str,
         default=None,
-        help="结果总根目录；运行时自动追加 vlnce/模型名 或 vlnce/ablation/消融项/模型名",
+        help="结果总根目录（兼容保留；默认建议使用统一路径 nav_ws/result）",
     )
     parser.add_argument(
         "--results-dir",
         type=str,
         default=None,
-        help="最终结果目录（高级覆盖项；指定后不会再自动追加 vlnce/模型名）",
+        help="最终结果目录（兼容保留；默认建议使用统一路径 nav_ws/result）",
     )
 
     parser.add_argument(
@@ -92,22 +92,61 @@ def maybe_generate_report(args: argparse.Namespace, config, verbose: bool = True
         return
 
     try:
-        generate_results_report(
+        report_payload = generate_results_report(
             results_dir,
             save=True,
             debug=False,
-            verbose=verbose,
+            verbose=False,
         )
     except FileNotFoundError:
         return
     except Exception as exc:
         print(f"⚠️  无法生成评估报告: {exc}")
 
+    if not verbose:
+        return
+
+    metrics = dict(report_payload.get("metrics") or {})
+    saved_paths = dict(report_payload.get("saved_paths") or {})
+    total_episodes = int(metrics.get("total_episodes", 0) or 0)
+    if total_episodes <= 0:
+        return
+
+    timing = dict(metrics.get("timing") or {})
+    print(
+        "\n📊 评测汇总 "
+        f"| episodes={total_episodes} "
+        f"| NE={float(metrics.get('avg_ne', -1.0)):.3f}m "
+        f"| OSR={float(metrics.get('avg_osr', 0.0)):.3f} "
+        f"| SR={float(metrics.get('avg_sr', 0.0)):.3f} "
+        f"| SPL={float(metrics.get('avg_spl', 0.0)):.3f} "
+        f"| nDTW={float(metrics.get('avg_ndtw', 0.0)):.3f}"
+    )
+    if timing:
+        print(
+            "⏱️  时延汇总 "
+            f"| episode_avg={float(timing.get('episode_duration_s_avg', 0.0)):.2f}s "
+            f"| api_total={float(timing.get('api_total_duration_s', 0.0)):.2f}s"
+        )
+    if saved_paths:
+        summary_path = str(saved_paths.get("summary") or "").strip()
+        csv_path = str(saved_paths.get("csv") or "").strip()
+        if summary_path:
+            print(f"📄 汇总文件: {summary_path}")
+        if csv_path:
+            print(f"📄 Episode表: {csv_path}")
+
 
 def run_navigation_from_args(
     args: argparse.Namespace,
     profile: NavigationRuntimeProfile = STANDARD_RUNTIME_PROFILE,
 ) -> int:
+    if str(getattr(args, "results_root", "") or "").strip() or str(getattr(args, "results_dir", "") or "").strip():
+        print(
+            "⚠️  检测到 results 路径覆盖参数（--results-root/--results-dir）。"
+            " 当前推荐统一默认路径（nav_ws/result），仅在兼容场景下使用覆盖参数。"
+        )
+
     config = load_runtime_config(args, profile=profile)
     results_dir = str(getattr(config.PATHS, "RESULTS_DIR", "") or "").strip()
     if results_dir:
@@ -124,7 +163,7 @@ def run_navigation_from_args(
     if not episode_ids:
         if args.skip_sr1:
             print("\n✅ 没有需要运行的 episodes：目标范围内都已有 SR=1 最佳结果")
-            maybe_generate_report(args, config, verbose=False)
+            maybe_generate_report(args, config, verbose=True)
             if profile.post_run_hook is not None:
                 profile.post_run_hook(args, config)
             return 0
@@ -168,7 +207,7 @@ def run_navigation_from_args(
             print("   " + " | ".join(parts), flush=True)
 
     del results_summary
-    maybe_generate_report(args, config, verbose=False)
+    maybe_generate_report(args, config, verbose=True)
     if profile.post_run_hook is not None:
         profile.post_run_hook(args, config)
     return 1 if failed_results else 0

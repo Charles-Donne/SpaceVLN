@@ -177,11 +177,17 @@ def _load_payloads_with_mtime(
 
 
 def _default_load_workers() -> int:
-    raw_value = os.environ.get("SPACEVLN_REPORT_WORKERS", "1")
-    try:
-        return max(1, int(raw_value))
-    except (TypeError, ValueError):
-        return 1
+    raw_value = str(os.environ.get("SPACEVLN_REPORT_WORKERS", "") or "").strip()
+    if raw_value:
+        try:
+            return max(1, int(raw_value))
+        except (TypeError, ValueError):
+            return 1
+
+    # I/O-heavy JSON aggregation: use an aggressive but bounded default.
+    cpu_count = int(os.cpu_count() or 4)
+    recommended = max(8, cpu_count * 4)
+    return min(64, recommended)
 
 
 def load_results(results_dir: str, *, load_workers: int = 1) -> List[Dict[str, Any]]:
@@ -432,6 +438,21 @@ def save_summary(metrics: Dict[str, Any], output_path: str) -> str:
     return content
 
 
+def save_metrics_json(metrics: Dict[str, Any], output_path: str) -> str:
+    payload = {
+        "total_episodes": int(metrics.get("total_episodes", 0) or 0),
+        "avg_ne": _as_float(metrics.get("avg_ne", -1.0), -1.0),
+        "avg_osr": _as_float(metrics.get("avg_osr", 0.0), 0.0),
+        "avg_sr": _as_float(metrics.get("avg_sr", 0.0), 0.0),
+        "avg_spl": _as_float(metrics.get("avg_spl", 0.0), 0.0),
+        "avg_ndtw": _as_float(metrics.get("avg_ndtw", 0.0), 0.0),
+        "timing": dict(metrics.get("timing") or {}),
+    }
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    return output_path
+
+
 def _format_metric_value(value: Any, digits: int = 3) -> str:
     if isinstance(value, float):
         if math.isinf(value) or math.isnan(value):
@@ -574,6 +595,7 @@ def generate_results_report(
     results_dir: str,
     *,
     save: bool = True,
+    summary_only: bool = False,
     debug: bool = False,
     verbose: bool = True,
     start_episode_id: Optional[int] = None,
@@ -612,7 +634,7 @@ def generate_results_report(
                 f"未找到指定范围内的episode结果: [{start_episode_id}, {end_episode_id}]"
             )
         raise FileNotFoundError(f"未找到任何episode结果: {os.path.join(results_dir, 'log')}")
-    if start_episode_id is not None or end_episode_id is not None:
+    if (start_episode_id is not None or end_episode_id is not None) and not use_direct_range_load:
         filtered_results = filter_results_by_episode_range(
             results,
             start_episode_id=start_episode_id,
@@ -652,11 +674,17 @@ def generate_results_report(
         summary_path = os.path.join(report_output_dir, "summary.txt")
         save_summary(metrics, summary_path)
         saved_paths["summary"] = summary_path
-        saved_paths.update(save_episode_tables(results, metrics, report_output_dir))
+        metrics_json_path = os.path.join(report_output_dir, "metrics.json")
+        save_metrics_json(metrics, metrics_json_path)
+        saved_paths["metrics_json"] = metrics_json_path
+        if not summary_only:
+            saved_paths.update(save_episode_tables(results, metrics, report_output_dir))
         if verbose:
             print(f"📋 汇总报告已保存: {summary_path}")
-            print(f"📋 Episode表格已保存: {saved_paths['csv']}")
-            print(f"📋 Markdown表格已保存: {saved_paths['md']}")
+            print(f"📋 指标JSON已保存: {metrics_json_path}")
+            if not summary_only:
+                print(f"📋 Episode表格已保存: {saved_paths['csv']}")
+                print(f"📋 Markdown表格已保存: {saved_paths['md']}")
 
     return {
         "results": results,
@@ -675,6 +703,11 @@ def build_results_arg_parser() -> argparse.ArgumentParser:
         help="实验配置文件路径，用于读取 success distance 等评测参数",
     )
     parser.add_argument("--save", action="store_true", help="保存 summary 和结果表格")
+    parser.add_argument(
+        "--summary-only",
+        action="store_true",
+        help="快速模式：只保存 summary + metrics.json，不生成 episode CSV/Markdown",
+    )
     parser.add_argument("--debug", action="store_true", help="打印逐 episode 调试信息")
     parser.add_argument("--start-id", type=int, default=None, help="只统计起始 episode ID")
     parser.add_argument("--end-id", type=int, default=None, help="只统计结束 episode ID")
@@ -683,7 +716,7 @@ def build_results_arg_parser() -> argparse.ArgumentParser:
         "--load-workers",
         type=int,
         default=_default_load_workers(),
-        help="并行读取 episode JSON 的线程数（默认读取 SPACEVLN_REPORT_WORKERS，未设置时为 1）",
+        help="并行读取 episode JSON 的线程数（默认读取 SPACEVLN_REPORT_WORKERS，未设置时自动取高并发）",
     )
     return parser
 
@@ -696,6 +729,7 @@ def run_results_report_from_args(args: argparse.Namespace) -> int:
         generate_results_report(
             args.path,
             save=bool(args.save),
+            summary_only=bool(args.summary_only),
             debug=bool(args.debug),
             verbose=True,
             start_episode_id=args.start_id,

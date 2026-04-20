@@ -342,6 +342,42 @@ def write_cache_report_json(report: CacheRunReport, output_path: str) -> str:
     return str(output)
 
 
+def save_cache_report_artifacts(
+    results_dir: str,
+    *,
+    output_dir: Optional[str] = None,
+) -> Optional[Dict[str, str]]:
+    """Build and persist cache report artifacts without printing to stdout.
+
+    Returns:
+        Dict with saved artifact paths when cache records exist, otherwise None.
+    """
+    resolved_results_dir = str(results_dir or "").strip()
+    if not resolved_results_dir:
+        return None
+
+    report = build_cache_report(resolved_results_dir)
+    if report.overall.request_count <= 0:
+        return None
+
+    target_dir = (
+        Path(output_dir).expanduser().resolve()
+        if str(output_dir or "").strip()
+        else Path(report.results_dir).joinpath("reports", "cache").resolve()
+    )
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    json_path = write_cache_report_json(report, str(target_dir / "cache_report.json"))
+    text_path = str((target_dir / "cache_report.txt").resolve())
+    with open(text_path, "w", encoding="utf-8") as f:
+        f.write(render_cache_report(report) + "\n")
+
+    return {
+        "json": json_path,
+        "text": text_path,
+    }
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Summarize VLM request info and cache metrics")
     parser.add_argument("--results-dir", required=True, help="Run results directory to scan")
@@ -370,6 +406,7 @@ __all__ = [
     "build_cache_report",
     "print_cache_report_summary",
     "render_cache_report",
+    "save_cache_report_artifacts",
     "write_cache_report_json",
 ]
 

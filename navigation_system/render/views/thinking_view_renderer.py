@@ -7,6 +7,7 @@ controller stays focused on orchestration instead of per-image rendering.
 
 import os
 import math
+import re
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -45,6 +46,7 @@ from navigation_system.space.landmarks.landmark_selection import (
 from navigation_system.space.description.direction_format import snap_relative_bearing
 from navigation_system.space.description.spatial_formatter import (
     resolve_display_current_area,
+    resolve_last_distinct_waypoint_index,
     select_display_waypoint_indices,
 )
 from navigation_system.vlm.contracts.schema import DIRECTION_CONFIG
@@ -78,8 +80,8 @@ class ThinkingViewRenderer:
     def _is_known_area_label(area_label: str) -> bool:
         return str(area_label or "").strip().lower() not in {"", "unknown"}
 
-    @staticmethod
-    def _split_area_label_links(area_label: str) -> Tuple[str, List[str]]:
+    @classmethod
+    def _split_area_label_links(cls, area_label: str) -> Tuple[str, List[str]]:
         text = str(area_label or "").strip()
         if not text:
             return "", []
@@ -88,14 +90,28 @@ class ThinkingViewRenderer:
         marker = " [links:"
         marker_idx = lower_text.find(marker)
         if marker_idx < 0:
-            return text, []
+            return cls._strip_visual_brackets(text), []
 
-        clean_text = text[:marker_idx].strip() or text
+        clean_text = cls._strip_visual_brackets(text[:marker_idx].strip() or text)
         link_text = text[marker_idx + len(marker):].strip()
         if link_text.endswith("]"):
             link_text = link_text[:-1].strip()
-        links = [item.strip() for item in link_text.split(",") if item.strip()]
+        links = [
+            cls._strip_visual_brackets(item.strip())
+            for item in link_text.split(",")
+            if item.strip()
+        ]
         return clean_text, links
+
+    @staticmethod
+    def _strip_visual_brackets(text: str) -> str:
+        cleaned = str(text or "").strip()
+        if not cleaned:
+            return cleaned
+        cleaned = cleaned.replace("【", "[").replace("】", "]")
+        cleaned = re.sub(r"\[\s*([^\[\]]+?)\s*\]", r"\1", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        return cleaned
 
     @staticmethod
     def _build_text_strip(
@@ -179,7 +195,7 @@ class ThinkingViewRenderer:
 
     @staticmethod
     def _short_text(text: str, max_len: int = 40) -> str:
-        text = str(text or "").strip()
+        text = ThinkingViewRenderer._strip_visual_brackets(str(text or "").strip())
         if len(text) <= max_len:
             return text
         return text[: max(0, max_len - 2)].rstrip() + ".."
@@ -202,7 +218,9 @@ class ThinkingViewRenderer:
             return []
 
         if not waypoint_info:
-            current_area_text = str(current_space_area_label or "Unknown").strip() or "Unknown"
+            current_area_text = cls._strip_visual_brackets(
+                str(current_space_area_label or "Unknown").strip() or "Unknown"
+            )
             clean_current_area_text, connected_area_labels = cls._split_area_label_links(current_area_text)
             if not cls._is_known_area_label(clean_current_area_text):
                 return []
@@ -296,7 +314,20 @@ class ThinkingViewRenderer:
             initial_waypoint_index=current_floor_initial_index,
             skip_current_overlap=True,
         )
-        last_visited_local_index = len(current_floor_ids) - 1 if current_floor_ids else None
+        last_visited_local_index = resolve_last_distinct_waypoint_index(
+            waypoint_positions=current_floor_positions,
+            current_pose=current_pose,
+            resolution_cm=resolution_cm,
+            full_map=full_map,
+            crop_offset=crop_offset,
+        )
+        if (
+            last_visited_local_index is not None
+            and 0 <= int(last_visited_local_index) < len(current_floor_ids)
+            and int(last_visited_local_index) not in display_indices
+        ):
+            display_indices.append(int(last_visited_local_index))
+            display_indices = sorted(set(display_indices))
         entries: List[Dict[str, Any]] = []
 
         for local_index in display_indices:
@@ -316,8 +347,10 @@ class ThinkingViewRenderer:
 
             area_label = str(current_floor_area_labels[local_index] if local_index < len(current_floor_area_labels) else "").strip()
             clean_area_label, connected_area_labels = cls._split_area_label_links(area_label)
-            description = str(wp_desc or "").strip()
-            display_text = description or clean_area_label or f"WP#{wp_id}"
+            description = cls._strip_visual_brackets(str(wp_desc or "").strip())
+            display_text = cls._strip_visual_brackets(
+                description or clean_area_label or f"WP#{wp_id}"
+            )
 
             entries.append({
                 "id": int(wp_id),
@@ -340,7 +373,9 @@ class ThinkingViewRenderer:
                 ),
             })
 
-        current_area_text = str(resolved_current_area_text or current_space_area_label or "Unknown").strip() or "Unknown"
+        current_area_text = cls._strip_visual_brackets(
+            str(resolved_current_area_text or current_space_area_label or "Unknown").strip() or "Unknown"
+        )
         clean_current_area_text, connected_current_area_labels = cls._split_area_label_links(current_area_text)
         current_area_view_angle = 0.0
         current_area_relative_bearing = 0.0

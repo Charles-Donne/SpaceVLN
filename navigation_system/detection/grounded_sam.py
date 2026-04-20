@@ -1,4 +1,5 @@
 import attr
+import os
 import time
 from typing import Any, Union, List, Tuple
 from abc import ABCMeta, abstractmethod
@@ -53,20 +54,89 @@ class GroundedSAM(Segment):
         sam_checkpoint_path = detection_model_cfg.SAM_CHECKPOINT_PATH
         sam_encoder_version = detection_model_cfg.SAM_ENCODER_VERSION
         repvit_sam_checkpoint_path = detection_model_cfg.REPVIT_SAM_CHECKPOINT_PATH
-        
-        self.grounding_dino_model = Model(
-            model_config_path=grounding_dino_config_path,
-            model_checkpoint_path=grounding_dino_checkpoint_path,
-            device=device
+
+        self.box_threshold = float(detection_threshold_cfg.BOX)
+        self.text_threshold = float(detection_threshold_cfg.TEXT)
+        self._dino_disabled_reason = ""
+        self._dino_disabled_warned = False
+        self._dino_runtime_mode = "unknown"
+
+        dino_device = device
+        use_cpu_fallback = str(
+            os.getenv("SPACEVLN_GROUNDINGDINO_CPU_FALLBACK", "")
+        ).strip().lower() in {"1", "true", "yes", "on"}
+
+        try:
+            from groundingdino.models.GroundingDINO import ms_deform_attn
+
+            custom_ops_available = bool(
+                getattr(ms_deform_attn, "_CUSTOM_OPS_AVAILABLE", False)
             )
+        except Exception:
+            custom_ops_available = False
+
+        try:
+            self.grounding_dino_model = Model(
+                model_config_path=grounding_dino_config_path,
+                model_checkpoint_path=grounding_dino_checkpoint_path,
+                device=dino_device,
+            )
+            if custom_ops_available:
+                self._dino_runtime_mode = (
+                    "cuda_custom_ops" if str(dino_device) != "cpu" else "cpu_custom_ops"
+                )
+            else:
+                self._dino_runtime_mode = (
+                    "cuda_pytorch_fallback"
+                    if str(dino_device) != "cpu"
+                    else "cpu_pytorch_fallback"
+                )
+                print(
+                    "[WARN] GroundingDINO custom CUDA op is unavailable; "
+                    "using the PyTorch fallback path instead. "
+                    "Detection still runs, and if the model is on CUDA it still uses GPU, "
+                    "but it will be slower than the custom op."
+                )
+        except Exception as exc:
+            if use_cpu_fallback and str(dino_device) != "cpu":
+                dino_device = torch.device("cpu")
+                print(
+                    "[WARN] GroundingDINO init on CUDA failed; "
+                    "retrying on CPU because SPACEVLN_GROUNDINGDINO_CPU_FALLBACK=1. "
+                    f"Reason: {type(exc).__name__}: {exc}"
+                )
+                try:
+                    self.grounding_dino_model = Model(
+                        model_config_path=grounding_dino_config_path,
+                        model_checkpoint_path=grounding_dino_checkpoint_path,
+                        device=dino_device,
+                    )
+                    self._dino_runtime_mode = "cpu_retry_fallback"
+                except Exception as cpu_exc:
+                    self.grounding_dino_model = None
+                    self.sam_predictor = None
+                    self._dino_disabled_reason = (
+                        "GroundingDINO initialization failed on both CUDA and CPU. "
+                        f"CUDA error: {type(exc).__name__}: {exc}. "
+                        f"CPU error: {type(cpu_exc).__name__}: {cpu_exc}"
+                    )
+                    return
+            else:
+                self.grounding_dino_model = None
+                self.sam_predictor = None
+                self._dino_disabled_reason = (
+                    "GroundingDINO initialization failed and detection was disabled. "
+                    "Set SPACEVLN_GROUNDINGDINO_CPU_FALLBACK=1 to retry on CPU. "
+                    f"Reason: {type(exc).__name__}: {exc}"
+                )
+                return
+
         if detection_model_cfg.USE_REPVIT_SAM:
             sam = build_sam_repvit(checkpoint=repvit_sam_checkpoint_path)
             sam.to(device=device)
         else:
             sam = sam_model_registry[sam_encoder_version](checkpoint=sam_checkpoint_path).to(device=device)
         self.sam_predictor = SamPredictor(sam)
-        self.box_threshold = float(detection_threshold_cfg.BOX)
-        self.text_threshold = float(detection_threshold_cfg.TEXT)
         self.grounding_dino_model.model.eval()
         
     def _segment(self, sam_predictor: SamPredictor, image: np.ndarray, xyxy: np.ndarray) -> np.ndarray:
@@ -133,6 +203,13 @@ class GroundedSAM(Segment):
     
     @torch.no_grad()
     def segment(self, image: VisualObservation, **kwargs) -> Tuple[np.ndarray, List[str], np.ndarray]:
+        if getattr(self, "grounding_dino_model", None) is None:
+            reason = ""
+            if not bool(getattr(self, "_dino_disabled_warned", False)):
+                reason = str(getattr(self, "_dino_disabled_reason", "") or "")
+                self._dino_disabled_warned = True
+            return self._empty_segment_result(image, reason)
+
         classes = kwargs.get("classes", [])
         box_annotator = sv.BoxAnnotator()
         # 兼容旧版本 supervision（没有 MaskAnnotator）
@@ -150,7 +227,10 @@ class GroundedSAM(Segment):
                 text_threshold=self.text_threshold
             )
         except Exception as exc:
-            return self._empty_segment_result(image, type(exc).__name__)
+            return self._empty_segment_result(
+                image,
+                f"{type(exc).__name__}: {exc}",
+            )
         # t2 = time.time()
         detections = self._process_detections(detections)
 

@@ -1,14 +1,8 @@
-**Role**: You are the verification and replanning module for open-vocabulary object navigation, not route-following instruction navigation.{verify_replan_prompt_notice_block}
+**Role**: You are the ObjectNav verification/replanning module inside the SpaceVLN spatial-reasoning framework. Re-localize from current surrounding views, verify the previous search stage, and output the next nearest unfinished object-search stage. No manipulation.{verify_replan_prompt_notice_block}
 
-**Raw OVON Task**:
-{instruction}
+**Global Task**: {instruction}
 
-**Target object**: {object_goal}
-**Goal aliases**: {goal_aliases}
-**Semantic prior hints**:
-{likely_spaces_hint_block}
-
-**Previous Subtask**
+**Previous Subtask**:
 - Destination: {subtask_destination}
 - Instruction: {subtask_instruction}
 {previous_subtask_landmark_block}
@@ -16,27 +10,30 @@
 **Space Structure**: {waypoint_summary}
 **Action space**: {action_space}
 
-Use the raw object goal exactly as given. Do **not** rewrite it into fabricated route stages. Re-evaluate the current space, determine whether the search advanced, and either continue the current search stage or move to the next inferred search stage.
-
-# What to reason about
-1. Infer the **current space / local anchor** from the current views and structure.
-2. Judge whether the previous subtask destination has been reached, passed, or is still ahead.
-3. Decide whether the target object is directly visible / close enough, or whether search should continue through another connector / space.
-4. Maintain an object-search chain rather than an instruction-following chain.
-5. `global_task_finish=true` only when the target object itself is the reached destination now.
-6. If the target object is clearly visible in the current space, switch the active destination to that object itself instead of lingering on a room-level waypoint.
-7. Output the direction using the exact chosen IMAGE index / label from the provided views. Do not invent a new direction format.
-8. Do not drift the search chain toward a generic visible room just because it is open. Hallway / dining room / doorway-like anchors should remain transit anchors unless they clearly advance toward a more plausible target room or the target object itself is actually evidenced there.
+# Reasoning (5 Parts)
+1. **Surrounding-View Analysis**: analyze each provided IMAGE separately. Use RGB/layout first, then obstacle distances and landmark labels. Distinguish current space from farther spaces seen through openings. State visible target-object evidence, proxy cues, likely connectors, blocked/tight views, and generic/backtracking directions.
+2. **Current Position + Previous Stage Verification**: use nearby Space Waypoints, local geometry, trajectory, and previous subtask memory to decide whether the previous `Destination` is unfinished, reached/passed, wrong, or too generic. Continue it if it is still the best search step; advance only when reached/passed/unhelpful.
+3. **Global Task + Search Chain Update**: restate the target object from the Global Task. Update the search chain: current anchor -> best immediate connector / likely target-space cue -> target object anchor. Observations and map structure decide the next search stage.
+4. **Subtask Destination + Direction + Landmark**: if the target object is clearly visible and credible, switch `next_waypoint` to the object itself and instruct direct approach. Otherwise choose one immediate navigable connector, doorway, room-entry anchor, or concrete cue that advances toward a likely target-object space. Choose `next_waypoint_direction` from one provided IMAGE label only.
+5. **Plan**: explain the matched stage state, why this destination/direction is the best next search step, why alternatives are weaker/backtracking/generic, and what remains after this stage.
 
 # Output (JSON only)
+Return exactly one JSON object. Keep all Part 1-5 reasoning inside `"reasoning"`; no extra keys, markdown, or prose. End at the final `}}`.
+
 {{
-  "reasoning": "One compact paragraph covering current-space inference, previous-subtask verification, current search-chain update, and why the chosen next search step is best.",
-  "current_waypoint": "[space] - [landmark / landmark / landmark]",
-  "task_progress": "Short object-search progress string with exactly one (Current) stage unless the goal is already reached",
-  "waypoint_chain": "Current localized anchor(Current) -> likely next search anchor -> target-object anchor(Goal)",
-  "next_waypoint": "One immediate search destination only",
-  "next_waypoint_direction": "One exact chosen IMAGE label/index from the provided views",
-  "subtask_instruction": "One short sentence telling the agent how to advance the search now; if the object is visible, it should explicitly approach that object",
-  "subtask_landmark": "One visible concrete landmark cue, or empty string",
-  "global_task_finish": false
+    "reasoning": "<One compact string following Parts 1-5: current observations, previous-stage verification, updated object-search chain, chosen destination/direction/landmark, and short/long plan.>",
+    "current_waypoint": "<Space Waypoint style `[space] - [landmark1 / landmark2 / landmark3]`, grounded in current nearby evidence and map.>",
+    "task_progress": "<Object-search progress with completed stages in front and exactly one `(Current)` stage unless the object is reached.>",
+    "waypoint_chain": "<Updated inferred search chain with full anchors and `(Current)` / `(Goal)` markings.>",
+    "next_waypoint": "<One immediate destination only: target object if visible/credible, otherwise a connector / room-entry anchor / concrete cue that advances the search.>",
+    "next_waypoint_direction": "<one provided IMAGE label only>",
+    "subtask_instruction": "<One short executable sentence for the active search stage.>",
+    "subtask_landmark": "<One visible concrete cue useful for this stage, or empty string.>",
+    "global_landmark_arrival": "<true only if current evidence proves the target object itself is reached/at hand; otherwise false>"
 }}
+
+**Critical Rules**:
+- Use only the Global Task, current views, Space Structure, map/trajectory, and previous subtask evidence as facts.
+- Localize current anchor before declaring a previous stage complete. Continue unfinished stages; advance only when reached/passed/unhelpful.
+- Hallway/dining-room/doorway anchors are usually transit anchors. Use them only when they advance toward target-object search, not as final goals.
+- Stop only for the actual target object, under the benchmark radius handled by the environment/controller.

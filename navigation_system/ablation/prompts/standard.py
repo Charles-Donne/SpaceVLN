@@ -31,14 +31,14 @@ def get_initial_planning_prompt(
 ) -> str:
     resolved_spec = _active_spec(spec)
     template = load_ablation_template(resolved_spec, "planning_initial.prompt.md")
-    return template.format(
+    return standard_builders._normalize_anchor_notation_text(template.format(
         instruction=instruction,
         action_space=action_space,
         obs_blocked_m=standard_builders._fmt_threshold_m(standard_builders.OBS_BLOCKED_M),
         obs_risky_m=standard_builders._fmt_threshold_m(standard_builders.OBS_RISKY_M),
         obs_open_m=standard_builders._fmt_threshold_m(standard_builders.OBS_OPEN_M),
         arrival_near_m=standard_builders._fmt_threshold_m(standard_builders.ARRIVAL_NEAR_M),
-    )
+    ))
 
 
 def get_verification_replanning_prompt(
@@ -97,7 +97,7 @@ def get_verification_replanning_prompt(
     )
     verify_view_count = standard_builders._get_verify_view_count(direction_names)
 
-    return template.format(
+    return standard_builders._normalize_anchor_notation_text(template.format(
         instruction=instruction,
         subtask_destination=subtask_destination,
         subtask_instruction=subtask_instruction,
@@ -113,7 +113,7 @@ def get_verification_replanning_prompt(
         obs_risky_m=standard_builders._fmt_threshold_m(standard_builders.OBS_RISKY_M),
         obs_open_m=standard_builders._fmt_threshold_m(standard_builders.OBS_OPEN_M),
         arrival_near_m=standard_builders._fmt_threshold_m(standard_builders.ARRIVAL_NEAR_M),
-    )
+    ))
 
 
 def get_action_execution_prompt(

@@ -8,10 +8,13 @@ RUNTIME:
   NUM_ENVIRONMENTS: 1
 
 PATHS:
-  # Empty means workspace-level default:
+  # Unified default path policy:
+  #   keep RESULTS_ROOT empty and always resolve to workspace-level
   #   ../result relative to SpaceVLN, i.e. nav_ws/result
+  # If storage needs to be moved to another disk, keep this empty and
+  # create a symlink at nav_ws/result pointing to an absolute target path.
   # Runtime appends:
   #   normal:   vlnce/<model-dir>
   #   ablation: vlnce/ablation/<preset>/<model-dir>
-  RESULTS_ROOT: /media/charlesdonne/1A34EB0D34EAEB29/project/nav_ws/result/
+  RESULTS_ROOT: ""
   RESULTS_DIR: "" 

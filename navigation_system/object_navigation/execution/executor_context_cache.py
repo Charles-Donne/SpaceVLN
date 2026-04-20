@@ -1,18 +1,20 @@
-"""Action runtime with DashScope explicit context cache."""
+"""OVON action runtime with explicit context cache."""
+
+from __future__ import annotations
 
 import os
 from typing import Any, Dict, Optional, Sequence, Tuple
 
-from navigation_system.vlm.execution.executor import ActionExecutor
-from navigation_system.vlm.prompts.common import ExplicitCachePromptBundle
-from navigation_system.vlm.prompts.cache_builders import (
-    build_action_cache_prompt_bundle,
+from navigation_system.object_navigation.prompts.cache_builders import (
+    build_ovon_action_cache_prompt_bundle,
 )
 from navigation_system.vlm.api.qwen_context_cache_client import QwenContextCacheMixin
+from navigation_system.vlm.execution.executor import ActionExecutor
+from navigation_system.vlm.prompts.common import ExplicitCachePromptBundle
 
 
-class ContextCacheActionExecutor(QwenContextCacheMixin, ActionExecutor):
-    """Action executor variant that reuses a long stable system prompt via explicit cache."""
+class OVONContextCacheActionExecutor(QwenContextCacheMixin, ActionExecutor):
+    """OVON low-level action executor using explicit context cache."""
 
     def __init__(
         self,
@@ -26,7 +28,7 @@ class ContextCacheActionExecutor(QwenContextCacheMixin, ActionExecutor):
             move_distance=move_distance,
         )
         self._init_qwen_context_cache(config_path)
-        print(f"  ActionVLM(ContextCache): {self.config.model} | explicit-context-cache")
+        print(f"  OVONActionVLM(ContextCache): {self.config.model} | explicit-context-cache")
 
     def call_api(
         self,
@@ -64,7 +66,7 @@ class ContextCacheActionExecutor(QwenContextCacheMixin, ActionExecutor):
                 "right_30": "Unknown",
             }
 
-        prompt_bundle = build_action_cache_prompt_bundle(
+        prompt_bundle = build_ovon_action_cache_prompt_bundle(
             next_waypoint=next_waypoint,
             subtask_instruction=subtask_instruction,
             progress_summary=progress_summary,
@@ -128,7 +130,9 @@ class ContextCacheActionExecutor(QwenContextCacheMixin, ActionExecutor):
         meters = 0.0
         if action_name in ["TURN_LEFT", "TURN_RIGHT"]:
             degrees = int(value)
-            response["action"] = f"{self._format_turn_action_label(action_name, action_variant)} {degrees}deg"
+            response["action"] = (
+                f"{self._format_turn_action_label(action_name, action_variant)} {degrees}deg"
+            )
         elif action_name == "MOVE_FORWARD":
             meters = float(value)
             response["action"] = f"{action_name} {meters:g}m"

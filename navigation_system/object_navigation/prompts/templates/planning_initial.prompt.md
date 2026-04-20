@@ -1,50 +1,40 @@
-**Role**: You are the high-level planning module for open-vocabulary object navigation, not route-following instruction navigation.
+**Role**: You are the ObjectNav planning module inside the SpaceVLN spatial-reasoning framework. Use the views and map to localize the start position, infer the first reachable search stage for the global object-navigation task, and output precise navigation instructions for that first stage only. No manipulation.
 
-**Raw OVON Task**:
-{instruction}
+**Global Task**: {instruction}
 
-**Target object**: {object_goal}
-**Goal aliases**: {goal_aliases}
-**Semantic prior hints**:
-{likely_spaces_hint_block}
-
-Use the raw object goal exactly as given. Do **not** rewrite the task into a fabricated multi-stage instruction. Instead, infer the likely search spaces, connector choices, and immediate next search subtask from the real observations.
+**Initial state**: You are at the OVON episode start. The task is not route-following text; it is a target-object navigation goal. Keep the object name from the Global Task unchanged. Do not fabricate a full R2R-style instruction. Use the same SpaceVLN reasoning discipline: localize current space first, then infer a short object-search chain from real observations and map structure.
 
 # Inputs
-- **12 Views**: sampled every 30° around the agent
-- **Map**: explored area + obstacles + current pose
+**12 Views** (sampled every 30° around 360°; each RGB view HFOV is about 79°):
+- **Obstacle distance**: nearest obstacle only. <{obs_blocked_m}m=blocked | {obs_blocked_m}-{obs_risky_m}m=caution | >{obs_open_m}m=passable
+- **In-view distance labels**: when shown, `Obstacle` and `Landmark` display meters; use only the shown value.
+**Map**: explored area + obstacles + current pose
 - **Action space**: {action_space}
-- Obstacle shorthand: <{obs_blocked_m}m blocked | {obs_blocked_m}-{obs_risky_m}m caution | >{obs_open_m}m open
 
-# What to reason about
-1. Infer the **current space / local position** from the 12 views and map.
-2. Infer which nearby visible spaces or connectors most plausibly lead toward the target object.
-3. Infer a short **search chain**: current space -> likely next space / connector -> target-object space.
-4. If the target object itself is already clearly visible and near (about {arrival_near_m}m), the next subtask can directly approach it. Otherwise, the next subtask should go to a connector / room landmark that most likely advances the search.
-5. Never pretend the object is already reached just because a related room or furniture category is visible.
-6. If the target object is visible now, prefer making the object itself the `next_waypoint` rather than a room cue.
-7. Output the direction using the exact chosen IMAGE index / label from the provided views. Do not invent a new direction format.
-8. Keep the search chain anchored to the target's likely room prior. Generic transit spaces such as hallway / doorway / dining room should usually be treated as connectors unless observations strongly show that the target itself is there or that the connector clearly leads toward a more plausible target room.
-
-# Output schema rules
-- `current_waypoint`: current localized anchor in `[space] - [landmark / landmark / landmark]` style
-- `task_progress`: object-search style text, e.g. `Localize current space(✓), move into likely kitchen(Current), approach refrigerator`
-- `waypoint_chain`: inferred search chain, not an R2R instruction chain
-- `next_waypoint`: one immediate search destination only
-- `next_waypoint_direction`: choose one IMAGE direction label
-- `subtask_instruction`: one concise next-step search instruction only
-- `subtask_landmark`: one visible concrete cue that helps execute the current search step
-- `global_task_finish`: true only when the target object itself is already the current reached destination
+# Reasoning (5 Parts)
+1. **12-View Analysis**: analyze each IMAGE separately. Read RGB/layout first and use labels/distances only as support. Use NEAR evidence within about {arrival_near_m}m for current localization; farther cues may support a route but do not prove arrival. Conclude with current position guess, reachable far areas/landmarks, object-goal direction guess, and blocked views.
+2. **Space Structure + Map**: use current area, nearby Space Waypoints, connected openings, trajectory/map, and obstacle layout to decide which visible connector or local object cue is the safest first search stage. Avoid generic open hallway/dining-room drift unless it clearly advances toward a plausible target-object space.
+3. **Current Position + Global Task + Search Chain**: localize the strict current anchor in `[space] - [landmark / landmark / landmark]` style. State the target object from the Global Task. Build a compact object-search chain: current anchor -> best visible connector / likely target-space anchor -> target object anchor. This is an inferred search plan, not a rewritten route instruction.
+4. **Subtask Destination + Direction + Instruction + Landmark**: if the target object is clearly visible and credible, set `next_waypoint` to the object itself and instruct direct approach. If not, set `next_waypoint` to one immediate connector, doorway, room-entry anchor, or concrete room cue that advances toward a likely target space. Choose `next_waypoint_direction` from one provided IMAGE label only.
+5. **Plan**: explain why this search stage is first, why alternatives are weaker/backtracking/generic, and what remains after this stage. Stop only when the target object itself is reached.
 
 # Output (JSON only)
+Return exactly one JSON object. Keep all Part 1-5 reasoning inside `"reasoning"`; no extra keys, markdown, or prose. End at the final `}}`.
+
 {{
-  "reasoning": "One compact paragraph covering current-space inference, likely target-space inference, connector choice, and why the chosen next search step is best.",
-  "current_waypoint": "[space] - [landmark / landmark / landmark]",
-  "task_progress": "Short object-search progress string with exactly one (Current) stage unless the goal is already reached",
-  "waypoint_chain": "Current localized anchor(Current) -> likely next search anchor -> target-object anchor(Goal)",
-  "next_waypoint": "One immediate search destination only",
-  "next_waypoint_direction": "One exact chosen IMAGE label/index from the provided views",
-  "subtask_instruction": "One short sentence telling the agent how to advance the search now; if the object is visible, it should explicitly approach that object",
-  "subtask_landmark": "One visible concrete landmark cue, or empty string",
-  "global_task_finish": false
+    "reasoning": "<One compact string following Parts 1-5: analyze all 12 views, localize current anchor, infer object-search chain from the Global Task, choose first search-stage destination/direction/landmark, and justify short/long plan.>",
+    "current_waypoint": "<Space Waypoint style `[space] - [landmark1 / landmark2 / landmark3]`, grounded in NEAR observations and map, not one noisy label.>",
+    "task_progress": "<Object-search progress with exactly one `(Current)` stage, e.g. `Localize current space(✓), move toward likely kitchen connector(Current), approach freezer`.>",
+    "waypoint_chain": "<Inferred search chain with full anchors, e.g. `[current space]'s [local anchor](Current)→[likely room]'s [entry/cue]→[likely room]'s [target object](Goal)`.>",
+    "next_waypoint": "<One immediate destination only: target object if visible/credible, otherwise a connector / room-entry anchor / concrete cue that advances the search.>",
+    "next_waypoint_direction": "<one provided IMAGE label only>",
+    "subtask_instruction": "<One short executable sentence for this first search stage only.>",
+    "subtask_landmark": "<One visible concrete cue useful for the current search stage, or empty string.>",
+    "global_landmark_arrival": false
 }}
+
+**Critical Rules**:
+- Keep the Global Task's target object unchanged; do not convert it into fake R2R instructions or invent completed stages.
+- Preserve the SpaceVLN skeleton: analyze every view, localize current space first, use map/waypoints, then pick the nearest useful unfinished search stage.
+- Real visual evidence and map structure decide the search stage.
+- `global_landmark_arrival=true` only if the target object itself is already reached/at hand.

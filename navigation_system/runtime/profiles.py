@@ -10,7 +10,7 @@ from navigation_system.vlm.api.qwen_context_cache_client import (
     build_default_context_cache_results_dir,
 )
 from navigation_system.vlm.reporting.cache_report import (
-    print_cache_report_summary,
+    save_cache_report_artifacts,
 )
 from navigation_system.vlm.runtime_factory import (
     build_context_cache_navigation_model_stack,
@@ -37,7 +37,12 @@ def _maybe_generate_context_cache_report(args, config) -> None:
     results_dir = str(
         getattr(args, "results_dir", "") or getattr(config.PATHS, "RESULTS_DIR", "") or ""
     ).strip()
-    print_cache_report_summary(results_dir)
+    if not results_dir:
+        return
+    try:
+        save_cache_report_artifacts(results_dir)
+    except Exception as exc:
+        print(f"⚠️  无法保存缓存报告: {exc}")
 
 
 STANDARD_RUNTIME_PROFILE = NavigationRuntimeProfile(

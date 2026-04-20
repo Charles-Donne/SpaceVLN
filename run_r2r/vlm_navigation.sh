@@ -19,8 +19,19 @@ spacevln_navigation_print_usage() {
   --runtime context_cache   显式 context cache 运行
 
 保存:
-  --results-root DIR        只覆盖总根目录，仍自动保存到 vlnce/模型名 或 vlnce/ablation/消融项/模型名
-  --results-dir DIR         高级：直接覆盖最终目录，不再自动追加结构化子目录
+    --results-root DIR        兼容保留：覆盖总根目录（默认不建议使用）
+    --results-dir DIR         兼容保留：覆盖最终目录（默认不建议使用）
+
+路径策略（推荐）:
+    不再覆盖路径，统一使用默认地址：
+        结果输出: nav_ws/result
+        数据加载: nav_ws/data
+    如需把存储放到其他磁盘，请在默认目录上建立软连接：
+        bash run_r2r/setup_storage_symlinks.sh --disk-root /abs/path/to/nav_ws_storage --both --backup-existing
+
+命令行输出（默认）:
+    仅打印关键流程与错误：episode 开始/结束、失败原因、最终评测汇总。
+    context-cache 命中率等详细统计不再打印到命令行，改为保存到结果目录 reports/cache。
 
 消融:
   --ablation landmark
@@ -138,6 +149,11 @@ else
 fi
 
 EXTRA_ARGS=(--runtime "$RUNTIME_MODE" "${RESULT_PATH_ARGS[@]}")
+
+if [[ ${#RESULT_PATH_ARGS[@]} -gt 0 ]]; then
+    echo "⚠️  检测到 --results-root/--results-dir 覆盖参数。"
+    echo "   当前推荐统一默认路径（nav_ws/result），如需换盘请使用软连接脚本。"
+fi
 
 if [[ -n "$ABLATION_RAW" ]]; then
     if preset_path="$(spacevln_ablation_resolve_preset_path "$ABLATION_RAW" 2>/dev/null)"; then

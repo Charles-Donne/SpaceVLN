@@ -90,7 +90,6 @@ class AblationActionExecutor(ActionExecutor):
 
         action_name, value = parsed_action
         action_variant = self._extract_action_variant(response.get("action"))
-        response["_action_variant"] = action_variant
         normalized_allowed_actions = None
         if allowed_action_names:
             normalized_allowed_actions = {

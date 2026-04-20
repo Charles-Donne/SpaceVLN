@@ -17,7 +17,7 @@ from navigation_system.vlm.prompts.builders import get_action_execution_prompt
 class ActionExecutor(BaseAPIClient):
     """VLM动作执行器 - 负责低层动作决策"""
     
-    REQUIRED_FIELDS = ['reasoning', 'action_analysis', 'action']  # degrees/meters/progress_summary optional
+    REQUIRED_FIELDS = ['reasoning', 'action']  # degrees/meters/progress_summary optional
     VALID_TURN_VALUES = VALID_TURN_DEGREES
     VALID_MOVE_VALUES = VALID_MOVE_METERS
     
@@ -371,7 +371,6 @@ class ActionExecutor(BaseAPIClient):
 
         action_name, value = parsed_action
         action_variant = self._extract_action_variant(response.get("action"))
-        response["_action_variant"] = action_variant
         normalized_allowed_actions = None
         if allowed_action_names:
             normalized_allowed_actions = {
@@ -455,7 +454,6 @@ class ActionExecutor(BaseAPIClient):
 
         action_name, value = parsed_action
         action_variant = self._extract_action_variant(response.get("action"))
-        response["_action_variant"] = action_variant
         normalized_allowed_actions = None
         if allowed_action_names:
             normalized_allowed_actions = {

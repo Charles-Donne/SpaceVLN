@@ -35,12 +35,12 @@ def build_initial_planner_cache_prompt_bundle(
         resolved_spec,
         "cache/planning_initial.user.prompt.md",
     )
-    system_prompt = system_template.format(
+    system_prompt = standard_cache_builders._normalize_anchor_notation_text(system_template.format(
         obs_blocked_m=standard_cache_builders._fmt_threshold_m(standard_cache_builders.OBS_BLOCKED_M),
         obs_risky_m=standard_cache_builders._fmt_threshold_m(standard_cache_builders.OBS_RISKY_M),
         obs_open_m=standard_cache_builders._fmt_threshold_m(standard_cache_builders.OBS_OPEN_M),
         arrival_near_m=standard_cache_builders._fmt_threshold_m(standard_cache_builders.ARRIVAL_NEAR_M),
-    )
+    ))
     user_prompt = user_template.format(
         instruction=instruction,
     )
@@ -108,7 +108,7 @@ def build_verify_planner_cache_prompt_bundle(
         notice_text = str(prompt_verify_replan_prompt_notice).strip()
         notice_block_for_user = f"**Stuck Notice**: {notice_text}"
 
-    system_prompt = system_template.format(
+    system_prompt = standard_cache_builders._normalize_anchor_notation_text(system_template.format(
         instruction=instruction,
         subtask_destination=subtask_destination,
         subtask_instruction=subtask_instruction,
@@ -121,7 +121,7 @@ def build_verify_planner_cache_prompt_bundle(
         obs_risky_m=standard_cache_builders._fmt_threshold_m(standard_cache_builders.OBS_RISKY_M),
         obs_open_m=standard_cache_builders._fmt_threshold_m(standard_cache_builders.OBS_OPEN_M),
         arrival_near_m=standard_cache_builders._fmt_threshold_m(standard_cache_builders.ARRIVAL_NEAR_M),
-    )
+    ))
     user_prompt = user_template.format(
         verify_replan_prompt_notice_block=notice_block_for_user,
         instruction=instruction,

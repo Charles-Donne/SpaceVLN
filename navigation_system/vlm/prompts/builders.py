@@ -28,16 +28,38 @@ def _fmt_threshold_m(value: float) -> str:
     return text.rstrip("0").rstrip(".")
 
 
+def _normalize_anchor_notation_text(prompt: str) -> str:
+    normalized = str(prompt or "")
+    literal_replacements = (
+        ("[space] - [landmark1 / landmark2 / landmark3]", "space - landmark1 / landmark2 / landmark3"),
+        ("[space] - [landmark / landmark / landmark]", "space - landmark / landmark / landmark"),
+        ("[space]'s [landmark]", "space's landmark"),
+    )
+    for old, new in literal_replacements:
+        normalized = normalized.replace(old, new)
+    normalized = re.sub(
+        r"\[([A-Za-z][^\[\]]*?)\]'s\s+\[([^\[\]]+?)\]",
+        lambda match: f"{match.group(1).strip()}'s {match.group(2).strip()}",
+        normalized,
+    )
+    normalized = re.sub(
+        r"\[space\]\s*-\s*\[([^\[\]]+?)\]",
+        lambda match: f"space - {match.group(1).strip()}",
+        normalized,
+    )
+    return normalized
+
+
 def get_initial_planning_prompt(instruction: str, action_space: str) -> str:
     """Render the initial planning prompt."""
-    return INITIAL_PLANNING_PROMPT.format(
+    return _normalize_anchor_notation_text(INITIAL_PLANNING_PROMPT.format(
         instruction=instruction,
         action_space=action_space,
         obs_blocked_m=_fmt_threshold_m(OBS_BLOCKED_M),
         obs_risky_m=_fmt_threshold_m(OBS_RISKY_M),
         obs_open_m=_fmt_threshold_m(OBS_OPEN_M),
         arrival_near_m=_fmt_threshold_m(ARRIVAL_NEAR_M),
-    )
+    ))
 
 
 def _get_verify_view_count(direction_names=None):
@@ -79,7 +101,7 @@ def get_verification_replanning_prompt(
     )
     verify_view_count = _get_verify_view_count(direction_names)
 
-    return VERIFICATION_REPLANNING_PROMPT.format(
+    return _normalize_anchor_notation_text(VERIFICATION_REPLANNING_PROMPT.format(
         instruction=instruction,
         subtask_destination=subtask_destination,
         subtask_instruction=subtask_instruction,
@@ -94,7 +116,7 @@ def get_verification_replanning_prompt(
         obs_risky_m=_fmt_threshold_m(OBS_RISKY_M),
         obs_open_m=_fmt_threshold_m(OBS_OPEN_M),
         arrival_near_m=_fmt_threshold_m(ARRIVAL_NEAR_M),
-    )
+    ))
 
 
 def _parse_distance_m(distance_text) -> float:
@@ -196,16 +218,21 @@ def _build_allowed_action_bullets(allowed_action_names=None) -> str:
     ordered = _normalize_allowed_action_names(allowed_action_names)
     lines = []
     if "MOVE_FORWARD" in ordered:
-        lines.append("- `MOVE_FORWARD {0.25m, 0.5m, 0.75m, 1.0m, 1.25m}`")
-    turn_parts = []
+        lines.append(
+            "- `MOVE_FORWARD {0.25m, 0.5m, 0.75m, 1.0m, 1.25m}`: move forward by the selected distance"
+        )
     if "TURN_LEFT" in ordered:
-        turn_parts.append("`TURN_LEFT_AVOID 30deg` | `TURN_LEFT_ALIGN 30deg`")
+        lines.append(
+            "- `TURN_LEFT_AVOID 30deg` to avoid obstacle | "
+            "`TURN_LEFT_ALIGN 30deg` to align destination landmark"
+        )
     if "TURN_RIGHT" in ordered:
-        turn_parts.append("`TURN_RIGHT_AVOID 30deg` | `TURN_RIGHT_ALIGN 30deg`")
-    if turn_parts:
-        lines.append("- " + " | ".join(turn_parts))
+        lines.append(
+            "- `TURN_RIGHT_AVOID 30deg` to avoid obstacle | "
+            "`TURN_RIGHT_ALIGN 30deg` to align destination landmark"
+        )
     if "STOP" in ordered:
-        lines.append("- `STOP`")
+        lines.append("- `STOP`: stop only when the current destination is reached")
     return "\n".join(lines)
 
 

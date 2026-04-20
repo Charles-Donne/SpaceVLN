@@ -3,6 +3,7 @@ Base Navigation Controller
 底层导航控制基类：环境交互、建图、检测、可视化
 """
 import os
+import re
 import numpy as np
 import cv2
 import torch
@@ -580,6 +581,11 @@ class BaseNavigationController:
         ).strip()
         if not label_text:
             return image
+        label_text = label_text.replace("【", "[").replace("】", "]")
+        label_text = re.sub(r"\[\s*([^\[\]]+?)\s*\]", r"\1", label_text)
+        label_text = re.sub(r"\s+", " ", label_text).strip()
+        if len(label_text) > 26:
+            label_text = label_text[:24].rstrip() + ".."
 
         try:
             distance_text = f"{float(waypoint_entry.get('distance_m', 0.0)):.1f}m"
@@ -589,16 +595,16 @@ class BaseNavigationController:
         display_text = f"{label_text} {distance_text}".strip()
         h, w = image.shape[:2]
         font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 0.62
-        thickness = 2
-        padding_x = 8
-        padding_y = 6
+        font_scale = 0.50
+        thickness = 1
+        padding_x = 6
+        padding_y = 4
         (text_w, text_h), baseline = cv2.getTextSize(display_text, font, font_scale, thickness)
 
         box_w = text_w + padding_x * 2
         box_h = text_h + baseline + padding_y * 2
         box_x1 = max(8, (w - box_w) // 2)
-        box_y1 = max(12, h // 2 - box_h - 18)
+        box_y1 = max(10, h // 2 - box_h - 24)
         box_x2 = min(w - 8, box_x1 + box_w)
         box_y2 = min(h - 8, box_y1 + box_h)
 

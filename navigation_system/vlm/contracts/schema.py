@@ -39,10 +39,22 @@ def normalize_subtask_payload(payload: Optional[Dict[str, Any]]) -> Optional[Dic
         return payload
 
     normalized = dict(payload)
+    arrival_value = normalized.get("global_landmark_arrival")
+    finish_value = normalized.get("global_task_finish")
+    if finish_value is None and arrival_value is not None:
+        finish_value = arrival_value
+        normalized["global_task_finish"] = arrival_value
+    if arrival_value is None and finish_value is not None:
+        arrival_value = finish_value
+        normalized["global_landmark_arrival"] = finish_value
     if normalized.get("subtask_landmark") is None:
         normalized["subtask_landmark"] = ""
     if normalized.get("global_task_finish") is None:
         normalized["global_task_finish"] = False
+    if normalized.get("global_landmark_arrival") is None:
+        normalized["global_landmark_arrival"] = bool(
+            normalized.get("global_task_finish", False)
+        )
     return normalized
 
 

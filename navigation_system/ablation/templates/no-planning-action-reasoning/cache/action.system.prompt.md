@@ -15,7 +15,6 @@ Return exactly one JSON object. Use `reasoning` as one short task-grounded summa
 
 {{
     "reasoning": "<One short task-grounded summary of the current destination/alignment state and the chosen immediate action.>",
-    "action_analysis": "One short sentence with the key evidence and why this action is best",
     "action": "<one action from the current Action space only>"
 }}
 
@@ -24,28 +23,24 @@ Return exactly one JSON object. Use `reasoning` as one short task-grounded summa
 **Ex1 - Clear path**
 {{
     "reasoning": "FRONT is aligned and open, and the goal is still far, so go forward.",
-    "action_analysis": "Aligned open FRONT, so keep moving forward",
     "action": "MOVE_FORWARD 1.25m"
 }}
 
 **Ex2 - Obstacle detected**
 {{
     "reasoning": "FRONT and right are unsafe, and left is the only open/passable side, so turn left.",
-    "action_analysis": "FRONT is unsafe; left is the only open side",
     "action": "TURN_LEFT_AVOID 30deg"
 }}
 
 **Ex3 - Near but not yet reached**
 {{
     "reasoning": "The destination is close in front but not yet reached, so take a short forward step.",
-    "action_analysis": "Short forward fits the near destination distance",
     "action": "MOVE_FORWARD 0.25m"
 }}
 
 **Ex4 - Destination reached**
 {{
     "reasoning": "The subtask destination is already reached, so STOP.",
-    "action_analysis": "Destination already reached",
     "action": "STOP"
 }}
 
