@@ -3,35 +3,28 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
+import random
 import sys
 from pathlib import Path
-from typing import Iterable, List, Sequence
+from typing import List, Sequence
 
-import habitat
-from habitat.config import read_write
-from habitat.config.default_structured_configs import (
-    HabitatSimDepthSensorConfig,
-    TopDownMapMeasurementConfig,
-    register_hydra_plugin,
+import yaml
+from navigation_system.runtime.object_navigation.thresholds import (
+    OVON_SUCCESS_DISTANCE_M,
 )
-
-from navigation_system.object_navigation.controller import (
-    OVONObjectNavigationController,
-)
-from navigation_system.object_navigation.env_adapter import SingleOVONVectorEnvAdapter
-from navigation_system.object_navigation.runtime_config import build_objectnav_runtime_config
-from navigation_system.object_navigation.runtime_factory import (
-    build_ovon_context_cache_navigation_model_stack,
-    build_ovon_navigation_model_stack,
-)
-from navigation_system.object_navigation.thresholds import OVON_SUCCESS_DISTANCE_M
 from navigation_system.runtime.episode_io import load_json_if_exists
-from navigation_system.runtime.results_report import generate_results_report
 from navigation_system.runtime.storage.results_layout import (
+    build_default_results_family_root,
     build_model_results_dir_name,
     resolve_api_config_path,
+    resolve_results_root_path,
+)
+from navigation_system.runtime.storage.artifacts import (
+    get_episode_detail_path_candidates,
+    get_episode_log_path_candidates,
 )
 
 
@@ -39,11 +32,88 @@ RUNTIME_CHOICES = ("standard", "context_cache")
 
 
 def _nav_ws_root() -> Path:
-    return Path(__file__).resolve().parents[3]
+    return Path(__file__).resolve().parents[4]
+
+
+def _default_run_config() -> str:
+    return str(
+        (
+            _nav_ws_root()
+            / "SpaceVLN"
+            / "navigation_system"
+            / "config"
+            / "experiments"
+            / "ovon_val_unseen_eval.yaml"
+        ).resolve()
+    )
+
+
+def _load_run_defaults(config_path: str | None) -> dict:
+    resolved_path = str(config_path or _default_run_config()).strip()
+    if not resolved_path:
+        return {}
+    path = Path(resolved_path).resolve()
+    if not path.is_file():
+        return {}
+    with open(path, "r", encoding="utf-8") as f:
+        payload = yaml.safe_load(f) or {}
+    if not isinstance(payload, dict):
+        return {}
+    block = payload.get("OVON") or payload
+    return dict(block) if isinstance(block, dict) else {}
+
+
+def _resolve_nav_ws_path(path_like: str | Path) -> Path:
+    candidate = Path(path_like)
+    if candidate.is_absolute():
+        return candidate.resolve()
+    return (_nav_ws_root() / candidate).resolve()
+
+
+def _build_parser_defaults(run_defaults: dict | None = None) -> dict:
+    defaults = dict(run_defaults or {})
+    split = str(defaults.get("split", "val_unseen")).strip() or "val_unseen"
+    runtime = str(defaults.get("runtime", "context_cache")).strip().lower() or "context_cache"
+    return {
+        "runtime": runtime if runtime in RUNTIME_CHOICES else "context_cache",
+        "exp_config": str(
+            _resolve_nav_ws_path(
+                defaults.get(
+                    "official_exp_config",
+                    _nav_ws_root() / "ovon" / "config" / "experiments" / "transformer_dagger.yaml",
+                )
+            )
+        ),
+        "data_path": str(
+            _resolve_nav_ws_path(
+                defaults.get(
+                    "data_path",
+                    _nav_ws_root()
+                    / "data"
+                    / "datasets"
+                    / "ovon"
+                    / "hm3d"
+                    / "v1"
+                    / split
+                    / (
+                        "val_unseen_hard.json.gz"
+                        if split == "val_unseen"
+                        else f"{split}.json.gz"
+                    ),
+                )
+            )
+        ),
+        "split": split,
+        "gpu_id": int(defaults.get("gpu_id", 0) or 0),
+        "max_steps": int(defaults.get("max_steps", 500) or 500),
+        "max_subtask_steps": int(defaults.get("max_subtask_steps", 4) or 4),
+        "save_step_images": bool(defaults.get("save_step_images", True)),
+        "save_gif": bool(defaults.get("save_gif", False)),
+    }
 
 
 def _default_results_dir() -> str:
-    return str((_nav_ws_root() / "result" / "ovon" / "ovon_smoke").resolve())
+    return str((Path(build_default_results_family_root("ovon")) / "ovon_smoke").resolve())
 
 
 def _default_api_config(runtime: str) -> str:
@@ -65,21 +135,29 @@ def _default_api_config(runtime: str) -> str:
     )
 
 
-def _default_results_dir_for_runtime(runtime: str, api_config_path: str) -> str:
+def _default_results_dir_for_runtime(
+    runtime: str,
+    api_config_path: str,
+    *,
+    results_root: str | None = None,
+) -> str:
     runtime_name = str(runtime or "context_cache").strip().lower()
     suffix = "_cache" if runtime_name == "context_cache" else ""
     model_dir = build_model_results_dir_name(api_config_path)
     return str(
         (
-            _nav_ws_root()
-            / "result"
-            / "ovon"
+            Path(build_default_results_family_root("ovon", results_root=results_root))
             / f"{model_dir}{suffix}"
         ).resolve()
     )
 
 
 def _select_model_stack_builder(runtime: str):
+    from navigation_system.runtime.object_navigation.runtime_factory import (
+        build_ovon_context_cache_navigation_model_stack,
+        build_ovon_navigation_model_stack,
+    )
+
     return (
         build_ovon_context_cache_navigation_model_stack
         if str(runtime or "").strip().lower() == "context_cache"
@@ -107,7 +185,17 @@ def _prepare_ovon_config(
     gpu_id: int,
     max_steps: int,
 ):
-    sys.path.insert(0, str((_nav_ws_root() / "ovon").resolve()))
+    import habitat
+    from habitat.config import read_write
+    from habitat.config.default_structured_configs import (
+        HabitatSimDepthSensorConfig,
+        TopDownMapMeasurementConfig,
+        register_hydra_plugin,
+    )
+
+    ovon_repo = str((_nav_ws_root() / "ovon").resolve())
+    if ovon_repo not in sys.path:
+        sys.path.insert(0, ovon_repo)
     ovon_repo_root = (_nav_ws_root() / "ovon").resolve()
     from ovon.config import HabitatConfigPlugin
 
@@ -182,6 +270,8 @@ def _prepare_ovon_config(
 
 
 def _load_dataset_for_episodes(config, episode_ids: Sequence[int] | None):
+    import habitat
+
     dataset = habitat.make_dataset(
         config.habitat.dataset.type,
         config=config.habitat.dataset,
@@ -202,9 +292,101 @@ def _load_dataset_for_episodes(config, episode_ids: Sequence[int] | None):
     return dataset
 
 
+def _index_dataset_episodes(dataset) -> dict[int, list]:
+    episode_lookup: dict[int, list] = {}
+    for episode in list(getattr(dataset, "episodes", []) or []):
+        episode_lookup.setdefault(int(episode.episode_id), []).append(episode)
+    return episode_lookup
+
+
+def _clone_dataset_with_episode(base_dataset, episode):
+    dataset = copy.copy(base_dataset)
+    dataset.episodes = [episode]
+    return dataset
+
+
 def _discover_episode_ids(dataset, *, num_episodes: int) -> List[int]:
     episodes = list(getattr(dataset, "episodes", []) or [])
     return [int(ep.episode_id) for ep in episodes[: max(1, int(num_episodes))]]
+
+
+def _discover_episode_ids_from_start(
+    dataset,
+    *,
+    episode_id: int | None,
+    num_episodes: int,
+) -> List[int]:
+    episodes = list(getattr(dataset, "episodes", []) or [])
+    ids = sorted({int(ep.episode_id) for ep in episodes})
+    if episode_id is not None:
+        start_id = int(episode_id)
+        ids = [candidate_id for candidate_id in ids if candidate_id >= start_id]
+    return ids[: max(1, int(num_episodes))]
+
+
+def _discover_random_episode_ids(
+    dataset,
+    *,
+    num_episodes: int,
+    seed: int,
+) -> List[int]:
+    ids = sorted({int(ep.episode_id) for ep in list(getattr(dataset, "episodes", []) or [])})
+    if not ids:
+        return []
+    sample_size = min(max(1, int(num_episodes)), len(ids))
+    return random.Random(int(seed)).sample(ids, sample_size)
+
+
+def _result_payload_is_sr1(payload: dict | None) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    for key in ("sr", "success"):
+        value = payload.get(key)
+        if value is None:
+            continue
+        try:
+            return bool(int(value))
+        except Exception:
+            return bool(value)
+    return False
+
+
+def _episode_has_existing_sr1(results_dir: str, episode_id: int) -> bool:
+    candidate_paths = []
+    candidate_paths.extend(get_episode_log_path_candidates(results_dir, episode_id))
+    for detail_dir in get_episode_detail_path_candidates(results_dir, episode_id):
+        candidate_paths.append(os.path.join(detail_dir, "records", "result.json"))
+
+    seen = set()
+    for path in candidate_paths:
+        if path in seen:
+            continue
+        seen.add(path)
+        if _result_payload_is_sr1(load_json_if_exists(path)):
+            return True
+    return False
+
+
+def _filter_existing_sr1(
+    *,
+    episode_ids: Sequence[int],
+    results_dir: str,
+) -> List[int]:
+    kept = []
+    skipped = []
+    for episode_id in episode_ids:
+        if _episode_has_existing_sr1(results_dir, int(episode_id)):
+            skipped.append(int(episode_id))
+        else:
+            kept.append(int(episode_id))
+    if skipped:
+        preview = ",".join(str(item) for item in skipped[:20])
+        suffix = "..." if len(skipped) > 20 else ""
+        print(
+            f"[OVON-ObjectNav] skip-sr1 skipped {len(skipped)} existing "
+            f"successful episodes: {preview}{suffix}"
+        )
+    return kept
 
 
 def _run_one_episode(
@@ -217,8 +399,21 @@ def _run_one_episode(
     save_step_images: bool,
     save_gif: bool,
     model_stack_builder,
+    base_dataset=None,
+    episode_lookup: dict[int, list] | None = None,
 ):
-    dataset = _load_dataset_for_episodes(ovon_config, [episode_id])
+    selected_candidates = list((episode_lookup or {}).get(int(episode_id), []))
+    if selected_candidates:
+        selected_episode = selected_candidates[0]
+        if len(selected_candidates) > 1:
+            print(
+                f"[WARN] Episode id {episode_id} matched {len(selected_candidates)} OVON goals; "
+                f"using first goal={getattr(selected_episode, 'object_category', '')!r}"
+            )
+        dataset = _clone_dataset_with_episode(base_dataset, selected_episode)
+    else:
+        dataset = _load_dataset_for_episodes(ovon_config, [episode_id])
+
     if len(dataset.episodes) < 1:
         raise RuntimeError(f"Episode {episode_id} not found in OVON dataset")
     if len(dataset.episodes) > 1:
@@ -228,6 +423,17 @@ def _run_one_episode(
             f"using first goal={getattr(selected_episode, 'object_category', '')!r}"
         )
         dataset.episodes = [selected_episode]
+
+    import habitat
+    from navigation_system.controller.object_navigation.controller import (
+        OVONObjectNavigationController,
+    )
+    from navigation_system.env.object_navigation.adapter import (
+        SingleOVONVectorEnvAdapter,
+    )
+    from navigation_system.runtime.object_navigation.runtime_config import (
+        build_objectnav_runtime_config,
+    )
 
     env = habitat.Env(config=ovon_config.habitat, dataset=dataset)
     adapter = SingleOVONVectorEnvAdapter(env, episode_count=1)
@@ -337,21 +543,28 @@ def _build_aggregate(all_results: Sequence[dict]) -> dict:
     }
 
 
-def build_arg_parser() -> argparse.ArgumentParser:
+def build_arg_parser(run_defaults: dict | None = None) -> argparse.ArgumentParser:
+    defaults = _build_parser_defaults(run_defaults)
     parser = argparse.ArgumentParser(
         description="Run a small-batch OVON evaluation with the SpaceVLN controller",
+    )
+    parser.add_argument(
+        "--run-config",
+        type=str,
+        default=_default_run_config(),
+        help="SpaceVLN OVON runtime defaults YAML",
     )
     parser.add_argument(
         "--runtime",
         type=str,
         choices=RUNTIME_CHOICES,
-        default="context_cache",
+        default=defaults["runtime"],
         help="runtime profile for OVON: standard or context_cache",
     )
     parser.add_argument(
         "--exp-config",
         type=str,
-        default=str((_nav_ws_root() / "ovon" / "config" / "experiments" / "transformer_dagger.yaml").resolve()),
+        default=defaults["exp_config"],
     )
     parser.add_argument(
         "--vlm-api-config",
@@ -361,16 +574,49 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--data-path",
         type=str,
-        default=str((_nav_ws_root() / "data" / "datasets" / "ovon" / "hm3d" / "v1" / "val_unseen" / "val_unseen_hard.json.gz").resolve()),
+        default=defaults["data_path"],
     )
-    parser.add_argument("--split", type=str, default="val_unseen")
+    parser.add_argument("--split", type=str, default=defaults["split"])
+    parser.add_argument(
+        "--episode-id",
+        type=int,
+        default=None,
+        help="start episode id for VLNCE-style positional launch commands",
+    )
     parser.add_argument("--episode-ids", type=str, default=None)
     parser.add_argument("--num-episodes", type=int, default=1)
-    parser.add_argument("--gpu-id", type=int, default=0)
-    parser.add_argument("--max-steps", type=int, default=500)
-    parser.add_argument("--max-subtask-steps", type=int, default=4)
+    parser.add_argument(
+        "--random",
+        action="store_true",
+        help="sample random episode ids from the selected OVON split",
+    )
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--gpu-id", type=int, default=defaults["gpu_id"])
+    parser.add_argument("--max-steps", type=int, default=defaults["max_steps"])
+    parser.add_argument(
+        "--max-subtask-steps",
+        type=int,
+        default=defaults["max_subtask_steps"],
+    )
+    parser.add_argument("--results-root", type=str, default=None)
     parser.add_argument("--results-dir", type=str, default=None)
-    parser.set_defaults(save_step_images=True)
+    parser.add_argument(
+        "--skip-sr1",
+        "--skip-existing-sr1",
+        dest="skip_sr1",
+        action="store_true",
+        help="skip selected episodes that already have successful result logs",
+    )
+    parser.add_argument(
+        "--parallel-workers",
+        type=int,
+        default=1,
+        help="accepted for launcher parity; OVON currently runs episodes serially",
+    )
+    parser.set_defaults(
+        save_step_images=bool(defaults["save_step_images"]),
+        save_gif=bool(defaults["save_gif"]),
+    )
     parser.add_argument(
         "--save-step-images",
         dest="save_step_images",
@@ -384,6 +630,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="disable per-step visualization PNG saving",
     )
     parser.add_argument("--save-gif", action="store_true")
+    parser.add_argument("--no-save-gif", dest="save_gif", action="store_false")
     parser.add_argument(
         "--no-report",
         action="store_true",
@@ -393,16 +640,34 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = build_arg_parser()
-    args = parser.parse_args(list(argv) if argv is not None else None)
+    raw_argv = list(argv) if argv is not None else list(sys.argv[1:])
+    bootstrap_parser = argparse.ArgumentParser(add_help=False)
+    bootstrap_parser.add_argument("--run-config", type=str, default=_default_run_config())
+    bootstrap_args, _ = bootstrap_parser.parse_known_args(raw_argv)
+    parser = build_arg_parser(_load_run_defaults(bootstrap_args.run_config))
+    args = parser.parse_args(raw_argv)
     args.vlm_api_config = resolve_api_config_path(
         str(args.vlm_api_config or _default_api_config(args.runtime))
     )
+    results_root = (
+        resolve_results_root_path(args.results_root)
+        if str(args.results_root or "").strip()
+        else None
+    )
     args.results_dir = str(
         args.results_dir
-        or _default_results_dir_for_runtime(args.runtime, args.vlm_api_config)
+        or _default_results_dir_for_runtime(
+            args.runtime,
+            args.vlm_api_config,
+            results_root=results_root,
+        )
         or _default_results_dir()
     )
+    if int(args.parallel_workers or 1) > 1:
+        print(
+            "[OVON-ObjectNav] parallel-workers is accepted for launcher parity, "
+            "but OVON episodes currently run serially."
+        )
     model_stack_builder = _select_model_stack_builder(args.runtime)
 
     ovon_config = _prepare_ovon_config(
@@ -415,15 +680,40 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     requested_episode_ids = _parse_episode_ids(args.episode_ids)
     discovery_dataset = _load_dataset_for_episodes(ovon_config, requested_episode_ids or None)
+    episode_lookup = _index_dataset_episodes(discovery_dataset)
     if requested_episode_ids:
         episode_ids = requested_episode_ids
+    elif bool(args.random):
+        episode_ids = _discover_random_episode_ids(
+            discovery_dataset,
+            num_episodes=args.num_episodes,
+            seed=args.seed,
+        )
+    elif args.episode_id is not None:
+        episode_ids = _discover_episode_ids_from_start(
+            discovery_dataset,
+            episode_id=int(args.episode_id),
+            num_episodes=args.num_episodes,
+        )
     else:
         episode_ids = _discover_episode_ids(
             discovery_dataset,
             num_episodes=args.num_episodes,
         )
 
+    if bool(args.skip_sr1):
+        episode_ids = _filter_existing_sr1(
+            episode_ids=episode_ids,
+            results_dir=args.results_dir,
+        )
+
     if not episode_ids:
+        if bool(args.skip_sr1):
+            print(
+                "[OVON-ObjectNav] no episodes need to run: requested selection "
+                "already has SR=1 results"
+            )
+            return 0
         raise RuntimeError("No OVON episodes selected for evaluation")
 
     os.makedirs(args.results_dir, exist_ok=True)
@@ -440,6 +730,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             save_step_images=bool(args.save_step_images),
             save_gif=bool(args.save_gif),
             model_stack_builder=model_stack_builder,
+            base_dataset=discovery_dataset,
+            episode_lookup=episode_lookup,
         )
         saved_metrics = _resolve_saved_metrics(result)
         all_results.append(
@@ -537,6 +829,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if not bool(args.no_report):
         try:
+            from navigation_system.runtime.results_report import generate_results_report
+
             generate_results_report(
                 args.results_dir,
                 save=True,

@@ -5,10 +5,10 @@ from __future__ import annotations
 from typing import Optional
 
 from navigation_system.controller.navigation_controller import VLMNavigationController
-from navigation_system.object_navigation.runtime_factory import (
+from navigation_system.runtime.object_navigation.runtime_factory import (
     build_ovon_navigation_model_stack,
 )
-from navigation_system.object_navigation.thresholds import (
+from navigation_system.runtime.object_navigation.thresholds import (
     OVON_AUTOCOMPLETE_OPENING_M,
     OVON_AUTOCOMPLETE_SOLID_M,
     OVON_AUTOCOMPLETE_TOPK,

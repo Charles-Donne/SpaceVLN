@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, Optional, Sequence, Tuple
 
-from navigation_system.object_navigation.prompts.cache_builders import (
+from navigation_system.vlm.prompts.object_navigation.cache_builders import (
     build_ovon_action_cache_prompt_bundle,
 )
 from navigation_system.vlm.api.qwen_context_cache_client import QwenContextCacheMixin

@@ -32,7 +32,7 @@ def _augment_parser(parser) -> None:
         type=str,
         choices=RUNTIME_CHOICES,
         default="standard",
-        help="运行时模式：standard 或 context_cache",
+        help="Runtime profile: standard or context_cache",
     )
     parser.add_argument(
         "--ablation",
@@ -41,13 +41,13 @@ def _augment_parser(parser) -> None:
         type=str,
         dest="ablation_preset",
         default=None,
-        help="消融预设名或消融 yaml 路径",
+        help="Ablation preset name or ablation YAML path",
     )
     parser.add_argument(
         "--ablation-config",
         type=str,
         default=None,
-        help="消融实验配置文件路径",
+        help="Explicit ablation experiment config path",
     )
 
 
@@ -66,7 +66,7 @@ def _resolve_ablation_config(raw_value: str | None) -> str | None:
         candidate = os.path.abspath(candidate)
 
     if not os.path.exists(candidate):
-        raise FileNotFoundError(f"消融配置不存在: {text}")
+        raise FileNotFoundError(f"Ablation config does not exist: {text}")
     return candidate
 
 

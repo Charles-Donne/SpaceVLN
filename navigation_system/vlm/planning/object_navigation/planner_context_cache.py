@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
 
-from navigation_system.object_navigation.prompts.cache_builders import (
+from navigation_system.vlm.prompts.object_navigation.cache_builders import (
     build_ovon_initial_planner_cache_prompt_bundle,
     build_ovon_verify_planner_cache_prompt_bundle,
 )

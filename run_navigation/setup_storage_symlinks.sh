@@ -26,7 +26,7 @@ BACKUP_ROOT=""
 usage() {
     cat <<'EOF'
 Usage:
-  bash run_r2r/setup_storage_symlinks.sh [options]
+  bash run_navigation/setup_storage_symlinks.sh [options]
 
 Purpose:
   Keep SpaceVLN paths unified at workspace defaults while placing large data/results
@@ -56,11 +56,11 @@ Options:
   -h, --help               Show this message
 
 Examples:
-  bash run_r2r/setup_storage_symlinks.sh \
+  bash run_navigation/setup_storage_symlinks.sh \
     --result-target /mnt/ssd/nav_ws/result \
     --backup-existing
 
-  bash run_r2r/setup_storage_symlinks.sh \
+  bash run_navigation/setup_storage_symlinks.sh \
     --disk-root /mnt/ssd/nav_ws \
     --both \
     --backup-existing

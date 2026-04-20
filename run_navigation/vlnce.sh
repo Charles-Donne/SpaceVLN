@@ -11,29 +11,29 @@ source "$SCRIPT_DIR/ablation_common.sh"
 
 spacevln_navigation_print_usage() {
     cat <<'EOF'
-用法:
-  bash run_r2r/vlm_navigation.sh [--runtime standard|context_cache] [--ablation PRESET_OR_YAML] [episode_args...]
+Usage:
+  bash run_navigation/vlnce.sh [--runtime standard|context_cache] [--ablation PRESET_OR_YAML] [episode_args...]
 
-模式:
-  --runtime standard        标准运行（默认）
-  --runtime context_cache   显式 context cache 运行
+Runtime:
+  --runtime standard        Standard runtime (default)
+  --runtime context_cache   Explicit context-cache runtime
 
-保存:
-    --results-root DIR        兼容保留：覆盖总根目录（默认不建议使用）
-    --results-dir DIR         兼容保留：覆盖最终目录（默认不建议使用）
+Results:
+    --results-root DIR        Compatibility override for the results root
+    --results-dir DIR         Compatibility override for the final results directory
 
-路径策略（推荐）:
-    不再覆盖路径，统一使用默认地址：
-        结果输出: nav_ws/result
-        数据加载: nav_ws/data
-    如需把存储放到其他磁盘，请在默认目录上建立软连接：
-        bash run_r2r/setup_storage_symlinks.sh --disk-root /abs/path/to/nav_ws_storage --both --backup-existing
+Path policy:
+    Use the unified workspace defaults whenever possible:
+        Results: nav_ws/result
+        Data:    nav_ws/data
+    To place large storage on another disk, create symlinks at the default paths:
+        bash run_navigation/setup_storage_symlinks.sh --disk-root /abs/path/to/nav_ws_storage --both --backup-existing
 
-命令行输出（默认）:
-    仅打印关键流程与错误：episode 开始/结束、失败原因、最终评测汇总。
-    context-cache 命中率等详细统计不再打印到命令行，改为保存到结果目录 reports/cache。
+Console output:
+    The launcher prints only key progress and failures by default.
+    Detailed context-cache statistics are saved under reports/cache instead of being spammed to stdout.
 
-消融:
+Ablation:
   --ablation landmark
   --ablation space_structure
   --ablation planning_reasoning
@@ -42,18 +42,18 @@ spacevln_navigation_print_usage() {
   --ablation both
   --ablation /abs/path/to/config.yaml
 
-episode_args 与原来保持一致，例如:
+Episode-arg examples:
   832
   832 300
   1 100 260 4
   random 20 260 all 4
 
-示例:
-  bash run_r2r/vlm_navigation.sh 1 10 260 4
-  bash run_r2r/vlm_navigation.sh --runtime context_cache 1 10 260 4
-  bash run_r2r/vlm_navigation.sh --ablation landmark 1 100 260 4
-  bash run_r2r/vlm_navigation.sh --ablation thinking_reasoning 1 100 260 4
-  bash run_r2r/vlm_navigation.sh --runtime context_cache --ablation space_structure 1 100 260 4
+Examples:
+  bash run_navigation/vlnce.sh 1 10 260 4
+  bash run_navigation/vlnce.sh --runtime context_cache 1 10 260 4
+  bash run_navigation/vlnce.sh --ablation landmark 1 100 260 4
+  bash run_navigation/vlnce.sh --ablation thinking_reasoning 1 100 260 4
+  bash run_navigation/vlnce.sh --runtime context_cache --ablation space_structure 1 100 260 4
 EOF
 }
 
@@ -75,7 +75,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         --runtime)
             if [[ $# -lt 2 ]]; then
-                echo "❌ --runtime 后面需要 standard 或 context_cache" >&2
+                echo "❌ --runtime requires standard or context_cache" >&2
                 exit 1
             fi
             RUNTIME_MODE="$2"
@@ -87,7 +87,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         --ablation|--preset|--ablation-preset|--ablation-config)
             if [[ $# -lt 2 ]]; then
-                echo "❌ $1 后面需要 preset 名称或 yaml 路径" >&2
+                echo "❌ $1 requires a preset name or YAML path" >&2
                 exit 1
             fi
             ABLATION_RAW="$2"
@@ -99,7 +99,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         --results-root)
             if [[ $# -lt 2 ]]; then
-                echo "❌ --results-root 后面需要目录" >&2
+                echo "❌ --results-root requires a directory" >&2
                 exit 1
             fi
             RESULT_PATH_ARGS+=(--results-root "$2")
@@ -111,7 +111,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         --results-dir)
             if [[ $# -lt 2 ]]; then
-                echo "❌ --results-dir 后面需要目录" >&2
+                echo "❌ --results-dir requires a directory" >&2
                 exit 1
             fi
             RESULT_PATH_ARGS+=(--results-dir "$2")
@@ -132,27 +132,27 @@ case "${RUNTIME_MODE}" in
     standard|context_cache)
         ;;
     *)
-        echo "❌ 不支持的 runtime: ${RUNTIME_MODE}" >&2
-        echo "   可选值: standard | context_cache" >&2
+        echo "❌ Unsupported runtime: ${RUNTIME_MODE}" >&2
+        echo "   Supported values: standard | context_cache" >&2
         exit 1
         ;;
 esac
 
 if [[ "${RUNTIME_MODE}" == "context_cache" ]]; then
     API_CONFIG="${VLM_API_CONFIG:-$(spacevln_default_context_cache_api_config)}"
-    API_MISSING_MESSAGE="context-cache API 配置不存在"
-    API_MISSING_HINT="请从 navigation_system/config/vlm/vlm_api_config_context_cache.yaml.template 复制并填写"
+    API_MISSING_MESSAGE="Context-cache API config does not exist"
+    API_MISSING_HINT="Copy and fill navigation_system/config/vlm/vlm_api_config_context_cache.yaml.template"
 else
     API_CONFIG="${VLM_API_CONFIG:-navigation_system/config/vlm/vlm_api_config.yaml}"
-    API_MISSING_MESSAGE="API 配置不存在"
-    API_MISSING_HINT="请从 navigation_system/config/vlm/vlm_api_config.yaml.template 复制并配置"
+    API_MISSING_MESSAGE="API config does not exist"
+    API_MISSING_HINT="Copy and fill navigation_system/config/vlm/vlm_api_config.yaml.template"
 fi
 
 EXTRA_ARGS=(--runtime "$RUNTIME_MODE" "${RESULT_PATH_ARGS[@]}")
 
 if [[ ${#RESULT_PATH_ARGS[@]} -gt 0 ]]; then
-    echo "⚠️  检测到 --results-root/--results-dir 覆盖参数。"
-    echo "   当前推荐统一默认路径（nav_ws/result），如需换盘请使用软连接脚本。"
+    echo "⚠️  Detected --results-root/--results-dir overrides."
+    echo "   The unified nav_ws/result layout is recommended; use the symlink helper if you need another disk."
 fi
 
 if [[ -n "$ABLATION_RAW" ]]; then

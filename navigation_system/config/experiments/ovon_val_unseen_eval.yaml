@@ -1,0 +1,10 @@
+OVON:
+  runtime: context_cache
+  official_exp_config: ovon/config/experiments/transformer_dagger.yaml
+  split: val_unseen
+  data_path: data/datasets/ovon/hm3d/v1/val_unseen/val_unseen_hard.json.gz
+  gpu_id: 0
+  max_steps: 500
+  max_subtask_steps: 4
+  save_step_images: true
+  save_gif: false

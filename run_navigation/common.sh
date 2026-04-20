@@ -1,5 +1,22 @@
 #!/bin/bash
 
+spacevln_shell_name_for_entry() {
+    local entry_script="$1"
+    local entry_name
+    entry_name="$(basename "$entry_script" .py)"
+    case "$entry_name" in
+        vlm_navigation)
+            printf '%s\n' "vlnce.sh"
+            ;;
+        object_navigation)
+            printf '%s\n' "object_navigation.sh"
+            ;;
+        *)
+            printf '%s.sh\n' "$entry_name"
+            ;;
+    esac
+}
+
 spacevln_common_dir() {
     cd "$(dirname "${BASH_SOURCE[0]}")" && pwd
 }
@@ -155,7 +172,7 @@ spacevln_default_context_cache_api_config() {
 spacevln_validate_parallel_workers() {
     local workers="$1"
     if ! [[ "$workers" =~ ^[0-9]+$ ]] || [ "$workers" -lt 1 ]; then
-        echo "❌ parallel_workers 必须是大于等于 1 的正整数: $workers"
+        echo "❌ parallel_workers must be a positive integer >= 1: $workers"
         return 1
     fi
 }
@@ -170,8 +187,8 @@ spacevln_mode_arg() {
             printf '%s\n' "--skip-sr1"
             ;;
         *)
-            echo "❌ 不支持的模式: $mode" >&2
-            echo "   可选模式: all | skip-sr1" >&2
+            echo "❌ Unsupported mode: $mode" >&2
+            echo "   Supported modes: all | skip-sr1" >&2
             return 1
             ;;
     esac
@@ -210,7 +227,7 @@ spacevln_dispatch_navigation_cli() {
     cd "$project_root" || exit 1
 
     if [ ! -f "$config_file" ]; then
-        echo "❌ Habitat 配置不存在: $config_file"
+        echo "❌ Habitat config does not exist: $config_file"
         exit 1
     fi
 
@@ -263,7 +280,7 @@ spacevln_dispatch_navigation_cli() {
         if [[ "$fifth_arg" =~ ^[0-9]+$ ]]; then
             parallel_workers="$fifth_arg"
         else
-            echo "❌ parallel_workers 必须是正整数: $fifth_arg"
+            echo "❌ parallel_workers must be a positive integer: $fifth_arg"
             exit 1
         fi
     fi
@@ -297,7 +314,7 @@ spacevln_dispatch_navigation_cli() {
         local episode_ids="$second_arg"
         local max_steps="${third_arg:-}"
         if [[ -z "$episode_ids" ]]; then
-            echo "❌ list 模式需要 episode id 列表"
+            echo "❌ list mode requires an explicit episode-id list"
             exit 1
         fi
         local args=(
@@ -315,13 +332,15 @@ spacevln_dispatch_navigation_cli() {
     fi
 
     if ! [[ "$first_arg" =~ ^[0-9]+$ ]]; then
-        echo "❌ 不支持的第一个参数: $first_arg"
-        echo "   可用写法:"
-        echo "   bash run_r2r/$(basename "$entry_script" .py).sh 832"
-        echo "   bash run_r2r/$(basename "$entry_script" .py).sh 832 300"
-        echo "   bash run_r2r/$(basename "$entry_script" .py).sh 1 600 260 5"
-        echo "   bash run_r2r/$(basename "$entry_script" .py).sh random 20 260 all 4"
-        echo "   bash run_r2r/$(basename "$entry_script" .py).sh --episode-id 832 --num-episodes 1"
+        local shell_name
+        shell_name="$(spacevln_shell_name_for_entry "$entry_script")"
+        echo "❌ Unsupported first positional argument: $first_arg"
+        echo "   Supported examples:"
+        echo "   bash run_navigation/${shell_name} 832"
+        echo "   bash run_navigation/${shell_name} 832 300"
+        echo "   bash run_navigation/${shell_name} 1 600 260 5"
+        echo "   bash run_navigation/${shell_name} random 20 260 all 4"
+        echo "   bash run_navigation/${shell_name} --episode-id 832 --num-episodes 1"
         exit 1
     fi
 

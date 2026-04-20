@@ -56,7 +56,7 @@ SpaceVLN/
 │   ├── detection/         # GroundingDINO + SAM / RepViT-SAM integration
 │   └── ablation/          # isolated ablation subsystem
 ├── habitat_extensions/    # Habitat task, sensors, measures, simulator extensions
-├── run_r2r/               # shell entrypoints for evaluation and reporting
+├── run_navigation/               # shell entrypoints for evaluation and reporting
 ├── docs/                  # architecture and deployment notes
 └── vlm_navigation*.py     # Python entrypoints
 ```
@@ -233,7 +233,7 @@ Both templates are written to prefer environment variables such as:
 ### Standard evaluation
 
 ```bash
-bash run_r2r/vlm_navigation.sh 1 10 260 4
+bash run_navigation/vlnce.sh 1 10 260 4
 ```
 
 This runs:
@@ -246,20 +246,20 @@ This runs:
 ### Explicit-context-cache evaluation
 
 ```bash
-bash run_r2r/vlm_navigation.sh --runtime context_cache 1 10 260 4
+bash run_navigation/vlnce.sh --runtime context_cache 1 10 260 4
 ```
 
 ### Single-episode evaluation
 
 ```bash
-bash run_r2r/vlm_navigation.sh 832
-bash run_r2r/vlm_navigation.sh 832 300
+bash run_navigation/vlnce.sh 832
+bash run_navigation/vlnce.sh 832 300
 ```
 
 ### Random evaluation
 
 ```bash
-bash run_r2r/vlm_navigation.sh random 20 260 all 4
+bash run_navigation/vlnce.sh random 20 260 all 4
 ```
 
 ### Direct Python entrypoint
@@ -278,7 +278,7 @@ python vlm_navigation.py \
 Help menus:
 
 ```bash
-bash run_r2r/vlm_navigation.sh --help
+bash run_navigation/vlnce.sh --help
 ```
 
 ### CLI Output Policy
@@ -310,25 +310,25 @@ If you need to place heavy data/results on another disk, keep defaults in config
 Use the helper script:
 
 ```bash
-bash run_r2r/setup_storage_symlinks.sh --help
+bash run_navigation/setup_storage_symlinks.sh --help
 ```
 
 Common examples:
 
 ```bash
 # move only result storage to another disk (recommended first step)
-bash run_r2r/setup_storage_symlinks.sh \
+bash run_navigation/setup_storage_symlinks.sh \
   --result-target /abs/path/to/nav_ws_storage/result \
   --backup-existing
 
 # move both data and result storage to another disk
-bash run_r2r/setup_storage_symlinks.sh \
+bash run_navigation/setup_storage_symlinks.sh \
   --disk-root /abs/path/to/nav_ws_storage \
   --both \
   --backup-existing
 
 # preview operations only
-bash run_r2r/setup_storage_symlinks.sh \
+bash run_navigation/setup_storage_symlinks.sh \
   --disk-root /abs/path/to/nav_ws_storage \
   --both \
   --backup-existing \
@@ -342,23 +342,23 @@ This keeps code/config paths unified while allowing storage placement on large d
 Use the reporting entrypoint to summarize already-generated episode logs without rerunning navigation:
 
 ```bash
-bash run_r2r/vlm_report_range.sh --help
+bash run_navigation/report_range.sh --help
 ```
 
 Common examples:
 
 ```bash
 # report a fixed id range for one model directory
-bash run_r2r/vlm_report_range.sh 1500 1799 qwen3.5-plus__qwen3.5-flash_cache
+bash run_navigation/report_range.sh 1500 1799 qwen3.5-plus__qwen3.5-flash_cache
 
 # report all available logged episodes in one model directory
-bash run_r2r/vlm_report_range.sh all all qwen3.5-plus__qwen3.5-flash_cache
+bash run_navigation/report_range.sh all all qwen3.5-plus__qwen3.5-flash_cache
 
 # report all available logged episodes under results root (all models)
-bash run_r2r/vlm_report_range.sh --start-id all --end-id all --results all
+bash run_navigation/report_range.sh --start-id all --end-id all --results all
 
 # report multiple models in one command
-bash run_r2r/vlm_report_range.sh --results qwen3.5-plus__qwen3.5-flash_cache,gemini2.5pro__gemini2.5flash
+bash run_navigation/report_range.sh --results qwen3.5-plus__qwen3.5-flash_cache,gemini2.5pro__gemini2.5flash
 ```
 
 Notes:
@@ -384,10 +384,10 @@ Supported presets include:
 Example commands:
 
 ```bash
-bash run_r2r/vlm_navigation.sh --ablation landmark 1 100 260 4
-bash run_r2r/vlm_navigation.sh --ablation planning_action_reasoning 1 100 260 4
-bash run_r2r/vlm_navigation.sh --ablation thinking_reasoning 1 100 260 4
-bash run_r2r/vlm_navigation.sh --runtime context_cache --ablation space_structure 1 100 260 4
+bash run_navigation/vlnce.sh --ablation landmark 1 100 260 4
+bash run_navigation/vlnce.sh --ablation planning_action_reasoning 1 100 260 4
+bash run_navigation/vlnce.sh --ablation thinking_reasoning 1 100 260 4
+bash run_navigation/vlnce.sh --runtime context_cache --ablation space_structure 1 100 260 4
 ```
 
 Further details are documented in:
@@ -447,7 +447,6 @@ For day-to-day experiments, the most important files are:
 
 See also:
 
-- `navigation_system/config/README.md`
 - `docs/ARCHITECTURE.md`
 
 ## Docker
@@ -466,8 +465,6 @@ Typical build command:
 cd ..
 docker buildx build --platform linux/amd64 -f Dockerfile.spacevln -t spacevln:v1 .
 ```
-
-See `docs/dockerhub.md` for a complete build / smoke-test / push workflow.
 
 ## Reproducibility Notes
 

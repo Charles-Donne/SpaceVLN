@@ -9,7 +9,9 @@ from typing import Any, Iterable, List, Optional, Sequence
 import numpy as np
 
 from habitat_extensions.pose_utils import get_rel_pose_change, get_sim_location
-from navigation_system.object_navigation.goal_task import build_raw_object_goal_instruction
+from navigation_system.env.object_navigation.goal_task import (
+    build_raw_object_goal_instruction,
+)
 
 
 ACTION_ID_TO_NAME = {

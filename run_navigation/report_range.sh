@@ -43,42 +43,42 @@ REPORT_LOAD_WORKERS="${SPACEVLN_REPORT_WORKERS:-$DEFAULT_REPORT_WORKERS}"
 REPORT_SUMMARY_ONLY=0
 
 usage() {
-    echo "用法:"
-    echo "  bash run_r2r/vlm_report_range.sh [start_episode_id|all] [end_episode_id|all] [results_selector]"
-    echo "  bash run_r2r/vlm_report_range.sh --start-id ID|all --end-id ID|all --results DIR|NAME|all"
-    echo "  bash run_r2r/vlm_report_range.sh --fast --start-id all --end-id all --results DIR|NAME"
+    echo "Usage:"
+    echo "  bash run_navigation/report_range.sh [start_episode_id|all] [end_episode_id|all] [results_selector]"
+    echo "  bash run_navigation/report_range.sh --start-id ID|all --end-id ID|all --results DIR|NAME|all"
+    echo "  bash run_navigation/report_range.sh --fast --start-id all --end-id all --results DIR|NAME"
     echo ""
-    echo "示例:"
-    echo "  bash run_r2r/vlm_report_range.sh 1500 1799"
-    echo "  bash run_r2r/vlm_report_range.sh 1 50 qwen3.5-plus__qwen3.5-flash_cache"
-    echo "  bash run_r2r/vlm_report_range.sh 1500 1799 /abs/path/to/result/vlnce/qwen3.5-plus__qwen3.5-flash"
-    echo "  bash run_r2r/vlm_report_range.sh all all"
-    echo "  bash run_r2r/vlm_report_range.sh --start-id 1600 --end-id all --results all"
-    echo "  bash run_r2r/vlm_report_range.sh --results qwen3.5-plus__qwen3.5-flash,gemini2.5pro__gemini2.5flash"
-    echo "  bash run_r2r/vlm_report_range.sh --fast all all ablation/no-space-structure/qwen3.5-plus__qwen3.5-flash_cache"
+    echo "Examples:"
+    echo "  bash run_navigation/report_range.sh 1500 1799"
+    echo "  bash run_navigation/report_range.sh 1 50 qwen3.5-plus__qwen3.5-flash_cache"
+    echo "  bash run_navigation/report_range.sh 1500 1799 /abs/path/to/result/vlnce/qwen3.5-plus__qwen3.5-flash"
+    echo "  bash run_navigation/report_range.sh all all"
+    echo "  bash run_navigation/report_range.sh --start-id 1600 --end-id all --results all"
+    echo "  bash run_navigation/report_range.sh --results qwen3.5-plus__qwen3.5-flash,gemini2.5pro__gemini2.5flash"
+    echo "  bash run_navigation/report_range.sh --fast all all ablation/no-space-structure/qwen3.5-plus__qwen3.5-flash_cache"
     echo ""
-    echo "说明:"
-    echo "  只读取已有 log 生成汇总，不会重新跑 episode。"
-    echo "  episode 上界不再写死 1800，会按 exp-config 对应测试集自动解析。"
-    echo "  start/end 支持 all；两者都省略时默认统计已有 log 的全部 episode。"
-    echo "  只给 start-id 时，end-id 自动补到测试集最大 episode。"
-    echo "  只给 end-id 时，start-id 自动补到测试集最小 episode。"
-    echo "  --summary-only/--fast: 只保存 summary + metrics.json（不生成 episode 级 CSV/MD，速度更快）。"
-    echo "  results_selector 支持:"
-    echo "    - 绝对路径"
-    echo "    - 已存在的相对路径"
-    echo "    - 默认 result/vlnce 下的实验目录名"
-    echo "    - all (扫描 results root 下全部含 log 的实验目录)"
-    echo "    - 逗号分隔多个目录名或路径"
+    echo "Notes:"
+    echo "  Reads existing logs only and regenerates reports without rerunning episodes."
+    echo "  The episode upper bound is inferred from the dataset in exp-config instead of being hard-coded to 1800."
+    echo "  start/end support all; when both are omitted, the script summarizes all existing logs."
+    echo "  If only start-id is provided, end-id expands to the dataset maximum."
+    echo "  If only end-id is provided, start-id expands to the dataset minimum."
+    echo "  --summary-only/--fast saves only summary + metrics.json and skips episode-level CSV/MD for speed."
+    echo "  results_selector supports:"
+    echo "    - absolute paths"
+    echo "    - existing relative paths"
+    echo "    - experiment names under the default result/vlnce root"
+    echo "    - all (scan every experiment directory containing logs)"
+    echo "    - comma-separated directory names or paths"
 }
 
 print_available_results_dirs() {
     if [ -z "$RESULTS_ROOT" ]; then
         RESULTS_ROOT="$(spacevln_default_results_root "$PYTHON_BIN")"
     fi
-    echo "可选实验目录:"
+    echo "Available experiment directories:"
     if [ ! -d "$RESULTS_ROOT" ]; then
-        echo "  (results 根目录不存在: $RESULTS_ROOT)"
+        echo "  (results root does not exist: $RESULTS_ROOT)"
         return
     fi
 
@@ -90,7 +90,7 @@ print_available_results_dirs() {
 
     local total="${#candidates[@]}"
     if [ "$total" -eq 0 ]; then
-        echo "  (当前没有可统计的实验目录: 缺少 log 子目录)"
+        echo "  (no reportable experiment directories found: missing log subdirectories)"
         return
     fi
 
@@ -106,7 +106,7 @@ print_available_results_dirs() {
 
     if [ "$total" -gt "$max_show" ]; then
         local omitted=$((total - max_show))
-        echo "  ... (还省略 $omitted 个目录)"
+        echo "  ... ($omitted additional directories omitted)"
     fi
 }
 
@@ -250,7 +250,7 @@ resolve_results_targets() {
                     RESULTS_ROOT="$(spacevln_default_results_root "$PYTHON_BIN")"
                 fi
                 if [ ! -d "$RESULTS_ROOT" ]; then
-                    echo "❌ results 根目录不存在: $RESULTS_ROOT" >&2
+                    echo "❌ results root does not exist: $RESULTS_ROOT" >&2
                     return 1
                 fi
 
@@ -276,14 +276,14 @@ resolve_results_targets() {
         seen["$target"]=1
 
         if [ ! -d "$target" ]; then
-            echo "❌ 目录不存在: $target" >&2
+            echo "❌ Directory does not exist: $target" >&2
             return 1
         fi
         RESULTS_TARGET_DIRS+=("$target")
     done
 
     if [ "${#RESULTS_TARGET_DIRS[@]}" -eq 0 ]; then
-        echo "❌ 没有可统计的结果目录" >&2
+        echo "❌ No result directories are available for reporting" >&2
         return 1
     fi
 
@@ -298,7 +298,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         --start-id)
             if [[ $# -lt 2 ]]; then
-                echo "❌ --start-id 后面需要 ID 或 all"
+                echo "❌ --start-id requires an ID or all"
                 exit 1
             fi
             START_ID_RAW="$2"
@@ -310,7 +310,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         --end-id)
             if [[ $# -lt 2 ]]; then
-                echo "❌ --end-id 后面需要 ID 或 all"
+                echo "❌ --end-id requires an ID or all"
                 exit 1
             fi
             END_ID_RAW="$2"
@@ -327,7 +327,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         --results|--results-dir|--model|--models)
             if [[ $# -lt 2 ]]; then
-                echo "❌ $1 后面需要目录、目录名、all 或逗号分隔列表"
+                echo "❌ $1 requires a directory, experiment name, all, or a comma-separated list"
                 exit 1
             fi
             RESULTS_SELECTOR="$2"
@@ -339,7 +339,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         --results-root)
             if [[ $# -lt 2 ]]; then
-                echo "❌ --results-root 后面需要目录"
+                echo "❌ --results-root requires a directory"
                 exit 1
             fi
             RESULTS_ROOT_OVERRIDE="$2"
@@ -351,7 +351,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         --exp-config)
             if [[ $# -lt 2 ]]; then
-                echo "❌ --exp-config 后面需要配置文件路径"
+                echo "❌ --exp-config requires a config-file path"
                 exit 1
             fi
             CONFIG_FILE="$2"
@@ -363,7 +363,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         --load-workers)
             if [[ $# -lt 2 ]]; then
-                echo "❌ --load-workers 后面需要正整数"
+                echo "❌ --load-workers requires a positive integer"
                 exit 1
             fi
             REPORT_LOAD_WORKERS="$2"
@@ -396,7 +396,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [ "${#POSITIONAL_ARGS[@]}" -gt 3 ]; then
-    echo "❌ 参数过多"
+    echo "❌ Too many positional arguments"
     usage
     exit 1
 fi
@@ -412,24 +412,24 @@ if [ -z "$RESULTS_SELECTOR" ] && [ "${#POSITIONAL_ARGS[@]}" -ge 3 ]; then
 fi
 
 if [ ! -f "$CONFIG_FILE" ]; then
-    echo "❌ Habitat 配置不存在: $CONFIG_FILE"
+    echo "❌ Habitat config does not exist: $CONFIG_FILE"
     exit 1
 fi
 
 if ! [[ "$REPORT_LOAD_WORKERS" =~ ^[0-9]+$ ]] || [ "$REPORT_LOAD_WORKERS" -lt 1 ]; then
-    echo "❌ SPACEVLN_REPORT_WORKERS / --load-workers 必须是大于等于 1 的正整数: $REPORT_LOAD_WORKERS"
+    echo "❌ SPACEVLN_REPORT_WORKERS / --load-workers must be a positive integer >= 1: $REPORT_LOAD_WORKERS"
     exit 1
 fi
 
 resolve_dataset_episode_bounds
 
 if ! START_ID="$(normalize_episode_token "$START_ID_RAW")"; then
-    echo "❌ start_episode_id 只支持正整数或 all: $START_ID_RAW"
+    echo "❌ start_episode_id only accepts positive integers or all: $START_ID_RAW"
     exit 1
 fi
 
 if ! END_ID="$(normalize_episode_token "$END_ID_RAW")"; then
-    echo "❌ end_episode_id 只支持正整数或 all: $END_ID_RAW"
+    echo "❌ end_episode_id only accepts positive integers or all: $END_ID_RAW"
     exit 1
 fi
 
@@ -442,28 +442,28 @@ fi
 
 if [ -n "$START_ID" ]; then
     if [ "$START_ID" -lt "$DATASET_MIN_EPISODE_ID" ]; then
-        echo "⚠️  start_episode_id=$START_ID 小于测试集最小 ID $DATASET_MIN_EPISODE_ID，自动截断"
+        echo "⚠️  start_episode_id=$START_ID is below the dataset minimum $DATASET_MIN_EPISODE_ID; clipping automatically"
         START_ID="$DATASET_MIN_EPISODE_ID"
     fi
     if [ "$START_ID" -gt "$DATASET_MAX_EPISODE_ID" ]; then
-        echo "❌ start_episode_id 超出测试集最大 ID $DATASET_MAX_EPISODE_ID: $START_ID"
+        echo "❌ start_episode_id exceeds the dataset maximum $DATASET_MAX_EPISODE_ID: $START_ID"
         exit 1
     fi
 fi
 
 if [ -n "$END_ID" ]; then
     if [ "$END_ID" -lt "$DATASET_MIN_EPISODE_ID" ]; then
-        echo "❌ end_episode_id 小于测试集最小 ID $DATASET_MIN_EPISODE_ID: $END_ID"
+        echo "❌ end_episode_id is below the dataset minimum $DATASET_MIN_EPISODE_ID: $END_ID"
         exit 1
     fi
     if [ "$END_ID" -gt "$DATASET_MAX_EPISODE_ID" ]; then
-        echo "⚠️  end_episode_id=$END_ID 超出测试集最大 ID $DATASET_MAX_EPISODE_ID，自动截断"
+        echo "⚠️  end_episode_id=$END_ID exceeds the dataset maximum $DATASET_MAX_EPISODE_ID; clipping automatically"
         END_ID="$DATASET_MAX_EPISODE_ID"
     fi
 fi
 
 if [ -n "$START_ID" ] && [ -n "$END_ID" ] && [ "$END_ID" -lt "$START_ID" ]; then
-    echo "❌ end_episode_id 不能小于 start_episode_id: $START_ID -> $END_ID"
+    echo "❌ end_episode_id cannot be smaller than start_episode_id: $START_ID -> $END_ID"
     exit 1
 fi
 
@@ -490,21 +490,21 @@ if ! resolve_results_targets "$RESULTS_SELECTOR" "$DEFAULT_RESULTS_DIR"; then
     exit 1
 fi
 
-echo "📦 测试集 episode 范围: [$DATASET_MIN_EPISODE_ID, $DATASET_MAX_EPISODE_ID] (count=$DATASET_TOTAL_EPISODES)"
+echo "📦 Dataset episode range: [$DATASET_MIN_EPISODE_ID, $DATASET_MAX_EPISODE_ID] (count=$DATASET_TOTAL_EPISODES)"
 if [ "$REPORT_SUMMARY_ONLY" -eq 1 ]; then
-    echo "⚡ 快速模式: 仅汇总指标（summary + metrics.json），跳过 episode 级 CSV/MD。"
+    echo "⚡ Fast mode: summary metrics only (summary + metrics.json), skipping episode-level CSV/MD."
 fi
 
 overall_rc=0
 for RESULTS_DIR in "${RESULTS_TARGET_DIRS[@]}"; do
     if [ ! -d "$RESULTS_DIR" ]; then
-        echo "❌ 目录不存在: $RESULTS_DIR"
+        echo "❌ Directory does not exist: $RESULTS_DIR"
         overall_rc=1
         continue
     fi
 
     if [ ! -d "$RESULTS_DIR/log" ]; then
-        echo "⚠️  跳过目录（无 log 子目录）: $RESULTS_DIR"
+        echo "⚠️  Skipping directory (missing log subdirectory): $RESULTS_DIR"
         overall_rc=1
         continue
     fi
@@ -517,7 +517,7 @@ for RESULTS_DIR in "${RESULTS_TARGET_DIRS[@]}"; do
     fi
 
     echo ""
-    echo "📊 生成结果报告"
+    echo "📊 Generating results report"
     echo "   Range: $local_range"
     echo "   Source: $RESULTS_DIR"
     echo "   Output: $local_output"
@@ -545,7 +545,7 @@ for RESULTS_DIR in "${RESULTS_TARGET_DIRS[@]}"; do
     fi
 
     if ! "${cmd[@]}"; then
-        echo "❌ 统计失败: $RESULTS_DIR"
+        echo "❌ Report generation failed: $RESULTS_DIR"
         overall_rc=1
     fi
 done

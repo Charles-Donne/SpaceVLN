@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, List, Optional, Tuple
 
-from navigation_system.object_navigation.prompts.builders import (
+from navigation_system.vlm.prompts.object_navigation.builders import (
     get_ovon_initial_planning_prompt,
     get_ovon_verification_replanning_prompt,
 )

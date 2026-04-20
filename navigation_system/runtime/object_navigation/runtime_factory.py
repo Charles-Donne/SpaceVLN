@@ -1,11 +1,11 @@
 """Build OVON-specific planner/action stacks."""
 
-from navigation_system.object_navigation.execution.executor import OVONActionExecutor
-from navigation_system.object_navigation.execution.executor_context_cache import (
+from navigation_system.vlm.execution.object_navigation.executor import OVONActionExecutor
+from navigation_system.vlm.execution.object_navigation.executor_context_cache import (
     OVONContextCacheActionExecutor,
 )
-from navigation_system.object_navigation.planning.planner import OVONPlanner
-from navigation_system.object_navigation.planning.planner_context_cache import (
+from navigation_system.vlm.planning.object_navigation.planner import OVONPlanner
+from navigation_system.vlm.planning.object_navigation.planner_context_cache import (
     OVONContextCachePlanner,
 )
 from navigation_system.vlm.interfaces import NavigationModelStack
