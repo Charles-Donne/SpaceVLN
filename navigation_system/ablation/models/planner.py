@@ -10,7 +10,7 @@ from navigation_system.ablation.prompts.standard import (
     get_verification_replanning_prompt,
 )
 from navigation_system.vlm.contracts.schema import get_next_waypoint
-from navigation_system.vlm.planning.planner import LLMPlanner
+from navigation_system.vlm.planning.vlnce.planner import LLMPlanner
 
 
 class AblationLLMPlanner(LLMPlanner):

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Union
 
 
-_TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
+_TEMPLATE_DIR = Path(__file__).resolve().parent / "vlnce" / "templates"
 
 
 @lru_cache(maxsize=None)

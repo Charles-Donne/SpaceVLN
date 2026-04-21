@@ -10,7 +10,7 @@ from navigation_system.vlm.prompts.object_navigation.cache_builders import (
 )
 from navigation_system.vlm.api.qwen_context_cache_client import QwenContextCacheMixin
 from navigation_system.vlm.contracts.schema import get_next_waypoint
-from navigation_system.vlm.planning.planner import LLMPlanner
+from navigation_system.vlm.planning.vlnce.planner import LLMPlanner
 from navigation_system.vlm.prompts.common import ExplicitCachePromptBundle
 
 

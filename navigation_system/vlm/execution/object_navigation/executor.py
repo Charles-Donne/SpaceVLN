@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional, Sequence, Tuple
 from navigation_system.vlm.prompts.object_navigation.builders import (
     get_ovon_action_execution_prompt,
 )
-from navigation_system.vlm.execution.executor import ActionExecutor
+from navigation_system.vlm.execution.vlnce.executor import ActionExecutor
 
 
 class OVONActionExecutor(ActionExecutor):

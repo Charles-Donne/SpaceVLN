@@ -8,18 +8,24 @@ task-specific overlays second.
 ```text
 navigation_system/
 ├── controller/
+│   └── vlnce/
 │   └── object_navigation/
 ├── env/
 │   └── object_navigation/
 ├── runtime/
+│   ├── vlnce/
 │   ├── storage/
 │   └── object_navigation/
 ├── vlm/
+│   ├── vlnce/
 │   ├── planning/
+│   │   └── vlnce/
 │   │   └── object_navigation/
 │   ├── execution/
+│   │   └── vlnce/
 │   │   └── object_navigation/
 │   └── prompts/
+│       └── vlnce/
 │       └── object_navigation/
 ├── detection/
 ├── space/
@@ -27,9 +33,9 @@ navigation_system/
 └── config/
 ```
 
-The default VLNCE / CE pipeline remains in the shared functional modules.
-OVON-specific behavior now lives under task-scoped subpackages inside the same
-functional areas.
+Shared logic remains in the functional root. Task-specific logic now lives in
+explicit task overlays such as `vlnce/` and `object_navigation/` inside the
+same functional areas.
 
 ## 2. Functional Responsibilities
 
@@ -37,7 +43,7 @@ functional areas.
 
 - Owns control flow, episode lifecycle, stopping logic, and integration across
   detection, spatial memory, rendering, and VLM calls.
-- Task-specific controller overlays live in subpackages such as
+- Task-specific controller overlays live in `controller/vlnce/` and
   `controller/object_navigation/`.
 
 ### `env/`
@@ -50,7 +56,8 @@ functional areas.
 
 - Owns CLI entrypoints, episode scheduling, result directory selection, and
   evaluation/report generation.
-- Task-specific launch/runtime helpers live in `runtime/object_navigation/`.
+- VLNCE runtime orchestration lives in `runtime/vlnce/`.
+- OVON runtime orchestration lives in `runtime/object_navigation/`.
 - Shared artifact layout lives in `runtime/storage/`.
 
 ### `vlm/`
@@ -63,7 +70,7 @@ functional areas.
 - `reporting/`: cache and API reporting.
 
 Task-specific prompt/planner/executor variants live under matching subpackages,
-for example `vlm/planning/object_navigation/`.
+for example `vlm/planning/vlnce/` and `vlm/planning/object_navigation/`.
 
 ### `detection/`
 
@@ -89,9 +96,11 @@ for example `vlm/planning/object_navigation/`.
 ## 3. Main Execution Path
 
 1. A launcher script under `run_navigation/` selects the task entrypoint.
-2. `runtime/*` resolves configs, runtime profile, results directories, and
+2. `runtime/vlnce/*` or `runtime/object_navigation/*` resolves task-specific
+   runtime profile, results directories, and
    episode selection.
-3. `controller/*` drives the navigation loop.
+3. `controller/vlnce/*` or `controller/object_navigation/*` drives the
+   navigation loop.
 4. `vlm/planning/*` proposes subtasks and `vlm/execution/*` chooses actions.
 5. `runtime/storage/*` saves `detail/`, `records/`, `log/`, and summaries.
 6. `runtime/results_report.py` aggregates offline evaluation metrics.

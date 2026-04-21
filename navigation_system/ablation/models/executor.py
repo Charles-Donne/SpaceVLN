@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional, Sequence, Tuple
 
 from navigation_system.ablation.config import AblationSpec, load_ablation_spec
 from navigation_system.ablation.prompts.standard import get_action_execution_prompt
-from navigation_system.vlm.execution.executor import ActionExecutor
+from navigation_system.vlm.execution.vlnce.executor import ActionExecutor
 
 
 class AblationActionExecutor(ActionExecutor):

@@ -47,7 +47,7 @@ Notes:
   - Default data root follows the unified workspace layout: nav_ws/data
   - The OVON runtime defaults YAML is:
       navigation_system/config/experiments/ovon_val_unseen_eval.yaml
-  - The workers argument is accepted for VLNCE launcher parity; OVON currently runs serially.
+  - The workers argument matches the VLNCE launcher style and now enables parallel episode workers.
 EOF
 }
 

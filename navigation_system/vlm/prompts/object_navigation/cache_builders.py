@@ -13,11 +13,12 @@ from navigation_system.runtime.object_navigation.thresholds import (
     OVON_ARRIVAL_NEAR_M,
     OVON_AUTOCOMPLETE_OPENING_M,
     OVON_AUTOCOMPLETE_SOLID_M,
+    OVON_FINAL_OBJECT_STOP_DISTANCE_M,
 )
 from navigation_system.vlm.prompts.object_navigation.common import (
     load_objectnav_prompt_template,
 )
-from navigation_system.vlm.prompts.builders import (
+from navigation_system.vlm.prompts.vlnce.builders import (
     _build_allowed_action_bullets,
     _build_landmark_perception_summary,
     _build_obstacle_perception_summary,
@@ -57,6 +58,7 @@ def _render_initial_planning_system_prompt() -> str:
         obs_risky_m=_fmt_threshold_m(OBS_RISKY_M),
         obs_open_m=_fmt_threshold_m(OBS_OPEN_M),
         arrival_near_m=_fmt_threshold_m(OVON_ARRIVAL_NEAR_M),
+        strict_stop_m=_fmt_threshold_m(OVON_FINAL_OBJECT_STOP_DISTANCE_M),
     ))
 
 
@@ -66,6 +68,7 @@ def _render_verify_planning_system_prompt() -> str:
         obs_risky_m=_fmt_threshold_m(OBS_RISKY_M),
         obs_open_m=_fmt_threshold_m(OBS_OPEN_M),
         arrival_near_m=_fmt_threshold_m(OVON_ARRIVAL_NEAR_M),
+        strict_stop_m=_fmt_threshold_m(OVON_FINAL_OBJECT_STOP_DISTANCE_M),
     ))
 
 
@@ -77,6 +80,7 @@ def _render_action_system_prompt() -> str:
         solid_autocomplete_m=_fmt_threshold_m(OVON_AUTOCOMPLETE_SOLID_M),
         open_autocomplete_m=_fmt_threshold_m(OVON_AUTOCOMPLETE_OPENING_M),
         arrival_near_m=_fmt_threshold_m(OVON_ARRIVAL_NEAR_M),
+        strict_stop_m=_fmt_threshold_m(OVON_FINAL_OBJECT_STOP_DISTANCE_M),
     )
 
 

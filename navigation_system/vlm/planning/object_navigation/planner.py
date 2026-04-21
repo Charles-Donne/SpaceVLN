@@ -6,7 +6,7 @@ from navigation_system.vlm.prompts.object_navigation.builders import (
     get_ovon_initial_planning_prompt,
     get_ovon_verification_replanning_prompt,
 )
-from navigation_system.vlm.planning.planner import LLMPlanner
+from navigation_system.vlm.planning.vlnce.planner import LLMPlanner
 
 
 class OVONPlanner(LLMPlanner):

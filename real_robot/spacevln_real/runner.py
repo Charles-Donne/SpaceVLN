@@ -7,9 +7,9 @@ import sys
 from types import SimpleNamespace
 import uuid
 
-from navigation_system.controller.navigation_controller import VLMNavigationController
-from navigation_system.runtime.execution import load_runtime_config
-from navigation_system.runtime.profiles import (
+from navigation_system.controller.vlnce.controller import VLMNavigationController
+from navigation_system.runtime.vlnce.execution import load_runtime_config
+from navigation_system.runtime.vlnce.profiles import (
     CONTEXT_CACHE_RUNTIME_PROFILE,
     STANDARD_RUNTIME_PROFILE,
 )

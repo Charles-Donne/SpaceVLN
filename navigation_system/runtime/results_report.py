@@ -128,7 +128,7 @@ def _load_result_payload(filepath: str) -> Optional[Dict[str, Any]]:
     except FileNotFoundError:
         return None
     except Exception as exc:
-        print(f"⚠️  读取文件失败 {filename}: {exc}")
+        print(f"⚠️  Failed to read {filename}: {exc}")
         return None
     return _normalize_report_item(payload)
 
@@ -318,15 +318,15 @@ def print_summary(metrics: Dict[str, Any]) -> None:
     n = metrics["total_episodes"]
     timing = metrics["timing"]
     print("\n" + "=" * 80)
-    print("📊 SpaceVLN 评估结果汇总")
+    print("📊 SpaceVLN evaluation summary")
     print("=" * 80)
-    print(f"\n🎯 统一指标:")
+    print(f"\n🎯 Unified metrics:")
     print(f"  NE:    {metrics['avg_ne']:.3f}m")
     print(f"  OSR:   {metrics['osr_count']}/{n} ({metrics['avg_osr']:.3f})")
     print(f"  SR:    {metrics['sr_count']}/{n} ({metrics['avg_sr']:.3f})")
     print(f"  SPL:   {metrics['avg_spl']:.3f}")
     print(f"  nDTW:  {metrics['avg_ndtw']:.3f}")
-    print(f"\n⏱️  计时统计:")
+    print(f"\n⏱️  Timing:")
     print(
         "  Thinking API: "
         f"avg={timing['thinking_api_avg_duration_s']:.2f}s "
@@ -340,16 +340,16 @@ def print_summary(metrics: Dict[str, Any]) -> None:
         f"| ok={timing['action_api_count']} fail={timing['action_api_failed_count']}"
     )
     print(
-        "  API总耗时:     "
+        "  API total:      "
         f"ok={timing['api_total_duration_s']:.2f}s "
         f"| fail={timing['api_failed_total_duration_s']:.2f}s"
     )
     print(
-        "  失败浪费:       "
+        "  Failure waste:  "
         f"retry_wait={timing['failed_retry_wait_duration_s_total']:.2f}s "
         f"| total={timing['failed_wasted_duration_s_total']:.2f}s"
     )
-    print(f"  Episode平均:   {timing['episode_duration_s_avg']:.2f}s")
+    print(f"  Episode avg:    {timing['episode_duration_s_avg']:.2f}s")
     print(f"\n{'=' * 80}")
 
 
@@ -369,9 +369,9 @@ def _resolve_success_distance_m(exp_config: Optional[str]) -> float:
 
 def print_debug_info(metrics: Dict[str, Any], success_distance_m: float) -> None:
     results = metrics["detailed_results"]
-    print(f"\n🔍 指标计算调试信息:")
+    print(f"\n🔍 Metric debug:")
     print(f"{'=' * 80}")
-    print(f"\nEpisode详情:")
+    print(f"\nEpisode details:")
     print(f"{'ID':<6} {'NE(m)':<10} {'OSR':<6} {'SR':<6} {'SPL':<8} {'nDTW':<8}")
     print(f"{'-' * 56}")
 
@@ -384,7 +384,7 @@ def print_debug_info(metrics: Dict[str, Any], success_distance_m: float) -> None
         ndtw = _as_float(item.get("ndtw", 0.0), 0.0)
         print(f"{ep_id:<6} {ne:<10.3f} {osr:<6} {sr:<6} {spl:<8.4f} {ndtw:<8.4f}")
 
-    print(f"\n⚠️  异常检测:")
+    print(f"\n⚠️  Consistency checks:")
     for item in results:
         ep_id = item.get("episode_id", "?")
         ne = _as_float(item.get("ne", -1.0), -1.0)
@@ -394,15 +394,15 @@ def print_debug_info(metrics: Dict[str, Any], success_distance_m: float) -> None
         ndtw = _as_float(item.get("ndtw", 0.0), 0.0)
 
         if sr == 1 and ne > success_distance_m:
-            print(f"  ❌ Episode {ep_id}: SR=1 但 NE={ne:.3f}m > {success_distance_m:g}m")
+            print(f"  ❌ Episode {ep_id}: SR=1 but NE={ne:.3f}m > {success_distance_m:g}m")
         if sr == 0 and 0 <= ne < success_distance_m:
-            print(f"  ⚠️  Episode {ep_id}: SR=0 但 NE={ne:.3f}m < {success_distance_m:g}m")
+            print(f"  ⚠️  Episode {ep_id}: SR=0 but NE={ne:.3f}m < {success_distance_m:g}m")
         if sr == 0 and spl > 0:
-            print(f"  ❌ Episode {ep_id}: SR=0 但 SPL={spl:.4f} > 0")
+            print(f"  ❌ Episode {ep_id}: SR=0 but SPL={spl:.4f} > 0")
         if osr < sr:
             print(f"  ❌ Episode {ep_id}: OSR={osr} < SR={sr}")
         if not 0.0 <= ndtw <= 1.0:
-            print(f"  ⚠️  Episode {ep_id}: nDTW={ndtw:.4f} 超出[0,1]范围")
+            print(f"  ⚠️  Episode {ep_id}: nDTW={ndtw:.4f} is outside [0, 1]")
         if ne < 0:
             print(f"  ⚠️  Episode {ep_id}: NE={ne} < 0")
 
@@ -414,22 +414,22 @@ def save_summary(metrics: Dict[str, Any], output_path: str) -> str:
     timing = metrics["timing"]
     content = f"""
 ================================================================================
-📊 SpaceVLN 评估结果汇总
+📊 SpaceVLN evaluation summary
 ================================================================================
 
-🎯 统一指标:
+🎯 Unified metrics:
   NE:    {metrics['avg_ne']:.3f}m
   OSR:   {metrics['osr_count']}/{n} ({metrics['avg_osr']:.3f})
   SR:    {metrics['sr_count']}/{n} ({metrics['avg_sr']:.3f})
   SPL:   {metrics['avg_spl']:.3f}
   nDTW:  {metrics['avg_ndtw']:.3f}
 
-⏱️  计时统计:
+⏱️  Timing:
   Thinking API: avg={timing['thinking_api_avg_duration_s']:.2f}s | total={timing['thinking_api_total_duration_s']:.2f}s | ok={timing['thinking_api_count']} fail={timing['thinking_api_failed_count']}
   Action API:   avg={timing['action_api_avg_duration_s']:.2f}s | total={timing['action_api_total_duration_s']:.2f}s | ok={timing['action_api_count']} fail={timing['action_api_failed_count']}
-  API总耗时:     ok={timing['api_total_duration_s']:.2f}s | fail={timing['api_failed_total_duration_s']:.2f}s
-  失败浪费:       retry_wait={timing['failed_retry_wait_duration_s_total']:.2f}s | total={timing['failed_wasted_duration_s_total']:.2f}s
-  Episode平均:   {timing['episode_duration_s_avg']:.2f}s
+  API total:      ok={timing['api_total_duration_s']:.2f}s | fail={timing['api_failed_total_duration_s']:.2f}s
+  Failure waste:  retry_wait={timing['failed_retry_wait_duration_s_total']:.2f}s | total={timing['failed_wasted_duration_s_total']:.2f}s
+  Episode avg:    {timing['episode_duration_s_avg']:.2f}s
 
 ================================================================================
 """
@@ -605,12 +605,12 @@ def generate_results_report(
     load_workers: int = 1,
 ) -> Dict[str, Any]:
     if not os.path.exists(results_dir):
-        raise FileNotFoundError(f"目录不存在: {results_dir}")
+        raise FileNotFoundError(f"Results directory does not exist: {results_dir}")
 
     if verbose:
-        print(f"📂 加载结果: {results_dir}")
+        print(f"📂 Loading results: {results_dir}")
         if int(load_workers) > 1:
-            print(f"⚙️  并行读取 workers: {int(load_workers)}")
+            print(f"⚙️  Parallel JSON workers: {int(load_workers)}")
 
     use_direct_range_load = start_episode_id is not None and end_episode_id is not None
     if use_direct_range_load:
@@ -631,9 +631,9 @@ def generate_results_report(
     if not results:
         if start_episode_id is not None or end_episode_id is not None:
             raise FileNotFoundError(
-                f"未找到指定范围内的episode结果: [{start_episode_id}, {end_episode_id}]"
+                f"No episode results found in range [{start_episode_id}, {end_episode_id}]"
             )
-        raise FileNotFoundError(f"未找到任何episode结果: {os.path.join(results_dir, 'log')}")
+        raise FileNotFoundError(f"No episode results found under: {os.path.join(results_dir, 'log')}")
     if (start_episode_id is not None or end_episode_id is not None) and not use_direct_range_load:
         filtered_results = filter_results_by_episode_range(
             results,
@@ -642,7 +642,7 @@ def generate_results_report(
         )
         if not filtered_results:
             raise FileNotFoundError(
-                f"未找到指定范围内的episode结果: [{start_episode_id}, {end_episode_id}]"
+                f"No episode results found in range [{start_episode_id}, {end_episode_id}]"
             )
         results = filtered_results
 
@@ -655,10 +655,10 @@ def generate_results_report(
 
     if verbose:
         if start_episode_id is not None or end_episode_id is not None:
-            print(f"✅ 加载了 {len(results)} 个episode ([{start_episode_id}, {end_episode_id}])")
-            print(f"📁 部分报告输出目录: {report_output_dir}")
+            print(f"✅ Loaded {len(results)} episodes ([{start_episode_id}, {end_episode_id}])")
+            print(f"📁 Partial report directory: {report_output_dir}")
         else:
-            print(f"✅ 加载了 {len(results)} 个episode")
+            print(f"✅ Loaded {len(results)} episodes")
 
     metrics = compute_metrics(results)
     saved_paths: Dict[str, str] = {}
@@ -680,11 +680,11 @@ def generate_results_report(
         if not summary_only:
             saved_paths.update(save_episode_tables(results, metrics, report_output_dir))
         if verbose:
-            print(f"📋 汇总报告已保存: {summary_path}")
-            print(f"📋 指标JSON已保存: {metrics_json_path}")
+            print(f"📋 Saved summary report: {summary_path}")
+            print(f"📋 Saved metrics JSON: {metrics_json_path}")
             if not summary_only:
-                print(f"📋 Episode表格已保存: {saved_paths['csv']}")
-                print(f"📋 Markdown表格已保存: {saved_paths['md']}")
+                print(f"📋 Saved episode CSV: {saved_paths['csv']}")
+                print(f"📋 Saved episode Markdown: {saved_paths['md']}")
 
     return {
         "results": results,
@@ -694,29 +694,29 @@ def generate_results_report(
 
 
 def build_results_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="分析 SpaceVLN 评估结果")
-    parser.add_argument("--path", type=str, required=True, help="结果目录路径")
+    parser = argparse.ArgumentParser(description="Analyze SpaceVLN evaluation results")
+    parser.add_argument("--path", type=str, required=True, help="Results directory")
     parser.add_argument(
         "--exp-config",
         type=str,
         default="navigation_system/config/experiments/r2r_eval.yaml",
-        help="实验配置文件路径，用于读取 success distance 等评测参数",
+        help="Experiment config path used to resolve evaluation thresholds such as success distance",
     )
-    parser.add_argument("--save", action="store_true", help="保存 summary 和结果表格")
+    parser.add_argument("--save", action="store_true", help="Save summary and result tables")
     parser.add_argument(
         "--summary-only",
         action="store_true",
-        help="快速模式：只保存 summary + metrics.json，不生成 episode CSV/Markdown",
+        help="Fast mode: save only `summary` + `metrics.json`, skip episode CSV/Markdown",
     )
-    parser.add_argument("--debug", action="store_true", help="打印逐 episode 调试信息")
-    parser.add_argument("--start-id", type=int, default=None, help="只统计起始 episode ID")
-    parser.add_argument("--end-id", type=int, default=None, help="只统计结束 episode ID")
-    parser.add_argument("--output-dir", type=str, default=None, help="报告输出目录")
+    parser.add_argument("--debug", action="store_true", help="Print per-episode debug information")
+    parser.add_argument("--start-id", type=int, default=None, help="Only include episodes from this id")
+    parser.add_argument("--end-id", type=int, default=None, help="Only include episodes up to this id")
+    parser.add_argument("--output-dir", type=str, default=None, help="Report output directory")
     parser.add_argument(
         "--load-workers",
         type=int,
         default=_default_load_workers(),
-        help="并行读取 episode JSON 的线程数（默认读取 SPACEVLN_REPORT_WORKERS，未设置时自动取高并发）",
+        help="Number of workers for loading episode JSON files in parallel",
     )
     return parser
 
@@ -724,7 +724,7 @@ def build_results_arg_parser() -> argparse.ArgumentParser:
 def run_results_report_from_args(args: argparse.Namespace) -> int:
     try:
         if args.start_id is not None and args.end_id is not None and args.end_id < args.start_id:
-            print(f"❌ end-id 不能小于 start-id: {args.start_id} -> {args.end_id}")
+            print(f"❌ end-id cannot be smaller than start-id: {args.start_id} -> {args.end_id}")
             return 1
         generate_results_report(
             args.path,

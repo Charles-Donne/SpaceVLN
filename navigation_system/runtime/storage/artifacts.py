@@ -114,18 +114,18 @@ class SaveManager:
         save_waypoint_memory: bool = False,
     ):
         """
-        初始化保存管理器
-        
+        Initialize the episode save manager.
+
         Args:
-            dump_dir: 数据保存根目录
-            episode_id: Episode ID
+            dump_dir: Root results directory.
+            episode_id: Episode id.
         """
         self.dump_dir = dump_dir
         self.episode_id = episode_id
         self.save_waypoint_memory_enabled = bool(save_waypoint_memory)
         self.detail_dir = get_episode_detail_root(dump_dir)
         self.episode_dir = get_episode_detail_dir(dump_dir, episode_id)
-        self.records_dir = os.path.join(self.episode_dir, "records")  # 统一的记录目录
+        self.records_dir = os.path.join(self.episode_dir, "records")
         os.makedirs(self.detail_dir, exist_ok=True)
         os.makedirs(self.episode_dir, exist_ok=True)
         os.makedirs(self.records_dir, exist_ok=True)
@@ -233,7 +233,9 @@ class SaveManager:
         if total_steps < 0:
             total_steps = float('inf')
 
-        # 排序规则：SR > OSR > SPL > nDTW > NE更小 > 总时间更短 > oracle SPL > path更短 > steps更少
+        # Rank priority:
+        # SR > OSR > SPL > nDTW > lower NE > shorter total time
+        # > higher oracle SPL > shorter path > fewer steps
         return (
             success,
             oracle_success,
@@ -278,7 +280,7 @@ class SaveManager:
     
     def save_waypoint_memory(self, waypoint_memory: Dict,
                             instruction: str, current_step: int):
-        """保存路径点与房间区域记忆到 records/。"""
+        """Save waypoint / area memory snapshots under `records/`."""
         if not self.save_waypoint_memory_enabled:
             return None
         payload = {
@@ -293,9 +295,9 @@ class SaveManager:
     
     def save_result(self, result: Dict):
         """
-        保存最终结果，并维护按episode的最佳汇总:
-        1. detail/<bucket>/episode_xxx/records/result.json (本次运行结果)
-        2. log/<bucket>/episode_xxx.json (该episode当前最佳结果，供结果报告程序使用)
+        Save the current run result and maintain the per-episode best summary:
+        1. `detail/<bucket>/episode_xxx/records/result.json` for this run
+        2. `log/<bucket>/episode_xxx.json` for the current best episode result
         """
         result_path = os.path.join(self.records_dir, "result.json")
         with open(result_path, 'w', encoding='utf-8') as f:

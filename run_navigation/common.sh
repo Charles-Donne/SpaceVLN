@@ -100,6 +100,7 @@ spacevln_setup_runtime_env() {
     local python_bin="$1"
 
     export GLOG_minloglevel="${GLOG_minloglevel:-2}"
+    export HABITAT_SIM_LOG="${HABITAT_SIM_LOG:-quiet}"
     export MAGNUM_LOG="${MAGNUM_LOG:-quiet}"
     export PYTHONWARNINGS="${PYTHONWARNINGS:-ignore}"
     export TRANSFORMERS_VERBOSITY="${TRANSFORMERS_VERBOSITY:-error}"

@@ -1,1 +1,1 @@
-"""Prompt builders and markdown templates for VLM runtimes."""
+"""Prompt builders grouped by task-specific overlays."""

@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional, Sequence, Tuple
 from navigation_system.ablation.prompts.cache import build_action_cache_prompt_bundle
 from navigation_system.ablation.config import AblationSpec, load_ablation_spec
 from navigation_system.vlm.api.qwen_context_cache_client import QwenContextCacheMixin
-from navigation_system.vlm.execution.executor import ActionExecutor
+from navigation_system.vlm.execution.vlnce.executor import ActionExecutor
 from navigation_system.vlm.prompts.common import ExplicitCachePromptBundle
 
 

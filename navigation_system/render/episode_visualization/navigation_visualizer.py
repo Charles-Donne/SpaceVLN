@@ -1,9 +1,7 @@
 """
-导航可视化模块
-=============
-负责保存RGB+俯视图拼接可视化、生成GIF动画
+Navigation visualization utilities.
 
-参考Sub-VLM-VLN的实现细节，确保俯视图正确显示
+This module saves RGB + top-down composites and optionally assembles GIFs.
 """
 import os
 import cv2
@@ -23,12 +21,7 @@ except ImportError:
 
 class NavigationVisualizer:
     """
-    导航可视化器
-    
-    负责:
-    - RGB + 俯视图拼接可视化
-    - 文本信息叠加
-    - GIF动画生成
+    Save per-step navigation visualizations and optional episode GIFs.
     """
     
     
@@ -38,12 +31,7 @@ class NavigationVisualizer:
         save_step_images: bool = False,
         keep_frames_for_gif: bool = True,
     ):
-        """
-        初始化可视化器
-        
-        Args:
-            output_dir: 输出目录
-        """
+        """Initialize the visualization helper."""
         self.output_dir = output_dir
         self.visualization_dir = None
         self.video_frames = []
@@ -54,12 +42,7 @@ class NavigationVisualizer:
             os.makedirs(output_dir, exist_ok=True)
     
     def setup_maps_dir(self, episode_dir: str):
-        """
-        设置可视化目录（RGB+俯视图拼接）
-        
-        Args:
-            episode_dir: Episode输出根目录
-        """
+        """Prepare the episode visualization directory."""
         self.visualization_dir = os.path.join(episode_dir, "visualization")
         if self.save_step_images or self.keep_frames_for_gif:
             os.makedirs(self.visualization_dir, exist_ok=True)
@@ -85,37 +68,16 @@ class NavigationVisualizer:
                                 distance: float = 0.0,
                                 action: str = "",
                                 subtask_id: str = None) -> Optional[str]:
-        """
-        保存单步可视化：左边第一人称视角 + 右边俯视图 + 文本信息
-        
-        参考Sub-VLM-VLN的实现，确保俯视图正确显示
-        
-        Args:
-            observations: 环境观测字典（需包含"rgb"键）
-            info: 环境指标字典（需包含"top_down_map_vlnce"键）
-            step: 当前步数
-            instruction: 全局导航指令
-            current_subtask: 当前子任务指令（可选）
-            distance: 到目标距离
-            action: 当前执行的动作名称
-            subtask_id: 子任务标识（会统一落盘成 "subtask1" 这种形式）
-            
-        Returns:
-            保存的图像路径，失败返回None
-        """
+        """Save one RGB + top-down composite frame with text overlays."""
         if not self.visualization_dir or "rgb" not in observations:
             return None
         
-        # 获取第一人称RGB
         rgb = observations["rgb"]
         
         top_down_map = self._extract_top_down_map(info or {}, rgb, step)
         self.last_top_down_map = top_down_map.copy() if top_down_map is not None else None
         
-        # 拼接：左边RGB + 右边俯视图
         combined = np.concatenate((rgb, top_down_map), axis=1)
-        
-        # 添加文本信息
         combined = self._add_text_overlay(
             combined, 
             instruction, 
@@ -125,8 +87,6 @@ class NavigationVisualizer:
             action
         )
         
-        # 保存（RGB格式需要转换为BGR）
-        # 文件名格式：step_0001_subtask1.png（统一使用PNG格式）
         if subtask_id:
             filename = f"step_{step:04d}_{build_subtask_name_from_token(subtask_id)}.png"
         else:
@@ -149,7 +109,7 @@ class NavigationVisualizer:
             try:
                 return maps.colorize_draw_agent_and_fit_to_height(info[key], rgb.shape[0])
             except Exception as exc:
-                print(f"⚠️  [Step {step}] {key} 渲染失败: {exc}")
+                print(f"⚠️  [Step {step}] Failed to render `{key}`: {exc}")
 
         fallback = info.get("global_map_input")
         fallback_meta = fallback if isinstance(fallback, dict) else {}
@@ -170,7 +130,7 @@ class NavigationVisualizer:
             )
 
         if step == 1:
-            print("⚠️  info中没有 top_down_map/top_down_map_vlnce，且没有 global_map fallback")
+            print("⚠️  Missing `top_down_map`, `top_down_map_vlnce`, and `global_map_input` fallback in info")
         return np.zeros_like(rgb)
 
     def save_final_top_down_map(self, output_path: str = None) -> Optional[str]:
@@ -196,43 +156,26 @@ class NavigationVisualizer:
                           step: int,
                           distance: float,
                           action: str = "") -> np.ndarray:
-        """
-        在图像底部添加文本信息（完全按照Sub-VLM-VLN的实现）
-        
-        Args:
-            image: 拼接后的RGB图像
-            instruction: 全局指令
-            current_subtask: 当前子任务
-            step: 步数
-            distance: 距离
-            action: 动作名称
-            
-        Returns:
-            添加文本后的图像
-        """
+        """Append the standard text panel below the composite frame."""
         img = image.copy()
         h, w = img.shape[:2]
         
-        # 创建文本区域（深灰色背景）
         text_height = 120
         text_area = np.zeros((text_height, w, 3), dtype=np.uint8)
-        text_area.fill(40)  # 深灰色背景
+        text_area.fill(40)
         
         font = cv2.FONT_HERSHEY_SIMPLEX
         font_scale = 0.5
         thickness = 1
-        color = (255, 255, 255)  # 白色
+        color = (255, 255, 255)
         
         y_offset = 25
         
-        # 第1行：步数、距离、动作（青色高亮）
         action_safe = self._safe_overlay_text(action, "[Action]")
         metrics_text = f"Step: {step} | Distance: {distance:.2f}m | Action: {action_safe}"
         cv2.putText(text_area, metrics_text, (10, y_offset), font, font_scale, (0, 255, 255), thickness)
         y_offset += 30
         
-        # 第2-3行：全局指令（白色，最多2行）
-        # 处理中文字符：先编码为ASCII可表示的形式
         instruction_safe = self._safe_overlay_text(instruction, "[Instruction]")
         
         instruction_lines = self._wrap_text(instruction_safe, w - 20, font, font_scale)
@@ -240,7 +183,6 @@ class NavigationVisualizer:
             cv2.putText(text_area, line, (10, y_offset), font, font_scale, color, thickness)
             y_offset += 25
         
-        # 第4行：当前子任务（绿色，最多1行）
         if current_subtask:
             y_offset += 5
             subtask_safe = self._safe_overlay_text(current_subtask, "[Subtask]")
@@ -250,23 +192,11 @@ class NavigationVisualizer:
             for line in subtask_lines[:1]:
                 cv2.putText(text_area, line, (10, y_offset), font, font_scale, (0, 255, 0), thickness)
         
-        # 拼接文本区域到图像底部（使用vstack而不是concatenate）
         result = np.vstack([img, text_area])
         return result
     
     def _wrap_text(self, text: str, max_width: int, font, font_scale: float) -> List[str]:
-        """
-        文本自动换行（完全按照Sub-VLM-VLN的实现）
-        
-        Args:
-            text: 要换行的文本
-            max_width: 最大宽度（像素）
-            font: OpenCV字体
-            font_scale: 字体缩放
-            
-        Returns:
-            换行后的文本列表
-        """
+        """Wrap overlay text to fit within the target pixel width."""
         words = text.split()
         lines = []
         current_line = ""
@@ -289,14 +219,14 @@ class NavigationVisualizer:
     
     def save_gif(self, output_path: str = None, fps: int = 2) -> Optional[str]:
         """
-        将所有帧保存为GIF动画
-        
+        Save all buffered frames as a GIF animation.
+
         Args:
-            output_path: 输出路径（可选，默认在visualization目录下）
-            fps: 帧率
-            
+            output_path: Optional output path under `visualization/`.
+            fps: Frames per second.
+
         Returns:
-            GIF路径，失败返回None
+            GIF path, or `None` on failure.
         """
         if not self.keep_frames_for_gif or not self.video_frames:
             return None
@@ -312,17 +242,17 @@ class NavigationVisualizer:
             return None
         
         try:
-            # 转换帧为uint8格式
+            # Convert frames to uint8
             frames_rgb = []
             for frame in self.video_frames:
                 if frame.dtype != np.uint8:
                     frame = frame.astype(np.uint8)
                 frames_rgb.append(frame)
             
-            # 计算每帧持续时间
+            # Compute per-frame duration
             duration = 1.0 / fps
             
-            # 保存GIF
+            # Save the GIF
             imageio.mimsave(output_path, frames_rgb, duration=duration, loop=0)
             
             if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
@@ -355,6 +285,6 @@ class NavigationVisualizer:
         return removed_count
     
     def clear_frames(self):
-        """清空视频帧列表"""
+        """Clear buffered video frames."""
         self.video_frames = []
         self.last_top_down_map = None

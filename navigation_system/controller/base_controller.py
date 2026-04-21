@@ -77,7 +77,7 @@ class BaseNavigationController:
             if env_class is None:
                 raise RuntimeError(
                     f"Habitat environment '{self.config.ENV_NAME}' is not registered. "
-                    "Please check navigation_system.env.zero_shot_env."
+                    "Please check navigation_system.env.vlnce.zero_shot_env."
                 )
             self.envs = construct_envs(
                 self.config,

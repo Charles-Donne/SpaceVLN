@@ -150,19 +150,19 @@ class ConfigHelper:
         num_environments: Optional[int] = None
     ) -> Config:
         """
-        配置导航相关参数
-        
+        Configure navigation-related parameters.
+
         Args:
-            config: Habitat配置对象
-            torch_gpu_id: GPU设备ID（可选，从config读取）
-            num_environments: 环境数量（可选，从config读取）
-        
+            config: Habitat config object.
+            torch_gpu_id: Optional GPU device id.
+            num_environments: Optional number of environments.
+
         Returns:
-            config: 配置后的Config对象
+            Updated config object.
         """
         config.defrost()
-        
-        # 从config读取默认值
+
+        # Read defaults from the config when values are omitted.
         if torch_gpu_id is None:
             torch_gpu_id = config.RUNTIME.TORCH_GPU_ID
         if num_environments is None:
@@ -171,15 +171,15 @@ class ConfigHelper:
         config.RUNTIME.TORCH_GPU_ID = int(torch_gpu_id)
         config.RUNTIME.NUM_ENVIRONMENTS = int(num_environments)
 
-        # ===== 启用必要的Habitat测量指标 =====
+        # ===== Enable required Habitat metrics =====
         required_measurements = [
-            "TOP_DOWN_MAP_VLNCE",         # 俯视图可视化必需
-            "DISTANCE_TO_GOAL",           # 距离目标点的距离
-            "SUCCESS",                    # 是否成功（3米内）
-            "SPL",                        # Success weighted by Path Length
-            "ORACLE_NAVIGATION_ERROR",    # 轨迹中与目标的最小距离
-            "ORACLE_SUCCESS",             # 轨迹中是否曾到达目标
-            "ORACLE_SPL"                  # 基于oracle_success的SPL
+            "TOP_DOWN_MAP_VLNCE",
+            "DISTANCE_TO_GOAL",
+            "SUCCESS",
+            "SPL",
+            "ORACLE_NAVIGATION_ERROR",
+            "ORACLE_SUCCESS",
+            "ORACLE_SPL",
         ]
         
         for measurement in required_measurements:
@@ -197,15 +197,15 @@ class ConfigHelper:
         num_environments: int = 1
     ) -> Config:
         """
-        配置Episode相关参数
-        
+        Configure episode-related parameters.
+
         Args:
-            config: Habitat配置对象
-            episode_ids: 要运行的episode ID列表
-            num_environments: 环境数量
-        
+            config: Habitat config object.
+            episode_ids: Episode ids to run.
+            num_environments: Number of environments.
+
         Returns:
-            config: 配置后的Config对象
+            Updated config object.
         """
         config.defrost()
         config.TASK_CONFIG.DATASET.EPISODES_ALLOWED = episode_ids
@@ -220,14 +220,14 @@ class ConfigHelper:
         results_dir: str
     ) -> Config:
         """
-        设置结果保存目录
-        
+        Set the results directory.
+
         Args:
-            config: Habitat配置对象
-            results_dir: 结果保存路径
-        
+            config: Habitat config object.
+            results_dir: Results directory.
+
         Returns:
-            config: 配置后的Config对象
+            Updated config object.
         """
         config.defrost()
         config.PATHS.RESULTS_DIR = str(results_dir)

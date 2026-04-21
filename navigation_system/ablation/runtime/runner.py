@@ -21,7 +21,7 @@ from navigation_system.ablation.runtime.profiles import (
     ABLATION_STANDARD_RUNTIME_PROFILE,
     AblationRuntimeProfile,
 )
-from navigation_system.runtime.episode_selection import (
+from navigation_system.runtime.vlnce.episode_selection import (
     filter_episode_ids,
     resolve_episode_ids,
 )

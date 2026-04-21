@@ -8,7 +8,7 @@
 **Landmark**:
 {landmark_perception_summary}
 
-- **Yellow bounding box**: candidate current-view landmark/object detection ({detected_landmarks}); first judge whether it is valid ObjectNav evidence or noise. If the label/box conflicts with the RGB scene, geometry, obstacle layout, or current search context, downweight or ignore it.
+- **Yellow bounding box**: candidate current-view landmark/object detection ({detected_landmarks}); judge whether it is valid ObjectNav evidence or noise. If the label/box conflicts with the RGB scene, geometry, obstacle layout, or current search context, downweight or ignore it.
 
 **Action space**:
 {allowed_action_bullets}

@@ -57,6 +57,20 @@ def _clean_area_label(area_label: str) -> str:
     return clean_area or "Unknown"
 
 
+def _format_current_area_header_label(area_label: str) -> str:
+    clean_area = _clean_area_label(area_label)
+    if clean_area == "Unknown":
+        return "unresolved; infer from current views"
+    return clean_area
+
+
+def _format_current_area_chain_label(area_label: str) -> str:
+    clean_area = _clean_area_label(area_label)
+    if clean_area == "Unknown":
+        return "Current Position"
+    return clean_area
+
+
 def _clean_waypoint_description(description: str) -> str:
     cleaned = str(
         strip_space_type_variant_suffixes(description) or description or ""
@@ -743,7 +757,12 @@ def build_waypoint_summary(
     )
     space_type_note = (
         f" ({display_area_type})"
-        if display_area_type and display_area_type != "Unknown" and display_area_type != display_area_label
+        if (
+            _clean_area_label(display_area_label) != "Unknown"
+            and display_area_type
+            and display_area_type != "Unknown"
+            and display_area_type != display_area_label
+        )
         else ""
     )
     current_floor_global_indices = [
@@ -818,7 +837,9 @@ def build_waypoint_summary(
         current_distance_field=current_distance_field,
     )
     header_lines.append(
-        f"Your Current Area: {display_area_label}{space_type_note}{current_area_initial_note}"
+        "Your Current Area: "
+        f"{_format_current_area_header_label(display_area_label)}"
+        f"{space_type_note}{current_area_initial_note}"
     )
     if multi_floor_active:
         floor_line = f"Current Floor: F{int(current_floor_id) + 1}"
@@ -838,8 +859,11 @@ def build_waypoint_summary(
 
     empty_area_chain_line = None
     if include_area_chain:
-        current_area_display = _clean_area_label(current_space_area_label)
-        empty_area_chain_line = f"Space Waypoint Chain: {current_area_display} (Current)"
+        current_area_display = _format_current_area_chain_label(current_space_area_label)
+        if current_area_display == "Current Position":
+            empty_area_chain_line = "Space Waypoint Chain: Current Position"
+        else:
+            empty_area_chain_line = f"Space Waypoint Chain: {current_area_display} (Current)"
 
     if not waypoint_ids:
         lines = list(header_lines)
@@ -868,6 +892,16 @@ def build_waypoint_summary(
         crop_offset=crop_offset,
     )
     display_area_label = resolved_current_area_label or display_area_label
+    space_type_note = (
+        f" ({display_area_type})"
+        if (
+            _clean_area_label(display_area_label) != "Unknown"
+            and display_area_type
+            and display_area_type != "Unknown"
+            and display_area_type != display_area_label
+        )
+        else ""
+    )
     current_area_initial_note = _build_current_area_initial_waypoint_note(
         waypoint_positions=current_floor_positions,
         waypoint_ids=current_floor_ids,
@@ -882,7 +916,11 @@ def build_waypoint_summary(
         projector=projector,
         current_distance_field=current_distance_field,
     )
-    header_lines[0] = f"Your Current Area: {display_area_label}{space_type_note}{current_area_initial_note}"
+    header_lines[0] = (
+        "Your Current Area: "
+        f"{_format_current_area_header_label(display_area_label)}"
+        f"{space_type_note}{current_area_initial_note}"
+    )
 
     current_floor_visible_local_indices = select_display_waypoint_indices(
         waypoint_positions=current_floor_positions,
@@ -1102,7 +1140,7 @@ def build_waypoint_summary(
                         spatial_info = f"{spatial_info} | {reachability_note}"
             node_lines.append(f"Space WP#{wp_id} [{wp_desc}{area_note}] -- {spatial_info}{suffix}")
 
-    current_area_display = _clean_area_label(display_area_label)
+    current_area_display = _format_current_area_chain_label(display_area_label)
     displayed_global_index_set = {
         int(index)
         for group in grouped_display_indices
@@ -1392,7 +1430,7 @@ def _build_waypoint_area_path_line(
         })
 
     if not node_entries:
-        return "Space Waypoint Chain: Unknown (Current)" if include_area_chain else None
+        return "Space Waypoint Chain: Current Position" if include_area_chain else None
 
     grouped_entries: List[Dict[str, Any]] = []
     for entry in node_entries:
@@ -1420,20 +1458,28 @@ def _build_waypoint_area_path_line(
         })
 
     def _format_group(entry: Dict[str, Any]) -> str:
+        entry_members = list(entry.get("members", []) or [])
+        formatted_area_label = _format_area_with_floor(
+            area_label=str(entry.get("area_label", "Unknown") or "Unknown"),
+            floor_id=_coerce_floor_id(entry.get("floor_id"), current_floor_id),
+            multi_floor_active=multi_floor_active,
+        )
+        if (
+            _clean_area_label(str(entry.get("area_label", "") or "")) == "Current Position"
+            and entry_members
+            and all(bool(member.get("is_current", False)) for member in entry_members)
+        ):
+            return formatted_area_label
         member_labels = [
             _format_space_waypoint_chain_member(
                 waypoint_token=str(member.get("token", "")),
                 waypoint_description=str(member.get("description", "") or ""),
                 is_current=bool(member.get("is_current", False)),
             )
-            for member in entry.get("members", [])
+            for member in entry_members
         ]
         return _format_space_waypoint_chain_group(
-            area_label=_format_area_with_floor(
-                area_label=str(entry.get("area_label", "Unknown") or "Unknown"),
-                floor_id=_coerce_floor_id(entry.get("floor_id"), current_floor_id),
-                multi_floor_active=multi_floor_active,
-            ),
+            area_label=formatted_area_label,
             member_labels=member_labels,
         )
 

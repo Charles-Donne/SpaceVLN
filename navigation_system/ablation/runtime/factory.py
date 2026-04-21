@@ -9,7 +9,7 @@ from navigation_system.ablation.models.planner_context_cache import (
     AblationContextCachePlanner,
 )
 from navigation_system.vlm.interfaces import NavigationModelStack
-from navigation_system.vlm.runtime_factory import (
+from navigation_system.vlm.vlnce.runtime_factory import (
     _build_action_executor,
     _build_planner,
 )

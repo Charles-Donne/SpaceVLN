@@ -11,7 +11,7 @@ from navigation_system.ablation.prompts.cache import (
 from navigation_system.ablation.config import AblationSpec, load_ablation_spec
 from navigation_system.vlm.api.qwen_context_cache_client import QwenContextCacheMixin
 from navigation_system.vlm.contracts.schema import get_next_waypoint
-from navigation_system.vlm.planning.planner import LLMPlanner
+from navigation_system.vlm.planning.vlnce.planner import LLMPlanner
 from navigation_system.vlm.prompts.common import ExplicitCachePromptBundle
 
 

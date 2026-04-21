@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import copy
 import json
+import multiprocessing
 import os
 import random
 import sys
@@ -16,6 +18,14 @@ from navigation_system.runtime.object_navigation.thresholds import (
     OVON_SUCCESS_DISTANCE_M,
 )
 from navigation_system.runtime.episode_io import load_json_if_exists
+from navigation_system.runtime.episode_io import (
+    build_episode_console_summary,
+    build_episode_start_summary,
+    get_episode_records_log_path,
+    redirect_process_output_to_file,
+    redirect_process_output_to_null,
+    save_episode_stdout_log_enabled,
+)
 from navigation_system.runtime.storage.results_layout import (
     build_default_results_family_root,
     build_model_results_dir_name,
@@ -153,7 +163,7 @@ def _default_results_dir_for_runtime(
 
 
 def _select_model_stack_builder(runtime: str):
-    from navigation_system.runtime.object_navigation.runtime_factory import (
+    from navigation_system.vlm.object_navigation.runtime_factory import (
         build_ovon_context_cache_navigation_model_stack,
         build_ovon_navigation_model_stack,
     )
@@ -185,19 +195,24 @@ def _prepare_ovon_config(
     gpu_id: int,
     max_steps: int,
 ):
-    import habitat
-    from habitat.config import read_write
-    from habitat.config.default_structured_configs import (
-        HabitatSimDepthSensorConfig,
-        TopDownMapMeasurementConfig,
-        register_hydra_plugin,
-    )
+    import contextlib
+    import io
+
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        import habitat
+        from habitat.config import read_write
+        from habitat.config.default_structured_configs import (
+            HabitatSimDepthSensorConfig,
+            TopDownMapMeasurementConfig,
+            register_hydra_plugin,
+        )
 
     ovon_repo = str((_nav_ws_root() / "ovon").resolve())
     if ovon_repo not in sys.path:
         sys.path.insert(0, ovon_repo)
     ovon_repo_root = (_nav_ws_root() / "ovon").resolve()
-    from ovon.config import HabitatConfigPlugin
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        from ovon.config import HabitatConfigPlugin
 
     register_hydra_plugin(HabitatConfigPlugin)
     config = habitat.get_config(str(Path(exp_config).resolve()))
@@ -389,6 +404,250 @@ def _filter_existing_sr1(
     return kept
 
 
+def _build_episode_summary_row(episode_id: int, result: dict) -> dict:
+    saved_metrics = _resolve_saved_metrics(result)
+    return {
+        "episode_id": int(episode_id),
+        "success": bool(
+            _coalesce_metric(
+                saved_metrics,
+                "sr",
+                result,
+                "success",
+                "sr",
+                default=False,
+            )
+        ),
+        "steps": int(result.get("total_steps", result.get("steps", 0)) or 0),
+        "distance_to_goal": float(
+            _coalesce_metric(
+                saved_metrics,
+                "ne",
+                result,
+                "distance_to_goal",
+                "ne",
+                default=-1.0,
+            )
+            or -1.0
+        ),
+        "spl": float(
+            _coalesce_metric(
+                saved_metrics,
+                "spl",
+                result,
+                "spl",
+                default=0.0,
+            )
+            or 0.0
+        ),
+        "soft_spl": float(
+            _coalesce_metric(
+                saved_metrics,
+                "soft_spl",
+                result,
+                "soft_spl",
+                "oracle_spl",
+                default=saved_metrics.get("oracle_spl", 0.0),
+            )
+            or 0.0
+        ),
+        "oracle_success": int(
+            _coalesce_metric(
+                saved_metrics,
+                "osr",
+                result,
+                "oracle_success",
+                "osr",
+                default=0,
+            )
+            or 0
+        ),
+        "gif_path": str(result.get("gif_path", "") or ""),
+        "topdown_path": str(result.get("topdown_path", "") or ""),
+        "result_file": str(result.get("result_file", "") or ""),
+        "reason": str(result.get("reason", "") or ""),
+        "error": str(result.get("error", "") or ""),
+    }
+
+
+def _build_console_metrics(summary_row: dict) -> dict:
+    return {
+        "sr": int(bool(summary_row.get("success", False))),
+        "osr": int(summary_row.get("oracle_success", 0) or 0),
+        "ne": float(summary_row.get("distance_to_goal", -1.0) or -1.0),
+        "spl": float(summary_row.get("spl", 0.0) or 0.0),
+    }
+
+
+def _build_parallel_episode_spec(
+    *,
+    args: argparse.Namespace,
+    episode_id: int,
+    index: int,
+    total: int,
+    worker_index: int,
+    worker_count: int,
+) -> dict:
+    return {
+        "runtime": str(args.runtime),
+        "exp_config": str(args.exp_config),
+        "split": str(args.split),
+        "data_path": str(args.data_path),
+        "gpu_id": int(args.gpu_id),
+        "max_steps": int(args.max_steps),
+        "max_subtask_steps": int(args.max_subtask_steps),
+        "results_dir": str(args.results_dir),
+        "vlm_api_config": str(args.vlm_api_config),
+        "save_step_images": bool(args.save_step_images),
+        "save_gif": bool(args.save_gif),
+        "episode_id": int(episode_id),
+        "index": int(index),
+        "total": int(total),
+        "worker_index": int(worker_index),
+        "worker_count": int(worker_count),
+    }
+
+
+def _run_parallel_episode_job(job_spec: dict) -> dict:
+    episode_id = int(job_spec["episode_id"])
+    index = int(job_spec["index"])
+    total = int(job_spec["total"])
+    worker_index = int(job_spec["worker_index"])
+    worker_count = int(job_spec["worker_count"])
+
+    print(
+        build_episode_start_summary(
+            episode_id=episode_id,
+            index=index,
+            total=total,
+            worker_index=worker_index,
+            worker_count=worker_count,
+        ),
+        flush=True,
+    )
+
+    with redirect_process_output_to_null():
+        ovon_config = _prepare_ovon_config(
+            exp_config=str(job_spec["exp_config"]),
+            split=str(job_spec["split"]),
+            data_path=str(job_spec["data_path"]),
+            gpu_id=int(job_spec["gpu_id"]),
+            max_steps=int(job_spec["max_steps"]),
+        )
+        discovery_dataset = _load_dataset_for_episodes(ovon_config, [episode_id])
+    episode_lookup = _index_dataset_episodes(discovery_dataset)
+
+    try:
+        result = _run_one_episode(
+            ovon_config=ovon_config,
+            api_config_path=str(job_spec["vlm_api_config"]),
+            episode_id=episode_id,
+            results_dir=str(job_spec["results_dir"]),
+            max_subtask_steps=int(job_spec["max_subtask_steps"]),
+            save_step_images=bool(job_spec["save_step_images"]),
+            save_gif=bool(job_spec["save_gif"]),
+            model_stack_builder=_select_model_stack_builder(str(job_spec["runtime"])),
+            base_dataset=discovery_dataset,
+            episode_lookup=episode_lookup,
+        )
+    except BaseException as exc:
+        result = {
+            "success": False,
+            "steps": 0,
+            "total_steps": 0,
+            "distance_to_goal": -1.0,
+            "reason": "",
+            "error": str(exc),
+            "gif_path": "",
+            "topdown_path": "",
+            "result_file": "",
+        }
+
+    summary_row = _build_episode_summary_row(episode_id, result)
+    print(
+        build_episode_console_summary(
+            episode_id=episode_id,
+            index=index,
+            total=total,
+            result=summary_row,
+            metrics=_build_console_metrics(summary_row),
+            worker_index=worker_index,
+            worker_count=worker_count,
+        ),
+        flush=True,
+    )
+    return summary_row
+
+
+def _run_parallel_episodes(args: argparse.Namespace, episode_ids: Sequence[int]) -> List[dict]:
+    worker_count = max(1, min(int(args.parallel_workers or 1), len(episode_ids)))
+    if worker_count <= 1 or len(episode_ids) <= 1:
+        return []
+
+    ordered_ids = [int(item) for item in episode_ids]
+    total = len(ordered_ids)
+    next_job_cursor = 0
+    results_by_episode_id: dict[int, dict] = {}
+    mp_context = multiprocessing.get_context("spawn")
+
+    with concurrent.futures.ProcessPoolExecutor(
+        max_workers=worker_count,
+        mp_context=mp_context,
+    ) as executor:
+        future_to_job: dict[concurrent.futures.Future, dict] = {}
+
+        def _submit_next_job(worker_index: int) -> bool:
+            nonlocal next_job_cursor
+            if next_job_cursor >= total:
+                return False
+            episode_id = ordered_ids[next_job_cursor]
+            job_spec = _build_parallel_episode_spec(
+                args=args,
+                episode_id=episode_id,
+                index=next_job_cursor + 1,
+                total=total,
+                worker_index=worker_index,
+                worker_count=worker_count,
+            )
+            future = executor.submit(_run_parallel_episode_job, job_spec)
+            future_to_job[future] = job_spec
+            next_job_cursor += 1
+            return True
+
+        for worker_index in range(1, worker_count + 1):
+            if not _submit_next_job(worker_index):
+                break
+
+        while future_to_job:
+            done, _ = concurrent.futures.wait(
+                list(future_to_job.keys()),
+                return_when=concurrent.futures.FIRST_COMPLETED,
+            )
+            for future in done:
+                job_spec = future_to_job.pop(future)
+                episode_id = int(job_spec["episode_id"])
+                try:
+                    results_by_episode_id[episode_id] = future.result()
+                except BaseException as exc:
+                    results_by_episode_id[episode_id] = {
+                        "episode_id": episode_id,
+                        "success": False,
+                        "steps": 0,
+                        "distance_to_goal": -1.0,
+                        "spl": 0.0,
+                        "soft_spl": 0.0,
+                        "oracle_success": 0,
+                        "gif_path": "",
+                        "topdown_path": "",
+                        "result_file": "",
+                        "reason": "",
+                        "error": str(exc),
+                    }
+                _submit_next_job(int(job_spec["worker_index"]))
+
+    return [results_by_episode_id[int(episode_id)] for episode_id in ordered_ids]
+
+
 def _run_one_episode(
     *,
     ovon_config,
@@ -402,41 +661,10 @@ def _run_one_episode(
     base_dataset=None,
     episode_lookup: dict[int, list] | None = None,
 ):
-    selected_candidates = list((episode_lookup or {}).get(int(episode_id), []))
-    if selected_candidates:
-        selected_episode = selected_candidates[0]
-        if len(selected_candidates) > 1:
-            print(
-                f"[WARN] Episode id {episode_id} matched {len(selected_candidates)} OVON goals; "
-                f"using first goal={getattr(selected_episode, 'object_category', '')!r}"
-            )
-        dataset = _clone_dataset_with_episode(base_dataset, selected_episode)
-    else:
-        dataset = _load_dataset_for_episodes(ovon_config, [episode_id])
-
-    if len(dataset.episodes) < 1:
-        raise RuntimeError(f"Episode {episode_id} not found in OVON dataset")
-    if len(dataset.episodes) > 1:
-        selected_episode = dataset.episodes[0]
-        print(
-            f"[WARN] Episode id {episode_id} matched {len(dataset.episodes)} OVON goals; "
-            f"using first goal={getattr(selected_episode, 'object_category', '')!r}"
-        )
-        dataset.episodes = [selected_episode]
-
-    import habitat
-    from navigation_system.controller.object_navigation.controller import (
-        OVONObjectNavigationController,
-    )
-    from navigation_system.env.object_navigation.adapter import (
-        SingleOVONVectorEnvAdapter,
-    )
     from navigation_system.runtime.object_navigation.runtime_config import (
         build_objectnav_runtime_config,
     )
 
-    env = habitat.Env(config=ovon_config.habitat, dataset=dataset)
-    adapter = SingleOVONVectorEnvAdapter(env, episode_count=1)
     runtime_config = build_objectnav_runtime_config(
         results_dir=results_dir,
         max_episode_steps=max(
@@ -453,19 +681,64 @@ def _run_one_episode(
         save_step_images=save_step_images,
         save_gif=save_gif,
     )
-
-    controller = OVONObjectNavigationController(
-        runtime_config,
-        config_path=api_config_path,
-        model_stack_builder=model_stack_builder,
-        envs=adapter,
+    save_stdout_log = save_episode_stdout_log_enabled(runtime_config)
+    episode_log_path = (
+        get_episode_records_log_path(results_dir, episode_id)
+        if save_stdout_log
+        else ""
+    )
+    redirect_context = (
+        redirect_process_output_to_file(episode_log_path, mode="w")
+        if save_stdout_log and episode_log_path
+        else redirect_process_output_to_null()
     )
 
-    try:
-        controller.reset_episode(episode_id=episode_id)
-        result = controller.run_vlm_navigation(max_subtask_steps=max_subtask_steps)
-    finally:
-        controller.close()
+    with redirect_context:
+        selected_candidates = list((episode_lookup or {}).get(int(episode_id), []))
+        if selected_candidates:
+            selected_episode = selected_candidates[0]
+            if len(selected_candidates) > 1:
+                print(
+                    f"[WARN] Episode id {episode_id} matched {len(selected_candidates)} OVON goals; "
+                    f"using first goal={getattr(selected_episode, 'object_category', '')!r}"
+                )
+            dataset = _clone_dataset_with_episode(base_dataset, selected_episode)
+        else:
+            dataset = _load_dataset_for_episodes(ovon_config, [episode_id])
+
+        if len(dataset.episodes) < 1:
+            raise RuntimeError(f"Episode {episode_id} not found in OVON dataset")
+        if len(dataset.episodes) > 1:
+            selected_episode = dataset.episodes[0]
+            print(
+                f"[WARN] Episode id {episode_id} matched {len(dataset.episodes)} OVON goals; "
+                f"using first goal={getattr(selected_episode, 'object_category', '')!r}"
+            )
+            dataset.episodes = [selected_episode]
+
+        import habitat
+        from navigation_system.controller.object_navigation.controller import (
+            OVONObjectNavigationController,
+        )
+        from navigation_system.env.object_navigation.adapter import (
+            SingleOVONVectorEnvAdapter,
+        )
+
+        env = habitat.Env(config=ovon_config.habitat, dataset=dataset)
+        adapter = SingleOVONVectorEnvAdapter(env, episode_count=1)
+
+        controller = OVONObjectNavigationController(
+            runtime_config,
+            config_path=api_config_path,
+            model_stack_builder=model_stack_builder,
+            envs=adapter,
+        )
+
+        try:
+            controller.reset_episode(episode_id=episode_id)
+            result = controller.run_vlm_navigation(max_subtask_steps=max_subtask_steps)
+        finally:
+            controller.close()
 
     return result
 
@@ -611,7 +884,7 @@ def build_arg_parser(run_defaults: dict | None = None) -> argparse.ArgumentParse
         "--parallel-workers",
         type=int,
         default=1,
-        help="accepted for launcher parity; OVON currently runs episodes serially",
+        help="number of parallel episode workers",
     )
     parser.set_defaults(
         save_step_images=bool(defaults["save_step_images"]),
@@ -663,23 +936,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         or _default_results_dir()
     )
-    if int(args.parallel_workers or 1) > 1:
-        print(
-            "[OVON-ObjectNav] parallel-workers is accepted for launcher parity, "
-            "but OVON episodes currently run serially."
-        )
     model_stack_builder = _select_model_stack_builder(args.runtime)
 
-    ovon_config = _prepare_ovon_config(
-        exp_config=args.exp_config,
-        split=args.split,
-        data_path=args.data_path,
-        gpu_id=args.gpu_id,
-        max_steps=args.max_steps,
-    )
+    with redirect_process_output_to_null():
+        ovon_config = _prepare_ovon_config(
+            exp_config=args.exp_config,
+            split=args.split,
+            data_path=args.data_path,
+            gpu_id=args.gpu_id,
+            max_steps=args.max_steps,
+        )
 
-    requested_episode_ids = _parse_episode_ids(args.episode_ids)
-    discovery_dataset = _load_dataset_for_episodes(ovon_config, requested_episode_ids or None)
+        requested_episode_ids = _parse_episode_ids(args.episode_ids)
+        discovery_dataset = _load_dataset_for_episodes(ovon_config, requested_episode_ids or None)
     episode_lookup = _index_dataset_episodes(discovery_dataset)
     if requested_episode_ids:
         episode_ids = requested_episode_ids
@@ -695,6 +964,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             episode_id=int(args.episode_id),
             num_episodes=args.num_episodes,
         )
+        if episode_ids and int(episode_ids[0]) != int(args.episode_id):
+            print(
+                f"[OVON-ObjectNav] requested start episode id {int(args.episode_id)} "
+                f"is not present in split '{args.split}'; "
+                f"starting from next available id {int(episode_ids[0])}."
+            )
     else:
         episode_ids = _discover_episode_ids(
             discovery_dataset,
@@ -717,87 +992,52 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise RuntimeError("No OVON episodes selected for evaluation")
 
     os.makedirs(args.results_dir, exist_ok=True)
-    all_results = []
+    total = len(episode_ids)
 
-    for episode_id in episode_ids:
-        print(f"\n[OVON-ObjectNav] Running episode {episode_id}")
-        result = _run_one_episode(
-            ovon_config=ovon_config,
-            api_config_path=args.vlm_api_config,
-            episode_id=episode_id,
-            results_dir=args.results_dir,
-            max_subtask_steps=args.max_subtask_steps,
-            save_step_images=bool(args.save_step_images),
-            save_gif=bool(args.save_gif),
-            model_stack_builder=model_stack_builder,
-            base_dataset=discovery_dataset,
-            episode_lookup=episode_lookup,
+    if int(args.parallel_workers or 1) > 1 and total > 1:
+        print(
+            f"[OVON-ObjectNav] parallel execution enabled | workers={int(args.parallel_workers)} | "
+            f"episodes={total}",
         )
-        saved_metrics = _resolve_saved_metrics(result)
-        all_results.append(
-            {
-                "episode_id": int(episode_id),
-                "success": bool(
-                    _coalesce_metric(
-                        saved_metrics,
-                        "sr",
-                        result,
-                        "success",
-                        "sr",
-                        default=False,
-                    )
+        all_results = _run_parallel_episodes(args, episode_ids)
+    else:
+        all_results = []
+        for index, episode_id in enumerate(episode_ids, 1):
+            print(
+                build_episode_start_summary(
+                    episode_id=int(episode_id),
+                    index=index,
+                    total=total,
                 ),
-                "steps": int(result.get("total_steps", result.get("steps", 0)) or 0),
-                "distance_to_goal": float(
-                    _coalesce_metric(
-                        saved_metrics,
-                        "ne",
-                        result,
-                        "distance_to_goal",
-                        "ne",
-                        default=-1.0,
-                    )
-                    or -1.0
+                flush=True,
+            )
+            result = _run_one_episode(
+                ovon_config=ovon_config,
+                api_config_path=args.vlm_api_config,
+                episode_id=episode_id,
+                results_dir=args.results_dir,
+                max_subtask_steps=args.max_subtask_steps,
+                save_step_images=bool(args.save_step_images),
+                save_gif=bool(args.save_gif),
+                model_stack_builder=model_stack_builder,
+                base_dataset=discovery_dataset,
+                episode_lookup=episode_lookup,
+            )
+            summary_row = _build_episode_summary_row(int(episode_id), result)
+            print(
+                build_episode_console_summary(
+                    episode_id=int(episode_id),
+                    index=index,
+                    total=total,
+                    result=summary_row,
+                    metrics=_build_console_metrics(summary_row),
                 ),
-                "spl": float(
-                    _coalesce_metric(
-                        saved_metrics,
-                        "spl",
-                        result,
-                        "spl",
-                        default=0.0,
-                    )
-                    or 0.0
-                ),
-                "soft_spl": float(
-                    _coalesce_metric(
-                        saved_metrics,
-                        "soft_spl",
-                        result,
-                        "soft_spl",
-                        "oracle_spl",
-                        default=saved_metrics.get("oracle_spl", 0.0),
-                    )
-                    or 0.0
-                ),
-                "oracle_success": int(
-                    _coalesce_metric(
-                        saved_metrics,
-                        "osr",
-                        result,
-                        "oracle_success",
-                        "osr",
-                        default=0,
-                    )
-                    or 0
-                ),
-                "gif_path": str(result.get("gif_path", "") or ""),
-                "topdown_path": str(result.get("topdown_path", "") or ""),
-                "result_file": result.get("result_file", ""),
-            }
-        )
+                flush=True,
+            )
+            all_results.append(summary_row)
 
     aggregate = _build_aggregate(all_results)
+    success_distance_m = _resolve_success_distance_from_ovon_config(ovon_config)
     summary_payload = {
         "meta": {
             "runtime": str(args.runtime),
@@ -806,13 +1046,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             "exp_config": str(Path(args.exp_config).resolve()),
             "vlm_api_config": str(args.vlm_api_config),
             "results_dir": str(Path(args.results_dir).resolve()),
-            "success_distance_m": _resolve_success_distance_from_ovon_config(ovon_config),
+            "success_distance_m": success_distance_m,
             "max_episode_steps": int(
                 getattr(ovon_config.habitat.environment, "max_episode_steps", 0) or 0
             ),
             "benchmark_note": (
                 "This run follows the local naokiyokoyama/ovon repo eval stack: "
-                f"STOP + distance_to_goal < success_distance, with success_distance={_resolve_success_distance_from_ovon_config(ovon_config):.2f} in the loaded config."
+                f"STOP + distance_to_goal < success_distance, with success_distance={success_distance_m:.2f} in the loaded config."
             ),
         },
         "aggregate": aggregate,

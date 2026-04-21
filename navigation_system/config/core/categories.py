@@ -11,48 +11,48 @@ class CategoryConfig:
                  landmark_classes: List[str]):
         """
         Args:
-            mapping_classes: 建图基础类别（固定）
-            landmark_classes: Landmark类别（动态）
+            mapping_classes: Static mapping classes.
+            landmark_classes: Dynamic landmark classes.
         """
-        # 基础类别（不变）
+        # Static mapping categories
         self._mapping_classes = mapping_classes.copy()
         self._landmark_classes = landmark_classes.copy()
         
         self._detection_classes = self._mapping_classes + self._landmark_classes
     
-    # ========== 属性访问 ==========
+    # ========== Accessors ==========
     
     @property
     def mapping_classes(self) -> List[str]:
-        """建图基础类别（floor, stairs, wall等）"""
+        """Static mapping categories such as floor, stairs, and wall."""
         return self._mapping_classes.copy()
     
     @property
     def landmark_classes(self) -> List[str]:
-        """Landmark类别（bed, chair, table等）"""
+        """Landmark categories such as bed, chair, and table."""
         return self._landmark_classes.copy()
     
     @property
     def detection_classes(self) -> List[str]:
-        """完整检测类别（mapping + landmark）"""
+        """Complete detection categories (`mapping + landmark`)."""
         return self._detection_classes.copy()
     
-    # ========== 类别查询 ==========
+    # ========== Category queries ==========
     
     def is_mapping_class(self, class_name: str) -> bool:
-        """判断是否为建图类别"""
+        """Return whether the class belongs to mapping categories."""
         return class_name in self._mapping_classes
     
     def is_landmark_class(self, class_name: str) -> bool:
-        """判断是否为Landmark类别"""
+        """Return whether the class belongs to landmark categories."""
         return class_name in self._landmark_classes
     
     def get_class_type(self, class_name: str) -> str:
         """
-        获取类别类型
-        
+        Return the category family.
+
         Returns:
-            'mapping', 'landmark', 或 'unknown'
+            `mapping`, `landmark`, or `unknown`.
         """
         if self.is_mapping_class(class_name):
             return 'mapping'
@@ -63,10 +63,7 @@ class CategoryConfig:
     
     def get_statistics(self) -> dict:
         """
-        获取静态类别统计信息
-        
-        Returns:
-            统计字典
+        Return summary statistics for the configured categories.
         """
         return {
             'total_mapping': len(self._mapping_classes),
@@ -77,17 +74,17 @@ class CategoryConfig:
         }
     
     def print_summary(self):
-        """打印类别配置摘要"""
+        """Print a category configuration summary."""
         stats = self.get_statistics()
         print(
             f"  Categories: mapping={stats['total_mapping']} "
             f"landmark={stats['total_landmark']} detection={stats['total_detection']}"
         )
     
-    # ========== 复制和重置 ==========
+    # ========== Copy helpers ==========
     
     def copy(self) -> 'CategoryConfig':
-        """创建副本"""
+        """Create a shallow copy."""
         new_config = CategoryConfig(
             self._mapping_classes,
             self._landmark_classes
@@ -95,14 +92,11 @@ class CategoryConfig:
         return new_config
 
 
-# ========== 便捷函数 ==========
+# ========== Convenience helpers ==========
 
 def create_category_config() -> CategoryConfig:
     """
-    创建默认静态类别配置（从constant.py读取）
-    
-    Returns:
-        CategoryConfig实例
+    Create the default category config from `constants.py`.
     """
     from navigation_system.config.core.constants import mapping_classes, landmark_classes
     return CategoryConfig(mapping_classes, landmark_classes)
@@ -113,13 +107,10 @@ def create_custom_category_config(
     landmark_classes: List[str]
 ) -> CategoryConfig:
     """
-    创建自定义类别配置
-    
+    Create a custom category config.
+
     Args:
-        mapping_classes: 自定义建图类别
-        landmark_classes: 自定义Landmark类别
-    
-    Returns:
-        CategoryConfig实例
+        mapping_classes: Custom mapping classes.
+        landmark_classes: Custom landmark classes.
     """
     return CategoryConfig(mapping_classes, landmark_classes)

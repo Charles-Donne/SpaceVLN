@@ -25,7 +25,7 @@ from navigation_system.runtime.episode_io import (
     redirect_process_output_to_null,
     save_episode_stdout_log_enabled,
 )
-from navigation_system.runtime.execution import (
+from navigation_system.runtime.vlnce.execution import (
     build_episode_config,
     load_runtime_config,
 )

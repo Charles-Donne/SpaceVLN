@@ -13,11 +13,11 @@ from navigation_system.ablation.runtime.profiles import (
 from navigation_system.ablation.runtime.runner import (
     run_navigation_from_args as run_ablation_navigation_from_args,
 )
-from navigation_system.runtime.profiles import (
+from navigation_system.runtime.vlnce.profiles import (
     CONTEXT_CACHE_RUNTIME_PROFILE,
     STANDARD_RUNTIME_PROFILE,
 )
-from navigation_system.runtime.runner import (
+from navigation_system.runtime.vlnce.runner import (
     build_arg_parser,
     run_navigation_from_args,
 )

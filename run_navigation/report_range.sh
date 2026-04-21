@@ -173,7 +173,7 @@ resolve_dataset_episode_bounds() {
 import sys
 
 from navigation_system.config import get_config
-from navigation_system.runtime.episode_selection import (
+from navigation_system.runtime.vlnce.episode_selection import (
     MAX_EPISODE_ID,
     MIN_EPISODE_ID,
     get_available_episode_ids,

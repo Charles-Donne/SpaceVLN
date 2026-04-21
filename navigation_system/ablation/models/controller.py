@@ -11,7 +11,7 @@ from navigation_system.ablation.render.thinking_view_renderer import (
     AblationThinkingViewRenderer,
 )
 from navigation_system.config.core.params.api import ACTION_VIEW_MODEL_CONTENT_WIDTH
-from navigation_system.controller.navigation_controller import VLMNavigationController
+from navigation_system.controller.vlnce.controller import VLMNavigationController
 from navigation_system.render.image_resize import resize_image_to_width
 
 
