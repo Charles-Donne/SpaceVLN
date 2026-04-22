@@ -57,7 +57,7 @@ def get_ovon_verification_replanning_prompt(
     verify_replan_prompt_notice: str = None,
 ) -> str:
     verify_replan_prompt_notice_block = (
-        f"\n**Recovery Notice**: {verify_replan_prompt_notice.strip()}"
+        f"\n**Stuck Notice**: {verify_replan_prompt_notice.strip()}"
         if str(verify_replan_prompt_notice or "").strip()
         else ""
     )

@@ -60,7 +60,7 @@ def _clean_area_label(area_label: str) -> str:
 def _format_current_area_header_label(area_label: str) -> str:
     clean_area = _clean_area_label(area_label)
     if clean_area == "Unknown":
-        return "unresolved; infer from current views"
+        return "unknown; you need to infer from current surrounding views"
     return clean_area
 
 

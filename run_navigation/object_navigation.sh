@@ -29,17 +29,19 @@ Usage:
   bash run_navigation/object_navigation.sh [--runtime standard|context_cache] [--run-config YAML] [episode args...]
 
 Episode-arg examples:
-  1074                         Run one episode
-  1074 60                      Run one episode with max_steps=60
-  1074 10 500                  Start at episode id 1074, run 10 episodes, max_steps=500
-  1074 10 500 skip-sr1 1       Same range, skip episodes with existing SR=1 logs
+  1                            Run the first sample in the current split
+  1 60                         Run one sample with max_steps=60
+  1 10 500                     Start from sample 1, run 10 tasks in split/sample order
+  1 10 500 skip-sr1 5          Same range, skip episodes with existing SR=1 logs, use 5 workers
   random 10 500 all 1          Sample 10 random episodes, max_steps=500
   list 1074,1081 500           Run explicit episode ids, max_steps=500
 
 Examples:
   bash run_navigation/object_navigation.sh --episode-ids 1074
+  bash run_navigation/object_navigation.sh --episode-id 1074
+  bash run_navigation/object_navigation.sh --start-index 1 --num-episodes 10
   bash run_navigation/object_navigation.sh --runtime context_cache --num-episodes 10
-  bash run_navigation/object_navigation.sh --runtime context_cache 1074 10 500 skip-sr1 1
+  bash run_navigation/object_navigation.sh --runtime context_cache 1 100 300 5
   bash run_navigation/object_navigation.sh --run-config navigation_system/config/experiments/ovon_val_unseen_eval.yaml --episode-ids 1074,1081
 
 Notes:
@@ -47,6 +49,9 @@ Notes:
   - Default data root follows the unified workspace layout: nav_ws/data
   - The OVON runtime defaults YAML is:
       navigation_system/config/experiments/ovon_val_unseen_eval.yaml
+  - Positional numeric launch follows split/sample order semantics.
+  - Use --start-index explicitly if you want the same behavior in long-form flags.
+  - Use --episode-id for an exact OVON episode id.
   - The workers argument matches the VLNCE launcher style and now enables parallel episode workers.
 EOF
 }
@@ -174,7 +179,7 @@ if [[ ${#POSITIONAL_ARGS[@]} -gt 0 ]]; then
     elif [[ "$first_arg" =~ ^[0-9]+$ ]]; then
         if [[ -n "$second_arg" && -z "$third_arg" ]]; then
             TRANSLATED_ARGS=(
-                --episode-id "$first_arg"
+                --start-index "$first_arg"
                 --num-episodes 1
                 --max-steps "$second_arg"
                 --parallel-workers "$parallel_workers"
@@ -183,7 +188,7 @@ if [[ ${#POSITIONAL_ARGS[@]} -gt 0 ]]; then
             num_episodes="${second_arg:-1}"
             max_steps="${third_arg:-}"
             TRANSLATED_ARGS=(
-                --episode-id "$first_arg"
+                --start-index "$first_arg"
                 --num-episodes "$num_episodes"
                 --parallel-workers "$parallel_workers"
             )

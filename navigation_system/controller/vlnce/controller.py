@@ -2850,6 +2850,9 @@ class VLMNavigationController(BaseNavigationController):
             "previous_subtask_landmark_summary": previous_subtask_landmark_summary,
             "previous_subtask_landmark_final_info": dict(getattr(self, "previous_subtask_landmark_final_info", {}) or {}),
             "verify_view_restriction": verify_view_restriction_info,
+            "image_paths": list(image_paths or []),
+            "direction_names": list(direction_names or []),
+            "global_map_image": global_map,
         }
         self.latest_thinking_cycle_info = dict(cycle_info)
         return response, prompt, cycle_info

@@ -1,39 +1,39 @@
 # Cache Prompt Split
 
-这里的文件是 Qwen 显式上下文缓存专用 prompt，不再从普通 prompt 运行时裁剪生成。
+These files define the explicit-context-cache prompt split used for Qwen-style cached calls. They are maintained directly in this directory rather than being extracted at runtime from the non-cache prompt.
 
-## 设计原则
+## Design Principles
 
 - `*.system.prompt.md`
-  - 放稳定、长文本、希望被显式缓存命中的规则和输出格式。
-  - 只允许保留少量固定阈值占位符，例如 `{obs_blocked_m}`。
+  - Stores the stable long-form rules, formatting constraints, and examples that should benefit from explicit cache reuse.
+  - May keep a small number of fixed threshold placeholders such as `{obs_blocked_m}`.
 - `*.user.prompt.md`
-  - 只放每次调用都会变化的动态文本。
-  - 不再放长规则、输出格式、示例说明等稳定内容。
-- 普通非缓存 prompt 与缓存 prompt 独立维护。
-  - 修改缓存行为时，只改本目录文件即可。
-  - 不需要再从普通 prompt 中“提取”可缓存部分。
+  - Stores only the per-call dynamic text.
+  - Should not duplicate long stable rules, output schemas, or examples.
+- Non-cache prompts and cache prompts are maintained independently.
+  - Update files in this directory when changing explicit-cache behavior.
+  - No runtime extraction step is required from the non-cache prompt.
 
-## 文件对应关系
+## File Mapping
 
 - `planning_initial.system.prompt.md`
-  - 初始 thinking 的固定规则、输入说明、输出 JSON 结构、示例。
+  - Stable rules, input legend, JSON schema, and examples for initial planning.
 - `planning_initial.user.prompt.md`
-  - 初始 thinking 的动态输入，目前只包含 `Global Task`。
+  - Dynamic initial-planning input, usually the current `Global Task`.
 - `planning_verify.system.prompt.md`
-  - verify / replan 的固定规则、固定输出结构、示例。
-  - 这里使用泛化表述 `Surrounding Views`，不再用动态的 `{verify_view_count}` 标题。
+  - Stable rules, JSON schema, and examples for verify / replan.
+  - Uses the generalized `Surrounding Views` wording instead of a runtime-specific view-count title.
 - `planning_verify.user.prompt.md`
-  - verify / replan 的动态输入：`Stuck Notice`、`Global Task`、`Previous Subtask`、`Space Structure`。
+  - Dynamic verify / replan inputs such as the current task, previous subtask, optional notice block, and any task-variant runtime summaries.
 - `action.system.prompt.md`
-  - action 的固定规则、输出 JSON 结构、示例。
-  - `Output Format` 固定放在 system prompt，不再放到动态 user prompt。
+  - Stable action rules, JSON schema, and examples.
+  - Keeps the `Output Format` in the cached system prompt.
 - `action.user.prompt.md`
-  - action 的动态输入：当前 subtask、环境感知、空间结构、黄框候选检测、当前 action space。
+  - Dynamic action inputs such as the current subtask, perception summaries, optional runtime summaries, candidate detections, and the current action space.
 
-## 最终发送给模型的结构
+## Final Message Structure
 
-显式缓存调用最终会发成两条消息：
+An explicit-cache call is sent as two messages:
 
 ```json
 {
@@ -69,20 +69,20 @@
 }
 ```
 
-## 调试产物
+## Debug Artifacts
 
-每次 cache 调用会在对应 step 目录下保存：
+Each cache call saves prompt/debug artifacts in the corresponding step directory, typically including:
 
 - `system_prompt.md`
 - `user_prompt.md`
-- 输入图片副本
+- input image copies
 - `vlm_info.json`
 - `response.json`
 
-其中：
+Where:
 
-- `system_prompt.md` 是被显式缓存的稳定文本。
-- `user_prompt.md` 是每次变化的动态文本。
-- 输入图片副本就是模型实际看到的压缩后版本，便于直接 debug。
-- `vlm_info.json` 统一记录模型、token、耗时和缓存统计。
-- `response.json` 是系统解析后的最终输出。
+- `system_prompt.md` is the stable text intended for explicit cache reuse.
+- `user_prompt.md` is the dynamic per-call text.
+- Input image copies reflect the actual compressed image payload sent to the model.
+- `vlm_info.json` records model name, tokens, latency, and cache stats.
+- `response.json` stores the parsed final model output.

@@ -36,30 +36,55 @@ def get_episode_detail_root(dump_dir: str) -> str:
     return os.path.join(dump_dir, DETAIL_DIR_NAME)
 
 
-def get_episode_detail_dir(dump_dir: str, episode_id: int) -> str:
+def _entry_dir_name(entry_id: int, entry_kind: str = "episode") -> str:
+    prefix = str(entry_kind or "episode").strip() or "episode"
+    return f"{prefix}_{int(entry_id)}"
+
+
+def get_episode_detail_dir(
+    dump_dir: str,
+    episode_id: int,
+    *,
+    entry_kind: str = "episode",
+) -> str:
     return os.path.join(
         get_episode_bucket_dir(get_episode_detail_root(dump_dir), episode_id),
-        f"episode_{int(episode_id)}",
+        _entry_dir_name(episode_id, entry_kind=entry_kind),
     )
 
 
-def get_episode_detail_path_candidates(dump_dir: str, episode_id: int) -> List[str]:
-    return [get_episode_detail_dir(dump_dir, episode_id)]
+def get_episode_detail_path_candidates(
+    dump_dir: str,
+    episode_id: int,
+    *,
+    entry_kind: str = "episode",
+) -> List[str]:
+    return [get_episode_detail_dir(dump_dir, episode_id, entry_kind=entry_kind)]
 
 
 def get_log_root(dump_dir: str) -> str:
     return os.path.join(dump_dir, LOG_DIR_NAME)
 
 
-def get_episode_log_path(dump_dir: str, episode_id: int) -> str:
+def get_episode_log_path(
+    dump_dir: str,
+    episode_id: int,
+    *,
+    entry_kind: str = "episode",
+) -> str:
     return os.path.join(
         get_episode_bucket_dir(get_log_root(dump_dir), episode_id),
-        f"episode_{int(episode_id)}.json",
+        f"{_entry_dir_name(episode_id, entry_kind=entry_kind)}.json",
     )
 
 
-def get_episode_log_path_candidates(dump_dir: str, episode_id: int) -> List[str]:
-    return [get_episode_log_path(dump_dir, episode_id)]
+def get_episode_log_path_candidates(
+    dump_dir: str,
+    episode_id: int,
+    *,
+    entry_kind: str = "episode",
+) -> List[str]:
+    return [get_episode_log_path(dump_dir, episode_id, entry_kind=entry_kind)]
 
 
 def iter_all_episode_log_paths(dump_dir: str) -> List[str]:
@@ -71,7 +96,9 @@ def iter_all_episode_log_paths(dump_dir: str) -> List[str]:
     for current_root, dirnames, filenames in os.walk(log_root):
         dirnames.sort()
         for filename in sorted(filenames):
-            if filename.startswith("episode_") and filename.endswith(".json"):
+            if filename.endswith(".json") and (
+                filename.startswith("episode_") or filename.startswith("sample_")
+            ):
                 matched_paths.append(os.path.join(current_root, filename))
     return matched_paths
 
@@ -89,13 +116,9 @@ class SaveManager:
         "failed_retry_wait_duration_s",
         "failed_wasted_duration_s",
         "ne",
-        "osr",
         "sr",
         "spl",
-        "ndtw",
         "path_length",
-        "oracle_navigation_error",
-        "oracle_spl",
         "timestamp",
     )
     API_SUMMARY_FIELDS = (
@@ -111,6 +134,8 @@ class SaveManager:
         dump_dir: str,
         episode_id: int,
         *,
+        storage_entry_id: Optional[int] = None,
+        entry_kind: str = "episode",
         save_waypoint_memory: bool = False,
     ):
         """
@@ -122,9 +147,15 @@ class SaveManager:
         """
         self.dump_dir = dump_dir
         self.episode_id = episode_id
+        self.storage_entry_id = int(storage_entry_id) if storage_entry_id is not None else int(episode_id)
+        self.entry_kind = str(entry_kind or "episode").strip() or "episode"
         self.save_waypoint_memory_enabled = bool(save_waypoint_memory)
         self.detail_dir = get_episode_detail_root(dump_dir)
-        self.episode_dir = get_episode_detail_dir(dump_dir, episode_id)
+        self.episode_dir = get_episode_detail_dir(
+            dump_dir,
+            self.storage_entry_id,
+            entry_kind=self.entry_kind,
+        )
         self.records_dir = os.path.join(self.episode_dir, "records")
         os.makedirs(self.detail_dir, exist_ok=True)
         os.makedirs(self.episode_dir, exist_ok=True)
@@ -303,9 +334,19 @@ class SaveManager:
         with open(result_path, 'w', encoding='utf-8') as f:
             json.dump(result, f, indent=2, ensure_ascii=False)
 
-        log_dir = os.path.dirname(get_episode_log_path(self.dump_dir, self.episode_id))
+        log_dir = os.path.dirname(
+            get_episode_log_path(
+                self.dump_dir,
+                self.storage_entry_id,
+                entry_kind=self.entry_kind,
+            )
+        )
         os.makedirs(log_dir, exist_ok=True)
-        log_path = get_episode_log_path(self.dump_dir, self.episode_id)
+        log_path = get_episode_log_path(
+            self.dump_dir,
+            self.storage_entry_id,
+            entry_kind=self.entry_kind,
+        )
 
         log_result = {
             'episode_id': result['episode_id'],
@@ -317,17 +358,28 @@ class SaveManager:
             'failed_retry_wait_duration_s': result.get('failed_retry_wait_duration_s', 0.0),
             'failed_wasted_duration_s': result.get('failed_wasted_duration_s', result.get('failed_api_total_duration_s', 0.0)),
             'ne': result.get('ne', -1),
-            'osr': result.get('osr', 0),
             'sr': result.get('sr', 0),
             'spl': result.get('spl', 0.0),
-            'ndtw': result.get('ndtw', 0.0),
             'thinking_api_summary': result.get('thinking_api_summary', {}),
             'action_api_summary': result.get('action_api_summary', {}),
             'path_length': result.get('path_length', 0.0),
-            'oracle_navigation_error': result.get('oracle_navigation_error', float('inf')),
-            'oracle_spl': result.get('oracle_spl', 0.0),
             'timestamp': result.get('timestamp', datetime.now().isoformat()),
         }
+        if 'soft_spl' in result:
+            log_result['soft_spl'] = result.get('soft_spl', 0.0)
+        if 'sample_index' in result:
+            log_result['sample_index'] = result.get('sample_index')
+        if 'osr' in result:
+            log_result['osr'] = result.get('osr', 0)
+        if 'ndtw' in result:
+            log_result['ndtw'] = result.get('ndtw', 0.0)
+        if 'oracle_navigation_error' in result:
+            log_result['oracle_navigation_error'] = result.get(
+                'oracle_navigation_error',
+                float('inf'),
+            )
+        if 'oracle_spl' in result:
+            log_result['oracle_spl'] = result.get('oracle_spl', 0.0)
 
         existing_best_log = self._load_json_if_exists(log_path)
         compare_baseline = existing_best_log if self.is_complete_result(existing_best_log) else None

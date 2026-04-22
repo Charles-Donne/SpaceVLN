@@ -7,7 +7,7 @@ from typing import Dict, Optional, Sequence
 from navigation_system.ablation.config import AblationSpec, load_ablation_spec
 from navigation_system.ablation.prompts.standard import _hidden_obstacle_distances
 from navigation_system.ablation.prompts.templates import load_ablation_template
-from navigation_system.vlm.prompts import cache_builders as standard_cache_builders
+from navigation_system.vlm.prompts.vlnce import cache_builders as standard_cache_builders
 from navigation_system.vlm.prompts.common import (
     ExplicitCachePromptBundle,
     compose_full_prompt,

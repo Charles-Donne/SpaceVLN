@@ -6,7 +6,7 @@ from typing import Dict, Optional, Sequence
 
 from navigation_system.ablation.config import AblationSpec, load_ablation_spec
 from navigation_system.ablation.prompts.templates import load_ablation_template
-from navigation_system.vlm.prompts import builders as standard_builders
+from navigation_system.vlm.prompts.vlnce import builders as standard_builders
 
 
 def _active_spec(spec: Optional[AblationSpec] = None) -> AblationSpec:

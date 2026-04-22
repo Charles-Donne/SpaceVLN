@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import copy
+import csv
 import json
 import multiprocessing
 import os
@@ -307,11 +308,34 @@ def _load_dataset_for_episodes(config, episode_ids: Sequence[int] | None):
     return dataset
 
 
+def _load_dataset_for_sample_indices(config, sample_indices: Sequence[int] | None):
+    dataset = _load_dataset_for_episodes(config, None)
+    if not sample_indices:
+        return dataset
+    episodes = list(getattr(dataset, "episodes", []) or [])
+    selected = []
+    for raw_index in sample_indices:
+        sample_index = int(raw_index)
+        if sample_index < 1 or sample_index > len(episodes):
+            continue
+        selected.append(episodes[sample_index - 1])
+    dataset.episodes = selected
+    return dataset
+
+
 def _index_dataset_episodes(dataset) -> dict[int, list]:
     episode_lookup: dict[int, list] = {}
     for episode in list(getattr(dataset, "episodes", []) or []):
         episode_lookup.setdefault(int(episode.episode_id), []).append(episode)
     return episode_lookup
+
+
+def _build_split_index_lookup(dataset) -> dict[int, int]:
+    split_index_lookup: dict[int, int] = {}
+    for sample_index, episode in enumerate(list(getattr(dataset, "episodes", []) or []), 1):
+        episode_id = int(getattr(episode, "episode_id"))
+        split_index_lookup.setdefault(episode_id, int(sample_index))
+    return split_index_lookup
 
 
 def _clone_dataset_with_episode(base_dataset, episode):
@@ -320,9 +344,105 @@ def _clone_dataset_with_episode(base_dataset, episode):
     return dataset
 
 
-def _discover_episode_ids(dataset, *, num_episodes: int) -> List[int]:
+def _sample_indices_from_range(
+    dataset,
+    *,
+    start_index: int | None,
+    num_episodes: int,
+) -> List[int]:
     episodes = list(getattr(dataset, "episodes", []) or [])
-    return [int(ep.episode_id) for ep in episodes[: max(1, int(num_episodes))]]
+    if not episodes:
+        return []
+    requested_index = max(1, int(start_index or 1))
+    start_offset = requested_index - 1
+    if start_offset >= len(episodes):
+        return []
+    end_offset = min(len(episodes), start_offset + max(1, int(num_episodes)))
+    return list(range(start_offset + 1, end_offset + 1))
+
+
+def _random_sample_indices(
+    dataset,
+    *,
+    num_episodes: int,
+    seed: int,
+) -> List[int]:
+    total = len(list(getattr(dataset, "episodes", []) or []))
+    if total <= 0:
+        return []
+    sample_size = min(max(1, int(num_episodes)), total)
+    return random.Random(int(seed)).sample(list(range(1, total + 1)), sample_size)
+
+
+def _episode_by_sample_index(dataset, sample_index: int):
+    episodes = list(getattr(dataset, "episodes", []) or [])
+    index = int(sample_index)
+    if index < 1 or index > len(episodes):
+        return None
+    return episodes[index - 1]
+
+
+def _build_sample_episode_specs(dataset, sample_indices: Sequence[int]) -> List[dict]:
+    specs: List[dict] = []
+    for sample_index in sample_indices:
+        episode = _episode_by_sample_index(dataset, int(sample_index))
+        if episode is None:
+            continue
+        specs.append(
+            {
+                "episode_id": int(getattr(episode, "episode_id")),
+                "sample_index": int(sample_index),
+                "storage_entry_id": int(sample_index),
+                "entry_kind": "sample",
+            }
+        )
+    return specs
+
+
+def _build_episode_id_specs(dataset, episode_ids: Sequence[int]) -> List[dict]:
+    episode_lookup = _index_dataset_episodes(dataset)
+    split_index_lookup = _build_split_index_lookup(dataset)
+    specs: List[dict] = []
+    for episode_id in episode_ids:
+        selected_episode_id = int(episode_id)
+        if selected_episode_id not in episode_lookup:
+            continue
+        specs.append(
+            {
+                "episode_id": selected_episode_id,
+                "sample_index": split_index_lookup.get(selected_episode_id),
+                "storage_entry_id": selected_episode_id,
+                "entry_kind": "episode",
+            }
+        )
+    return specs
+
+
+def _discover_episode_ids(dataset, *, num_episodes: int) -> List[int]:
+    return _discover_episode_ids_from_start(
+        dataset,
+        episode_id=None,
+        num_episodes=num_episodes,
+    )
+
+
+def _discover_episode_ids_from_index(
+    dataset,
+    *,
+    start_index: int | None,
+    num_episodes: int,
+) -> List[int]:
+    episodes = list(getattr(dataset, "episodes", []) or [])
+    if not episodes:
+        return []
+
+    requested_index = int(start_index or 1)
+    start_offset = max(0, requested_index - 1)
+    if start_offset >= len(episodes):
+        return []
+
+    selected = episodes[start_offset : start_offset + max(1, int(num_episodes))]
+    return [int(ep.episode_id) for ep in selected]
 
 
 def _discover_episode_ids_from_start(
@@ -366,10 +486,25 @@ def _result_payload_is_sr1(payload: dict | None) -> bool:
     return False
 
 
-def _episode_has_existing_sr1(results_dir: str, episode_id: int) -> bool:
+def _episode_has_existing_sr1(
+    results_dir: str,
+    episode_id: int,
+    *,
+    entry_kind: str = "episode",
+) -> bool:
     candidate_paths = []
-    candidate_paths.extend(get_episode_log_path_candidates(results_dir, episode_id))
-    for detail_dir in get_episode_detail_path_candidates(results_dir, episode_id):
+    candidate_paths.extend(
+        get_episode_log_path_candidates(
+            results_dir,
+            episode_id,
+            entry_kind=entry_kind,
+        )
+    )
+    for detail_dir in get_episode_detail_path_candidates(
+        results_dir,
+        episode_id,
+        entry_kind=entry_kind,
+    ):
         candidate_paths.append(os.path.join(detail_dir, "records", "result.json"))
 
     seen = set()
@@ -404,9 +539,43 @@ def _filter_existing_sr1(
     return kept
 
 
-def _build_episode_summary_row(episode_id: int, result: dict) -> dict:
+def _filter_existing_sr1_specs(
+    *,
+    episode_specs: Sequence[dict],
+    results_dir: str,
+) -> List[dict]:
+    kept: List[dict] = []
+    skipped: List[str] = []
+    for spec in episode_specs:
+        storage_entry_id = int(spec.get("storage_entry_id", spec.get("episode_id", 0)) or 0)
+        entry_kind = str(spec.get("entry_kind", "episode") or "episode")
+        if _episode_has_existing_sr1(
+            results_dir,
+            storage_entry_id,
+            entry_kind=entry_kind,
+        ):
+            skipped.append(f"{entry_kind}_{storage_entry_id}")
+        else:
+            kept.append(dict(spec))
+    if skipped:
+        preview = ",".join(skipped[:20])
+        suffix = "..." if len(skipped) > 20 else ""
+        print(
+            f"[OVON-ObjectNav] skip-sr1 skipped {len(skipped)} existing "
+            f"successful samples: {preview}{suffix}"
+        )
+    return kept
+
+
+def _build_episode_summary_row(
+    episode_id: int,
+    result: dict,
+    *,
+    sample_index: int | None = None,
+) -> dict:
     saved_metrics = _resolve_saved_metrics(result)
     return {
+        "sample_index": int(sample_index) if sample_index is not None else None,
         "episode_id": int(episode_id),
         "success": bool(
             _coalesce_metric(
@@ -451,17 +620,6 @@ def _build_episode_summary_row(episode_id: int, result: dict) -> dict:
             )
             or 0.0
         ),
-        "oracle_success": int(
-            _coalesce_metric(
-                saved_metrics,
-                "osr",
-                result,
-                "oracle_success",
-                "osr",
-                default=0,
-            )
-            or 0
-        ),
         "gif_path": str(result.get("gif_path", "") or ""),
         "topdown_path": str(result.get("topdown_path", "") or ""),
         "result_file": str(result.get("result_file", "") or ""),
@@ -473,16 +631,16 @@ def _build_episode_summary_row(episode_id: int, result: dict) -> dict:
 def _build_console_metrics(summary_row: dict) -> dict:
     return {
         "sr": int(bool(summary_row.get("success", False))),
-        "osr": int(summary_row.get("oracle_success", 0) or 0),
-        "ne": float(summary_row.get("distance_to_goal", -1.0) or -1.0),
+        "dtg": float(summary_row.get("distance_to_goal", -1.0) or -1.0),
         "spl": float(summary_row.get("spl", 0.0) or 0.0),
+        "soft_spl": float(summary_row.get("soft_spl", 0.0) or 0.0),
     }
 
 
 def _build_parallel_episode_spec(
     *,
     args: argparse.Namespace,
-    episode_id: int,
+    episode_spec: dict,
     index: int,
     total: int,
     worker_index: int,
@@ -500,7 +658,16 @@ def _build_parallel_episode_spec(
         "vlm_api_config": str(args.vlm_api_config),
         "save_step_images": bool(args.save_step_images),
         "save_gif": bool(args.save_gif),
-        "episode_id": int(episode_id),
+        "episode_id": int(episode_spec["episode_id"]),
+        "sample_index": (
+            int(episode_spec["sample_index"])
+            if episode_spec.get("sample_index") is not None
+            else None
+        ),
+        "storage_entry_id": int(
+            episode_spec.get("storage_entry_id", episode_spec["episode_id"])
+        ),
+        "entry_kind": str(episode_spec.get("entry_kind", "episode") or "episode"),
         "index": int(index),
         "total": int(total),
         "worker_index": int(worker_index),
@@ -510,6 +677,10 @@ def _build_parallel_episode_spec(
 
 def _run_parallel_episode_job(job_spec: dict) -> dict:
     episode_id = int(job_spec["episode_id"])
+    raw_sample_index = job_spec.get("sample_index")
+    sample_index = int(raw_sample_index) if raw_sample_index is not None else None
+    storage_entry_id = int(job_spec.get("storage_entry_id", episode_id) or episode_id)
+    entry_kind = str(job_spec.get("entry_kind", "episode") or "episode")
     index = int(job_spec["index"])
     total = int(job_spec["total"])
     worker_index = int(job_spec["worker_index"])
@@ -518,6 +689,7 @@ def _run_parallel_episode_job(job_spec: dict) -> dict:
     print(
         build_episode_start_summary(
             episode_id=episode_id,
+            sample_index=sample_index,
             index=index,
             total=total,
             worker_index=worker_index,
@@ -534,7 +706,10 @@ def _run_parallel_episode_job(job_spec: dict) -> dict:
             gpu_id=int(job_spec["gpu_id"]),
             max_steps=int(job_spec["max_steps"]),
         )
-        discovery_dataset = _load_dataset_for_episodes(ovon_config, [episode_id])
+        if sample_index is not None and entry_kind == "sample":
+            discovery_dataset = _load_dataset_for_sample_indices(ovon_config, [sample_index])
+        else:
+            discovery_dataset = _load_dataset_for_episodes(ovon_config, [episode_id])
     episode_lookup = _index_dataset_episodes(discovery_dataset)
 
     try:
@@ -549,6 +724,9 @@ def _run_parallel_episode_job(job_spec: dict) -> dict:
             model_stack_builder=_select_model_stack_builder(str(job_spec["runtime"])),
             base_dataset=discovery_dataset,
             episode_lookup=episode_lookup,
+            sample_index=sample_index,
+            storage_entry_id=storage_entry_id,
+            entry_kind=entry_kind,
         )
     except BaseException as exc:
         result = {
@@ -563,10 +741,15 @@ def _run_parallel_episode_job(job_spec: dict) -> dict:
             "result_file": "",
         }
 
-    summary_row = _build_episode_summary_row(episode_id, result)
+    summary_row = _build_episode_summary_row(
+        episode_id,
+        result,
+        sample_index=sample_index,
+    )
     print(
         build_episode_console_summary(
             episode_id=episode_id,
+            sample_index=sample_index,
             index=index,
             total=total,
             result=summary_row,
@@ -579,15 +762,18 @@ def _run_parallel_episode_job(job_spec: dict) -> dict:
     return summary_row
 
 
-def _run_parallel_episodes(args: argparse.Namespace, episode_ids: Sequence[int]) -> List[dict]:
-    worker_count = max(1, min(int(args.parallel_workers or 1), len(episode_ids)))
-    if worker_count <= 1 or len(episode_ids) <= 1:
+def _run_parallel_episodes(
+    args: argparse.Namespace,
+    episode_specs: Sequence[dict],
+) -> List[dict]:
+    worker_count = max(1, min(int(args.parallel_workers or 1), len(episode_specs)))
+    if worker_count <= 1 or len(episode_specs) <= 1:
         return []
 
-    ordered_ids = [int(item) for item in episode_ids]
-    total = len(ordered_ids)
+    ordered_specs = [dict(item) for item in episode_specs]
+    total = len(ordered_specs)
     next_job_cursor = 0
-    results_by_episode_id: dict[int, dict] = {}
+    results_by_order: List[dict | None] = [None] * total
     mp_context = multiprocessing.get_context("spawn")
 
     with concurrent.futures.ProcessPoolExecutor(
@@ -600,10 +786,9 @@ def _run_parallel_episodes(args: argparse.Namespace, episode_ids: Sequence[int])
             nonlocal next_job_cursor
             if next_job_cursor >= total:
                 return False
-            episode_id = ordered_ids[next_job_cursor]
             job_spec = _build_parallel_episode_spec(
                 args=args,
-                episode_id=episode_id,
+                episode_spec=ordered_specs[next_job_cursor],
                 index=next_job_cursor + 1,
                 total=total,
                 worker_index=worker_index,
@@ -625,18 +810,18 @@ def _run_parallel_episodes(args: argparse.Namespace, episode_ids: Sequence[int])
             )
             for future in done:
                 job_spec = future_to_job.pop(future)
-                episode_id = int(job_spec["episode_id"])
+                order_index = int(job_spec["index"]) - 1
                 try:
-                    results_by_episode_id[episode_id] = future.result()
+                    results_by_order[order_index] = future.result()
                 except BaseException as exc:
-                    results_by_episode_id[episode_id] = {
-                        "episode_id": episode_id,
+                    results_by_order[order_index] = {
+                        "episode_id": int(job_spec["episode_id"]),
+                        "sample_index": job_spec.get("sample_index"),
                         "success": False,
                         "steps": 0,
                         "distance_to_goal": -1.0,
                         "spl": 0.0,
                         "soft_spl": 0.0,
-                        "oracle_success": 0,
                         "gif_path": "",
                         "topdown_path": "",
                         "result_file": "",
@@ -645,7 +830,7 @@ def _run_parallel_episodes(args: argparse.Namespace, episode_ids: Sequence[int])
                     }
                 _submit_next_job(int(job_spec["worker_index"]))
 
-    return [results_by_episode_id[int(episode_id)] for episode_id in ordered_ids]
+    return [item for item in results_by_order if item is not None]
 
 
 def _run_one_episode(
@@ -660,6 +845,9 @@ def _run_one_episode(
     model_stack_builder,
     base_dataset=None,
     episode_lookup: dict[int, list] | None = None,
+    sample_index: int | None = None,
+    storage_entry_id: int | None = None,
+    entry_kind: str = "episode",
 ):
     from navigation_system.runtime.object_navigation.runtime_config import (
         build_objectnav_runtime_config,
@@ -683,7 +871,11 @@ def _run_one_episode(
     )
     save_stdout_log = save_episode_stdout_log_enabled(runtime_config)
     episode_log_path = (
-        get_episode_records_log_path(results_dir, episode_id)
+        get_episode_records_log_path(
+            results_dir,
+            int(storage_entry_id if storage_entry_id is not None else episode_id),
+            entry_kind=entry_kind,
+        )
         if save_stdout_log
         else ""
     )
@@ -694,17 +886,30 @@ def _run_one_episode(
     )
 
     with redirect_context:
-        selected_candidates = list((episode_lookup or {}).get(int(episode_id), []))
-        if selected_candidates:
-            selected_episode = selected_candidates[0]
-            if len(selected_candidates) > 1:
-                print(
-                    f"[WARN] Episode id {episode_id} matched {len(selected_candidates)} OVON goals; "
-                    f"using first goal={getattr(selected_episode, 'object_category', '')!r}"
-                )
-            dataset = _clone_dataset_with_episode(base_dataset, selected_episode)
+        if sample_index is not None:
+            selected_episode = None
+            if base_dataset is not None:
+                base_episodes = list(getattr(base_dataset, "episodes", []) or [])
+                if len(base_episodes) == 1:
+                    selected_episode = base_episodes[0]
+                else:
+                    selected_episode = _episode_by_sample_index(base_dataset, int(sample_index))
+            if selected_episode is None:
+                dataset = _load_dataset_for_sample_indices(ovon_config, [int(sample_index)])
+            else:
+                dataset = _clone_dataset_with_episode(base_dataset, selected_episode)
         else:
-            dataset = _load_dataset_for_episodes(ovon_config, [episode_id])
+            selected_candidates = list((episode_lookup or {}).get(int(episode_id), []))
+            if selected_candidates:
+                selected_episode = selected_candidates[0]
+                if len(selected_candidates) > 1:
+                    print(
+                        f"[WARN] Episode id {episode_id} matched {len(selected_candidates)} OVON goals; "
+                        f"using first goal={getattr(selected_episode, 'object_category', '')!r}"
+                    )
+                dataset = _clone_dataset_with_episode(base_dataset, selected_episode)
+            else:
+                dataset = _load_dataset_for_episodes(ovon_config, [episode_id])
 
         if len(dataset.episodes) < 1:
             raise RuntimeError(f"Episode {episode_id} not found in OVON dataset")
@@ -735,7 +940,7 @@ def _run_one_episode(
         )
 
         try:
-            controller.reset_episode(episode_id=episode_id)
+            controller.reset_episode(episode_id=episode_id, sample_index=sample_index)
             result = controller.run_vlm_navigation(max_subtask_steps=max_subtask_steps)
         finally:
             controller.close()
@@ -788,7 +993,6 @@ def _build_aggregate(all_results: Sequence[dict]) -> dict:
         return {
             "episodes": 0,
             "success_rate": 0.0,
-            "oracle_success_rate": 0.0,
             "avg_steps": 0.0,
             "avg_distance_to_goal": 0.0,
             "avg_spl": 0.0,
@@ -799,20 +1003,146 @@ def _build_aggregate(all_results: Sequence[dict]) -> dict:
     return {
         "episodes": count,
         "successes": sum(1 for item in rows if bool(item.get("success", False))),
-        "oracle_successes": sum(
-            1 for item in rows if int(item.get("oracle_success", 0) or 0) > 0
-        ),
         "success_rate": sum(1 for item in rows if bool(item.get("success", False))) / count,
-        "oracle_success_rate": sum(
-            1 for item in rows if int(item.get("oracle_success", 0) or 0) > 0
-        )
-        / count,
         "avg_steps": sum(float(item.get("steps", 0) or 0) for item in rows) / count,
         "avg_distance_to_goal": (
             sum(float(item.get("distance_to_goal", -1.0) or -1.0) for item in rows) / count
         ),
         "avg_spl": sum(float(item.get("spl", 0.0) or 0.0) for item in rows) / count,
         "avg_soft_spl": sum(float(item.get("soft_spl", 0.0) or 0.0) for item in rows) / count,
+    }
+
+
+def _format_ovon_metric(value: float, digits: int = 4) -> str:
+    try:
+        return f"{float(value):.{digits}f}"
+    except Exception:
+        return "0.0"
+
+
+def _write_ovon_reports(
+    *,
+    results_dir: str,
+    rows: Sequence[dict],
+    aggregate: dict,
+    success_distance_m: float,
+    summary_meta: dict,
+) -> dict:
+    report_dir = Path(results_dir) / "reports"
+    report_dir.mkdir(parents=True, exist_ok=True)
+
+    summary_txt_path = report_dir / "summary.txt"
+    metrics_json_path = report_dir / "metrics.json"
+    csv_path = report_dir / "episode_results.csv"
+    md_path = report_dir / "episode_results.md"
+
+    summary_text = (
+        "========================================\n"
+        "OVON evaluation summary\n"
+        "========================================\n"
+        f"Episodes:      {int(aggregate.get('episodes', 0) or 0)}\n"
+        f"Successes:     {int(aggregate.get('successes', 0) or 0)}\n"
+        f"SR:            {_format_ovon_metric(float(aggregate.get('success_rate', 0.0) or 0.0), 3)}\n"
+        f"SPL:           {_format_ovon_metric(float(aggregate.get('avg_spl', 0.0) or 0.0), 3)}\n"
+        f"SoftSPL:       {_format_ovon_metric(float(aggregate.get('avg_soft_spl', 0.0) or 0.0), 3)}\n"
+        f"Avg DTG:       {_format_ovon_metric(float(aggregate.get('avg_distance_to_goal', 0.0) or 0.0), 3)}m\n"
+        f"Avg Steps:     {_format_ovon_metric(float(aggregate.get('avg_steps', 0.0) or 0.0), 2)}\n"
+        f"Success dist:  {float(success_distance_m):.2f}m\n"
+        f"Selection:     {summary_meta.get('selection_mode', 'episode_id_order')}\n"
+        "========================================\n"
+    )
+    summary_txt_path.write_text(summary_text, encoding="utf-8")
+
+    metrics_payload = {
+        "meta": dict(summary_meta),
+        "aggregate": dict(aggregate),
+    }
+    metrics_json_path.write_text(
+        json.dumps(metrics_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    headers = [
+        "episode_id",
+        "sample_index",
+        "sr",
+        "distance_to_goal",
+        "spl",
+        "soft_spl",
+        "steps",
+        "reason",
+        "error",
+    ]
+    with csv_path.open("w", encoding="utf-8", newline="") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=headers)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(
+                {
+                    "episode_id": int(row.get("episode_id", -1) or -1),
+                    "sample_index": (
+                        int(row["sample_index"]) if row.get("sample_index") is not None else ""
+                    ),
+                    "sr": int(bool(row.get("success", False))),
+                    "distance_to_goal": _format_ovon_metric(
+                        float(row.get("distance_to_goal", -1.0) or -1.0),
+                        4,
+                    ),
+                    "spl": _format_ovon_metric(float(row.get("spl", 0.0) or 0.0), 4),
+                    "soft_spl": _format_ovon_metric(float(row.get("soft_spl", 0.0) or 0.0), 4),
+                    "steps": int(row.get("steps", 0) or 0),
+                    "reason": str(row.get("reason", "") or ""),
+                    "error": str(row.get("error", "") or ""),
+                }
+            )
+
+    md_lines = [
+        "# OVON Episode Results",
+        "",
+        "| Episode | Sample | SR | DTG(m) | SPL | SoftSPL | Steps |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for row in rows:
+        sample_value = (
+            str(int(row["sample_index"]))
+            if row.get("sample_index") is not None
+            else "-"
+        )
+        md_lines.append(
+            "| {episode} | {sample} | {sr} | {dtg} | {spl} | {soft_spl} | {steps} |".format(
+                episode=int(row.get("episode_id", -1) or -1),
+                sample=sample_value,
+                sr=int(bool(row.get("success", False))),
+                dtg=_format_ovon_metric(float(row.get("distance_to_goal", -1.0) or -1.0), 4),
+                spl=_format_ovon_metric(float(row.get("spl", 0.0) or 0.0), 4),
+                soft_spl=_format_ovon_metric(float(row.get("soft_spl", 0.0) or 0.0), 4),
+                steps=int(row.get("steps", 0) or 0),
+            )
+        )
+    md_lines.extend(
+        [
+            "",
+            "## Summary",
+            "",
+            "| Episodes | SR | SPL | SoftSPL | Avg DTG(m) | Avg Steps |",
+            "| --- | --- | --- | --- | --- | --- |",
+            "| {episodes} | {sr} | {spl} | {soft_spl} | {dtg} | {steps} |".format(
+                episodes=int(aggregate.get("episodes", 0) or 0),
+                sr=_format_ovon_metric(float(aggregate.get("success_rate", 0.0) or 0.0), 4),
+                spl=_format_ovon_metric(float(aggregate.get("avg_spl", 0.0) or 0.0), 4),
+                soft_spl=_format_ovon_metric(float(aggregate.get("avg_soft_spl", 0.0) or 0.0), 4),
+                dtg=_format_ovon_metric(float(aggregate.get("avg_distance_to_goal", 0.0) or 0.0), 4),
+                steps=_format_ovon_metric(float(aggregate.get("avg_steps", 0.0) or 0.0), 2),
+            ),
+        ]
+    )
+    md_path.write_text("\n".join(md_lines) + "\n", encoding="utf-8")
+
+    return {
+        "summary": str(summary_txt_path),
+        "metrics_json": str(metrics_json_path),
+        "csv": str(csv_path),
+        "md": str(md_path),
     }
 
 
@@ -854,7 +1184,13 @@ def build_arg_parser(run_defaults: dict | None = None) -> argparse.ArgumentParse
         "--episode-id",
         type=int,
         default=None,
-        help="start episode id for VLNCE-style positional launch commands",
+        help="exact starting OVON episode id",
+    )
+    parser.add_argument(
+        "--start-index",
+        type=int,
+        default=None,
+        help="1-based start index within the current split order",
     )
     parser.add_argument("--episode-ids", type=str, default=None)
     parser.add_argument("--num-episodes", type=int, default=1)
@@ -907,7 +1243,7 @@ def build_arg_parser(run_defaults: dict | None = None) -> argparse.ArgumentParse
     parser.add_argument(
         "--no-report",
         action="store_true",
-        help="skip CE-style aggregate report generation",
+        help="skip OVON aggregate report generation",
     )
     return parser
 
@@ -950,13 +1286,34 @@ def main(argv: Sequence[str] | None = None) -> int:
         requested_episode_ids = _parse_episode_ids(args.episode_ids)
         discovery_dataset = _load_dataset_for_episodes(ovon_config, requested_episode_ids or None)
     episode_lookup = _index_dataset_episodes(discovery_dataset)
+    split_index_lookup = _build_split_index_lookup(discovery_dataset)
+    selected_specs: List[dict]
     if requested_episode_ids:
-        episode_ids = requested_episode_ids
+        selected_specs = _build_episode_id_specs(discovery_dataset, requested_episode_ids)
     elif bool(args.random):
-        episode_ids = _discover_random_episode_ids(
+        selected_specs = _build_sample_episode_specs(
             discovery_dataset,
+            _random_sample_indices(
+                discovery_dataset,
+                num_episodes=args.num_episodes,
+                seed=args.seed,
+            ),
+        )
+    elif args.start_index is not None:
+        sample_indices = _sample_indices_from_range(
+            discovery_dataset,
+            start_index=int(args.start_index),
             num_episodes=args.num_episodes,
-            seed=args.seed,
+        )
+        if not sample_indices:
+            raise RuntimeError(
+                f"Requested start index {int(args.start_index)} is outside split '{args.split}'"
+            )
+        selected_specs = _build_sample_episode_specs(discovery_dataset, sample_indices)
+        print(
+            f"[OVON-ObjectNav] start-index {int(args.start_index)} "
+            f"mapped to sample {int(sample_indices[0])} / episode id "
+            f"{int(selected_specs[0]['episode_id'])} in split '{args.split}'."
         )
     elif args.episode_id is not None:
         episode_ids = _discover_episode_ids_from_start(
@@ -970,19 +1327,24 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"is not present in split '{args.split}'; "
                 f"starting from next available id {int(episode_ids[0])}."
             )
+        selected_specs = _build_episode_id_specs(discovery_dataset, episode_ids)
     else:
-        episode_ids = _discover_episode_ids(
+        selected_specs = _build_sample_episode_specs(
             discovery_dataset,
-            num_episodes=args.num_episodes,
+            _sample_indices_from_range(
+                discovery_dataset,
+                start_index=1,
+                num_episodes=args.num_episodes,
+            ),
         )
 
     if bool(args.skip_sr1):
-        episode_ids = _filter_existing_sr1(
-            episode_ids=episode_ids,
+        selected_specs = _filter_existing_sr1_specs(
+            episode_specs=selected_specs,
             results_dir=args.results_dir,
         )
 
-    if not episode_ids:
+    if not selected_specs:
         if bool(args.skip_sr1):
             print(
                 "[OVON-ObjectNav] no episodes need to run: requested selection "
@@ -992,20 +1354,28 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise RuntimeError("No OVON episodes selected for evaluation")
 
     os.makedirs(args.results_dir, exist_ok=True)
-    total = len(episode_ids)
+    total = len(selected_specs)
 
     if int(args.parallel_workers or 1) > 1 and total > 1:
+        selection_label = (
+            "split-order sample index"
+            if args.start_index is not None
+            else "ascending episode id"
+        )
         print(
             f"[OVON-ObjectNav] parallel execution enabled | workers={int(args.parallel_workers)} | "
-            f"episodes={total}",
+            f"episodes={total} | selection={selection_label} | completion logs may interleave",
         )
-        all_results = _run_parallel_episodes(args, episode_ids)
+        all_results = _run_parallel_episodes(args, selected_specs)
     else:
         all_results = []
-        for index, episode_id in enumerate(episode_ids, 1):
+        for index, episode_spec in enumerate(selected_specs, 1):
+            episode_id = int(episode_spec["episode_id"])
+            sample_index = episode_spec.get("sample_index")
             print(
                 build_episode_start_summary(
                     episode_id=int(episode_id),
+                    sample_index=sample_index,
                     index=index,
                     total=total,
                 ),
@@ -1022,11 +1392,25 @@ def main(argv: Sequence[str] | None = None) -> int:
                 model_stack_builder=model_stack_builder,
                 base_dataset=discovery_dataset,
                 episode_lookup=episode_lookup,
+                sample_index=(
+                    int(sample_index) if sample_index is not None else None
+                ),
+                storage_entry_id=int(
+                    episode_spec.get("storage_entry_id", episode_id)
+                ),
+                entry_kind=str(episode_spec.get("entry_kind", "episode") or "episode"),
             )
-            summary_row = _build_episode_summary_row(int(episode_id), result)
+            summary_row = _build_episode_summary_row(
+                int(episode_id),
+                result,
+                sample_index=(
+                    int(sample_index) if sample_index is not None else None
+                ),
+            )
             print(
                 build_episode_console_summary(
                     episode_id=int(episode_id),
+                    sample_index=sample_index,
                     index=index,
                     total=total,
                     result=summary_row,
@@ -1054,6 +1438,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "This run follows the local naokiyokoyama/ovon repo eval stack: "
                 f"STOP + distance_to_goal < success_distance, with success_distance={success_distance_m:.2f} in the loaded config."
             ),
+            "selection_mode": (
+                "split_order"
+                if args.start_index is not None
+                else "episode_id_range"
+                if args.episode_id is not None
+                else "explicit_episode_ids"
+                if requested_episode_ids
+                else "random"
+                if bool(args.random)
+                else "split_order"
+            ),
         },
         "aggregate": aggregate,
         "episodes": all_results,
@@ -1069,16 +1464,16 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if not bool(args.no_report):
         try:
-            from navigation_system.runtime.results_report import generate_results_report
-
-            generate_results_report(
-                args.results_dir,
-                save=True,
-                verbose=True,
-                exp_config=args.exp_config,
+            report_paths = _write_ovon_reports(
+                results_dir=args.results_dir,
+                rows=all_results,
+                aggregate=aggregate,
+                success_distance_m=success_distance_m,
+                summary_meta=summary_payload["meta"],
             )
+            print(f"[OVON-ObjectNav] saved OVON report: {report_paths['summary']}")
         except Exception as exc:
-            print(f"[WARN] Failed to generate CE-style aggregate report: {exc}")
+            print(f"[WARN] Failed to generate OVON aggregate report: {exc}")
 
     successes = sum(1 for item in all_results if item["success"])
     print(

@@ -4,22 +4,33 @@ import contextlib
 import json
 import os
 import sys
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from navigation_system.runtime.storage.artifacts import (
     get_episode_detail_dir,
 )
 
 
-def get_episode_records_log_path(results_dir: str, episode_id: int) -> str:
-    episode_dir = get_episode_detail_dir(results_dir, episode_id)
+def get_episode_records_log_path(
+    results_dir: str,
+    episode_id: int,
+    *,
+    entry_kind: str = "episode",
+) -> str:
+    episode_dir = get_episode_detail_dir(results_dir, episode_id, entry_kind=entry_kind)
     records_dir = os.path.join(episode_dir, "records")
     os.makedirs(records_dir, exist_ok=True)
-    return os.path.join(records_dir, f"episode_{int(episode_id)}.log")
+    entry_prefix = str(entry_kind or "episode").strip() or "episode"
+    return os.path.join(records_dir, f"{entry_prefix}_{int(episode_id)}.log")
 
 
-def get_episode_result_path(results_dir: str, episode_id: int) -> str:
-    episode_dir = get_episode_detail_dir(results_dir, episode_id)
+def get_episode_result_path(
+    results_dir: str,
+    episode_id: int,
+    *,
+    entry_kind: str = "episode",
+) -> str:
+    episode_dir = get_episode_detail_dir(results_dir, episode_id, entry_kind=entry_kind)
     records_dir = os.path.join(episode_dir, "records")
     os.makedirs(records_dir, exist_ok=True)
     return os.path.join(records_dir, "result.json")
@@ -133,6 +144,7 @@ def build_episode_console_summary(
     metrics: Dict[str, Any],
     worker_index: int = 0,
     worker_count: int = 0,
+    sample_index: Optional[int] = None,
 ) -> str:
     status = "OK" if bool(result.get("success", False)) else "FAIL"
     steps = int(result.get("steps", result.get("total_steps", 0)) or 0)
@@ -145,31 +157,38 @@ def build_episode_console_summary(
             if worker_index > 0 and worker_count > 0
             else f"[{index}/{total}]"
         ),
+        (f"Sample {int(sample_index)}" if sample_index is not None else None),
         f"Episode {episode_id}",
         status,
         f"steps={steps}",
     ]
+    parts = [part for part in parts if part is not None]
 
     if metrics:
-        ne = metrics.get("ne", -1.0)
-        sr = metrics.get("sr", 0)
-        osr = metrics.get("osr", 0)
-        spl = metrics.get("spl", 0.0)
-        ndtw = metrics.get("ndtw", 0.0)
-        try:
-            parts.append(f"NE={float(ne):.3f}m")
-        except Exception:
-            pass
-        parts.append(f"OSR={int(osr)}")
-        parts.append(f"SR={int(sr)}")
-        try:
-            parts.append(f"SPL={float(spl):.4f}")
-        except Exception:
-            pass
-        try:
-            parts.append(f"nDTW={float(ndtw):.4f}")
-        except Exception:
-            pass
+        metric_specs = (
+            ("dtg", "DTG", "distance"),
+            ("ne", "NE", "distance"),
+            ("osr", "OSR", "int"),
+            ("sr", "SR", "int"),
+            ("spl", "SPL", "float"),
+            ("soft_spl", "SoftSPL", "float"),
+            ("ndtw", "nDTW", "float"),
+        )
+        for key, label, value_type in metric_specs:
+            if key not in metrics:
+                continue
+            value = metrics.get(key)
+            if value is None:
+                continue
+            try:
+                if value_type == "distance":
+                    parts.append(f"{label}={float(value):.3f}m")
+                elif value_type == "int":
+                    parts.append(f"{label}={int(value)}")
+                else:
+                    parts.append(f"{label}={float(value):.4f}")
+            except Exception:
+                continue
 
     if reason:
         parts.append(f"reason={reason}")
@@ -186,6 +205,7 @@ def build_episode_start_summary(
     total: int,
     worker_index: int = 0,
     worker_count: int = 0,
+    sample_index: Optional[int] = None,
 ) -> str:
     parts = [
         (
@@ -193,10 +213,11 @@ def build_episode_start_summary(
             if worker_index > 0 and worker_count > 0
             else f"[{index}/{total}]"
         ),
+        (f"Sample {int(sample_index)}" if sample_index is not None else None),
         f"Episode {episode_id}",
         "START",
     ]
-    return " | ".join(parts)
+    return " | ".join([part for part in parts if part is not None])
 
 
 __all__ = [

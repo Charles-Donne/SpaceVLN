@@ -2,14 +2,28 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+import json
+import math
+import os
 import re
+import shutil
 
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
+from navigation_system.controller.action_compat import resolve_habitat_action
+from navigation_system.controller.base_controller import BaseNavigationController
 from navigation_system.controller.vlnce.controller import VLMNavigationController
 from navigation_system.env.object_navigation.goal_task import (
-    OBJECT_SPACE_PRIORS,
     parse_object_goal_instruction,
+)
+from navigation_system.render.episode_visualization.navigation_visualizer import (
+    NavigationVisualizer,
+)
+from navigation_system.runtime.storage.artifacts import (
+    SaveManager,
+    get_episode_detail_dir,
+    get_episode_detail_path_candidates,
 )
 from navigation_system.vlm.object_navigation.runtime_factory import (
     build_ovon_navigation_model_stack,
@@ -19,6 +33,9 @@ from navigation_system.runtime.object_navigation.thresholds import (
     OVON_AUTOCOMPLETE_SOLID_M,
     OVON_AUTOCOMPLETE_TOPK,
     OVON_FINAL_OBJECT_STOP_DISTANCE_M,
+    OVON_FORCED_EARLY_STOP_DISTANCE_M,
+    OVON_FORCED_EARLY_STOP_MAX_DELTA_M,
+    OVON_FORCED_EARLY_STOP_THINKING_POINTS,
 )
 from navigation_system.vlm.interfaces import NavigationModelStackBuilder
 
@@ -32,6 +49,77 @@ class OVONObjectNavigationController(VLMNavigationController):
     FINAL_DESTINATION_MATCH_AUTOSTOP_STREAK = 2
     FINAL_DESTINATION_MATCH_AUTOSTOP_RADIUS_M = OVON_FINAL_OBJECT_STOP_DISTANCE_M
     STRICT_GLOBAL_STOP_DISTANCE_M = OVON_FINAL_OBJECT_STOP_DISTANCE_M
+    FORCED_EARLY_STOP_DISTANCE_M = OVON_FORCED_EARLY_STOP_DISTANCE_M
+    FORCED_EARLY_STOP_MAX_DELTA_M = OVON_FORCED_EARLY_STOP_MAX_DELTA_M
+    FORCED_EARLY_STOP_THINKING_POINTS = OVON_FORCED_EARLY_STOP_THINKING_POINTS
+
+    def _reset_vlm_episode_state(self) -> None:
+        super()._reset_vlm_episode_state()
+        self.ovon_forced_early_stop_subtask_history = []
+        self.ovon_stop_gate_requested = False
+        self.ovon_stop_gate_rejection_notice = ""
+
+    def reset_episode(self, episode_id: int = None, sample_index: int = None):
+        """Reset OVON state while storing artifacts under sample-index paths."""
+        self.ovon_sample_index = int(sample_index) if sample_index is not None else None
+        self.ovon_storage_entry_id = (
+            int(self.ovon_sample_index)
+            if self.ovon_sample_index is not None
+            else int(episode_id if episode_id is not None else 0)
+        )
+        self.ovon_storage_entry_kind = (
+            "sample" if self.ovon_sample_index is not None else "episode"
+        )
+
+        if self.ovon_storage_entry_id is not None:
+            for old_episode_dir in get_episode_detail_path_candidates(
+                self.config.PATHS.RESULTS_DIR,
+                self.ovon_storage_entry_id,
+                entry_kind=self.ovon_storage_entry_kind,
+            ):
+                if os.path.exists(old_episode_dir):
+                    print(f"[Reset] Removed previous episode data: {old_episode_dir}")
+                    try:
+                        shutil.rmtree(old_episode_dir)
+                    except PermissionError as exc:
+                        raise PermissionError(
+                            "Cannot remove stale episode outputs before reset: "
+                            f"{old_episode_dir}. This is usually caused by files created "
+                            "by another user or by a Docker container running as root. "
+                            "Fix the ownership or delete the stale directory first."
+                        ) from exc
+
+        BaseNavigationController.reset_episode(self, episode_id)
+
+        self.save_manager = SaveManager(
+            self.config.PATHS.RESULTS_DIR,
+            self.current_episode_id,
+            storage_entry_id=self.ovon_storage_entry_id,
+            entry_kind=self.ovon_storage_entry_kind,
+            save_waypoint_memory=self.runtime_options.save_waypoint_memory,
+        )
+
+        self._reset_vlm_episode_state()
+
+        visualization_dir = os.path.join(self.episode_dir, "visualization")
+        self.nav_visualizer = NavigationVisualizer(
+            visualization_dir,
+            save_step_images=self.runtime_options.save_navigation_step_images,
+            keep_frames_for_gif=self.runtime_options.save_navigation_gif,
+        )
+        self.nav_visualizer.setup_maps_dir(self.episode_dir)
+
+    @property
+    def episode_dir(self) -> str:
+        return get_episode_detail_dir(
+            self.config.PATHS.RESULTS_DIR,
+            int(getattr(self, "ovon_storage_entry_id", self.current_episode_id) or 0),
+            entry_kind=str(getattr(self, "ovon_storage_entry_kind", "episode") or "episode"),
+        )
+
+    @property
+    def current_episode_dir(self) -> str:
+        return self.episode_dir
 
     def _ovon_is_final_object_stage(self) -> bool:
         current_subtask = getattr(self, "current_subtask", None) or {}
@@ -39,14 +127,7 @@ class OVONObjectNavigationController(VLMNavigationController):
             return False
 
         subtask_landmark = self._get_subtask_landmark_field(current_subtask)
-        next_waypoint = self._get_next_waypoint_field(current_subtask)
-        waypoint_tail = self._extract_last_waypoint_chain_node(
-            current_subtask.get("waypoint_chain") or current_subtask.get("waypoint_sequence") or ""
-        )
-        return any(
-            self._ovon_text_exactly_matches_goal(item)
-            for item in (subtask_landmark, next_waypoint, waypoint_tail)
-        )
+        return self._ovon_text_is_exact_goal_label(subtask_landmark)
 
     def __init__(
         self,
@@ -107,6 +188,20 @@ class OVONObjectNavigationController(VLMNavigationController):
         goal, _aliases = parse_object_goal_instruction(getattr(self, "current_instruction", ""))
         return self._normalize_landmark_candidate(goal) or ""
 
+    def _ovon_exact_goal_label(self) -> str:
+        return self._ovon_goal_object_name()
+
+    def _ovon_text_is_exact_goal_label(self, text: Optional[str]) -> bool:
+        exact_goal = self._ovon_exact_goal_label()
+        if not exact_goal:
+            return False
+
+        candidates = {
+            self._normalize_landmark_candidate(text),
+            self._normalize_landmark_candidate(self._ovon_landmark_part(text)),
+        }
+        return exact_goal in {candidate for candidate in candidates if candidate}
+
     def _ovon_text_exactly_matches_goal(self, text: Optional[str]) -> bool:
         goal_terms = self._ovon_goal_terms()
         if not goal_terms:
@@ -117,52 +212,55 @@ class OVONObjectNavigationController(VLMNavigationController):
 
     def _ovon_response_names_target_object(self, response: Dict[str, Any]) -> Tuple[bool, str]:
         subtask_landmark = str(response.get("subtask_landmark") or "").strip()
-        if not self._ovon_text_exactly_matches_goal(subtask_landmark):
+        if not self._ovon_text_is_exact_goal_label(subtask_landmark):
             return False, "subtask_landmark does not exactly match the OVON target object"
-
-        next_waypoint = self._get_next_waypoint_field(response)
-        waypoint_tail = self._extract_last_waypoint_chain_node(
-            response.get("waypoint_chain") or response.get("waypoint_sequence") or ""
-        )
-        if not (
-            self._ovon_text_exactly_matches_goal(next_waypoint)
-            or self._ovon_text_exactly_matches_goal(waypoint_tail)
-        ):
-            return False, "next_waypoint / waypoint_chain tail does not exactly name the OVON target object"
         return True, ""
 
-    def _ovon_response_has_plausible_space_context(self, response: Dict[str, Any]) -> Tuple[bool, str]:
-        goal_name = self._ovon_goal_object_name()
-        if not goal_name:
-            return True, ""
+    def _ovon_response_enters_final_object_stage(self, response: Optional[Dict[str, Any]]) -> bool:
+        payload = dict(response or {})
+        if not payload:
+            return False
+        return self._ovon_text_is_exact_goal_label(payload.get("subtask_landmark"))
 
-        likely_spaces = list(OBJECT_SPACE_PRIORS.get(goal_name, []))
-        if not likely_spaces:
-            return True, ""
+    def _ovon_current_waypoint_mentions_goal(self, response: Optional[Dict[str, Any]]) -> bool:
+        current_waypoint = str((response or {}).get("current_waypoint") or "").strip()
+        if not current_waypoint:
+            return False
+        candidates = [current_waypoint, self._ovon_landmark_part(current_waypoint)]
+        if " - " in current_waypoint:
+            _space_part, local_part = current_waypoint.split(" - ", 1)
+            candidates.extend(part.strip() for part in local_part.split("/") if part.strip())
+        for item in candidates:
+            if not item:
+                continue
+            if self._ovon_text_is_exact_goal_label(item):
+                return True
+        return False
 
-        context_fields = [
-            response.get("current_waypoint"),
-            response.get("next_waypoint"),
-            response.get("waypoint_chain"),
-            response.get("task_progress"),
-            response.get("subtask_instruction"),
-        ]
-        context_text = " ".join(str(item or "") for item in context_fields)
-        normalized_context = self._normalize_landmark_candidate(context_text) or ""
-        if not normalized_context:
-            return False, "missing space context for final target-object stop"
+    def _ovon_inject_goal_into_current_waypoint(
+        self,
+        response: Optional[Dict[str, Any]],
+    ) -> None:
+        if not isinstance(response, dict):
+            return
+        exact_goal = self._ovon_exact_goal_label()
+        current_waypoint = str(response.get("current_waypoint") or "").strip()
+        if not exact_goal or not current_waypoint or self._ovon_current_waypoint_mentions_goal(response):
+            return
 
-        normalized_spaces = [
-            self._normalize_landmark_candidate(space_name)
-            for space_name in likely_spaces
-        ]
-        if any(space_name and space_name in normalized_context for space_name in normalized_spaces):
-            return True, ""
+        if " - " in current_waypoint:
+            space_part, local_part = current_waypoint.split(" - ", 1)
+            local_parts = [part.strip() for part in local_part.split("/") if part.strip()]
+            local_parts = [exact_goal] + [
+                part for part in local_parts if not self._ovon_text_exactly_matches_goal(part)
+            ]
+            response["current_waypoint"] = self._sanitize_current_waypoint_text(
+                f"{space_part.strip()} - {' / '.join(local_parts)}"
+            )
+            return
 
-        return (
-            False,
-            f"final response does not place target object in a plausible target space "
-            f"({', '.join(likely_spaces)})",
+        response["current_waypoint"] = self._sanitize_current_waypoint_text(
+            f"{current_waypoint} - {exact_goal}"
         )
 
     @staticmethod
@@ -172,16 +270,10 @@ class OVONObjectNavigationController(VLMNavigationController):
         except (TypeError, ValueError):
             return None
 
-    def _ovon_distance_to_goal_m(self) -> Optional[float]:
-        latest_info = getattr(self, "latest_info", None)
-        if not isinstance(latest_info, dict):
-            return None
-        distance_to_goal = self._ovon_float(latest_info.get("distance_to_goal", -1.0))
-        if distance_to_goal is None or distance_to_goal < 0.0:
-            return None
-        return float(distance_to_goal)
-
-    def _ovon_target_detection_within_strict_stop(self) -> bool:
+    def _ovon_target_detection_within_distance(
+        self,
+        distance_threshold_m: float,
+    ) -> Tuple[bool, Optional[Dict[str, Any]]]:
         entries: Sequence[Dict[str, Any]] = []
         try:
             entries = self._get_latest_action_local_map_landmark_entries()
@@ -189,59 +281,127 @@ class OVONObjectNavigationController(VLMNavigationController):
             entries = []
 
         for entry in entries or []:
-            if not self._ovon_text_exactly_matches_goal(entry.get("name")):
+            if not self._ovon_text_is_exact_goal_label(entry.get("name")):
                 continue
             distance_m = self._ovon_float(entry.get("distance_m"))
             if distance_m is None:
                 continue
-            if distance_m <= float(self.STRICT_GLOBAL_STOP_DISTANCE_M):
-                return True
-        return False
+            if distance_m <= float(distance_threshold_m):
+                return True, dict(entry)
+        return False, None
 
-    def _ovon_strict_stop_distance_satisfied(self) -> Tuple[bool, str]:
-        distance_to_goal = self._ovon_distance_to_goal_m()
-        if distance_to_goal is not None:
-            if distance_to_goal <= float(self.STRICT_GLOBAL_STOP_DISTANCE_M):
-                return True, ""
-            return (
-                False,
-                f"distance_to_goal={distance_to_goal:.2f}m is greater than "
-                f"strict stop threshold {float(self.STRICT_GLOBAL_STOP_DISTANCE_M):.2f}m",
+    def _ovon_previous_subtask_target_within_distance(
+        self,
+        distance_threshold_m: float,
+    ) -> Tuple[bool, Optional[Dict[str, Any]]]:
+        info = dict(getattr(self, "previous_subtask_landmark_final_info", {}) or {})
+        if not info:
+            return False, None
+
+        entries = list(info.get("entries") or [])
+        if not entries:
+            entries = [info]
+
+        for entry in entries:
+            if not self._ovon_text_is_exact_goal_label(
+                entry.get("raw_name") or entry.get("name")
+            ):
+                continue
+            distance_m = self._ovon_float(
+                entry.get("final_distance_m", entry.get("distance_m"))
             )
+            if distance_m is None:
+                continue
+            if distance_m <= float(distance_threshold_m):
+                return True, dict(entry)
+        return False, None
 
-        if self._ovon_target_detection_within_strict_stop():
-            return True, ""
+    def _ovon_build_stop_gate_notice(self, reason: str) -> str:
+        exact_goal = self._ovon_exact_goal_label() or "the exact target object"
+        reason_text = str(reason or "").strip()
+        base_notice = (
+            f"Do not set `global_landmark_arrival=true` yet. OVON may stop only on verify when "
+            f"the current `subtask_landmark` is exactly `{exact_goal}`, `current_waypoint` localizes "
+            f"`{exact_goal}` as the current anchor, the previous executed action subtask also used "
+            f"`{exact_goal}` as its `subtask_landmark`, and the Previous Subtask landmark summary shows "
+            f"`{exact_goal}` within about 0.75m. If any of these is missing, keep "
+            f"`global_landmark_arrival=false` and continue approaching `{exact_goal}`."
+        )
+        if not reason_text:
+            return base_notice
+        return f"{base_notice} Current rejection reason: {reason_text}."
 
-        return False, "no target-object distance evidence within strict stop threshold"
+    def _ovon_previous_action_landmark_matches_goal(self) -> Tuple[bool, str]:
+        previous_subtask = getattr(self, "current_subtask", None)
+        if not isinstance(previous_subtask, dict):
+            return False, "no previous action subtask is available for OVON stop gating"
 
-    def _ovon_validate_global_landmark_arrival(
+        exact_goal = self._ovon_exact_goal_label()
+        if not exact_goal:
+            return False, "OVON target object is unavailable"
+
+        previous_landmark = self._normalize_landmark_candidate(
+            self._get_subtask_landmark_field(previous_subtask)
+        )
+        if not previous_landmark:
+            return False, "previous action subtask landmark is empty"
+        if previous_landmark != exact_goal:
+            return False, "previous action subtask landmark does not exactly match the OVON target object"
+        return True, ""
+
+    def _ovon_effective_global_landmark_arrival(
         self,
         response: Optional[Dict[str, Any]],
         *,
-        require_flag: bool = True,
         log_rejection: bool = False,
+        log_upgrade: bool = False,
     ) -> bool:
-        if not response:
-            return False
-        if require_flag and not bool(response.get("global_landmark_arrival", False)):
-            return False
-
-        names_ok, name_reason = self._ovon_response_names_target_object(response)
-        if not names_ok:
-            if log_rejection and bool(response.get("global_landmark_arrival", False)):
-                print(f"[OVONStrictStop] Reject global_landmark_arrival=true: {name_reason}")
+        _ = log_upgrade
+        payload = dict(response or {})
+        requested_stop = bool(payload.get("global_landmark_arrival", False))
+        self.ovon_stop_gate_requested = bool(requested_stop)
+        self.ovon_stop_gate_rejection_notice = ""
+        if not requested_stop:
             return False
 
-        space_ok, space_reason = self._ovon_response_has_plausible_space_context(response)
-        if not space_ok:
-            if log_rejection and bool(response.get("global_landmark_arrival", False)):
-                print(f"[OVONStrictStop] Reject global_landmark_arrival=true: {space_reason}")
+        stop_ok, stop_reason = self._ovon_response_names_target_object(payload)
+        if not stop_ok:
+            self.ovon_stop_gate_rejection_notice = self._ovon_build_stop_gate_notice(stop_reason)
+            if log_rejection:
+                print(f"[OVONStopGate] reject planner stop: {stop_reason}")
             return False
 
-        distance_ok, distance_reason = self._ovon_strict_stop_distance_satisfied()
-        if not distance_ok:
-            if log_rejection and bool(response.get("global_landmark_arrival", False)):
-                print(f"[OVONStrictStop] Reject global_landmark_arrival=true: {distance_reason}")
+        if not self._ovon_current_waypoint_mentions_goal(payload):
+            rejection_reason = (
+                "current_waypoint does not localize the exact OVON target object as the current anchor"
+            )
+            self.ovon_stop_gate_rejection_notice = self._ovon_build_stop_gate_notice(rejection_reason)
+            if log_rejection:
+                print(
+                    f"[OVONStopGate] reject planner stop: {rejection_reason}"
+                )
+            return False
+
+        previous_action_ok, previous_action_reason = self._ovon_previous_action_landmark_matches_goal()
+        if not previous_action_ok:
+            self.ovon_stop_gate_rejection_notice = self._ovon_build_stop_gate_notice(previous_action_reason)
+            if log_rejection:
+                print(f"[OVONStopGate] reject planner stop: {previous_action_reason}")
+            return False
+
+        previous_summary_ok, _previous_summary_entry = self._ovon_previous_subtask_target_within_distance(
+            float(self.FORCED_EARLY_STOP_DISTANCE_M)
+        )
+        if not previous_summary_ok:
+            rejection_reason = (
+                "Previous Subtask landmark summary does not show the exact OVON target object "
+                f"within {float(self.FORCED_EARLY_STOP_DISTANCE_M):.2f}m"
+            )
+            self.ovon_stop_gate_rejection_notice = self._ovon_build_stop_gate_notice(rejection_reason)
+            if log_rejection:
+                print(
+                    f"[OVONStopGate] reject planner stop: {rejection_reason}"
+                )
             return False
 
         return True
@@ -251,14 +411,151 @@ class OVONObjectNavigationController(VLMNavigationController):
         if not response:
             return response
 
-        valid_arrival = self._ovon_validate_global_landmark_arrival(
+        exact_goal = self._ovon_exact_goal_label()
+
+        valid_arrival = self._ovon_effective_global_landmark_arrival(
             response,
-            require_flag=True,
             log_rejection=True,
+            log_upgrade=True,
         )
         response["global_landmark_arrival"] = bool(valid_arrival)
+        if exact_goal and bool(valid_arrival):
+            self._ovon_inject_goal_into_current_waypoint(response)
         response.pop("global_task_finish", None)
         return response
+
+    def _ovon_persist_thinking_response_artifact(
+        self,
+        response: Dict[str, Any],
+        cycle_info: Dict[str, Any],
+    ) -> None:
+        thinking_dir = str((cycle_info or {}).get("thinking_dir") or "").strip()
+        if not thinking_dir:
+            return
+        try:
+            os.makedirs(thinking_dir, exist_ok=True)
+            artifact_payload = dict(response or {})
+            artifact_payload.pop("global_task_finish", None)
+            with open(os.path.join(thinking_dir, "response.json"), "w", encoding="utf-8") as handle:
+                json.dump(artifact_payload, handle, ensure_ascii=False, indent=2)
+        except OSError:
+            return
+
+    def _ovon_reset_forced_early_stop_subtask_history(self) -> None:
+        self.ovon_forced_early_stop_subtask_history = []
+
+    def _ovon_forced_early_stop_ready(
+        self,
+        response: Optional[Dict[str, Any]],
+        *,
+        proposed_subtask_id: int,
+    ) -> Tuple[bool, str]:
+        if not isinstance(response, dict):
+            self._ovon_reset_forced_early_stop_subtask_history()
+            return False, "no OVON response available for forced early-stop checking"
+
+        exact_goal = self._ovon_exact_goal_label()
+        current_landmark = self._normalize_landmark_candidate(
+            self._get_subtask_landmark_field(response)
+        )
+        if not exact_goal or current_landmark != exact_goal:
+            self._ovon_reset_forced_early_stop_subtask_history()
+            return False, "current subtask landmark is not the exact final target object"
+
+        previous_action_ok, previous_action_reason = self._ovon_previous_action_landmark_matches_goal()
+        if not previous_action_ok:
+            self._ovon_reset_forced_early_stop_subtask_history()
+            return False, previous_action_reason
+
+        if not self._ovon_current_waypoint_mentions_goal(response):
+            self._ovon_reset_forced_early_stop_subtask_history()
+            return False, "current_waypoint does not localize the exact target object as the current anchor"
+
+        target_seen, matched_entry = self._ovon_target_detection_within_distance(
+            float(self.FORCED_EARLY_STOP_DISTANCE_M)
+        )
+        if not target_seen:
+            self._ovon_reset_forced_early_stop_subtask_history()
+            return False, "target object is not within the forced early-stop detection radius"
+
+        pose_xy = self._extract_pose_xy(self._get_agent_pose())
+        if pose_xy is None:
+            self._ovon_reset_forced_early_stop_subtask_history()
+            return False, "current pose is unavailable for forced early-stop checking"
+
+        snapshot = {
+            "subtask_id": int(proposed_subtask_id),
+            "pose_xy": (float(pose_xy[0]), float(pose_xy[1])),
+            "step": int(getattr(self, "current_step", 0) or 0),
+            "distance_m": self._ovon_float((matched_entry or {}).get("distance_m")),
+        }
+
+        history: List[Dict[str, Any]] = list(
+            getattr(self, "ovon_forced_early_stop_subtask_history", []) or []
+        )
+        if history:
+            last_subtask_id = int(history[-1].get("subtask_id", -1) or -1)
+            if proposed_subtask_id == last_subtask_id:
+                history[-1] = snapshot
+            elif proposed_subtask_id == last_subtask_id + 1:
+                history.append(snapshot)
+            else:
+                history = [snapshot]
+        else:
+            history = [snapshot]
+
+        required = int(self.FORCED_EARLY_STOP_THINKING_POINTS)
+        history = history[-required:]
+        self.ovon_forced_early_stop_subtask_history = history
+
+        if len(history) < required:
+            return False, (
+                f"forced early-stop final-target thinking history "
+                f"{len(history)}/{required}"
+            )
+
+        pair_movements: List[float] = []
+        for prev_item, next_item in zip(history[:-1], history[1:]):
+            prev_pose = prev_item.get("pose_xy")
+            next_pose = next_item.get("pose_xy")
+            if not prev_pose or not next_pose:
+                self.ovon_forced_early_stop_subtask_history = [snapshot]
+                return False, "missing historical pose for forced early-stop checking"
+            pair_movements.append(
+                float(
+                    ((next_pose[0] - prev_pose[0]) ** 2 + (next_pose[1] - prev_pose[1]) ** 2) ** 0.5
+                )
+            )
+
+        total_drift_m = float(
+            ((history[-1]["pose_xy"][0] - history[0]["pose_xy"][0]) ** 2 +
+             (history[-1]["pose_xy"][1] - history[0]["pose_xy"][1]) ** 2) ** 0.5
+        )
+        if any(move_m > float(self.FORCED_EARLY_STOP_MAX_DELTA_M) for move_m in pair_movements):
+            self.ovon_forced_early_stop_subtask_history = [snapshot]
+            return False, (
+                "forced early-stop reset because consecutive final-target subtasks did not stay "
+                f"within {float(self.FORCED_EARLY_STOP_MAX_DELTA_M):.2f}m"
+            )
+        if total_drift_m > float(self.FORCED_EARLY_STOP_MAX_DELTA_M):
+            self.ovon_forced_early_stop_subtask_history = [snapshot]
+            return False, (
+                f"forced early-stop total drift {total_drift_m:.2f}m exceeds "
+                f"{float(self.FORCED_EARLY_STOP_MAX_DELTA_M):.2f}m"
+            )
+
+        target_distance = self._ovon_float((matched_entry or {}).get("distance_m"))
+        target_distance_text = (
+            f"{float(target_distance):.2f}m"
+            if target_distance is not None
+            else "unknown distance"
+        )
+        return True, (
+            f"exact final-target stage persisted across one executed subtask "
+            f"({required} thinking calls), that subtask move stayed within "
+            f"{float(self.FORCED_EARLY_STOP_MAX_DELTA_M):.2f}m, total drift={total_drift_m:.2f}m, "
+            f"and target detection is within {target_distance_text}"
+        )
 
     def _update_final_goal_destination_match_streak(
         self,
@@ -282,33 +579,164 @@ class OVONObjectNavigationController(VLMNavigationController):
         cycle_info: Dict[str, Any],
         mode: str,
     ) -> bool:
-        response["global_landmark_arrival"] = self._ovon_validate_global_landmark_arrival(
+        mode_key = str(mode).strip().lower()
+        response["global_landmark_arrival"] = self._ovon_effective_global_landmark_arrival(
             response,
-            require_flag=True,
             log_rejection=True,
+            log_upgrade=True,
         )
-        response["global_task_finish"] = (
-            str(mode).strip().lower() != "initial"
-            and bool(response.get("global_landmark_arrival", False))
-        )
+        if mode_key == "initial" and bool(response.get("global_landmark_arrival", False)):
+            print(
+                "[OVONStopGate] reject initial-planning stop: OVON must execute at least one "
+                "action subtask and stop only on a later verify call."
+            )
+            response["global_landmark_arrival"] = False
+        if bool(response.get("global_landmark_arrival", False)):
+            self._ovon_reset_forced_early_stop_subtask_history()
+            self._ovon_inject_goal_into_current_waypoint(response)
+        else:
+            proposed_subtask_id = 1 if mode_key == "initial" else int(self.subtask_count) + 1
+            forced_stop_ok, forced_reason = self._ovon_forced_early_stop_ready(
+                response,
+                proposed_subtask_id=int(proposed_subtask_id),
+            )
+            if forced_stop_ok:
+                exact_goal = self._ovon_exact_goal_label()
+                response["global_landmark_arrival"] = True
+                if exact_goal:
+                    response["subtask_landmark"] = exact_goal
+                    response["next_waypoint"] = exact_goal
+                self._ovon_inject_goal_into_current_waypoint(response)
+                print(
+                    "[OVONEarlyStop] "
+                    f"{forced_reason}. Stop on this thinking call instead of looping."
+                )
+        task_finished = bool(response.get("global_landmark_arrival", False))
+        self._ovon_persist_thinking_response_artifact(response, cycle_info)
+        response["global_task_finish"] = bool(task_finished)
+        if mode_key == "initial" and bool(task_finished):
+            phase = str(cycle_info.get("phase", "initial"))
+            self._apply_postplanning_space_area_update(
+                response=response,
+                phase=phase,
+                thinking_dir=cycle_info.get("thinking_dir"),
+                refresh_direction_views=True,
+            )
+            self._record_current_position_from_thinking_response(response)
+            self.current_subtask = response
+            self.subtask_count = 1
+            self.subtask_attempt = 0
+            self._print_subtask_info(response, is_initial=True)
+            print("[DONE] Global task complete at initial planning")
+            return True
         return super()._apply_thinking_cycle_result(
             response=response,
             cycle_info=cycle_info,
             mode=mode,
         )
 
+    def _run_thinking_cycle(
+        self,
+        mode: str,
+    ) -> Tuple[Optional[Dict[str, Any]], Optional[str], Optional[Dict[str, Any]]]:
+        response, prompt, cycle_info = super()._run_thinking_cycle(mode)
+        mode_key = str(mode).strip().lower()
+        if mode_key != "verify" or not response or not cycle_info:
+            return response, prompt, cycle_info
+
+        if not bool(getattr(self, "ovon_stop_gate_requested", False)):
+            return response, prompt, cycle_info
+        retry_notice = str(getattr(self, "ovon_stop_gate_rejection_notice", "") or "").strip()
+        if not retry_notice:
+            return response, prompt, cycle_info
+
+        print("[OVONStopGate] verify stop request was rejected; re-query once with a stop-guard notice")
+        verify_subtask = dict(self.current_subtask or {})
+        verify_subtask["subtask_instruction"] = self._build_previous_subtask_instruction_summary(
+            self.current_subtask
+        )
+        retry_response, retry_prompt = self.planner.verify_and_replan(
+            instruction=self.current_instruction,
+            current_subtask=verify_subtask,
+            observation_images=list(cycle_info.get("image_paths") or []),
+            direction_names=list(cycle_info.get("direction_names") or []),
+            global_map_image=cycle_info.get("global_map_image"),
+            local_map_image=None,
+            detected_landmarks=list(cycle_info.get("detected_landmarks") or []),
+            waypoint_summary=cycle_info.get("waypoint_summary"),
+            previous_subtask_landmark_summary=cycle_info.get("previous_subtask_landmark_summary"),
+            obstacle_distances=getattr(self, "latest_obstacle_distances", None),
+            verify_replan_prompt_notice=self._merge_prompt_notices(
+                str(getattr(self, "verify_replan_prompt_notice", "") or "").strip(),
+                retry_notice,
+            ),
+            save_dir=cycle_info.get("thinking_dir"),
+        )
+        if not retry_response:
+            return response, prompt, cycle_info
+
+        retry_response = self._sanitize_planner_response(retry_response)
+        thinking_dir = str(cycle_info.get("thinking_dir") or "").strip()
+        if thinking_dir:
+            try:
+                with open(os.path.join(thinking_dir, "response.json"), "w", encoding="utf-8") as handle:
+                    json.dump(retry_response, handle, ensure_ascii=False, indent=2)
+            except OSError:
+                pass
+
+        updated_cycle_info = dict(cycle_info)
+        self.latest_thinking_cycle_info = dict(updated_cycle_info)
+        return retry_response, retry_prompt, updated_cycle_info
+
     def _should_autostop_from_goal_distance(self) -> bool:
-        """OVON global STOP must be planner-confirmed, target-exact, and within 0.5m."""
+        """OVON global STOP follows the planner's explicit final-arrival flag only."""
         current_subtask = getattr(self, "current_subtask", None)
         if not isinstance(current_subtask, dict):
             return False
-        if not bool(current_subtask.get("global_landmark_arrival", False)):
-            return False
-        return self._ovon_validate_global_landmark_arrival(
+
+        if self._ovon_effective_global_landmark_arrival(
             current_subtask,
-            require_flag=True,
             log_rejection=False,
+            log_upgrade=False,
+        ):
+            current_subtask["global_landmark_arrival"] = True
+            return True
+        return False
+
+    def _attempt_goal_distance_autostop(self) -> bool:
+        current_subtask = getattr(self, "current_subtask", None)
+        planner_stop_ok = False
+        if isinstance(current_subtask, dict):
+            planner_stop_ok = self._ovon_effective_global_landmark_arrival(
+                current_subtask,
+                log_rejection=False,
+                log_upgrade=False,
+            )
+            if planner_stop_ok:
+                current_subtask["global_landmark_arrival"] = True
+        if not planner_stop_ok:
+            return False
+
+        print("[OVONAutoStop] planner final-arrival flag is true; issuing STOP immediately.")
+
+        result = self.step_with_vlm(
+            resolve_habitat_action("STOP"),
+            action_name="OVON_AUTO_GOAL_STOP",
+            save_vis=True,
+            enable_landmark_detection=False,
         )
+        if result.get("done", False):
+            print("[OVONAutoStop] STOP executed and episode finished.")
+            return True
+        print("[OVONAutoStop] STOP was issued but episode did not finish; continue.")
+        return False
+
+    def _reset_custom_landmark_state(self) -> None:
+        """OVON keeps landmark memory across subtasks; only current tracked classes reset."""
+        self.landmark_classes = []
+        self.tracked_landmark_classes.clear()
+        self.target_landmark = None
+        self.classes = []
 
     def _should_autocomplete_subtask_during_action_step(
         self,
@@ -413,3 +841,37 @@ class OVONObjectNavigationController(VLMNavigationController):
             )
         )
         return matches[0]
+
+    def _save_navigation_result(self, total_steps: int, env_metrics: Dict = None) -> str:
+        """Save OVON results without VLNCE-only metrics such as OSR/nDTW."""
+
+        def check_inf_nan(value):
+            if isinstance(value, (int, float)) and (math.isinf(value) or math.isnan(value)):
+                return 0
+            return value
+
+        metrics_source = dict(env_metrics if env_metrics else (self.latest_info if self.latest_info else {}))
+        episode_timing_summary = self._build_episode_timing_summary()
+        result = {
+            "episode_id": self.current_episode_id,
+            "instruction": self.current_instruction,
+            "total_steps": total_steps,
+            "subtask_count": self.subtask_count,
+            "episode_duration_s": episode_timing_summary["episode_duration_s"],
+            "failed_api_total_duration_s": episode_timing_summary["failed_api_total_duration_s"],
+            "failed_retry_wait_duration_s": episode_timing_summary["failed_retry_wait_duration_s"],
+            "failed_wasted_duration_s": episode_timing_summary["failed_wasted_duration_s"],
+            "success": int(check_inf_nan(metrics_source.get("success", 0))),
+            "spl": float(check_inf_nan(metrics_source.get("spl", 0.0))),
+            "soft_spl": float(check_inf_nan(metrics_source.get("soft_spl", 0.0))),
+            "distance_to_goal": float(check_inf_nan(metrics_source.get("distance_to_goal", -1.0))),
+            "path_length": float(check_inf_nan(metrics_source.get("path_length", 0.0))),
+            "thinking_api_summary": episode_timing_summary["thinking_api_summary"],
+            "action_api_summary": episode_timing_summary["action_api_summary"],
+            "timestamp": datetime.now().isoformat(),
+        }
+        result["sr"] = result["success"]
+        result["ne"] = result["distance_to_goal"]
+        if getattr(self, "ovon_sample_index", None) is not None:
+            result["sample_index"] = int(self.ovon_sample_index)
+        return self.save_manager.save_result(result)

@@ -4,19 +4,22 @@
 
 # Inputs
 **12 Views** (sampled every 30° around 360°; each RGB view HFOV is about 79°):
+- **RGB scene content**: this is the primary evidence. First read the actual image content: layout, openings, walls, furniture, room cues, stairs, boundaries, and object relations.
 - **Obstacle distance**: nearest obstacle only. <{obs_blocked_m}m=blocked | {obs_blocked_m}-{obs_risky_m}m=caution | >{obs_risky_m}m=passable
-- **In-view distance labels**: when shown, `Obstacle` and `Landmark` display meters; use only the shown value.
-**Map**: explored area + obstacles + current pose
-- **Map colors**: White=unexplored | Black=obstacles | Green=safe floor | Dark red=trajectory | Red Arrow=you position
+- **Space Waypoint** (if present): `Space Waypoint` labels may appear on the RGB view. Use only the shown values.
+- **Bottom white strip** (if present): bottom summary rows may show `your current area` and `space waypoint` entries, including names, distances, directions, connection info, or status tags. Treat it as structured current-view / nearby-memory summary, not obstacle/free-space/path-clearance proof.
+**Space Structure**: rendered current-area / Space Waypoint / connection evidence if provided; use it with the views and map, not as a replacement for current-view localization.
+**Global Map**: explored area + obstacles + trajectory + current pose + space structure if rendered
+- **Map colors**: White=unexplored | Black=obstacles | Green=safe floor | Purple/magenta=trajectory | Red Arrow=you position | Colored regions + blue tags=space structure on Global Map when present
 
 # Reasoning (4 Parts)
 
 **1) 12-View Analysis (MUST analyze EACH IMAGE 1-12)**
-**Format**: For each IMAGE, use `IMAGE# (Direction Angle°): likely [space]; NEAR: ...; FAR: ...; Obstacle: ...; Landmark: ...`, omitting any field not visible there. If the current stage involves stairs and this IMAGE is stair-related, explicitly state `upstairs` / `downstairs` / `unclear`.
-**Distance reading**: `Obstacle` and `Landmark` refer only to that IMAGE's shown value; do not infer hidden values.
+**Format**: For each IMAGE, use `IMAGE# (Direction Angle°): likely [space]; NEAR: ...; FAR: ...; Obstacle: ...; Space Waypoint: ...`, omitting any field not visible there. If the current stage involves stairs and this IMAGE is stair-related, explicitly state `upstairs` / `downstairs` / `unclear`.
+**Distance reading**: `Obstacle` and `Space Waypoint` refer only to that IMAGE's shown value; do not infer hidden values.
 **Near rule**: treat only cues within about {arrival_near_m}m as truly NEAR/current-position evidence. This is for localization/progress only, not auto-stop. Farther cues may support direction/future destination but do not prove arrival.
-**Evidence order**: read each IMAGE in this order: NEAR current/large objects + implied space; FAR objects/openings + implied space; obstacle distance + blocked/caution/passable; landmark + shown distance. Judge RGB/layout first and use labels/distances only as support. Use all 12 views, layout, openings, furniture relations, and adjacent-view consistency to decide current space/current waypoint, reachable spaces, and likely next direction. Use NEAR evidence first to separate room interior from hallway/landing/transition/outside; a room visible through an opening does not make it the current space. Landmark detections may be missing/noisy, especially in hallway-like or other weak-detector spaces, so never localize current space/current waypoint from detection alone. In stair scenes, decide upstairs/downstairs first, then infer top/run/bottom/off-stairs from geometry + adjacent views; downstairs may appear as an open drop / missing-floor beyond a stair edge or railing, so do not choose the clearer opposite run.
-**No hallucination**: analyze each IMAGE separately. If an IMAGE shows only a wall or nearby furniture, say only that. Do not write `none`, fill empty slots, invent spaces/FAR objects/landmarks, or mention landmark unless explicitly shown.
+**Evidence order**: read each IMAGE in this order: NEAR current/large objects + implied space; FAR objects/openings + implied space; obstacle distance + blocked/caution/passable; reachable space waypoint + shown distance if explicitly shown. Judge RGB/layout first and use labels/distances only as support. Use all 12 views, layout, openings, furniture relations, and adjacent-view consistency to decide current space/current waypoint, reachable spaces, and likely next direction. Use NEAR evidence first to separate room interior from hallway/landing/transition/outside; a room visible through an opening does not make it the current space. Space Waypoint cues may be missing/noisy in cluttered views, so never localize current space/current waypoint from one shown waypoint alone. In stair scenes, decide upstairs/downstairs first, then infer top/run/bottom/off-stairs from geometry + adjacent views; downstairs may appear as an open drop / missing-floor beyond a stair edge or railing, so do not choose the clearer opposite run.
+**No hallucination**: analyze each IMAGE separately. If an IMAGE shows only a wall or nearby furniture, say only that. Do not write `none`, fill empty slots, invent spaces/FAR objects/space waypoint cues, or mention space waypoint unless explicitly shown.
 **Conclusion**: Identify from the 12-view content: Current Position Guess: [current space + NEAR landmarks + adjacent-view context] | Reachable Far Area/Landmark: [which IMAGEs show reachable FAR spaces/landmarks/openings, what each leads to, and which task-relevant transition/route point it may support] | Destination-Related Direction Guess: [which IMAGE/view most likely points toward the next task-relevant space or space landmark, and why] | Blocked: [which IMAGEs have obstacle distance <{obs_blocked_m}m]
 
 **2) Current Position + Global Task Goal + Task Chain**

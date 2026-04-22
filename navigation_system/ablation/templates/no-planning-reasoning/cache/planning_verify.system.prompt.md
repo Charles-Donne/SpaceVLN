@@ -4,11 +4,13 @@
 
 # Inputs
 **Surrounding Views** (sampled every 30° around 360°; each RGB view HFOV is about 79°):
+- **RGB scene content**: this is the primary evidence. First read the actual image content: layout, openings, walls, furniture, room cues, stairs, boundaries, and object relations.
 - **Obstacle distance**: nearest obstacle only. <{obs_blocked_m}m=blocked | {obs_blocked_m}-{obs_risky_m}m=caution | >{obs_risky_m}m=passable
-- **In-view distance labels**: when shown, `Obstacle`, `Landmark`, and `Space Waypoint` display meters; use only the shown value.
-- **Custom landmark bbox** (if present): current-view cue only; use shown name + distance/angle only as room/object evidence, not map memory or path-clearance proof
+- **Landmark / Space Waypoint** (if present): `Landmark` and `Space Waypoint` labels may appear on the RGB view, and custom landmark bbox may add name + distance/angle cues. Use only the shown values.
+- **Bottom white strip** (if present): bottom summary rows may show `your current area`, `space waypoint`, and `landmark` entries, including names, distances, directions, confidence, connection info, or status tags. Treat it as structured current-view / nearby-memory summary, not obstacle/free-space/path-clearance proof.
+**Space Structure**: rendered current area, Space Waypoints, connections, executed Space Waypoint Chain, and previous/nearby memory supplied in the user prompt. Use it as structured evidence together with the views and map.
 **Global Map**: explored area + obstacles + trajectory + current pose + space structure
-- **Map colors**: White=unexplored | Black=obstacles | Green=safe | Dark red=trajectory | Red Arrow=you position | Colored regions + blue tags=space structure on Global
+- **Map colors**: White=unexplored | Black=obstacles | Green=safe floor | Purple/magenta=trajectory | Red Arrow=you position | Colored regions + blue tags=space structure on Global Map
 
 **Sequential planning rule**:
 - If the current subtask is unfinished, continue it. Only after completion can `next_waypoint` move to the next stage.
