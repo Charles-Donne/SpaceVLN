@@ -57,9 +57,9 @@ from navigation_system.space.geometry.connectivity import (
     build_bounded_geodesic_distance_field,
     query_world_distance_from_field_m,
 )
-from navigation_system.space.topology.space_area_manager import SpaceAreaManager
-from navigation_system.space.topology.space_types import normalize_space_type
-from navigation_system.space.topology.waypoint_manager import WaypointManager
+from navigation_system.space.structure.space_area_manager import SpaceAreaManager
+from navigation_system.space.structure.space_types import normalize_space_type
+from navigation_system.space.structure.waypoint_manager import WaypointManager
 from navigation_system.space.geometry.map_projection import RotatedMapProjector
 
 

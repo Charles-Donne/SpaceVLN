@@ -26,7 +26,7 @@ from navigation_system.space.geometry.connectivity import (
     build_bounded_geodesic_distance_field,
     query_world_distance_from_field_m,
 )
-from navigation_system.space.topology.space_types import (
+from navigation_system.space.structure.space_types import (
     normalize_space_type,
     strip_space_type_label_variant_suffix,
 )

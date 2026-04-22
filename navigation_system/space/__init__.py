@@ -1,7 +1,11 @@
-"""Space subsystem: map, topology, landmarks, geometry, and prompt-facing descriptions."""
+"""Space subsystem: structure, landmark memory, map state, geometry, and descriptions."""
 
-from importlib import import_module
-from typing import Any
+from navigation_system.space.landmarks import LandmarkMemory
+from navigation_system.space.map import SemanticMapper, SemanticProcessor
+from navigation_system.space.structure import (
+    normalize_space_type,
+    strip_space_type_variant_suffixes,
+)
 
 __all__ = [
     "LandmarkMemory",
@@ -10,15 +14,3 @@ __all__ = [
     "normalize_space_type",
     "strip_space_type_variant_suffixes",
 ]
-
-
-def __getattr__(name: str) -> Any:
-    if name == "SemanticMapper":
-        return getattr(import_module("navigation_system.space.map.semantic_mapper"), name)
-    if name == "SemanticProcessor":
-        return getattr(import_module("navigation_system.space.map.semantic_processor"), name)
-    if name == "LandmarkMemory":
-        return getattr(import_module("navigation_system.space.landmarks"), name)
-    if name in {"normalize_space_type", "strip_space_type_variant_suffixes"}:
-        return getattr(import_module("navigation_system.space.topology"), name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

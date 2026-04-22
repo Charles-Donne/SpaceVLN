@@ -46,7 +46,7 @@ from navigation_system.controller.state import (
     EpisodeTimingTracker,
     VLMControllerOptions,
 )
-from navigation_system.space.topology.space_types import (
+from navigation_system.space.structure.space_types import (
     strip_space_type_variant_suffixes,
 )
 from navigation_system.vlm.interfaces import (
