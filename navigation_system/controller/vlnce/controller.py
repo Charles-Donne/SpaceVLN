@@ -1451,8 +1451,8 @@ class VLMNavigationController(BaseNavigationController):
         return f"[{clean_name}]{suffix}"
 
     def _get_latest_action_local_map_landmark_entries(self) -> List[Dict[str, Any]]:
-        latest_prompt_entries = self.landmark_memory_pool.get_latest_prompt_entries()
-        history = self.landmark_memory_pool.prompt_entries_by_step
+        latest_prompt_entries = self.landmark_memory.get_latest_prompt_entries()
+        history = self.landmark_memory.prompt_entries_by_step
         latest_history_step = max(history.keys(), default=-1)
         history_tail_count = len(history.get(latest_history_step, []) or []) if latest_history_step >= 0 else 0
         cache_key = (
@@ -1538,7 +1538,7 @@ class VLMNavigationController(BaseNavigationController):
         self.latest_action_local_map_debug_lines = self._build_action_landmark_overlay_lines(ordered_entries)
 
     def _get_action_landmark_prompt_entries(self, detection_step: Optional[int]) -> List[Dict[str, Any]]:
-        history = self.landmark_memory_pool.prompt_entries_by_step
+        history = self.landmark_memory.prompt_entries_by_step
         topk = max(1, int(LANDMARK_STRIP_TOPK))
         if detection_step is not None:
             entries = self._sort_action_landmark_entries(history.get(detection_step, []) or [])
@@ -1546,7 +1546,7 @@ class VLMNavigationController(BaseNavigationController):
                 return entries[:topk]
 
         latest_entries = self._sort_action_landmark_entries(
-            self.landmark_memory_pool.get_latest_prompt_entries()
+            self.landmark_memory.get_latest_prompt_entries()
         )
         if latest_entries:
             return latest_entries[:topk]
@@ -1775,13 +1775,13 @@ class VLMNavigationController(BaseNavigationController):
         )
 
     def _get_current_action_step_landmark_entries(self) -> List[Dict[str, Any]]:
-        entries = self.landmark_memory_pool.get_step_prompt_entries(self.current_step)
+        entries = self.landmark_memory.get_step_prompt_entries(self.current_step)
         if entries:
             return entries
         latest_entries = self._get_latest_action_local_map_landmark_entries()
         if latest_entries:
             return latest_entries
-        return self.landmark_memory_pool.get_step_visible_entries(self.current_step)
+        return self.landmark_memory.get_step_visible_entries(self.current_step)
 
     def _save_waypoint_area_memory_snapshot(self) -> None:
         """Persist waypoint/space-area state for debugging after each planning update."""
@@ -2164,7 +2164,7 @@ class VLMNavigationController(BaseNavigationController):
         self.tracked_landmark_classes.clear()
         self.target_landmark = None
         self.classes = []
-        self.landmark_memory_pool.reset_subtask()
+        self.landmark_memory.reset_subtask()
 
         detected = getattr(self, 'detected_classes', None)
         if detected is not None:
@@ -3237,7 +3237,7 @@ class VLMNavigationController(BaseNavigationController):
     def _build_action_detected_landmarks_text(self, detection_step: Optional[int]) -> str:
         """Build the compact action-prompt landmark text from the current detection step."""
         if detection_step is not None:
-            step_landmarks = self.landmark_memory_pool.get_step_detected(detection_step)
+            step_landmarks = self.landmark_memory.get_step_detected(detection_step)
             if step_landmarks:
                 return ", ".join([name for name, _ in step_landmarks])
 
@@ -3315,9 +3315,9 @@ class VLMNavigationController(BaseNavigationController):
         detection_image = self._build_action_detection_image_input(last_step)
         action_landmark_map_info = build_action_landmark_map_info(
             step_landmark_entries=step_landmark_entries,
-            landmark_dist_map=self.landmark_memory_pool.get_latest_dist_map(),
-            landmark_dist_map_multi=self.landmark_memory_pool.get_latest_dist_map_multi(),
-            landmark_instances_world=self.landmark_memory_pool.get_world_instances(),
+            landmark_dist_map=self.landmark_memory.get_latest_dist_map(),
+            landmark_dist_map_multi=self.landmark_memory.get_latest_dist_map_multi(),
+            landmark_instances_world=self.landmark_memory.get_world_instances(),
         )
         self._log_action_landmark_debug("pre-action", step_landmark_entries)
 

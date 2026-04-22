@@ -1,4 +1,4 @@
-"""Centralized landmark memory pool for action/thinking runtime."""
+"""Centralized landmark memory for action/thinking runtime."""
 
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -70,7 +70,7 @@ def _merge_world_instance_confidence(
 
 
 @dataclass
-class LandmarkMemoryPool:
+class LandmarkMemory:
     """Single owner for landmark instance memory plus prompt-facing derived views."""
 
     world_instances: List[Dict[str, Any]] = field(default_factory=list)
