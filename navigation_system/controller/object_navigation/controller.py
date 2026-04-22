@@ -72,14 +72,6 @@ class OVONObjectNavigationController(VLMNavigationController):
             return float(OVON_TARGET_BOX_THRESHOLD), float(OVON_TARGET_TEXT_THRESHOLD)
         return super()._get_landmark_detection_thresholds(landmark_query)
 
-    def _get_current_subtask_landmark_candidates(self) -> List[str]:
-        if self._ovon_is_final_object_stage():
-            goal_name = self._ovon_goal_object_name()
-            normalized_goal = self._normalize_landmark_candidate(goal_name)
-            if normalized_goal:
-                return [normalized_goal]
-        return super()._get_current_subtask_landmark_candidates()
-
     def reset_episode(self, episode_id: int = None, sample_index: int = None):
         """Reset OVON state while storing artifacts under sample-index paths."""
         self.ovon_sample_index = int(sample_index) if sample_index is not None else None
@@ -217,7 +209,7 @@ class OVONObjectNavigationController(VLMNavigationController):
 
     @classmethod
     def _ovon_label_variants(cls, text: Optional[str]) -> Set[str]:
-        normalized = cls._normalize_landmark_candidate(text)
+        normalized = cls._normalize_landmark_text(text)
         if not normalized:
             return set()
         normalized = " ".join(
@@ -258,44 +250,44 @@ class OVONObjectNavigationController(VLMNavigationController):
 
     def _ovon_goal_object_name(self) -> str:
         goal, _aliases = parse_object_goal_instruction(getattr(self, "current_instruction", ""))
-        return self._normalize_landmark_candidate(goal) or ""
+        return self._normalize_landmark_text(goal) or ""
 
     def _ovon_exact_goal_label(self) -> str:
         return self._ovon_goal_object_name()
 
     @staticmethod
-    def _ovon_phrase_in_text(candidate: Optional[str], phrase: Optional[str]) -> bool:
-        candidate_text = str(candidate or "").strip()
+    def _ovon_phrase_in_text(text: Optional[str], phrase: Optional[str]) -> bool:
+        normalized_text = str(text or "").strip()
         phrase_text = str(phrase or "").strip()
-        if not candidate_text or not phrase_text:
+        if not normalized_text or not phrase_text:
             return False
-        candidate_tokens = candidate_text.split()
+        text_tokens = normalized_text.split()
         phrase_tokens = phrase_text.split()
-        if not candidate_tokens or not phrase_tokens:
+        if not text_tokens or not phrase_tokens:
             return False
         phrase_len = len(phrase_tokens)
         return any(
-            candidate_tokens[idx: idx + phrase_len] == phrase_tokens
-            for idx in range(0, len(candidate_tokens) - phrase_len + 1)
+            text_tokens[idx: idx + phrase_len] == phrase_tokens
+            for idx in range(0, len(text_tokens) - phrase_len + 1)
         )
 
     def _ovon_text_contains_goal_label(self, text: Optional[str]) -> bool:
         goal_terms = self._ovon_goal_terms()
         if not goal_terms:
             return False
-        candidates = {
-            self._normalize_landmark_candidate(text),
-            self._normalize_landmark_candidate(self._ovon_landmark_part(text)),
+        text_terms = {
+            self._normalize_landmark_text(text),
+            self._normalize_landmark_text(self._ovon_landmark_part(text)),
         }
-        candidates = {candidate for candidate in candidates if candidate}
-        if not candidates:
+        text_terms = {term for term in text_terms if term}
+        if not text_terms:
             return False
-        for candidate in candidates:
-            candidate_variants = self._ovon_label_variants(candidate) or {candidate}
-            for candidate_variant in candidate_variants:
-                if candidate_variant in goal_terms:
+        for text_term in text_terms:
+            text_variants = self._ovon_label_variants(text_term) or {text_term}
+            for text_variant in text_variants:
+                if text_variant in goal_terms:
                     return True
-                if any(self._ovon_phrase_in_text(candidate_variant, goal_term) for goal_term in goal_terms):
+                if any(self._ovon_phrase_in_text(text_variant, goal_term) for goal_term in goal_terms):
                     return True
         return False
 
@@ -315,11 +307,11 @@ class OVONObjectNavigationController(VLMNavigationController):
         current_waypoint = str((response or {}).get("current_waypoint") or "").strip()
         if not current_waypoint:
             return False
-        candidates = [current_waypoint, self._ovon_landmark_part(current_waypoint)]
+        waypoint_terms = [current_waypoint, self._ovon_landmark_part(current_waypoint)]
         if " - " in current_waypoint:
             _space_part, local_part = current_waypoint.split(" - ", 1)
-            candidates.extend(part.strip() for part in local_part.split("/") if part.strip())
-        for item in candidates:
+            waypoint_terms.extend(part.strip() for part in local_part.split("/") if part.strip())
+        for item in waypoint_terms:
             if not item:
                 continue
             if self._ovon_text_contains_goal_label(item):
@@ -429,7 +421,7 @@ class OVONObjectNavigationController(VLMNavigationController):
         if not exact_goal:
             return False, "OVON target object is unavailable"
 
-        previous_landmark = self._normalize_landmark_candidate(
+        previous_landmark = self._normalize_landmark_text(
             self._get_subtask_landmark_field(previous_subtask)
         )
         if not previous_landmark:
@@ -647,7 +639,7 @@ class OVONObjectNavigationController(VLMNavigationController):
             return False, "no OVON response available for forced early-stop checking"
 
         exact_goal = self._ovon_exact_goal_label()
-        current_landmark = self._normalize_landmark_candidate(
+        current_landmark = self._normalize_landmark_text(
             self._get_subtask_landmark_field(response)
         )
         if not exact_goal or not self._ovon_text_contains_goal_label(current_landmark):
@@ -944,8 +936,8 @@ class OVONObjectNavigationController(VLMNavigationController):
         self,
         step_landmark_entries: Sequence[Dict[str, Any]],
     ) -> Optional[Dict[str, Any]]:
-        candidate_names = self._get_current_subtask_autocomplete_candidates()
-        if not candidate_names:
+        landmark_match_terms = self._get_current_subtask_autocomplete_match_terms()
+        if not landmark_match_terms:
             return None
 
         final_object_stage = self._ovon_is_final_object_stage()
@@ -961,21 +953,22 @@ class OVONObjectNavigationController(VLMNavigationController):
                 for entry in ordered_entries
                 if self._ovon_text_contains_goal_label(entry.get("name"))
             ]
-            candidate_names = [name for name in candidate_names if self._ovon_text_contains_goal_label(name)]
-            if not candidate_names:
-                goal_name = self._ovon_goal_object_name()
-                if goal_name:
-                    candidate_names = [goal_name]
+            landmark_match_terms = [
+                term for term in landmark_match_terms
+                if self._ovon_text_contains_goal_label(term)
+            ]
+            if not landmark_match_terms:
+                return None
 
         matches: List[Dict[str, Any]] = []
         for entry in ordered_entries[: max(1, effective_topk)]:
             if not self._entry_reaches_action_arrival_threshold(
                 entry,
-                candidate_names=candidate_names,
+                landmark_match_terms=landmark_match_terms,
             ):
                 continue
             matches.append({
-                "name": str(entry.get("name") or candidate_names[0]),
+                "name": str(entry.get("name") or landmark_match_terms[0]),
                 "distance_m": float(entry.get("distance_m")),
                 "confidence": float(entry.get("confidence", 0.0) or 0.0),
                 "angle_deg": entry.get("angle_deg"),
@@ -990,50 +983,7 @@ class OVONObjectNavigationController(VLMNavigationController):
             })
 
         if not matches:
-            if final_object_stage:
-                return None
-
-            dest_room, dest_object = self._parse_subtask_destination()
-            subtask_landmark = self._normalize_landmark_candidate(
-                self._get_subtask_landmark_field(getattr(self, "current_subtask", None))
-            )
-            if not self._current_area_matches_stair_destination(dest_room, dest_object, subtask_landmark):
-                return None
-
-            relaxed_matches: List[Dict[str, Any]] = []
-            for entry in ordered_entries[: max(1, effective_topk)]:
-                if not self._entry_reaches_action_arrival_threshold(
-                    entry,
-                    candidate_names=candidate_names,
-                ):
-                    continue
-                relaxed_matches.append({
-                    "name": str(entry.get("name") or candidate_names[0]),
-                    "distance_m": float(entry.get("distance_m")),
-                    "confidence": float(entry.get("confidence", 0.0) or 0.0),
-                    "angle_deg": entry.get("angle_deg"),
-                    "is_opening_like": bool(self._is_opening_like_landmark_entry(entry)),
-                    "stop_distance_m": float(self._autocomplete_stop_distance_m(entry)),
-                    "structure_matched": True,
-                    "source": "vis" if str(entry.get("source", "mem") or "mem") == "vis" else "mem",
-                    "display_id": self._safe_int(entry.get("display_id")),
-                    "instance_idx": self._safe_int(entry.get("instance_idx")),
-                    "class_total": self._safe_int(entry.get("class_total")),
-                    "selection_rank": self._safe_int(entry.get("selection_rank")),
-                    "instance_uid": self._safe_int(entry.get("instance_uid")),
-                })
-
-            if not relaxed_matches:
-                return None
-
-            relaxed_matches.sort(
-                key=lambda item: (
-                    float(item.get("distance_m", 1e9)),
-                    -float(item.get("confidence", 0.0)),
-                    str(item.get("name", "")),
-                )
-            )
-            return relaxed_matches[0]
+            return None
 
         matches.sort(
             key=lambda item: (

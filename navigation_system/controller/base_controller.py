@@ -23,7 +23,7 @@ except ImportError:  # Habitat 0.2.x path/layout differs; only needed when const
 
 from navigation_system.detection import GroundedSAM
 from navigation_system.space import SemanticMapper, SemanticProcessor
-from navigation_system.space.landmarks import LandmarkMemoryState
+from navigation_system.space.landmarks import LandmarkMemoryPool
 from navigation_system.space.map.semantic_mapping import Semantic_Mapping
 from navigation_system.render import MapVisualizer
 from navigation_system.space.map.obstacle_analysis import (
@@ -123,7 +123,7 @@ class BaseNavigationController:
         
         self.current_episode_id = None
         self.current_step = 0
-        self.landmark_memory = LandmarkMemoryState()
+        self.landmark_memory_pool = LandmarkMemoryPool()
         self._reset_navigation_runtime_state()
 
     def _reset_navigation_runtime_state(self) -> None:
@@ -158,7 +158,7 @@ class BaseNavigationController:
 
     def _record_landmark_detection_step(self, step_idx: int, detected_landmarks_step) -> None:
         """记录当前step的landmark检测结果和地图矫正后的距离/角度。"""
-        self.landmark_memory.record_step(
+        self.landmark_memory_pool.record_step(
             step_idx=step_idx,
             detected_landmarks=detected_landmarks_step,
         )
@@ -353,7 +353,7 @@ class BaseNavigationController:
         
         self.detected_class_registry.clear()
         self.classes = []
-        self.landmark_memory.reset_episode()
+        self.landmark_memory_pool.reset_episode()
         self.mapper.reset()
         self.mapper.init_map_and_pose(num_detected_classes=0)
         
@@ -997,12 +997,12 @@ class BaseNavigationController:
             )
 
         if not force:
-            if enable_landmark_detection and self.landmark_memory.has_step(self.current_step):
+            if enable_landmark_detection and self.landmark_memory_pool.has_step(self.current_step):
                 return True
             if required_paths and all(os.path.exists(path) for path in required_paths):
                 if not enable_landmark_detection:
                     return True
-                if self.landmark_memory.has_step(self.current_step):
+                if self.landmark_memory_pool.has_step(self.current_step):
                     return True
 
         self._batch_obs([self.latest_obs], save_object_detection=enable_landmark_detection)

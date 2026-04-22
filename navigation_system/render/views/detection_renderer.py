@@ -144,7 +144,7 @@ def render_detection_bbox(owner,
         # task landmarks only; keep space-structure overlays out of this image.
         return []
 
-    landmark_memory = controller.landmark_memory if controller is not None else None
+    landmark_memory_pool = controller.landmark_memory_pool if controller is not None else None
     effective_detection_visible_topk = max(1, int(detection_visible_topk))
     effective_landmark_strip_topk = max(1, int(landmark_strip_topk))
     if controller is not None:
@@ -161,8 +161,8 @@ def render_detection_bbox(owner,
         if selected_landmark_instances is not None:
             selected_world_landmark_instances = [dict(item) for item in (selected_landmark_instances or [])]
             all_world_landmark_instances: List[Dict[str, Any]] = (
-                landmark_memory.get_world_instances()
-                if landmark_memory is not None else []
+                landmark_memory_pool.get_world_instances()
+                if landmark_memory_pool is not None else []
             )
             display_lookup_source = all_world_landmark_instances or selected_world_landmark_instances
             action_landmark_context = {
@@ -173,8 +173,8 @@ def render_detection_bbox(owner,
             }
         else:
             all_world_landmark_instances: List[Dict[str, Any]] = (
-                landmark_memory.get_world_instances()
-                if landmark_memory is not None else []
+                landmark_memory_pool.get_world_instances()
+                if landmark_memory_pool is not None else []
             )
             action_landmark_context = owner._build_action_landmark_context(
                 all_world_landmark_instances,
@@ -351,8 +351,8 @@ def render_detection_bbox(owner,
             selected_topk_entries.append(offscreen_entry)
         selected_topk_entries = _sort_selected_topk_entries(selected_topk_entries)
         strip, selected_topk_entries = _build_landmark_strip(selected_topk_entries)
-        if landmark_memory is not None:
-            landmark_memory.set_latest_prompt_entries(
+        if landmark_memory_pool is not None:
+            landmark_memory_pool.set_latest_prompt_entries(
                 visible_entries=[],
                 prompt_entries=selected_topk_entries,
             )
@@ -642,8 +642,8 @@ def render_detection_bbox(owner,
     if append_bottom_strip and strip is not None:
         detection_vis = np.vstack([detection_vis, strip])
 
-    if landmark_memory is not None:
-        landmark_memory.set_latest_prompt_entries(
+    if landmark_memory_pool is not None:
+        landmark_memory_pool.set_latest_prompt_entries(
             visible_entries=visible_entries_meta,
             prompt_entries=selected_topk_entries,
         )

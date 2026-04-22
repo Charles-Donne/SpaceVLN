@@ -47,7 +47,6 @@ from navigation_system.controller.state import (
     VLMControllerOptions,
 )
 from navigation_system.space.topology.space_types import (
-    normalize_space_type,
     strip_space_type_variant_suffixes,
 )
 from navigation_system.vlm.interfaces import (
@@ -677,12 +676,12 @@ class VLMNavigationController(BaseNavigationController):
         step_landmark_entries: Optional[Sequence[Dict[str, Any]]] = None,
     ) -> Tuple[str, Optional[float]]:
         entries = self._sort_action_landmark_entries(step_landmark_entries or [])
-        candidate_names = self._get_current_subtask_landmark_candidates()
+        landmark_match_terms = self._get_current_subtask_landmark_match_terms()
         for entry in entries:
             raw_name = str(entry.get("name") or "").strip()
-            if raw_name and self._landmark_matches_current_subtask_destination(
+            if raw_name and self._landmark_matches_current_subtask_landmark(
                 raw_name,
-                candidate_names=candidate_names,
+                landmark_match_terms=landmark_match_terms,
             ):
                 return (
                     self._sanitize_action_memory_value(
@@ -816,7 +815,7 @@ class VLMNavigationController(BaseNavigationController):
                 break
 
         recent_avoidance_side = self._get_recent_forced_avoidance_turn_side()
-        ranked_candidates: List[Tuple[float, str]] = []
+        ranked_side_options: List[Tuple[float, str]] = []
         for side_name, record in side_records.items():
             if record["blocked"]:
                 continue
@@ -838,12 +837,12 @@ class VLMNavigationController(BaseNavigationController):
             else:
                 score += min(float(distance_m), 5.0)
 
-            ranked_candidates.append((score, side_name))
+            ranked_side_options.append((score, side_name))
 
-        ranked_candidates.sort(reverse=True)
-        if not ranked_candidates:
+        ranked_side_options.sort(reverse=True)
+        if not ranked_side_options:
             return None, side_records
-        return ranked_candidates[0][1], side_records
+        return ranked_side_options[0][1], side_records
 
     def _build_controller_forced_action_response(
         self,
@@ -1148,14 +1147,14 @@ class VLMNavigationController(BaseNavigationController):
 
         room_text, object_text = destination.split("'s ", 1)
         room_norm = strip_space_type_variant_suffixes(room_text.strip().lower())
-        object_norm = self._normalize_landmark_candidate(object_text)
+        object_norm = self._normalize_landmark_text(object_text)
         return room_norm or None, object_norm or None
 
     @classmethod
     def _landing_side_from_text(cls, text: Optional[str]) -> Optional[str]:
         normalized = cls._normalize_waypoint_endpoint_label(text)
         if not normalized:
-            normalized = cls._normalize_landmark_candidate(text)
+            normalized = cls._normalize_landmark_text(text)
         if not normalized:
             return None
 
@@ -1171,7 +1170,7 @@ class VLMNavigationController(BaseNavigationController):
     def _is_stairs_like_text(cls, text: Optional[str]) -> bool:
         normalized = cls._normalize_waypoint_endpoint_label(text)
         if not normalized:
-            normalized = cls._normalize_landmark_candidate(text)
+            normalized = cls._normalize_landmark_text(text)
         if not normalized:
             return False
         return any(token in normalized for token in ("stairs", "stair", "staircase", "stairway"))
@@ -1199,13 +1198,13 @@ class VLMNavigationController(BaseNavigationController):
             return False
 
         dest_room_norm = strip_space_type_variant_suffixes(str(dest_room or "").strip().lower()) or None
-        dest_object_norm = self._normalize_waypoint_endpoint_label(dest_object) or self._normalize_landmark_candidate(dest_object)
+        dest_object_norm = self._normalize_waypoint_endpoint_label(dest_object) or self._normalize_landmark_text(dest_object)
         current_area_text = (
             getattr(self.mapper, "current_space_area_display_label", "")
             or getattr(self.mapper, "current_space_area_label", "")
         )
         current_area_norm = self._normalize_waypoint_endpoint_label(current_area_text)
-        current_area_type = self._normalize_landmark_candidate(
+        current_area_type = self._normalize_landmark_text(
             getattr(self.mapper, "current_space_area_type", "")
         )
         dest_side = self._landing_side_from_text(dest_object_norm)
@@ -1286,81 +1285,23 @@ class VLMNavigationController(BaseNavigationController):
 
         return False
 
-    def _get_current_subtask_autocomplete_candidates(self) -> List[str]:
-        """Allow proximity auto-stop when the subtask landmark aligns with the destination landmark or connector/generic destination space."""
+    def _get_current_subtask_autocomplete_match_terms(self) -> List[str]:
+        """Use the current VLM subtask landmark as the only proximity auto-complete match term."""
         if self._current_subtask_uses_stairs_like_landmark():
             return []
-        dest_room, dest_object = self._parse_subtask_destination()
-        dest_object_norm = self._normalize_landmark_candidate(dest_object)
-        dest_space_candidates = self._get_current_subtask_autocomplete_space_candidates(dest_room)
-        subtask_landmark_norm = self._normalize_landmark_candidate(
+        subtask_landmark_norm = self._normalize_landmark_text(
             self._get_subtask_landmark_field(getattr(self, 'current_subtask', None))
         )
         if not subtask_landmark_norm:
             return []
-
-        destination_candidates: List[str] = []
-        for raw_candidate in (dest_object_norm, *dest_space_candidates):
-            normalized = self._normalize_landmark_candidate(raw_candidate)
-            if normalized and normalized not in destination_candidates:
-                destination_candidates.append(normalized)
-        if not destination_candidates:
-            return []
-
-        destination_aligned = (
-            any(
-                subtask_landmark_norm == candidate or
-                subtask_landmark_norm in candidate or
-                candidate in subtask_landmark_norm
-                for candidate in destination_candidates
-            )
-        )
-        stair_destination_aligned = self._current_area_matches_stair_destination(
-            dest_room,
-            dest_object_norm,
-            subtask_landmark_norm,
-        )
-        if not destination_aligned and not stair_destination_aligned:
-            return []
-
-        candidates: List[str] = []
-        for raw_candidate in (subtask_landmark_norm, *destination_candidates):
-            normalized = self._normalize_landmark_candidate(raw_candidate)
-            if normalized and normalized not in candidates:
-                candidates.append(normalized)
-        return candidates
-
-    def _get_current_subtask_autocomplete_space_candidates(
-        self,
-        dest_room: Optional[str],
-    ) -> List[str]:
-        """Allow connector/generic destination spaces themselves to trigger proximity auto-stop."""
-        room_norm = self._normalize_waypoint_endpoint_label(dest_room) or self._normalize_landmark_candidate(dest_room)
-        if not room_norm:
-            return []
-
-        canonical_space = normalize_space_type(room_norm)
-        is_connector_space = canonical_space == "hallway"
-        is_generic_room_space = room_norm == "room"
-        if not is_connector_space and not is_generic_room_space:
-            return []
-
-        candidates: List[str] = []
-        for raw_candidate in (
-            room_norm,
-            canonical_space if canonical_space != "Unknown" else None,
-        ):
-            normalized = self._normalize_landmark_candidate(raw_candidate)
-            if normalized and normalized not in candidates:
-                candidates.append(normalized)
-        return candidates
+        return [subtask_landmark_norm]
 
     def _should_autocomplete_subtask_during_action_step(
         self,
         step_landmark_entries: Sequence[Dict[str, Any]],
     ) -> Optional[Dict[str, Any]]:
-        candidate_names = self._get_current_subtask_autocomplete_candidates()
-        if not candidate_names:
+        landmark_match_terms = self._get_current_subtask_autocomplete_match_terms()
+        if not landmark_match_terms:
             return None
 
         matches: List[Dict[str, Any]] = []
@@ -1371,11 +1312,11 @@ class VLMNavigationController(BaseNavigationController):
         for entry in ordered_entries[: int(self.ACTION_SUBTASK_AUTOCOMPLETE_TOPK)]:
             if not self._entry_reaches_action_arrival_threshold(
                 entry,
-                candidate_names=candidate_names,
+                landmark_match_terms=landmark_match_terms,
             ):
                 continue
             matches.append({
-                "name": str(entry.get('name') or candidate_names[0]),
+                "name": str(entry.get('name') or landmark_match_terms[0]),
                 "distance_m": float(entry.get('distance_m')),
                 "confidence": float(entry.get('confidence', 0.0) or 0.0),
                 "angle_deg": entry.get('angle_deg'),
@@ -1390,47 +1331,7 @@ class VLMNavigationController(BaseNavigationController):
             })
 
         if not matches:
-            dest_room, dest_object = self._parse_subtask_destination()
-            subtask_landmark = self._normalize_landmark_candidate(
-                self._get_subtask_landmark_field(getattr(self, 'current_subtask', None))
-            )
-            if not self._current_area_matches_stair_destination(dest_room, dest_object, subtask_landmark):
-                return None
-
-            relaxed_matches: List[Dict[str, Any]] = []
-            for entry in ordered_entries[: int(self.ACTION_SUBTASK_AUTOCOMPLETE_TOPK)]:
-                if not self._entry_reaches_action_arrival_threshold(
-                    entry,
-                    candidate_names=candidate_names,
-                ):
-                    continue
-                relaxed_matches.append({
-                    "name": str(entry.get('name') or candidate_names[0]),
-                    "distance_m": float(entry.get('distance_m')),
-                    "confidence": float(entry.get('confidence', 0.0) or 0.0),
-                    "angle_deg": entry.get('angle_deg'),
-                    "is_opening_like": bool(self._is_opening_like_landmark_entry(entry)),
-                    "stop_distance_m": float(self._autocomplete_stop_distance_m(entry)),
-                    "structure_matched": True,
-                    "source": "vis" if str(entry.get("source", "mem") or "mem") == "vis" else "mem",
-                    "display_id": self._safe_int(entry.get("display_id")),
-                    "instance_idx": self._safe_int(entry.get("instance_idx")),
-                    "class_total": self._safe_int(entry.get("class_total")),
-                    "selection_rank": self._safe_int(entry.get("selection_rank")),
-                    "instance_uid": self._safe_int(entry.get("instance_uid")),
-                })
-
-            if not relaxed_matches:
-                return None
-
-            relaxed_matches.sort(
-                key=lambda item: (
-                    float(item.get("distance_m", 1e9)),
-                    -float(item.get("confidence", 0.0)),
-                    str(item.get("name", "")),
-                )
-            )
-            return relaxed_matches[0]
+            return None
 
         matches.sort(
             key=lambda item: (
@@ -1444,15 +1345,15 @@ class VLMNavigationController(BaseNavigationController):
     def _entry_reaches_action_arrival_threshold(
         self,
         entry: Optional[Dict[str, Any]],
-        candidate_names: Optional[Sequence[str]] = None,
+        landmark_match_terms: Optional[Sequence[str]] = None,
     ) -> bool:
         if not entry:
             return False
         if self._is_stairs_like_text(entry.get("name")) or self._current_subtask_uses_stairs_like_landmark():
             return False
-        if not self._landmark_matches_current_subtask_destination(
+        if not self._landmark_matches_current_subtask_landmark(
             entry.get("name"),
-            candidate_names=candidate_names,
+            landmark_match_terms=landmark_match_terms,
         ):
             return False
 
@@ -1490,30 +1391,23 @@ class VLMNavigationController(BaseNavigationController):
             return float(self.ACTION_SUBTASK_AUTOCOMPLETE_OPEN_DISTANCE_M)
         return float(self.ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M)
 
-    def _get_current_subtask_landmark_candidates(self) -> List[str]:
-        _dest_room, dest_object = self._parse_subtask_destination()
-        candidates: List[str] = []
-        for raw_candidate in (
-            self._get_subtask_landmark_field(getattr(self, 'current_subtask', None)),
-            getattr(self, 'target_landmark', None),
-            dest_object,
-        ):
-            normalized = self._normalize_landmark_candidate(raw_candidate)
-            if normalized and normalized not in candidates:
-                candidates.append(normalized)
-        return candidates
+    def _get_current_subtask_landmark_match_terms(self) -> List[str]:
+        subtask_landmark = self._normalize_landmark_text(
+            self._get_subtask_landmark_field(getattr(self, 'current_subtask', None))
+        )
+        return [subtask_landmark] if subtask_landmark else []
 
     def _get_current_subtask_landmark_display_name(self) -> str:
         payload = getattr(self, 'current_subtask', None) or {}
-        for raw_candidate in (
+        for raw_landmark_source in (
             self._get_subtask_landmark_field(payload),
             self._get_next_waypoint_field(payload),
             getattr(self, 'target_landmark', None),
         ):
-            cleaned = strip_space_type_variant_suffixes(str(raw_candidate or "")).strip()
+            cleaned = strip_space_type_variant_suffixes(str(raw_landmark_source or "")).strip()
             if not cleaned:
                 continue
-            if "'s " in cleaned and raw_candidate == self._get_next_waypoint_field(payload):
+            if "'s " in cleaned and raw_landmark_source == self._get_next_waypoint_field(payload):
                 cleaned = cleaned.split("'s ", 1)[1].strip()
             cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,;:-")
             if cleaned:
@@ -1557,8 +1451,8 @@ class VLMNavigationController(BaseNavigationController):
         return f"[{clean_name}]{suffix}"
 
     def _get_latest_action_local_map_landmark_entries(self) -> List[Dict[str, Any]]:
-        latest_prompt_entries = self.landmark_memory.get_latest_prompt_entries()
-        history = self.landmark_memory.prompt_entries_by_step
+        latest_prompt_entries = self.landmark_memory_pool.get_latest_prompt_entries()
+        history = self.landmark_memory_pool.prompt_entries_by_step
         latest_history_step = max(history.keys(), default=-1)
         history_tail_count = len(history.get(latest_history_step, []) or []) if latest_history_step >= 0 else 0
         cache_key = (
@@ -1644,7 +1538,7 @@ class VLMNavigationController(BaseNavigationController):
         self.latest_action_local_map_debug_lines = self._build_action_landmark_overlay_lines(ordered_entries)
 
     def _get_action_landmark_prompt_entries(self, detection_step: Optional[int]) -> List[Dict[str, Any]]:
-        history = self.landmark_memory.prompt_entries_by_step
+        history = self.landmark_memory_pool.prompt_entries_by_step
         topk = max(1, int(LANDMARK_STRIP_TOPK))
         if detection_step is not None:
             entries = self._sort_action_landmark_entries(history.get(detection_step, []) or [])
@@ -1652,7 +1546,7 @@ class VLMNavigationController(BaseNavigationController):
                 return entries[:topk]
 
         latest_entries = self._sort_action_landmark_entries(
-            self.landmark_memory.get_latest_prompt_entries()
+            self.landmark_memory_pool.get_latest_prompt_entries()
         )
         if latest_entries:
             return latest_entries[:topk]
@@ -1709,7 +1603,7 @@ class VLMNavigationController(BaseNavigationController):
     def _build_previous_subtask_landmark_summary(self) -> str:
         entries = self._get_latest_action_local_map_landmark_entries()
         autocomplete_info = dict(getattr(self, "previous_subtask_autocomplete_landmark_info", {}) or {})
-        candidate_names = tuple(self._get_current_subtask_landmark_candidates())
+        landmark_match_terms = tuple(self._get_current_subtask_landmark_match_terms())
         cache_key = (
             int(getattr(self, "current_step", -1) or -1),
             tuple(
@@ -1724,7 +1618,7 @@ class VLMNavigationController(BaseNavigationController):
                 for entry in entries[:2]
             ),
             tuple(sorted((str(key), str(value)) for key, value in autocomplete_info.items())),
-            candidate_names,
+            landmark_match_terms,
         )
         if cache_key == getattr(self, "_previous_subtask_landmark_summary_cache_key", None):
             self.previous_subtask_landmark_final_info = dict(
@@ -1751,7 +1645,7 @@ class VLMNavigationController(BaseNavigationController):
                         for entry in entries[:2]
                     ),
                     tuple(sorted((str(key), str(value)) for key, value in autocomplete_info.items())),
-                    candidate_names,
+                    landmark_match_terms,
                 )
         if not entries:
             fallback_info = dict(autocomplete_info)
@@ -1771,7 +1665,7 @@ class VLMNavigationController(BaseNavigationController):
             return summary_text
         summary_items: List[str] = []
         info_entries: List[Dict[str, Any]] = []
-        landmark_arrival_candidates = list(candidate_names)
+        landmark_arrival_match_terms = list(landmark_match_terms)
         for rank, entry in enumerate(entries[:2], start=1):
             raw_name = str(entry.get("name") or "").strip() or "Unknown"
             distance_m = self._safe_float(entry.get("distance_m"))
@@ -1781,8 +1675,8 @@ class VLMNavigationController(BaseNavigationController):
                 entry,
                 is_opening_like=is_opening_like,
             )
-            entry_name_norm = self._normalize_landmark_candidate(raw_name)
-            autocomplete_name_norm = self._normalize_landmark_candidate(
+            entry_name_norm = self._normalize_landmark_text(raw_name)
+            autocomplete_name_norm = self._normalize_landmark_text(
                 autocomplete_info.get("raw_name") or autocomplete_info.get("name")
             )
             autocomplete_instance_uid = self._safe_int(autocomplete_info.get("instance_uid"))
@@ -1808,7 +1702,7 @@ class VLMNavigationController(BaseNavigationController):
             if not has_arrived:
                 has_arrived = self._entry_reaches_action_arrival_threshold(
                     entry,
-                    candidate_names=landmark_arrival_candidates,
+                    landmark_match_terms=landmark_arrival_match_terms,
                 )
             info = {
                 "raw_name": raw_name,
@@ -1862,32 +1756,32 @@ class VLMNavigationController(BaseNavigationController):
             keep_view_prefix=False,
         )
 
-    def _landmark_matches_current_subtask_destination(
+    def _landmark_matches_current_subtask_landmark(
         self,
         name: Optional[str],
-        candidate_names: Optional[Sequence[str]] = None,
+        landmark_match_terms: Optional[Sequence[str]] = None,
     ) -> bool:
-        normalized = self._normalize_landmark_candidate(name)
+        normalized = self._normalize_landmark_text(name)
         if not normalized:
             return False
 
-        candidates = list(candidate_names or self._get_current_subtask_landmark_candidates())
-        if not candidates:
+        match_terms = list(landmark_match_terms or self._get_current_subtask_landmark_match_terms())
+        if not match_terms:
             return False
 
         return any(
-            normalized == candidate or normalized in candidate or candidate in normalized
-            for candidate in candidates
+            normalized == match_term or normalized in match_term or match_term in normalized
+            for match_term in match_terms
         )
 
     def _get_current_action_step_landmark_entries(self) -> List[Dict[str, Any]]:
-        entries = self.landmark_memory.get_step_prompt_entries(self.current_step)
+        entries = self.landmark_memory_pool.get_step_prompt_entries(self.current_step)
         if entries:
             return entries
         latest_entries = self._get_latest_action_local_map_landmark_entries()
         if latest_entries:
             return latest_entries
-        return self.landmark_memory.get_step_visible_entries(self.current_step)
+        return self.landmark_memory_pool.get_step_visible_entries(self.current_step)
 
     def _save_waypoint_area_memory_snapshot(self) -> None:
         """Persist waypoint/space-area state for debugging after each planning update."""
@@ -2057,7 +1951,7 @@ class VLMNavigationController(BaseNavigationController):
         return get_episode_detail_dir(self.config.PATHS.RESULTS_DIR, self.current_episode_id)
 
     @classmethod
-    def _normalize_landmark_candidate(cls, text: Optional[str]) -> Optional[str]:
+    def _normalize_landmark_text(cls, text: Optional[str]) -> Optional[str]:
         """Normalize landmark text without forcing a short phrase length."""
         if not text:
             return None
@@ -2084,7 +1978,7 @@ class VLMNavigationController(BaseNavigationController):
         cleaned = " ".join(cleaned.split())
         if not cleaned:
             return None
-        return cls._normalize_landmark_candidate(cleaned)
+        return cls._normalize_landmark_text(cleaned)
 
     @classmethod
     def _extract_last_waypoint_chain_node(cls, waypoint_chain: Optional[str]) -> Optional[str]:
@@ -2186,8 +2080,8 @@ class VLMNavigationController(BaseNavigationController):
         )
 
     @classmethod
-    def _iter_landmark_source_candidates(cls, source: Optional[str]) -> List[str]:
-        """Extract object-like phrase candidates from structured fields."""
+    def _iter_landmark_source_terms(cls, source: Optional[str]) -> List[str]:
+        """Extract object-like landmark phrases from structured fields."""
         if not source:
             return []
 
@@ -2195,27 +2089,27 @@ class VLMNavigationController(BaseNavigationController):
         if not text:
             return []
 
-        candidates = [text]
+        source_terms = [text]
 
         if "Detection:" in text:
             detection_part = text.split("Detection:", 1)[1].split("|", 1)[0].strip()
             if detection_part:
-                candidates.append(detection_part)
+                source_terms.append(detection_part)
 
         if "'s" in text:
             tail = text.split("'s", 1)[1].strip()
             if tail:
-                candidates.append(tail)
+                source_terms.append(tail)
 
         for sep in ["|", ",", ";"]:
             if sep in text:
-                candidates.extend(
+                source_terms.extend(
                     part.strip() for part in text.split(sep) if part.strip()
                 )
 
         unique = []
         seen = set()
-        for item in candidates:
+        for item in source_terms:
             if item not in seen:
                 unique.append(item)
                 seen.add(item)
@@ -2228,16 +2122,16 @@ class VLMNavigationController(BaseNavigationController):
         fallback_sources: Optional[List[Optional[str]]] = None,
     ) -> Optional[str]:
         """Prefer the raw LLM output, then fall back to structured fields."""
-        primary_candidate = cls._normalize_landmark_candidate(subtask_landmark)
-        if primary_candidate:
-            return primary_candidate
+        primary_landmark = cls._normalize_landmark_text(subtask_landmark)
+        if primary_landmark:
+            return primary_landmark
 
         for source in fallback_sources or []:
-            for piece in cls._iter_landmark_source_candidates(source):
-                candidate = cls._normalize_landmark_candidate(piece)
-                if candidate:
-                    print(f"  [INFO] Fallback landmark: {candidate}")
-                    return candidate
+            for piece in cls._iter_landmark_source_terms(source):
+                fallback_landmark = cls._normalize_landmark_text(piece)
+                if fallback_landmark:
+                    print(f"  [INFO] Fallback landmark: {fallback_landmark}")
+                    return fallback_landmark
 
         return None
 
@@ -2270,7 +2164,7 @@ class VLMNavigationController(BaseNavigationController):
         self.tracked_landmark_classes.clear()
         self.target_landmark = None
         self.classes = []
-        self.landmark_memory.reset_subtask()
+        self.landmark_memory_pool.reset_subtask()
 
         detected = getattr(self, 'detected_classes', None)
         if detected is not None:
@@ -2552,12 +2446,12 @@ class VLMNavigationController(BaseNavigationController):
         if not space_part or not local_part:
             return cleaned
 
-        raw_candidates = [
+        raw_local_parts = [
             part.strip(" ,;:-")
             for part in re.split(r"\s*[\/|]\s*", local_part)
             if part.strip(" ,;:-")
         ]
-        if not raw_candidates:
+        if not raw_local_parts:
             return f"{space_part}'s {local_part}".strip()
 
         generic_tokens = {
@@ -2572,17 +2466,17 @@ class VLMNavigationController(BaseNavigationController):
             "zone",
         }
 
-        def _candidate_score(candidate: str) -> Tuple[int, int, int]:
-            normalized = re.sub(r"[^a-z0-9\s-]", " ", candidate.lower())
+        def _local_part_score(local_text: str) -> Tuple[int, int, int]:
+            normalized = re.sub(r"[^a-z0-9\s-]", " ", local_text.lower())
             words = [word for word in normalized.split() if word]
             informative_words = [word for word in words if word not in generic_tokens]
             return (
                 len(informative_words),
                 len(words),
-                len(candidate),
+                len(local_text),
             )
 
-        chosen_local_part = max(raw_candidates, key=_candidate_score).strip(" ,;:-")
+        chosen_local_part = max(raw_local_parts, key=_local_part_score).strip(" ,;:-")
         chosen_local_part = re.sub(r"\s+", " ", chosen_local_part).strip()
         if not chosen_local_part:
             chosen_local_part = local_part
@@ -3343,7 +3237,7 @@ class VLMNavigationController(BaseNavigationController):
     def _build_action_detected_landmarks_text(self, detection_step: Optional[int]) -> str:
         """Build the compact action-prompt landmark text from the current detection step."""
         if detection_step is not None:
-            step_landmarks = self.landmark_memory.get_step_detected(detection_step)
+            step_landmarks = self.landmark_memory_pool.get_step_detected(detection_step)
             if step_landmarks:
                 return ", ".join([name for name, _ in step_landmarks])
 
@@ -3421,9 +3315,9 @@ class VLMNavigationController(BaseNavigationController):
         detection_image = self._build_action_detection_image_input(last_step)
         action_landmark_map_info = build_action_landmark_map_info(
             step_landmark_entries=step_landmark_entries,
-            landmark_dist_map=self.landmark_memory.get_latest_dist_map(),
-            landmark_dist_map_multi=self.landmark_memory.get_latest_dist_map_multi(),
-            landmark_instances_world=self.landmark_memory.get_world_instances(),
+            landmark_dist_map=self.landmark_memory_pool.get_latest_dist_map(),
+            landmark_dist_map_multi=self.landmark_memory_pool.get_latest_dist_map_multi(),
+            landmark_instances_world=self.landmark_memory_pool.get_world_instances(),
         )
         self._log_action_landmark_debug("pre-action", step_landmark_entries)
 

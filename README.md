@@ -167,27 +167,10 @@ The original implementation returns `None` for unmatched phrases; the refined ve
 
 ### 6. Install SpaceVLN dependencies
 
-Set `CUDA_HOME` if GroundingDINO or CUDA extensions need it:
-
-```bash
-export CUDA_HOME=/usr/local/cuda-12.1
-```
-
-Install the validated dependency snapshot:
-
 ```bash
 cd /path/to/nav_ws/SpaceVLN
 pip install -r requirements.txt
 ```
-
-`requirements.txt` includes editable sibling installs for:
-
-```text
--e ../GroundingDINO
--e ../vlnce/habitat-lab
-```
-
-Therefore, keep the workspace layout above or adjust the editable paths in `requirements.txt`.
 
 ## Data and Checkpoints
 
