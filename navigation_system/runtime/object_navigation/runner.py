@@ -10,6 +10,7 @@ import json
 import multiprocessing
 import os
 import random
+import shutil
 import sys
 from pathlib import Path
 from typing import List, Sequence
@@ -643,6 +644,75 @@ def _filter_existing_sr1_specs(
     return kept
 
 
+def _prune_empty_parents(path: str | Path, *, stop_at: str | Path) -> None:
+    current = Path(path)
+    stop = Path(stop_at)
+    try:
+        current = current.resolve()
+    except FileNotFoundError:
+        current = current.absolute()
+    try:
+        stop = stop.resolve()
+    except FileNotFoundError:
+        stop = stop.absolute()
+
+    while current != stop and stop in current.parents:
+        try:
+            current.rmdir()
+        except OSError:
+            break
+        current = current.parent
+
+
+def _cleanup_entry_artifacts(
+    *,
+    results_dir: str,
+    storage_entry_id: int,
+    entry_kind: str,
+) -> None:
+    detail_root = Path(results_dir) / "detail"
+    log_root = Path(results_dir) / "log"
+
+    for detail_dir in get_episode_detail_path_candidates(
+        results_dir,
+        int(storage_entry_id),
+        entry_kind=entry_kind,
+    ):
+        detail_path = Path(detail_dir)
+        if detail_path.exists():
+            shutil.rmtree(detail_path, ignore_errors=True)
+            _prune_empty_parents(detail_path.parent, stop_at=detail_root)
+
+    for log_path in get_episode_log_path_candidates(
+        results_dir,
+        int(storage_entry_id),
+        entry_kind=entry_kind,
+    ):
+        candidate = Path(log_path)
+        if candidate.exists():
+            try:
+                candidate.unlink()
+            except IsADirectoryError:
+                shutil.rmtree(candidate, ignore_errors=True)
+            _prune_empty_parents(candidate.parent, stop_at=log_root)
+
+
+def _cleanup_interrupted_specs(*, results_dir: str, episode_specs: Sequence[dict]) -> None:
+    seen: set[tuple[str, int]] = set()
+    for spec in episode_specs:
+        storage_entry_id = int(spec.get("storage_entry_id", spec.get("episode_id", 0)) or 0)
+        entry_kind = str(spec.get("entry_kind", "episode") or "episode")
+        key = (entry_kind, storage_entry_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        _cleanup_entry_artifacts(
+            results_dir=results_dir,
+            storage_entry_id=storage_entry_id,
+            entry_kind=entry_kind,
+        )
+
+
 def _build_episode_summary_row(
     episode_id: int,
     result: dict,
@@ -804,7 +874,9 @@ def _run_parallel_episode_job(job_spec: dict) -> dict:
             storage_entry_id=storage_entry_id,
             entry_kind=entry_kind,
         )
-    except BaseException as exc:
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception as exc:
         result = {
             "success": False,
             "steps": 0,
@@ -851,11 +923,12 @@ def _run_parallel_episodes(
     next_job_cursor = 0
     results_by_order: List[dict | None] = [None] * total
     mp_context = multiprocessing.get_context("spawn")
-
-    with concurrent.futures.ProcessPoolExecutor(
+    interrupted = False
+    executor = concurrent.futures.ProcessPoolExecutor(
         max_workers=worker_count,
         mp_context=mp_context,
-    ) as executor:
+    )
+    try:
         future_to_job: dict[concurrent.futures.Future, dict] = {}
 
         def _submit_next_job(worker_index: int) -> bool:
@@ -880,16 +953,36 @@ def _run_parallel_episodes(
                 break
 
         while future_to_job:
-            done, _ = concurrent.futures.wait(
-                list(future_to_job.keys()),
-                return_when=concurrent.futures.FIRST_COMPLETED,
-            )
+            try:
+                done, _ = concurrent.futures.wait(
+                    list(future_to_job.keys()),
+                    return_when=concurrent.futures.FIRST_COMPLETED,
+                )
+            except KeyboardInterrupt:
+                interrupted = True
+                for pending_future in list(future_to_job.keys()):
+                    pending_future.cancel()
+                _cleanup_interrupted_specs(
+                    results_dir=args.results_dir,
+                    episode_specs=list(future_to_job.values()),
+                )
+                raise
             for future in done:
                 job_spec = future_to_job.pop(future)
                 order_index = int(job_spec["index"]) - 1
                 try:
                     results_by_order[order_index] = future.result()
-                except BaseException as exc:
+                except (KeyboardInterrupt, SystemExit):
+                    interrupted = True
+                    future.cancel()
+                    _cleanup_interrupted_specs(
+                        results_dir=args.results_dir,
+                        episode_specs=[job_spec, *list(future_to_job.values())],
+                    )
+                    for pending_future in list(future_to_job.keys()):
+                        pending_future.cancel()
+                    raise
+                except Exception as exc:
                     results_by_order[order_index] = {
                         "episode_id": int(job_spec["episode_id"]),
                         "sample_index": job_spec.get("sample_index"),
@@ -905,6 +998,8 @@ def _run_parallel_episodes(
                         "error": str(exc),
                     }
                 _submit_next_job(int(job_spec["worker_index"]))
+    finally:
+        executor.shutdown(wait=not interrupted)
 
     return [item for item in results_by_order if item is not None]
 
@@ -1432,69 +1527,83 @@ def main(argv: Sequence[str] | None = None) -> int:
     os.makedirs(args.results_dir, exist_ok=True)
     total = len(selected_specs)
 
-    if int(args.parallel_workers or 1) > 1 and total > 1:
-        selection_label = (
-            "split-order sample index"
-            if args.start_index is not None
-            else "ascending episode id"
-        )
+    try:
+        if int(args.parallel_workers or 1) > 1 and total > 1:
+            selection_label = (
+                "split-order sample index"
+                if args.start_index is not None
+                else "ascending episode id"
+            )
+            print(
+                f"[OVON-ObjectNav] parallel execution enabled | workers={int(args.parallel_workers)} | "
+                f"episodes={total} | selection={selection_label} | completion logs may interleave",
+            )
+            all_results = _run_parallel_episodes(args, selected_specs)
+        else:
+            all_results = []
+            for index, episode_spec in enumerate(selected_specs, 1):
+                episode_id = int(episode_spec["episode_id"])
+                sample_index = episode_spec.get("sample_index")
+                print(
+                    build_episode_start_summary(
+                        episode_id=int(episode_id),
+                        sample_index=sample_index,
+                        index=index,
+                        total=total,
+                    ),
+                    flush=True,
+                )
+                try:
+                    result = _run_one_episode(
+                        ovon_config=ovon_config,
+                        api_config_path=args.vlm_api_config,
+                        episode_id=episode_id,
+                        results_dir=args.results_dir,
+                        max_subtask_steps=args.max_subtask_steps,
+                        save_step_images=bool(args.save_step_images),
+                        save_gif=bool(args.save_gif),
+                        model_stack_builder=model_stack_builder,
+                        base_dataset=discovery_dataset,
+                        episode_lookup=episode_lookup,
+                        sample_index=(
+                            int(sample_index) if sample_index is not None else None
+                        ),
+                        storage_entry_id=int(
+                            episode_spec.get("storage_entry_id", episode_id)
+                        ),
+                        entry_kind=str(episode_spec.get("entry_kind", "episode") or "episode"),
+                    )
+                except KeyboardInterrupt:
+                    _cleanup_interrupted_specs(
+                        results_dir=args.results_dir,
+                        episode_specs=[episode_spec],
+                    )
+                    raise
+                summary_row = _build_episode_summary_row(
+                    int(episode_id),
+                    result,
+                    sample_index=(
+                        int(sample_index) if sample_index is not None else None
+                    ),
+                )
+                print(
+                    build_episode_console_summary(
+                        episode_id=int(episode_id),
+                        sample_index=sample_index,
+                        index=index,
+                        total=total,
+                        result=summary_row,
+                        metrics=_build_console_metrics(summary_row),
+                    ),
+                    flush=True,
+                )
+                all_results.append(summary_row)
+    except KeyboardInterrupt:
         print(
-            f"[OVON-ObjectNav] parallel execution enabled | workers={int(args.parallel_workers)} | "
-            f"episodes={total} | selection={selection_label} | completion logs may interleave",
+            "\n[OVON-ObjectNav] interrupted by user; incomplete jobs were discarded.",
+            flush=True,
         )
-        all_results = _run_parallel_episodes(args, selected_specs)
-    else:
-        all_results = []
-        for index, episode_spec in enumerate(selected_specs, 1):
-            episode_id = int(episode_spec["episode_id"])
-            sample_index = episode_spec.get("sample_index")
-            print(
-                build_episode_start_summary(
-                    episode_id=int(episode_id),
-                    sample_index=sample_index,
-                    index=index,
-                    total=total,
-                ),
-                flush=True,
-            )
-            result = _run_one_episode(
-                ovon_config=ovon_config,
-                api_config_path=args.vlm_api_config,
-                episode_id=episode_id,
-                results_dir=args.results_dir,
-                max_subtask_steps=args.max_subtask_steps,
-                save_step_images=bool(args.save_step_images),
-                save_gif=bool(args.save_gif),
-                model_stack_builder=model_stack_builder,
-                base_dataset=discovery_dataset,
-                episode_lookup=episode_lookup,
-                sample_index=(
-                    int(sample_index) if sample_index is not None else None
-                ),
-                storage_entry_id=int(
-                    episode_spec.get("storage_entry_id", episode_id)
-                ),
-                entry_kind=str(episode_spec.get("entry_kind", "episode") or "episode"),
-            )
-            summary_row = _build_episode_summary_row(
-                int(episode_id),
-                result,
-                sample_index=(
-                    int(sample_index) if sample_index is not None else None
-                ),
-            )
-            print(
-                build_episode_console_summary(
-                    episode_id=int(episode_id),
-                    sample_index=sample_index,
-                    index=index,
-                    total=total,
-                    result=summary_row,
-                    metrics=_build_console_metrics(summary_row),
-                ),
-                flush=True,
-            )
-            all_results.append(summary_row)
+        return 130
 
     aggregate = _build_aggregate(all_results)
     success_distance_m = _resolve_success_distance_from_ovon_config(ovon_config)

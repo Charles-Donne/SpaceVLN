@@ -35,9 +35,12 @@ from navigation_system.runtime.object_navigation.thresholds import (
     OVON_AUTOCOMPLETE_SOLID_M,
     OVON_AUTOCOMPLETE_TOPK,
     OVON_FINAL_OBJECT_STOP_DISTANCE_M,
+    OVON_FINAL_OBJECT_LANDMARK_TOPK,
     OVON_FORCED_EARLY_STOP_DISTANCE_M,
     OVON_FORCED_EARLY_STOP_MAX_DELTA_M,
     OVON_FORCED_EARLY_STOP_THINKING_POINTS,
+    OVON_TARGET_BOX_THRESHOLD,
+    OVON_TARGET_TEXT_THRESHOLD,
 )
 from navigation_system.vlm.interfaces import NavigationModelStackBuilder
 
@@ -60,6 +63,22 @@ class OVONObjectNavigationController(VLMNavigationController):
         self.ovon_forced_early_stop_subtask_history = []
         self.ovon_stop_gate_requested = False
         self.ovon_stop_gate_rejection_notice = ""
+
+    def _get_landmark_detection_thresholds(
+        self,
+        landmark_query: Optional[str],
+    ) -> Optional[Tuple[Optional[float], Optional[float]]]:
+        if self._ovon_text_contains_goal_label(landmark_query):
+            return float(OVON_TARGET_BOX_THRESHOLD), float(OVON_TARGET_TEXT_THRESHOLD)
+        return super()._get_landmark_detection_thresholds(landmark_query)
+
+    def _get_current_subtask_landmark_candidates(self) -> List[str]:
+        if self._ovon_is_final_object_stage():
+            goal_name = self._ovon_goal_object_name()
+            normalized_goal = self._normalize_landmark_candidate(goal_name)
+            if normalized_goal:
+                return [normalized_goal]
+        return super()._get_current_subtask_landmark_candidates()
 
     def reset_episode(self, episode_id: int = None, sample_index: int = None):
         """Reset OVON state while storing artifacts under sample-index paths."""
@@ -130,6 +149,57 @@ class OVONObjectNavigationController(VLMNavigationController):
 
         subtask_landmark = self._get_subtask_landmark_field(current_subtask)
         return self._ovon_text_contains_goal_label(subtask_landmark)
+
+    def _get_action_landmark_topk(self) -> int:
+        if self._ovon_is_final_object_stage():
+            return int(OVON_FINAL_OBJECT_LANDMARK_TOPK)
+        return int(self.ACTION_SUBTASK_AUTOCOMPLETE_TOPK)
+
+    def _ovon_select_final_stage_landmark_entries(
+        self,
+        entries: Sequence[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        ordered_entries = [
+            dict(entry)
+            for entry in (entries or [])
+            if isinstance(entry, dict)
+        ]
+        if not self._ovon_is_final_object_stage():
+            return self._sort_action_landmark_entries(ordered_entries)
+
+        target_entries = [
+            entry
+            for entry in ordered_entries
+            if self._ovon_text_contains_goal_label(entry.get("name"))
+        ]
+        target_entries.sort(
+            key=lambda entry: (
+                -float(self._safe_float(entry.get("confidence")) or 0.0),
+                self._safe_float(entry.get("distance_m"))
+                if self._safe_float(entry.get("distance_m")) is not None
+                else float("inf"),
+                self._safe_int(entry.get("selection_rank"))
+                if self._safe_int(entry.get("selection_rank")) is not None
+                else 1e9,
+                str(entry.get("name", "")),
+            )
+        )
+        return target_entries[: max(1, int(OVON_FINAL_OBJECT_LANDMARK_TOPK))]
+
+    def _get_latest_action_local_map_landmark_entries(self) -> List[Dict[str, Any]]:
+        return self._ovon_select_final_stage_landmark_entries(
+            super()._get_latest_action_local_map_landmark_entries()
+        )
+
+    def _get_action_landmark_prompt_entries(self, detection_step: Optional[int]) -> List[Dict[str, Any]]:
+        return self._ovon_select_final_stage_landmark_entries(
+            super()._get_action_landmark_prompt_entries(detection_step)
+        )
+
+    def _get_current_action_step_landmark_entries(self) -> List[Dict[str, Any]]:
+        return self._ovon_select_final_stage_landmark_entries(
+            super()._get_current_action_step_landmark_entries()
+        )
 
     def __init__(
         self,

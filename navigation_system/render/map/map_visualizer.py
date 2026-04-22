@@ -826,6 +826,15 @@ class MapVisualizer:
         if landmark_memory is not None:
             landmark_memory.set_world_instances(landmark_instances_world)
 
+        action_landmark_topk = max(1, int(local_map_landmark_topk))
+        if controller is not None:
+            topk_getter = getattr(controller, "_get_action_landmark_topk", None)
+            if callable(topk_getter):
+                try:
+                    action_landmark_topk = max(1, int(topk_getter()))
+                except (TypeError, ValueError):
+                    action_landmark_topk = max(1, int(local_map_landmark_topk))
+
         locked_action_landmark_entries = (
             landmark_memory.get_latest_prompt_entries()
             if landmark_memory is not None else []
@@ -839,12 +848,12 @@ class MapVisualizer:
             action_landmark_context = self._build_action_landmark_context_from_locked_entries(
                 landmark_instances_world,
                 locked_action_landmark_entries,
-                topk=local_map_landmark_topk,
+                topk=action_landmark_topk,
             )
         else:
             action_landmark_context = self._build_action_landmark_context(
                 landmark_instances_world,
-                topk=local_map_landmark_topk,
+                topk=action_landmark_topk,
             )
         selected_action_landmark_instances = list(action_landmark_context.get("selected_instances", []) or [])
         try:
@@ -906,7 +915,7 @@ class MapVisualizer:
                 )
             local_map_debug_lines = self._build_local_map_landmark_debug_lines(
                 selected_action_landmark_instances,
-                topk=local_map_landmark_topk,
+                topk=action_landmark_topk,
             )
             if not local_map_debug_lines and controller is not None:
                 local_map_debug_lines = list(

@@ -1,113 +1,91 @@
 # SpaceVLN
 
-SpaceVLN is a modular vision-language navigation system for continuous VLN-CE evaluation in Habitat. The repository integrates hierarchical language-conditioned planning, action selection, explicit spatial structure modeling, landmark-centric perception, grounded visual reasoning, batch evaluation utilities, and an isolated ablation subsystem for controlled analysis.
+SpaceVLN is a research codebase for vision-and-language navigation in continuous Habitat environments. It integrates VLM-based hierarchical planning, action-level visual decision making, explicit space-structure reasoning, landmark-centric perception, qualitative rendering, batch evaluation, and controlled ablation experiments.
 
-The implementation is built on ideas and engineering components inherited from prior embodied navigation systems, in particular `NaVid-VLN-CE` and `CA-Nav`, while adapting the full runtime to a Habitat-based continuous evaluation stack with GroundingDINO/SAM-style perception and a reorganized experimental interface.
+The system is built on the Habitat VLN-CE ecosystem and adapts components and design ideas from prior embodied navigation projects, especially [NaVid-VLN-CE](https://github.com/jzhzhang/NaVid-VLN-CE), [CA-Nav-code](https://github.com/Chenkehan21/CA-Nav-code), Habitat-Lab / Habitat-Sim, GroundingDINO, and Segment Anything.
 
 ## Abstract
 
-## Overview
+## Highlights
 
-This repository is intended to serve as an experimental research codebase rather than a minimal demo. Relative to the upstream projects it builds upon, the current codebase emphasizes:
-
-- a unified navigation runtime for planner/action VLM inference;
-- explicit `space structure` and `landmark` representations for navigation state;
-- modular rendering for thinking views, action views, and replay artifacts;
-- persistent run artifacts for qualitative analysis and failure diagnosis;
-- isolated ablation experiments that do not modify the original system prompts in place.
-
-The repository is **not** a line-by-line reproduction of any single upstream project. Instead, it consolidates and adapts ideas from:
-
-- `NaVid-VLN-CE`: <https://github.com/jzhzhang/NaVid-VLN-CE>
-- `CA-Nav-code`: <https://github.com/Chenkehan21/CA-Nav-code>
-- `Habitat-Lab`: <https://github.com/facebookresearch/habitat-lab>
-- `Habitat-Sim`: <https://github.com/facebookresearch/habitat-sim>
-- `GroundingDINO`: <https://github.com/IDEA-Research/GroundingDINO>
-- `Grounded-Segment-Anything`: <https://github.com/IDEA-Research/Grounded-Segment-Anything>
-- `VLN-CE`: <https://github.com/jacobkrantz/VLN-CE>
-
-## Validated Software Stack
-
-The current SpaceVLN codebase is organized around a **legacy but validated Habitat stack** rather than the latest Habitat releases.
-
-### Core stack used by this repository
-
-- Python: `3.8`
-- Habitat-Lab: `0.1.7`
-- Habitat-Sim: `0.1.7`
-- GroundingDINO: `0.1.0`
-- PyTorch: install a CUDA-compatible build for your machine
-- Python package snapshot: synchronized from the validated `spatial_agent` conda environment
-
-### Important note
-
-The official current Habitat documentation now targets newer Python versions. However, this repository imports legacy `habitat`, `habitat_baselines`, and `habitat_sim` interfaces that are consistent with the `0.1.7` generation of Habitat-Lab / Habitat-Sim. For reproducibility, we recommend staying on that stack unless you explicitly plan to port the code.
+- VLM planner and VLM action executor with standard and explicit-context-cache runtimes.
+- Persistent spatial memory with space waypoints, area labels, landmark memory, and map-rendered reasoning evidence.
+- VLN-CE and OVON-style object navigation launchers under a unified workspace layout.
+- GroundingDINO + SAM perception interface for open-vocabulary landmark grounding.
+- Full run artifacts: prompts, responses, step views, maps, per-episode logs, reports, and optional replay visualizations.
+- Isolated ablation subsystem under `navigation_system/ablation/` for subtractive studies without editing the main prompt templates in place.
 
 ## Repository Layout
 
 ```text
 SpaceVLN/
 ├── navigation_system/
-│   ├── controller/        # navigation control loop
-│   ├── vlm/               # planner, executor, prompts, API clients
-│   ├── space/             # map, topology, landmarks, spatial descriptors
-│   ├── render/            # thinking/action visual inputs and replay outputs
-│   ├── runtime/           # runners, batch execution, reports, storage
-│   ├── detection/         # GroundingDINO + SAM / RepViT-SAM integration
-│   └── ablation/          # isolated ablation subsystem
-├── habitat_extensions/    # Habitat task, sensors, measures, simulator extensions
-├── run_navigation/               # shell entrypoints for evaluation and reporting
-├── docs/                  # architecture and deployment notes
-└── vlm_navigation*.py     # Python entrypoints
+│   ├── controller/              # navigation controllers and runtime orchestration
+│   ├── vlm/                     # VLM prompts, API clients, planner/action executors
+│   ├── object_navigation/       # OVON/object-navigation runtime and prompts
+│   ├── space/                   # semantic maps, topology, landmarks, spatial formatting
+│   ├── render/                  # thinking/action view rendering and episode visualization
+│   ├── detection/               # GroundingDINO/SAM integration
+│   ├── runtime/                 # launch, storage, reporting, metrics utilities
+│   └── ablation/                # ablation configs, prompt variants, wrappers
+├── habitat_extensions/          # VLN-CE Habitat task, sensors, measures, config
+├── run_navigation/              # canonical bash launchers
+├── docs/                        # architecture / deployment notes
+├── requirements.txt             # validated Python dependency snapshot
+├── vlm_navigation.py            # VLN-CE Python entrypoint
+└── object_navigation.py         # OVON Python entrypoint
 ```
 
-## Recommended Workspace Layout
-
-The default configuration assumes the following workspace organization:
+Recommended workspace layout:
 
 ```text
 nav_ws/
 ├── SpaceVLN/
 ├── vlnce/
-│   ├── habitat-lab/
-│   └── habitat-sim/
-├── ovon/
-│   ├── habitat-lab-v0.2.3/
-│   └── habitat-sim-v0.2.3/
-├── GroundingDINO/
-└── data/
-    ├── datasets/
-    ├── scene_datasets/
-    └── model/
-        └── grounded_sam/
+│   └── habitat-lab/             # Habitat-Lab v0.1.7 source tree
+├── GroundingDINO/               # GroundingDINO source tree
+├── data/
+│   ├── datasets/
+│   ├── scene_datasets/
+│   └── model/grounded_sam/
+└── result/                      # default output root
 ```
 
-By default, SpaceVLN expects:
+The repository is configured to prefer workspace-relative paths. If datasets or results must live on another disk, keep the default config paths and create symlinks at `nav_ws/data` and/or `nav_ws/result`.
 
-- Habitat/VLN datasets under `../data/datasets/`
-- scene assets under `../data/scene_datasets/`
-- detection checkpoints under `../data/model/grounded_sam/`
-- a local editable `habitat-lab` source tree at `../vlnce/habitat-lab`
-- a local editable `GroundingDINO` source tree at `../GroundingDINO`
+## Validated Software Stack
 
-If your directory layout differs, update:
+The VLN-CE runtime uses the legacy Habitat generation required by VLN-CE-style continuous navigation:
 
-- `habitat_extensions/config/spacevln_task.yaml`
-- `navigation_system/config/system/00_runtime.yaml`
-- `navigation_system/config/system/10_detection_models.yaml`
+- Python `3.8`
+- Habitat-Sim `0.1.7`
+- Habitat-Lab `0.1.7`
+- GroundingDINO commit `57535c5a79791cb76e36fdb64975271354f10251`
+- Segment Anything from `facebookresearch/segment-anything`
+- CUDA-enabled PyTorch matching your local CUDA driver/runtime
+
+Newer Habitat releases are not drop-in replacements for this VLN-CE stack. Use the versions above unless you intend to port the code.
 
 ## Installation
 
-### 1. Create a Python environment
+The commands below assume the workspace root is `nav_ws/` and this repository is cloned as `nav_ws/SpaceVLN`.
+
+### 1. Create the conda environment
 
 ```bash
-conda create -n spacevln python=3.8 cmake=3.14.0 -y
+conda create -n spacevln python=3.8 -y
 conda activate spacevln
+```
+
+Optional but useful build tools:
+
+```bash
+conda install -c conda-forge cmake=3.14.0 ninja -y
 ```
 
 ### 2. Install PyTorch
 
-Install a CUDA-compatible PyTorch build appropriate for your machine. One tested example is:
+Install a CUDA build that matches your machine. For example, for CUDA 12.1 wheels:
 
 ```bash
 pip install --extra-index-url https://download.pytorch.org/whl/cu121 \
@@ -116,366 +94,297 @@ pip install --extra-index-url https://download.pytorch.org/whl/cu121 \
   torchaudio==2.1.2+cu121
 ```
 
-If you use a different CUDA runtime, replace the wheels accordingly.
+If your CUDA runtime is different, replace the wheel index and versions accordingly.
 
-### 3. Install Habitat-Sim
+### 3. Install Habitat-Sim 0.1.7
 
-For this repository, `habitat-sim==0.1.7` via conda is the recommended installation path.
+Recommended conda installation:
 
 ```bash
-conda install habitat-sim=0.1.7 headless withbullet -c conda-forge -c aihabitat
+conda install -c aihabitat -c conda-forge \
+  habitat-sim=0.1.7=py3.8_headless_linux_856d4b08c1a2632626bf0d205bf46471a99502b7 -y
 ```
 
-Remarks:
-
-- `headless` is recommended for servers and multi-GPU machines.
-- `withbullet` is recommended for consistency with Habitat installation guidance.
-- If you require a display-attached build, adjust the conda flags accordingly.
-
-### 4. Clone sibling source repositories
-
-Clone the external source repositories expected by the current SpaceVLN workspace layout:
+For unstable networks, download the matching `habitat-sim` package from the conda package page and install it locally:
 
 ```bash
-cd ..
+conda install /path/to/habitat-sim-0.1.7-py3.8_headless_linux_856d4b08c1a2632626bf0d205bf46471a99502b7.tar.bz2
+```
+
+### 4. Install Habitat-Lab 0.1.7
+
+```bash
+cd /path/to/nav_ws
 mkdir -p vlnce
-git clone https://github.com/facebookresearch/habitat-lab.git vlnce/habitat-lab
+git clone --branch v0.1.7 https://github.com/facebookresearch/habitat-lab.git vlnce/habitat-lab
+cd vlnce/habitat-lab
+```
+
+Install Habitat-Lab and Habitat-Baselines:
+
+```bash
+python -m pip install -r requirements.txt
+python -m pip install -r habitat_baselines/rl/requirements.txt
+python -m pip install -r habitat_baselines/rl/ddppo/requirements.txt
+python setup.py develop --all
+```
+
+If installation fails because of legacy TensorFlow constraints, remove/comment `tensorflow==1.13.1` from `habitat_baselines/rl/requirements.txt`, then rerun the commands above. Network-related failures are common with this old stack; rerunning the failed command is often sufficient.
+
+### 5. Install GroundingDINO and Segment Anything
+
+```bash
+cd /path/to/nav_ws
 git clone https://github.com/IDEA-Research/GroundingDINO.git
+cd GroundingDINO
+git checkout -q 57535c5a79791cb76e36fdb64975271354f10251
+pip install -e .
+pip install 'git+https://github.com/facebookresearch/segment-anything.git'
+pip install nltk
 ```
 
-Notes:
+#### Recommended GroundingDINO phrase-to-class refinement
 
-- the current `requirements.txt` installs both repositories in editable mode from sibling paths;
-- the validated Habitat-Lab source tree used with this system exposes both `habitat` and `habitat_baselines`.
+For more stable phrase-to-class mapping, refine `GroundingDINO/groundingdino/util/inference.py` by replacing the original `phrases2classes` implementation with an edit-distance fallback:
 
-### 5. Install SpaceVLN Python dependencies
+```python
+from nltk.metrics import edit_distance
 
-Before installation, set `CUDA_HOME` for GroundingDINO compilation:
-
-```bash
-export CUDA_HOME=/path/to/your/cuda
+@staticmethod
+def phrases2classes(phrases: List[str], classes: List[str]) -> np.ndarray:
+    class_ids = []
+    for phrase in phrases:
+        if phrase in classes:
+            class_ids.append(classes.index(phrase))
+        else:
+            distances = np.array([edit_distance(phrase, class_id) for class_id in classes])
+            idx = np.argmin(distances)
+            class_ids.append(idx)
+    return np.array(class_ids)
 ```
 
-Then return to SpaceVLN and install the validated dependency snapshot:
+The original implementation returns `None` for unmatched phrases; the refined version maps each phrase to the nearest class name and produces more stable open-vocabulary detection outputs.
+
+### 6. Install SpaceVLN dependencies
+
+Set `CUDA_HOME` if GroundingDINO or CUDA extensions need it:
 
 ```bash
-cd ../SpaceVLN
+export CUDA_HOME=/usr/local/cuda-12.1
+```
+
+Install the validated dependency snapshot:
+
+```bash
+cd /path/to/nav_ws/SpaceVLN
 pip install -r requirements.txt
 ```
 
-This requirements file is intentionally aligned with the currently validated `spatial_agent` environment. The README still recommends creating a fresh environment named `spacevln`, but the version pins are synchronized from that validated runtime snapshot.
+`requirements.txt` includes editable sibling installs for:
+
+```text
+-e ../GroundingDINO
+-e ../vlnce/habitat-lab
+```
+
+Therefore, keep the workspace layout above or adjust the editable paths in `requirements.txt`.
 
 ## Data and Checkpoints
 
-### Navigation datasets
-
-The default task configuration reads:
-
-- `../data/datasets/R2R_VLNCE_v1-3_preprocessed/val_unseen.json.gz`
-- `../data/datasets/R2R_VLNCE_v1-3_preprocessed/val_unseen_gt.json.gz`
-- `../data/scene_datasets/`
-
-These paths are defined in `habitat_extensions/config/spacevln_task.yaml`.
-
-Path policy recommendation:
-
-- keep dataset paths as workspace-relative defaults (do not hardcode absolute paths in repo configs);
-- keep workspace default mount point at `nav_ws/data`;
-- if data must live on another disk, keep config unchanged and create a symlink at `nav_ws/data`.
-
-### Detection checkpoints
-
-Detection model paths are defined in:
-
-- `navigation_system/config/system/10_detection_models.yaml`
-
-The expected layout is:
+Expected dataset/checkpoint layout:
 
 ```text
-../data/model/grounded_sam/
-├── GroundingDINO_SwinT_OGC.py
-├── groundingdino_swint_ogc.pth
-├── sam_vit_h_4b8939.pth
-└── repvit_sam.pt
+nav_ws/data/
+├── datasets/
+│   ├── R2R_VLNCE_v1-3_preprocessed/
+│   │   ├── val_unseen.json.gz
+│   │   └── val_unseen_gt.json.gz
+│   └── ovon/hm3d/v1/val_unseen/val_unseen_hard.json.gz
+├── scene_datasets/
+└── model/grounded_sam/
+    ├── GroundingDINO_SwinT_OGC.py
+    ├── groundingdino_swint_ogc.pth
+    ├── sam_vit_h_4b8939.pth
+    └── repvit_sam.pt
 ```
 
-Notes:
+Important config files:
 
-- `GroundingDINO_SwinT_OGC.py` can be copied from the GroundingDINO repository, or the config path can be redirected to the source tree.
-- If RepViT-SAM is unavailable, set `USE_REPVIT_SAM: false` in `navigation_system/config/system/10_detection_models.yaml`.
+- VLN-CE task/data paths: `habitat_extensions/config/spacevln_task.yaml`
+- OVON dataset path: `navigation_system/config/experiments/ovon_val_unseen_eval.yaml`
+- detection checkpoint paths: `navigation_system/config/system/10_detection_models.yaml`
+- default result path policy: `navigation_system/config/system/00_runtime.yaml`
 
-## API Configuration
+If `repvit_sam.pt` is unavailable, set `USE_REPVIT_SAM: false` in `navigation_system/config/system/10_detection_models.yaml`.
 
-SpaceVLN does not commit active provider credentials. Create local configuration files from the templates in `navigation_system/config/vlm/`.
+## VLM API Configuration
 
-### Standard runtime
+Runtime credentials are not committed. Create local config files from templates:
 
 ```bash
 cp navigation_system/config/vlm/vlm_api_config.yaml.template \
    navigation_system/config/vlm/vlm_api_config.yaml
-```
 
-### Explicit-context-cache runtime
-
-```bash
 cp navigation_system/config/vlm/vlm_api_config_context_cache.yaml.template \
    navigation_system/config/vlm/vlm_api_config_context_cache.yaml
 ```
 
-Both templates are written to prefer environment variables such as:
+The templates can read provider keys from environment variables such as:
 
-- `OPENAI_API_KEY`
 - `DASHSCOPE_API_KEY`
+- `OPENAI_API_KEY`
 - `OPENROUTER_API_KEY`
 
-## Running Evaluation
+## Running Experiments
 
-### Standard evaluation
+### VLN-CE
+
+Standard runtime:
 
 ```bash
 bash run_navigation/vlnce.sh 1 10 260 4
 ```
 
-This runs:
-
-- starting episode ID: `1`
-- number of episodes: `10`
-- max episode steps: `260`
-- parallel workers: `4`
-
-### Explicit-context-cache evaluation
+Explicit-context-cache runtime:
 
 ```bash
 bash run_navigation/vlnce.sh --runtime context_cache 1 10 260 4
 ```
 
-### Single-episode evaluation
+Common argument pattern:
+
+```text
+start_episode num_episodes max_steps parallel_workers
+```
+
+Examples:
 
 ```bash
 bash run_navigation/vlnce.sh 832
 bash run_navigation/vlnce.sh 832 300
-```
-
-### Random evaluation
-
-```bash
 bash run_navigation/vlnce.sh random 20 260 all 4
-```
-
-### Direct Python entrypoint
-
-```bash
-python vlm_navigation.py \
-  --exp-config navigation_system/config/experiments/r2r_eval.yaml \
-  --runtime standard \
-  --episode-id 1 \
-  --num-episodes 10 \
-  --max-steps 260 \
-  --parallel-workers 4 \
-  --vlm-api-config navigation_system/config/vlm/vlm_api_config.yaml
-```
-
-Help menus:
-
-```bash
 bash run_navigation/vlnce.sh --help
 ```
 
-### CLI Output Policy
-
-Default runtime output is intentionally compact:
-
-- keep: episode start/end lines, failure/error diagnostics, final run summary;
-- suppress: verbose per-request cache hit/cost logs in command line.
-
-For context-cache runs, cache statistics are still persisted to result artifacts:
-
-- `result/.../reports/cache/cache_report.json`
-- `result/.../reports/cache/cache_report.txt`
-
-### Unified Path Policy
-
-To keep repository structure upload-friendly and team-consistent:
-
-- use default workspace paths for both read/write:
-  - data root: `nav_ws/data`
-  - result root: `nav_ws/result`
-- keep `--results-root` / `--results-dir` interfaces for compatibility only;
-- for daily runs, do not override paths in commands.
-
-If you need to place heavy data/results on another disk, keep defaults in config and create symlinks from default workspace paths to absolute target paths.
-
-### Symlink Storage Setup
-
-Use the helper script:
+### OVON / Object Navigation
 
 ```bash
-bash run_navigation/setup_storage_symlinks.sh --help
+bash run_navigation/object_navigation.sh --runtime context_cache 1 10 500 4
 ```
 
-Common examples:
+Examples:
 
 ```bash
-# move only result storage to another disk (recommended first step)
-bash run_navigation/setup_storage_symlinks.sh \
-  --result-target /abs/path/to/nav_ws_storage/result \
-  --backup-existing
-
-# move both data and result storage to another disk
-bash run_navigation/setup_storage_symlinks.sh \
-  --disk-root /abs/path/to/nav_ws_storage \
-  --both \
-  --backup-existing
-
-# preview operations only
-bash run_navigation/setup_storage_symlinks.sh \
-  --disk-root /abs/path/to/nav_ws_storage \
-  --both \
-  --backup-existing \
-  --dry-run
+bash run_navigation/object_navigation.sh --episode-id 1074
+bash run_navigation/object_navigation.sh --episode-ids 1074,1081
+bash run_navigation/object_navigation.sh --run-config navigation_system/config/experiments/ovon_val_unseen_eval.yaml --num-episodes 10
+bash run_navigation/object_navigation.sh --help
 ```
 
-This keeps code/config paths unified while allowing storage placement on large disks.
+### Ablation Studies
 
-### Reporting Existing Episode Logs
-
-Use the reporting entrypoint to summarize already-generated episode logs without rerunning navigation:
-
-```bash
-bash run_navigation/report_range.sh --help
-```
-
-Common examples:
-
-```bash
-# report a fixed id range for one model directory
-bash run_navigation/report_range.sh 1500 1799 qwen3.5-plus__qwen3.5-flash_cache
-
-# report all available logged episodes in one model directory
-bash run_navigation/report_range.sh all all qwen3.5-plus__qwen3.5-flash_cache
-
-# report all available logged episodes under results root (all models)
-bash run_navigation/report_range.sh --start-id all --end-id all --results all
-
-# report multiple models in one command
-bash run_navigation/report_range.sh --results qwen3.5-plus__qwen3.5-flash_cache,gemini2.5pro__gemini2.5flash
-```
-
-Notes:
-
-- The script no longer enforces a hardcoded `1800` upper bound in shell logic; it resolves episode bounds from the selected test dataset in `--exp-config`.
-- `all` is supported for both `start-id` and `end-id`.
-- If both bounds are omitted, it reports over all currently existing logs.
-- `results` accepts an absolute path, an existing relative path, a model directory name under `result/vlnce/`, a comma-separated list, or `all`.
-
-## Ablation Studies
-
-The ablation subsystem is isolated under `navigation_system/ablation/` and is designed to perform **subtractive ablations** without modifying the original main-system prompt templates in place.
-
-Supported presets include:
-
-- `landmark`
-- `space_structure`
-- `planning_reasoning` / `thinking_reasoning`
-- `action_reasoning`
-- `planning_action_reasoning` / `thinking_action_reasoning`
-- `both`
-
-Example commands:
+Ablation presets are isolated under `navigation_system/ablation/`.
 
 ```bash
 bash run_navigation/vlnce.sh --ablation landmark 1 100 260 4
+bash run_navigation/vlnce.sh --ablation space_structure 1 100 260 4
 bash run_navigation/vlnce.sh --ablation planning_action_reasoning 1 100 260 4
-bash run_navigation/vlnce.sh --ablation thinking_reasoning 1 100 260 4
 bash run_navigation/vlnce.sh --runtime context_cache --ablation space_structure 1 100 260 4
 ```
 
-Further details are documented in:
+Supported preset names include:
 
-- `navigation_system/ablation/README.md`
+- `landmark`
+- `space_structure`
+- `planning_reasoning`
+- `action_reasoning`
+- `planning_action_reasoning`
+- `both`
 
-## Results and Artifacts
+See `navigation_system/ablation/configs/` and `navigation_system/ablation/templates/` for preset definitions and prompt variants.
 
-The runtime resolves result directories in the following order:
+### Reporting Existing Results
 
-1. `SPACEVLN_RESULTS_ROOT`
-2. `PATHS.RESULTS_ROOT` in `navigation_system/config/system/00_runtime.yaml` (empty by default)
-3. fallback to workspace default `nav_ws/result/vlnce/`
-
-Recommended practice:
-
-- keep `PATHS.RESULTS_ROOT` empty in repo config;
-- keep run commands on default paths;
-- move storage via symlinks rather than command-level path overrides.
-
-Standard runs are stored as:
-
-```text
-result/vlnce/<planner>__<executor>/
+```bash
+bash run_navigation/report_range.sh 1 100 qwen3.5-plus__qwen3.5-flash_cache
+bash run_navigation/report_range.sh all all qwen3.5-plus__qwen3.5-flash_cache
+bash run_navigation/report_range.sh --start-id all --end-id all --results all
 ```
 
-Context-cache runs are stored as:
+## Result Layout
+
+Default output root is `nav_ws/result`.
 
 ```text
-result/vlnce/<planner>__<executor>_cache/
+result/
+├── vlnce/
+│   ├── <planner>__<executor>/
+│   ├── <planner>__<executor>_cache/
+│   └── ablation/<preset>/<model_name>/
+└── ovon/
+    ├── <planner>__<executor>/
+    └── <planner>__<executor>_cache/
 ```
 
-Ablation runs are stored as:
+Per-episode artifacts may include:
 
-```text
-result/vlnce/ablation/<ablation_name>/<model_name>/
+- planner/action prompts and responses;
+- rendered thinking views and action views;
+- global/local maps and visual summaries;
+- `vlm_info.json` request metadata;
+- per-episode metrics and logs;
+- cache reports under `reports/cache/` for context-cache runs.
+
+To move data/results to another disk while keeping config portable, use symlinks:
+
+```bash
+bash run_navigation/setup_storage_symlinks.sh --disk-root /abs/path/to/nav_ws_storage --both --backup-existing
 ```
-
-Stored artifacts may include:
-
-- planner/action prompts and responses
-- per-request `vlm_info.json`
-- visualization frames and replay GIFs
-- per-episode result logs
-- ablation manifests for ablation runs
-
-## Configuration Entry Points
-
-For day-to-day experiments, the most important files are:
-
-- `navigation_system/config/experiments/r2r_eval.yaml`
-- `navigation_system/config/system/00_runtime.yaml`
-- `navigation_system/config/system/10_detection_models.yaml`
-- `navigation_system/config/system/20_space_sensor.yaml`
-- `navigation_system/config/vlm/vlm_api_config.yaml`
-- `navigation_system/config/vlm/vlm_api_config_context_cache.yaml`
-
-See also:
-
-- `docs/ARCHITECTURE.md`
 
 ## Docker
 
-The repository now includes a full-workspace Docker build at `../Dockerfile.spacevln`.
+A full-workspace Dockerfile is provided at the workspace root:
 
-- build context: the `nav_ws/` workspace root
-- bundled into the image: `data/`, `GroundingDINO/`, `vlnce/habitat-lab/`, and `SpaceVLN/`
-- default result root in-container: `/workspace/result`
-- default result root on bare-metal runs from the same workspace: `nav_ws/result`
-- API config templates are copied into place during image build; provide real keys via environment variables such as `DASHSCOPE_API_KEY`, `OPENAI_API_KEY`, or `OPENROUTER_API_KEY`
+```text
+nav_ws/Dockerfile.spacevln
+```
 
-Typical build command:
+It is intended to bundle `SpaceVLN/`, `vlnce/habitat-lab/`, `GroundingDINO/`, and optionally `data/` into one reproducible image.
+
+Build from `nav_ws/`:
 
 ```bash
-cd ..
+cd /path/to/nav_ws
 docker buildx build --platform linux/amd64 -f Dockerfile.spacevln -t spacevln:v1 .
 ```
 
-## Reproducibility Notes
+Run interactively:
 
-To keep the repository maintainable and sharable:
+```bash
+docker run --rm -it --gpus all spacevln:v1 bash
+```
 
-- no active API keys are committed;
-- no user-specific absolute paths are committed;
-- large datasets and checkpoints are not committed;
-- local VLM configuration files are created from templates;
-- `requirements.txt` is synchronized from a validated working environment instead of being reduced to a speculative minimal set.
+If data/results are not baked into the image, mount them explicitly:
 
-## Acknowledgements
+```bash
+docker run --rm -it --gpus all \
+  -v /path/to/nav_ws/data:/workspace/data \
+  -v /path/to/nav_ws/result:/workspace/result \
+  spacevln:v1 bash
+```
 
-This codebase builds on the open-source efforts of the Habitat, VLN-CE, GroundingDINO, Grounded-Segment-Anything, NaVid-VLN-CE, and CA-Nav communities. Please consult the original repositories for licensing terms, model usage constraints, and dataset licenses before redistributing derived artifacts or checkpoints.
+Provide API keys via environment variables or create local config files from the templates inside the container.
+
+## Citation and Acknowledgements
+
+This repository builds on open-source embodied navigation and perception projects, including:
+
+- [NaVid-VLN-CE](https://github.com/jzhzhang/NaVid-VLN-CE)
+- [CA-Nav-code](https://github.com/Chenkehan21/CA-Nav-code)
+- [Habitat-Lab](https://github.com/facebookresearch/habitat-lab)
+- [Habitat-Sim](https://github.com/facebookresearch/habitat-sim)
+- [VLN-CE](https://github.com/jacobkrantz/VLN-CE)
+- [GroundingDINO](https://github.com/IDEA-Research/GroundingDINO)
+- [Segment Anything](https://github.com/facebookresearch/segment-anything)
+
+Please consult the upstream repositories for licenses, dataset terms, and model usage constraints before redistribution.

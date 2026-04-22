@@ -206,6 +206,7 @@ class VLMNavigationController(BaseNavigationController):
         self.last_planned_degrees = 0
         self.last_planned_meters = 0
         self.last_action_name = ""
+        self.last_action_effective_name = ""
         self.last_action_semantic_variant = ""
         self.last_action_progress_hint = ""
         self.timing_tracker.reset()
@@ -364,6 +365,46 @@ class VLMNavigationController(BaseNavigationController):
         self.action_force_forward_after_turns_pending = False
         self.action_force_forward_after_turns_notice_text = ""
 
+    def _get_last_effective_turn_action_name(self) -> str:
+        action_name_upper = str(
+            getattr(self, "last_action_effective_name", "") or getattr(self, "last_action_name", "") or ""
+        ).strip().upper()
+        if action_name_upper in ("TURN_LEFT", "TURN_RIGHT"):
+            return action_name_upper
+        return ""
+
+    def _build_reverse_turn_guard_progress_notice(self) -> str:
+        last_turn_action = self._get_last_effective_turn_action_name()
+        if last_turn_action == "TURN_LEFT":
+            return "(constraint: last step turned left; do not immediately turn back right)"
+        if last_turn_action == "TURN_RIGHT":
+            return "(constraint: last step turned right; do not immediately turn back left)"
+        return ""
+
+    def _apply_immediate_reverse_turn_guard(
+        self,
+        allowed_action_names: Optional[Sequence[str]],
+    ) -> Optional[Tuple[str, ...]]:
+        last_turn_action = self._get_last_effective_turn_action_name()
+        if not last_turn_action:
+            return tuple(allowed_action_names) if allowed_action_names else None
+
+        forbidden_turn = "TURN_RIGHT" if last_turn_action == "TURN_LEFT" else "TURN_LEFT"
+        base_actions = list(allowed_action_names) if allowed_action_names else [
+            "MOVE_FORWARD",
+            "TURN_LEFT",
+            "TURN_RIGHT",
+            "STOP",
+        ]
+        filtered_actions = [
+            str(name).strip().upper()
+            for name in base_actions
+            if str(name).strip().upper() != forbidden_turn
+        ]
+        if not filtered_actions:
+            filtered_actions = ["STOP"]
+        return tuple(filtered_actions)
+
     def _reset_blocked_front_controller_recovery_state(self) -> None:
         self.blocked_front_controller_recovery_count = 0
 
@@ -372,7 +413,7 @@ class VLMNavigationController(BaseNavigationController):
         return (
             f"The last {limit} action decisions were consecutive turns. "
             "Do not output `TURN_LEFT 30deg` or `TURN_RIGHT 30deg` on this call. "
-            "If arrival is already satisfied, output `STOP`; otherwise output one `MOVE_FORWARD` action."
+            "If arrival is already satisfied, output `STOP`; otherwise output one `MOVE_FORWARD` action only when FRONT is passable."
         )
 
     def _update_action_consecutive_turn_state(self, action_name: Optional[str]) -> None:
@@ -402,12 +443,18 @@ class VLMNavigationController(BaseNavigationController):
         base_summary = str(self.progress_summary or "").strip()
         last_action_hint = str(getattr(self, "last_action_progress_hint", "") or "").strip()
         warning_text = str(self.action_stagnation_progress_warning_text or "").strip()
+        reverse_turn_notice = self._build_reverse_turn_guard_progress_notice()
         summary_text = base_summary
         if last_action_hint:
             if summary_text and summary_text != "(Just started - no actions yet)":
                 summary_text = f"{summary_text} ({last_action_hint})"
             else:
                 summary_text = f"({last_action_hint})"
+        if reverse_turn_notice:
+            if summary_text and summary_text != "(Just started - no actions yet)":
+                summary_text = f"{summary_text} {reverse_turn_notice}"
+            else:
+                summary_text = reverse_turn_notice
         if not warning_text:
             return summary_text
         if summary_text and summary_text != "(Just started - no actions yet)":
@@ -1447,8 +1494,9 @@ class VLMNavigationController(BaseNavigationController):
         _dest_room, dest_object = self._parse_subtask_destination()
         candidates: List[str] = []
         for raw_candidate in (
-            dest_object,
+            self._get_subtask_landmark_field(getattr(self, 'current_subtask', None)),
             getattr(self, 'target_landmark', None),
+            dest_object,
         ):
             normalized = self._normalize_landmark_candidate(raw_candidate)
             if normalized and normalized not in candidates:
@@ -2205,10 +2253,10 @@ class VLMNavigationController(BaseNavigationController):
         if clean_landmark:
             self.tracked_landmark_classes.add(clean_landmark)
             self.target_landmark = clean_landmark
+            self.landmark_classes = [clean_landmark]
         else:
             self.target_landmark = None
-
-        self.landmark_classes = sorted(list(self.tracked_landmark_classes))
+            self.landmark_classes = []
         self.classes = list(self.landmark_classes)
 
     def _reset_custom_landmark_state(self) -> None:
@@ -2982,6 +3030,7 @@ class VLMNavigationController(BaseNavigationController):
         self.last_planned_degrees = 0
         self.last_planned_meters = 0
         self.last_action_name = ""
+        self.last_action_effective_name = ""
         self.previous_subtask_landmark_final_info = None
         self.previous_subtask_autocomplete_landmark_info = None
 
@@ -3119,14 +3168,7 @@ class VLMNavigationController(BaseNavigationController):
         self.current_subtask = response
 
         subtask_landmark = self._get_subtask_landmark_field(response)
-        self._set_current_landmark_tracking(
-            subtask_landmark,
-            fallback_sources=[
-                self._get_next_waypoint_field(response),
-                response.get('subtask_instruction'),
-                response.get('current_waypoint'),
-            ]
-        )
+        self._set_current_landmark_tracking(subtask_landmark)
 
         self._print_subtask_info(response, is_initial=is_initial)
         rotation_ok = self._auto_rotate_to_current_subtask_waypoint()
@@ -3343,6 +3385,7 @@ class VLMNavigationController(BaseNavigationController):
             "subtask_id": self.subtask_count,
             "next_waypoint": self._get_next_waypoint_field(self.current_subtask),
             "subtask_instruction": self.current_subtask.get("subtask_instruction", ""),
+            "subtask_landmark": self._get_subtask_landmark_field(self.current_subtask),
             "start_step": self.current_step,
             "timestamp": datetime.now().isoformat(),
         }
@@ -3423,6 +3466,7 @@ class VLMNavigationController(BaseNavigationController):
             ) = self.action_executor.decide_action(
                 next_waypoint=self._get_next_waypoint_field(self.current_subtask),
                 subtask_instruction=action_subtask_instruction,
+                subtask_landmark=self._get_subtask_landmark_field(self.current_subtask),
                 first_person_image=action_context["detection_image"] or "",
                 action_mapping=ACTION_MAPPING,
                 progress_summary=progress_summary_for_prompt,
@@ -3575,6 +3619,7 @@ class VLMNavigationController(BaseNavigationController):
             if force_forward_after_turns_pending
             else None
         )
+        allowed_action_names = self._apply_immediate_reverse_turn_guard(allowed_action_names)
         if (
             force_forward_after_turns_pending and
             self._is_obstacle_distance_blocked((action_context.get("obstacle_distances") or {}).get("front"))
@@ -3641,9 +3686,10 @@ class VLMNavigationController(BaseNavigationController):
         # Check whether the planner requested stop.
         should_stop = (action_name == "STOP")
         if should_stop:
-            self.last_action_progress_hint = self._build_last_action_progress_hint(
-                action_name=action_name,
-            )
+                self.last_action_progress_hint = self._build_last_action_progress_hint(
+                    action_name=action_name,
+                )
+                self.last_action_effective_name = str(action_name or "").upper()
         
         # Convert the planned macro-action into repeated low-level actions.
         repeat_count = 1
@@ -3892,6 +3938,7 @@ class VLMNavigationController(BaseNavigationController):
                     actual_meters=actual_meters,
                     actual_degrees=actual_degrees,
                 )
+                self.last_action_effective_name = str(actual_action_name or "").upper()
 
                 self.pose_before_action = pose_after_action_batch
 

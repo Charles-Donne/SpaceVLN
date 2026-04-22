@@ -151,6 +151,7 @@ def build_action_cache_prompt_bundle(
     obstacle_distances: Optional[Dict[str, str]],
     landmark_map_info: Optional[str],
     allowed_action_names: Optional[Sequence[str]],
+    subtask_landmark: str = "",
     move_distance: float = 0.25,
     turn_angle: int = 30,
 ) -> ExplicitCachePromptBundle:
@@ -170,6 +171,7 @@ def build_action_cache_prompt_bundle(
     system_prompt = _normalize_action_prompt_text(_render_action_system_prompt())
     user_prompt = _normalize_action_prompt_text(ACTION_CACHE_USER_PROMPT.format(
         subtask_destination=next_waypoint,
+        subtask_landmark=str(subtask_landmark or "").strip() or "none",
         subtask_instruction=subtask_instruction,
         progress_summary=progress_text,
         obstacle_perception_summary=obstacle_summary,

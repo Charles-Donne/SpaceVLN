@@ -24,7 +24,6 @@ from navigation_system.config.core.constants import (
     detection_thickness,
     detection_visible_topk,
     landmark_strip_topk,
-    local_map_landmark_topk,
 )
 
 
@@ -146,6 +145,17 @@ def render_detection_bbox(owner,
         return []
 
     landmark_memory = controller.landmark_memory if controller is not None else None
+    effective_detection_visible_topk = max(1, int(detection_visible_topk))
+    effective_landmark_strip_topk = max(1, int(landmark_strip_topk))
+    if controller is not None:
+        topk_getter = getattr(controller, "_get_action_landmark_topk", None)
+        if callable(topk_getter):
+            try:
+                effective_topk = max(1, int(topk_getter()))
+                effective_detection_visible_topk = effective_topk
+                effective_landmark_strip_topk = effective_topk
+            except (TypeError, ValueError):
+                pass
 
     if action_landmark_context is None:
         if selected_landmark_instances is not None:
@@ -168,7 +178,7 @@ def render_detection_bbox(owner,
             )
             action_landmark_context = owner._build_action_landmark_context(
                 all_world_landmark_instances,
-                topk=local_map_landmark_topk,
+                topk=effective_detection_visible_topk,
             )
 
     all_world_landmark_instances = list(action_landmark_context.get("all_instances", []) or [])
@@ -294,11 +304,11 @@ def render_detection_bbox(owner,
         selected_visible_entries = [
             entry for entry in ordered_entries
             if str(entry.get("source", "off")) == "vis"
-        ][:max(1, int(landmark_strip_topk))]
+        ][:effective_landmark_strip_topk]
         selected_offscreen_entries = [
             entry for entry in ordered_entries
             if str(entry.get("source", "off")) != "vis"
-        ][:max(1, int(landmark_strip_topk))]
+        ][:effective_landmark_strip_topk]
         if selected_visible_entries or selected_offscreen_entries or action_waypoint_entries:
             item_lines = build_landmark_strip_lines(
                 selected_visible_entries,
@@ -430,7 +440,7 @@ def render_detection_bbox(owner,
     deduped_candidates = owner._dedupe_detection_candidates(
         candidate_entries,
         hfov=hfov,
-        topk=None if selected_world_landmark_instances else detection_visible_topk,
+        topk=None if selected_world_landmark_instances else effective_detection_visible_topk,
     )
 
     selected_topk_entries: List[Dict[str, Any]] = []
@@ -548,7 +558,7 @@ def render_detection_bbox(owner,
             )
             selected_topk_entries.append(offscreen_entry)
     else:
-        selected_entries = deduped_candidates[:max(1, int(detection_visible_topk))]
+        selected_entries = deduped_candidates[:effective_detection_visible_topk]
         same_cls_totals = {
             str(item["name"]): sum(1 for other in selected_entries if str(other["name"]) == str(item["name"]))
             for item in selected_entries

@@ -50,6 +50,7 @@ class ActionExecutorLike(Protocol):
         action_mapping: Dict[str, int],
         progress_summary: str = "",
         waypoint_summary: str = "",
+        subtask_landmark: str = "",
         detection_image: Any = None,
         detected_landmarks: str = None,
         obstacle_distances: Dict[str, str] = None,

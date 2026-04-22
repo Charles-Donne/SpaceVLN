@@ -32,8 +32,8 @@ from navigation_system.config.core.params.thresholds import (
 )
 from navigation_system.runtime.object_navigation.thresholds import (
     OVON_AUTOCOMPLETE_SOLID_M,
-    OVON_BOX_THRESHOLD,
-    OVON_TEXT_THRESHOLD,
+    OVON_DEFAULT_BOX_THRESHOLD,
+    OVON_DEFAULT_TEXT_THRESHOLD,
     OVON_SUCCESS_DISTANCE_M,
 )
 
@@ -122,8 +122,8 @@ def build_objectnav_runtime_config(
                     "USE_REPVIT_SAM": True,
                 },
                 "THRESHOLDS": {
-                    "BOX": float(OVON_BOX_THRESHOLD),
-                    "TEXT": float(OVON_TEXT_THRESHOLD),
+                    "BOX": float(OVON_DEFAULT_BOX_THRESHOLD),
+                    "TEXT": float(OVON_DEFAULT_TEXT_THRESHOLD),
                 },
             },
             "SPACE": {

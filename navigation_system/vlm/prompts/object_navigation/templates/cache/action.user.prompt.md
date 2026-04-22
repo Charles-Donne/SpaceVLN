@@ -1,5 +1,6 @@
-# Current Search Subtask
+# Current Subtask
 **Destination**: {subtask_destination}
+**Tracked Landmark**: {subtask_landmark}
 **Instruction**: {subtask_instruction}
 **Subtask Progress**: {progress_summary}
 

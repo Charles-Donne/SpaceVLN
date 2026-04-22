@@ -57,16 +57,35 @@ def _clean_area_label(area_label: str) -> str:
     return clean_area or "Unknown"
 
 
-def _format_current_area_header_label(area_label: str) -> str:
+def _is_unknown_area_label(area_label: str) -> bool:
+    return _clean_area_label(area_label).strip().lower() == "unknown"
+
+
+def _format_area_display_label(
+    area_label: str,
+    area_type: str = "",
+    fallback: str = "area",
+) -> str:
     clean_area = _clean_area_label(area_label)
-    if clean_area == "Unknown":
-        return "unknown; you need to infer from current surrounding views"
+    if not _is_unknown_area_label(clean_area):
+        return clean_area
+
+    clean_type = _clean_area_label(area_type)
+    if not _is_unknown_area_label(clean_type):
+        return clean_type
+    return str(fallback or "area").strip() or "area"
+
+
+def _format_current_area_header_label(area_label: str, area_type: str = "") -> str:
+    clean_area = _clean_area_label(area_label)
+    if _is_unknown_area_label(clean_area):
+        return "you need to infer actual area from current views"
     return clean_area
 
 
 def _format_current_area_chain_label(area_label: str) -> str:
     clean_area = _clean_area_label(area_label)
-    if clean_area == "Unknown":
+    if _is_unknown_area_label(clean_area):
         return "Current Position"
     return clean_area
 
@@ -97,6 +116,24 @@ def _split_waypoint_description(description: str) -> Tuple[str, str]:
     return clean_desc, ""
 
 
+def _format_waypoint_description_for_display(
+    description: str,
+    area_label: str = "",
+    area_type: str = "",
+) -> str:
+    clean_desc = _clean_waypoint_description(description)
+    if not clean_desc:
+        return ""
+
+    space_text, local_text = _split_waypoint_description(clean_desc)
+    if _is_unknown_area_label(space_text):
+        display_space = _format_area_display_label(area_label, area_type, fallback="area")
+        if local_text:
+            return f"{display_space} - {local_text}"
+        return display_space
+    return clean_desc
+
+
 def _trim_local_place_prefix(local_text: str) -> str:
     clean_text = str(local_text or "").strip()
     lowered = clean_text.lower()
@@ -125,7 +162,7 @@ def _format_space_waypoint_chain_member(
 
 
 def _format_space_waypoint_chain_group(area_label: str, member_labels: Sequence[str]) -> str:
-    clean_area = _clean_area_label(area_label)
+    clean_area = _format_area_display_label(area_label)
     members = [str(item).strip() for item in member_labels if str(item).strip()]
     if not members:
         return clean_area
@@ -699,7 +736,7 @@ def _format_area_with_floor(
     floor_id: int,
     multi_floor_active: bool,
 ) -> str:
-    clean_area = _clean_area_label(area_label)
+    clean_area = _format_area_display_label(area_label)
     if not multi_floor_active:
         return clean_area
     return f"{clean_area} [{_format_floor_label(floor_id)}]"
@@ -755,12 +792,17 @@ def build_waypoint_summary(
         waypoint_floor_ids=waypoint_floor_ids,
         current_floor_id=current_floor_id,
     )
+    rendered_floor_ids = {int(floor_id) for floor_id in normalized_floor_ids}
+    render_multi_floor = bool(
+        multi_floor_active
+        and (len(rendered_floor_ids) > 1 or bool(on_stairs_connector))
+    )
     space_type_note = (
         f" ({display_area_type})"
         if (
-            _clean_area_label(display_area_label) != "Unknown"
+            not _is_unknown_area_label(display_area_label)
             and display_area_type
-            and display_area_type != "Unknown"
+            and not _is_unknown_area_label(display_area_type)
             and display_area_type != display_area_label
         )
         else ""
@@ -838,10 +880,10 @@ def build_waypoint_summary(
     )
     header_lines.append(
         "Your Current Area: "
-        f"{_format_current_area_header_label(display_area_label)}"
+        f"{_format_current_area_header_label(display_area_label, display_area_type)}"
         f"{space_type_note}{current_area_initial_note}"
     )
-    if multi_floor_active:
+    if render_multi_floor:
         floor_line = f"Current Floor: F{int(current_floor_id) + 1}"
         if on_stairs_connector:
             floor_line += " | stair connector active"
@@ -895,9 +937,9 @@ def build_waypoint_summary(
     space_type_note = (
         f" ({display_area_type})"
         if (
-            _clean_area_label(display_area_label) != "Unknown"
+            not _is_unknown_area_label(display_area_label)
             and display_area_type
-            and display_area_type != "Unknown"
+            and not _is_unknown_area_label(display_area_type)
             and display_area_type != display_area_label
         )
         else ""
@@ -918,7 +960,7 @@ def build_waypoint_summary(
     )
     header_lines[0] = (
         "Your Current Area: "
-        f"{_format_current_area_header_label(display_area_label)}"
+        f"{_format_current_area_header_label(display_area_label, display_area_type)}"
         f"{space_type_note}{current_area_initial_note}"
     )
 
@@ -1165,14 +1207,15 @@ def build_waypoint_summary(
         floor_indices = grouped_indices_by_floor.get(int(floor_id), [])
         if not floor_indices:
             continue
-        floor_label = _format_floor_label(floor_id)
-        floor_notes: List[str] = []
-        if int(floor_id) == int(current_floor_id):
-            floor_notes.append("Current Floor")
-        if on_stairs_connector and int(floor_id) == int(current_floor_id):
-            floor_notes.append("stair connector active")
-        floor_suffix = f" ({' | '.join(floor_notes)})" if floor_notes else ""
-        node_lines.append(f"--- {floor_label}{floor_suffix} ---")
+        if render_multi_floor:
+            floor_label = _format_floor_label(floor_id)
+            floor_notes: List[str] = []
+            if int(floor_id) == int(current_floor_id):
+                floor_notes.append("Current Floor")
+            if on_stairs_connector and int(floor_id) == int(current_floor_id):
+                floor_notes.append("stair connector active")
+            floor_suffix = f" ({' | '.join(floor_notes)})" if floor_notes else ""
+            node_lines.append(f"--- {floor_label}{floor_suffix} ---")
 
         indices_by_area: Dict[str, List[int]] = {}
         for index in floor_indices:
@@ -1192,12 +1235,17 @@ def build_waypoint_summary(
                 continue
             visit_count = int(area_visit_counts.get((int(floor_id), _clean_area_label(area_label)), 0))
             visit_label = "visit" if visit_count == 1 else "visits"
-            node_lines.append(f"  Area: {area_label} ({visit_count} {visit_label})")
+            display_node_area = _format_area_display_label(area_label)
+            area_prefix = "  Area:" if render_multi_floor else "Area:"
+            node_lines.append(f"{area_prefix} {display_node_area} ({visit_count} {visit_label})")
 
             for index in _ordered_area_waypoints(area_indices):
                 wp_id = waypoint_ids[index]
-                wp_desc = _clean_waypoint_description(
-                    waypoint_descriptions[index] if index < len(waypoint_descriptions) else ""
+                raw_wp_desc = waypoint_descriptions[index] if index < len(waypoint_descriptions) else ""
+                wp_desc = _format_waypoint_description_for_display(
+                    raw_wp_desc,
+                    area_label=area_label,
+                    area_type=display_area_type,
                 )
                 local_index = current_floor_index_map.get(index)
                 is_last = global_last_distinct_index is not None and index == int(global_last_distinct_index)
@@ -1249,7 +1297,8 @@ def build_waypoint_summary(
                         )
                         if reachability_note:
                             spatial_info = f"{spatial_info} | {reachability_note}"
-                node_lines.append(f"    - Space WP#{wp_id} [{wp_desc}] -- {spatial_info}{suffix}")
+                waypoint_prefix = "    -" if render_multi_floor else "  -"
+                node_lines.append(f"{waypoint_prefix} Space WP#{wp_id} [{wp_desc}] -- {spatial_info}{suffix}")
 
     current_area_display = _format_current_area_chain_label(display_area_label)
     displayed_chain_global_indices = [
@@ -1280,7 +1329,7 @@ def build_waypoint_summary(
         include_area_chain=include_area_chain,
         include_path=include_path,
         current_floor_id=current_floor_id,
-        multi_floor_active=multi_floor_active,
+        multi_floor_active=render_multi_floor,
         stair_connectors=stair_connectors,
     )
 
@@ -1375,7 +1424,7 @@ def _has_clear_path_to_waypoint(
 
 
 def _format_waypoint_area_ref(waypoint_id: int, area_label: str) -> str:
-    clean_area = _clean_area_label(area_label)
+    clean_area = _format_area_display_label(area_label)
     return f"Space WP#{int(waypoint_id)}({clean_area})"
 
 

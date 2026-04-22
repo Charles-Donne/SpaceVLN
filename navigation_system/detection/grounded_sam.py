@@ -211,6 +211,8 @@ class GroundedSAM(Segment):
             return self._empty_segment_result(image, reason)
 
         classes = kwargs.get("classes", [])
+        box_threshold = float(kwargs.get("box_threshold", self.box_threshold))
+        text_threshold = float(kwargs.get("text_threshold", self.text_threshold))
         box_annotator = sv.BoxAnnotator()
         # 兼容旧版本 supervision（没有 MaskAnnotator）
         try:
@@ -223,8 +225,8 @@ class GroundedSAM(Segment):
             detections = self.grounding_dino_model.predict_with_classes(
                 image=image,
                 classes=classes,
-                box_threshold=self.box_threshold,
-                text_threshold=self.text_threshold
+                box_threshold=box_threshold,
+                text_threshold=text_threshold
             )
         except Exception as exc:
             return self._empty_segment_result(

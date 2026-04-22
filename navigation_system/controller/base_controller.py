@@ -304,6 +304,23 @@ class BaseNavigationController:
             0.0,
         ).astype(np.float32)
 
+    def _get_landmark_detection_thresholds(
+        self,
+        landmark_query: Optional[str],
+    ) -> Optional[Tuple[Optional[float], Optional[float]]]:
+        return None
+
+    def _segment_landmark_query(self, rgb: np.ndarray, landmark_query: str):
+        segment_kwargs: Dict[str, Any] = {"classes": [landmark_query]}
+        thresholds = self._get_landmark_detection_thresholds(landmark_query)
+        if thresholds is not None:
+            box_threshold, text_threshold = thresholds
+            if box_threshold is not None:
+                segment_kwargs["box_threshold"] = float(box_threshold)
+            if text_threshold is not None:
+                segment_kwargs["text_threshold"] = float(text_threshold)
+        return self.segment_module.segment(rgb, **segment_kwargs)
+
     def _detect_landmarks_for_visualization(self,
                                             rgb: np.ndarray,
                                             landmark_queries: Optional[List[str]] = None):
@@ -314,7 +331,7 @@ class BaseNavigationController:
 
         detection_batches = []
         for lm_idx, landmark_query in enumerate(queries):
-            landmark_result = self.segment_module.segment(rgb, classes=[landmark_query])
+            landmark_result = self._segment_landmark_query(rgb, landmark_query)
             detection_batches.append((*landmark_result, lm_idx))
 
         merged_masks, merged_labels, annotated_image, merged_detections = \
@@ -1209,7 +1226,7 @@ class BaseNavigationController:
 
         detection_batches = []
         for lm_idx, landmark_query in enumerate(landmark_classes_list):
-            landmark_result = self.segment_module.segment(rgb, classes=[landmark_query])
+            landmark_result = self._segment_landmark_query(rgb, landmark_query)
             detection_batches.append((*landmark_result, lm_idx))
 
         masks_all, labels_all, annotated_images, current_detections = \

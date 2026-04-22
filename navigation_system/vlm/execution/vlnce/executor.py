@@ -296,6 +296,7 @@ class ActionExecutor(BaseAPIClient):
                      action_mapping: Dict[str, int],
                      progress_summary: str = "",
                      waypoint_summary: str = "",
+                     subtask_landmark: str = "",
                      detection_image: Any = None,
                      detected_landmarks: str = None,
                      obstacle_distances: Dict[str, str] = None,
@@ -331,6 +332,7 @@ class ActionExecutor(BaseAPIClient):
         prompt = get_action_execution_prompt(
             next_waypoint=next_waypoint,
             subtask_instruction=subtask_instruction,
+            subtask_landmark=subtask_landmark,
             progress_summary=progress_summary,
             waypoint_summary=waypoint_summary,
             detected_landmarks=detected_landmarks,

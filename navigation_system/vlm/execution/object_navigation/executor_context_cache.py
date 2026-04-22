@@ -52,6 +52,7 @@ class OVONContextCacheActionExecutor(QwenContextCacheMixin, ActionExecutor):
         action_mapping: Dict[str, int],
         progress_summary: str = "",
         waypoint_summary: str = "",
+        subtask_landmark: str = "",
         detection_image: Any = None,
         detected_landmarks: str = None,
         obstacle_distances: Dict[str, str] = None,
@@ -69,6 +70,7 @@ class OVONContextCacheActionExecutor(QwenContextCacheMixin, ActionExecutor):
         prompt_bundle = build_ovon_action_cache_prompt_bundle(
             next_waypoint=next_waypoint,
             subtask_instruction=subtask_instruction,
+            subtask_landmark=subtask_landmark,
             progress_summary=progress_summary,
             waypoint_summary=waypoint_summary,
             detected_landmarks=detected_landmarks,

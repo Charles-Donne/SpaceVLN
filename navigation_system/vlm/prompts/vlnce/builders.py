@@ -328,6 +328,7 @@ def _normalize_action_prompt_text(prompt: str) -> str:
 def get_action_execution_prompt(
     next_waypoint: str,
     subtask_instruction: str,
+    subtask_landmark: str = "",
     progress_summary: str = "",
     waypoint_summary: str = "",
     detected_landmarks: str = None,
@@ -344,6 +345,7 @@ def get_action_execution_prompt(
 
     return _normalize_action_prompt_text(ACTION_EXECUTION_PROMPT.format(
         subtask_destination=next_waypoint,
+        subtask_landmark=str(subtask_landmark or "").strip() or "none",
         subtask_instruction=subtask_instruction,
         progress_summary=progress_summary,
         detected_landmarks=detected_landmarks or "none",

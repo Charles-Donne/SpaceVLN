@@ -85,6 +85,7 @@ def get_ovon_verification_replanning_prompt(
 def get_ovon_action_execution_prompt(
     next_waypoint: str,
     subtask_instruction: str,
+    subtask_landmark: str = "",
     progress_summary: str = "",
     detected_landmarks: str = None,
     obstacle_distances: dict = None,
@@ -93,6 +94,7 @@ def get_ovon_action_execution_prompt(
 ) -> str:
     return ACTION_EXECUTION_PROMPT.format(
         subtask_destination=next_waypoint,
+        subtask_landmark=str(subtask_landmark or "").strip() or "none",
         subtask_instruction=subtask_instruction,
         progress_summary=progress_summary or "(Just started - no actions yet)",
         obstacle_perception_summary=_build_obstacle_perception_summary(obstacle_distances),

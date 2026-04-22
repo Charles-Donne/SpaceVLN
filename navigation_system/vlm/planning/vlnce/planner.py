@@ -13,7 +13,9 @@ from navigation_system.vlm.prompts.vlnce.builders import (
     get_verification_replanning_prompt
 )
 from navigation_system.vlm.prompts.common import (
+    ExplicitCachePromptBundle,
     PromptLike,
+    compose_full_prompt,
     extract_prompt_debug_text,
 )
 from navigation_system.vlm.contracts.schema import (
@@ -100,23 +102,65 @@ class LLMPlanner(BaseAPIClient):
     
     def validate_response(self, response: Dict, mode: str = 'initial') -> bool:
         """验证响应字段"""
+        self._last_response_rejection_notice = ""
         response = self._normalize_response_payload(response)
         if not response:
+            self._last_response_rejection_notice = "Your previous response was rejected because it was empty or invalid JSON."
             return False
 
         # 验证基础字段
         if not self.validate_fields(response, REQUIRED_SUBTASK_FIELDS):
+            self._last_response_rejection_notice = (
+                "Your previous response was rejected because required JSON fields were missing. "
+                "Return the exact required schema only."
+            )
             return False
 
         current_waypoint = str(response.get('current_waypoint', '') or '').strip()
         if not current_waypoint:
+            self._last_response_rejection_notice = (
+                "Your previous response was rejected because `current_waypoint` was empty. "
+                "Infer the current space from the current observations and provide a concrete `space - landmarks` anchor."
+            )
             return False
+
+        for field_name in ("current_waypoint", "next_waypoint", "waypoint_chain", "waypoint_sequence"):
+            field_text = str(response.get(field_name, "") or "").strip()
+            if re.search(r"(?i)(^|[^a-z0-9])unknown(?:'s|\b)", field_text):
+                print(f"  [WARN] Planner returned unresolved `{field_name}` with Unknown; reject and retry")
+                self._last_response_rejection_notice = (
+                    f"Your previous response was rejected because `{field_name}` contained `Unknown`. "
+                    "Do not output `Unknown`, `Unknown's ...`, or any unresolved current area. "
+                    "Treat `Unknown` in Space Structure as raw unresolved metadata only; infer the actual current space "
+                    "from the current views, nearby landmarks, openings, map, and trajectory. "
+                    "Do not copy an old waypoint's space area unless current observations support it."
+                )
+                return False
 
         if str(mode).strip().lower() == 'initial' and bool(response.get('global_task_finish', False)):
             print("  [WARN] Initial planning returned global_task_finish=true at task start; reject and retry")
+            self._last_response_rejection_notice = (
+                "Your previous response was rejected because initial planning cannot finish the global task. "
+                "Keep the finish flag false and output the first executable subtask."
+            )
             return False
 
         return True
+
+    @staticmethod
+    def _append_retry_notice_to_prompt(prompt: PromptLike, notice: str) -> PromptLike:
+        notice_text = str(notice or "").strip()
+        if not notice_text:
+            return prompt
+        retry_block = f"**Retry Notice**: {notice_text}"
+        if isinstance(prompt, ExplicitCachePromptBundle):
+            user_prompt = f"{str(prompt.user_prompt or '').rstrip()}\n\n{retry_block}"
+            return ExplicitCachePromptBundle(
+                system_prompt=prompt.system_prompt,
+                user_prompt=user_prompt,
+                full_prompt=compose_full_prompt(prompt.system_prompt, user_prompt),
+            )
+        return f"{str(prompt or '').rstrip()}\n\n{retry_block}"
 
     def _call_planner_with_retry(
         self,
@@ -133,6 +177,7 @@ class LLMPlanner(BaseAPIClient):
         prompt_debug_text = extract_prompt_debug_text(prompt)
 
         for retry in range(max_retries):
+            self._last_response_rejection_notice = ""
             attempt_start_time = time.perf_counter()
             response = self.call_api(
                 prompt,
@@ -155,6 +200,10 @@ class LLMPlanner(BaseAPIClient):
                         f"  [WARN] {failure_label} chose an unavailable direction: "
                         f"{normalized_response.get('next_waypoint_direction', '')}"
                     )
+                    self._last_response_rejection_notice = (
+                        "Your previous response was rejected because `next_waypoint_direction` did not match "
+                        "one of the provided IMAGE labels. Choose only from the current provided IMAGE labels."
+                    )
 
             attempt_success = bool(is_valid and direction_is_available)
             self.last_call_timing_info["records"].append({
@@ -169,6 +218,10 @@ class LLMPlanner(BaseAPIClient):
             if retry < max_retries - 1:
                 wait = (retry + 1) * 2
                 self.last_call_timing_info["failed_retry_wait_duration_s"] += float(wait)
+                retry_notice = str(getattr(self, "_last_response_rejection_notice", "") or "").strip()
+                if retry_notice:
+                    prompt = self._append_retry_notice_to_prompt(prompt, retry_notice)
+                    prompt_debug_text = extract_prompt_debug_text(prompt)
                 print(
                     f"  [WARN] {failure_label} failed, retry {retry + 1}/{max_retries - 1} "
                     f"in {wait}s..."
