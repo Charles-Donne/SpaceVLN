@@ -12,7 +12,7 @@ pipeline without changing the simulator workflow.
   - `SemanticMapper`
   - artifact saving and visualization
 - New real-robot integration modules:
-  - ROS1 / ROS2 subscribers and publishers
+  - ROS2 subscribers and publishers
   - RGB / depth / pose / IMU synchronization
   - action command bridge
   - real-robot `VectorEnv` adapter
@@ -36,10 +36,10 @@ pipeline without changing the simulator workflow.
 
 Prerequisites:
 
-1. ROS1 or ROS2 is installed and sourced
+1. ROS2 is installed and sourced
 2. OAK-D Lite RGB, depth, and camera info topics are available
-3. The base controller listens on `/spacevln/action_cmd`
-4. The base controller publishes status on `/spacevln/action_status`
+3. The low-level robot controller listens on `/spacevln/action_cmd`
+4. The low-level robot controller publishes status on `/spacevln/action_status`
 
 Run:
 
@@ -68,4 +68,3 @@ Action topics:
 - `/spacevln/action_status`
 
 See `real_robot/ros_interface.md` for the full payload specification.
-

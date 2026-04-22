@@ -58,6 +58,20 @@ def normalize_subtask_payload(payload: Optional[Dict[str, Any]]) -> Optional[Dic
     return normalized
 
 
+def normalize_objectnav_subtask_payload(payload: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Normalize OVON planner output while keeping only the OVON-facing stop flag."""
+    normalized = normalize_subtask_payload(payload)
+    if not normalized:
+        return normalized
+
+    ovon_payload = dict(normalized)
+    ovon_payload["global_landmark_arrival"] = bool(
+        ovon_payload.get("global_landmark_arrival", False)
+    )
+    ovon_payload.pop("global_task_finish", None)
+    return ovon_payload
+
+
 def get_next_waypoint(payload: Optional[Dict[str, Any]]) -> str:
     if not payload:
         return ""
@@ -76,5 +90,6 @@ __all__ = [
     "REQUIRED_SUBTASK_FIELDS",
     "get_next_waypoint",
     "get_subtask_landmark",
+    "normalize_objectnav_subtask_payload",
     "normalize_subtask_payload",
 ]

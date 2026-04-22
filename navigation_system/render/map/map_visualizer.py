@@ -44,18 +44,20 @@ class MapVisualizer:
     GLOBAL_TRAJECTORY_COLOR = (160, 32, 214)
     LOCAL_TRAJECTORY_COLOR = (178, 48, 230)
     SPACE_AREA_COLOR_PALETTE: Tuple[Tuple[int, int, int], ...] = (
-        (223, 214, 247),  # blush pink
-        (196, 217, 248),  # soft peach
-        (246, 204, 220),  # lavender rose
-        (250, 214, 200),  # powder blue
-        (216, 200, 246),  # pink lilac
-        (188, 223, 250),  # cream apricot
-        (232, 210, 239),  # mauve
-        (204, 218, 255),  # periwinkle
-        (205, 228, 244),  # pastel sky
-        (197, 212, 242),  # soft coral
-        (215, 208, 250),  # airy violet
-        (181, 226, 248),  # buttercream
+        (196, 143, 127),
+        (166, 168, 111),
+        (138, 179, 150),
+        (105, 167, 198),
+        (158, 145, 208),
+        (107, 135, 201),
+        (215, 167, 154),
+        (175, 191, 142),
+        (200, 149, 182),
+        (138, 191, 215),
+        (184, 155, 125),
+        (122, 181, 169),
+        (139, 155, 211),
+        (190, 144, 158),
     )
     SPACE_TYPE_PREFERRED_COLOR_INDEX: Dict[str, int] = {
         "hallway": 0,

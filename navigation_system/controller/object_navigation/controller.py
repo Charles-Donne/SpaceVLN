@@ -25,6 +25,8 @@ from navigation_system.runtime.storage.artifacts import (
     get_episode_detail_dir,
     get_episode_detail_path_candidates,
 )
+from navigation_system.vlm.contracts.schema import normalize_objectnav_subtask_payload
+from navigation_system.vlm.contracts import DIRECTION_CONFIG
 from navigation_system.vlm.object_navigation.runtime_factory import (
     build_ovon_navigation_model_stack,
 )
@@ -127,7 +129,7 @@ class OVONObjectNavigationController(VLMNavigationController):
             return False
 
         subtask_landmark = self._get_subtask_landmark_field(current_subtask)
-        return self._ovon_text_is_exact_goal_label(subtask_landmark)
+        return self._ovon_text_contains_goal_label(subtask_landmark)
 
     def __init__(
         self,
@@ -191,36 +193,53 @@ class OVONObjectNavigationController(VLMNavigationController):
     def _ovon_exact_goal_label(self) -> str:
         return self._ovon_goal_object_name()
 
-    def _ovon_text_is_exact_goal_label(self, text: Optional[str]) -> bool:
-        exact_goal = self._ovon_exact_goal_label()
-        if not exact_goal:
+    @staticmethod
+    def _ovon_phrase_in_text(candidate: Optional[str], phrase: Optional[str]) -> bool:
+        candidate_text = str(candidate or "").strip()
+        phrase_text = str(phrase or "").strip()
+        if not candidate_text or not phrase_text:
             return False
+        candidate_tokens = candidate_text.split()
+        phrase_tokens = phrase_text.split()
+        if not candidate_tokens or not phrase_tokens:
+            return False
+        phrase_len = len(phrase_tokens)
+        return any(
+            candidate_tokens[idx: idx + phrase_len] == phrase_tokens
+            for idx in range(0, len(candidate_tokens) - phrase_len + 1)
+        )
 
+    def _ovon_text_contains_goal_label(self, text: Optional[str]) -> bool:
+        goal_terms = self._ovon_goal_terms()
+        if not goal_terms:
+            return False
         candidates = {
             self._normalize_landmark_candidate(text),
             self._normalize_landmark_candidate(self._ovon_landmark_part(text)),
         }
-        return exact_goal in {candidate for candidate in candidates if candidate}
-
-    def _ovon_text_exactly_matches_goal(self, text: Optional[str]) -> bool:
-        goal_terms = self._ovon_goal_terms()
-        if not goal_terms:
+        candidates = {candidate for candidate in candidates if candidate}
+        if not candidates:
             return False
-        variants = self._ovon_label_variants(self._ovon_landmark_part(text))
-        variants.update(self._ovon_label_variants(text))
-        return bool(variants and goal_terms.intersection(variants))
+        for candidate in candidates:
+            candidate_variants = self._ovon_label_variants(candidate) or {candidate}
+            for candidate_variant in candidate_variants:
+                if candidate_variant in goal_terms:
+                    return True
+                if any(self._ovon_phrase_in_text(candidate_variant, goal_term) for goal_term in goal_terms):
+                    return True
+        return False
 
     def _ovon_response_names_target_object(self, response: Dict[str, Any]) -> Tuple[bool, str]:
         subtask_landmark = str(response.get("subtask_landmark") or "").strip()
-        if not self._ovon_text_is_exact_goal_label(subtask_landmark):
-            return False, "subtask_landmark does not exactly match the OVON target object"
+        if not self._ovon_text_contains_goal_label(subtask_landmark):
+            return False, "subtask_landmark does not contain the OVON target object"
         return True, ""
 
     def _ovon_response_enters_final_object_stage(self, response: Optional[Dict[str, Any]]) -> bool:
         payload = dict(response or {})
         if not payload:
             return False
-        return self._ovon_text_is_exact_goal_label(payload.get("subtask_landmark"))
+        return self._ovon_text_contains_goal_label(payload.get("subtask_landmark"))
 
     def _ovon_current_waypoint_mentions_goal(self, response: Optional[Dict[str, Any]]) -> bool:
         current_waypoint = str((response or {}).get("current_waypoint") or "").strip()
@@ -233,7 +252,7 @@ class OVONObjectNavigationController(VLMNavigationController):
         for item in candidates:
             if not item:
                 continue
-            if self._ovon_text_is_exact_goal_label(item):
+            if self._ovon_text_contains_goal_label(item):
                 return True
         return False
 
@@ -252,7 +271,7 @@ class OVONObjectNavigationController(VLMNavigationController):
             space_part, local_part = current_waypoint.split(" - ", 1)
             local_parts = [part.strip() for part in local_part.split("/") if part.strip()]
             local_parts = [exact_goal] + [
-                part for part in local_parts if not self._ovon_text_exactly_matches_goal(part)
+                part for part in local_parts if not self._ovon_text_contains_goal_label(part)
             ]
             response["current_waypoint"] = self._sanitize_current_waypoint_text(
                 f"{space_part.strip()} - {' / '.join(local_parts)}"
@@ -281,7 +300,7 @@ class OVONObjectNavigationController(VLMNavigationController):
             entries = []
 
         for entry in entries or []:
-            if not self._ovon_text_is_exact_goal_label(entry.get("name")):
+            if not self._ovon_text_contains_goal_label(entry.get("name")):
                 continue
             distance_m = self._ovon_float(entry.get("distance_m"))
             if distance_m is None:
@@ -303,7 +322,7 @@ class OVONObjectNavigationController(VLMNavigationController):
             entries = [info]
 
         for entry in entries:
-            if not self._ovon_text_is_exact_goal_label(
+            if not self._ovon_text_contains_goal_label(
                 entry.get("raw_name") or entry.get("name")
             ):
                 continue
@@ -321,9 +340,9 @@ class OVONObjectNavigationController(VLMNavigationController):
         reason_text = str(reason or "").strip()
         base_notice = (
             f"Do not set `global_landmark_arrival=true` yet. OVON may stop only on verify when "
-            f"the current `subtask_landmark` is exactly `{exact_goal}`, `current_waypoint` localizes "
+            f"the current `subtask_landmark` contains `{exact_goal}`, `current_waypoint` localizes "
             f"`{exact_goal}` as the current anchor, the previous executed action subtask also used "
-            f"`{exact_goal}` as its `subtask_landmark`, and the Previous Subtask landmark summary shows "
+            f"a landmark containing `{exact_goal}` as its `subtask_landmark`, and the Previous Subtask landmark summary shows "
             f"`{exact_goal}` within about 0.75m. If any of these is missing, keep "
             f"`global_landmark_arrival=false` and continue approaching `{exact_goal}`."
         )
@@ -345,8 +364,8 @@ class OVONObjectNavigationController(VLMNavigationController):
         )
         if not previous_landmark:
             return False, "previous action subtask landmark is empty"
-        if previous_landmark != exact_goal:
-            return False, "previous action subtask landmark does not exactly match the OVON target object"
+        if not self._ovon_text_contains_goal_label(previous_landmark):
+            return False, "previous action subtask landmark does not contain the OVON target object"
         return True, ""
 
     def _ovon_effective_global_landmark_arrival(
@@ -373,7 +392,7 @@ class OVONObjectNavigationController(VLMNavigationController):
 
         if not self._ovon_current_waypoint_mentions_goal(payload):
             rejection_reason = (
-                "current_waypoint does not localize the exact OVON target object as the current anchor"
+                "current_waypoint does not localize the OVON target object as the current anchor"
             )
             self.ovon_stop_gate_rejection_notice = self._ovon_build_stop_gate_notice(rejection_reason)
             if log_rejection:
@@ -394,7 +413,7 @@ class OVONObjectNavigationController(VLMNavigationController):
         )
         if not previous_summary_ok:
             rejection_reason = (
-                "Previous Subtask landmark summary does not show the exact OVON target object "
+                "Previous Subtask landmark summary does not show the OVON target object "
                 f"within {float(self.FORCED_EARLY_STOP_DISTANCE_M):.2f}m"
             )
             self.ovon_stop_gate_rejection_notice = self._ovon_build_stop_gate_notice(rejection_reason)
@@ -411,6 +430,20 @@ class OVONObjectNavigationController(VLMNavigationController):
         if not response:
             return response
 
+        response["next_waypoint_direction"] = self._ovon_normalize_direction_label(
+            response.get("next_waypoint_direction")
+        )
+        response["next_waypoint"] = self._ovon_normalize_next_waypoint_text(
+            response.get("next_waypoint"),
+            response=response,
+        )
+        response["subtask_instruction"] = self._sanitize_subtask_instruction_text(
+            response.get("subtask_instruction"),
+            response.get("next_waypoint"),
+            response.get("next_waypoint_direction"),
+            keep_view_prefix=True,
+        )
+
         exact_goal = self._ovon_exact_goal_label()
 
         valid_arrival = self._ovon_effective_global_landmark_arrival(
@@ -423,6 +456,95 @@ class OVONObjectNavigationController(VLMNavigationController):
             self._ovon_inject_goal_into_current_waypoint(response)
         response.pop("global_task_finish", None)
         return response
+
+    def _normalize_controller_response_payload(
+        self,
+        response: Optional[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        return normalize_objectnav_subtask_payload(response)
+
+    @staticmethod
+    def _ovon_extract_image_index_from_direction_text(text: Optional[str]) -> Optional[int]:
+        match = re.search(r"IMAGE\s*(\d+)", str(text or ""), flags=re.IGNORECASE)
+        if not match:
+            return None
+        try:
+            return int(match.group(1))
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _ovon_direction_body_to_image_label(cls, text: Optional[str]) -> str:
+        raw_text = str(text or "").strip()
+        if not raw_text:
+            return ""
+        if raw_text.startswith("IMAGE") and "(" in raw_text and ")" in raw_text:
+            return raw_text
+
+        image_index = cls._ovon_extract_image_index_from_direction_text(raw_text)
+        direction_body = raw_text
+        if ":" in raw_text:
+            maybe_prefix, maybe_body = raw_text.split(":", 1)
+            if cls._ovon_extract_image_index_from_direction_text(maybe_prefix) is not None:
+                direction_body = maybe_body.strip()
+
+        if image_index is None:
+            normalized_body = direction_body.lower().replace("°", "deg")
+            for item in DIRECTION_CONFIG:
+                item_name = str(item.get("name") or "").strip()
+                body = re.sub(r"^IMAGE\s*\d+\s*:\s*", "", item_name, flags=re.IGNORECASE)
+                body_norm = body.lower().replace("°", "deg")
+                if body_norm == normalized_body:
+                    image_index = cls._ovon_extract_image_index_from_direction_text(item_name)
+                    direction_body = body
+                    break
+
+        if image_index is None:
+            return raw_text
+        if not direction_body:
+            for item in DIRECTION_CONFIG:
+                if int(item.get("step", -1) or -1) == int(image_index):
+                    direction_body = re.sub(
+                        r"^IMAGE\s*\d+\s*:\s*",
+                        "",
+                        str(item.get("name") or "").strip(),
+                        flags=re.IGNORECASE,
+                    )
+                    break
+        return f"IMAGE {int(image_index)} ({direction_body})".strip()
+
+    def _ovon_normalize_direction_label(self, text: Optional[str]) -> str:
+        return self._ovon_direction_body_to_image_label(text)
+
+    def _ovon_normalize_next_waypoint_text(
+        self,
+        text: Optional[str],
+        *,
+        response: Optional[Dict[str, Any]] = None,
+    ) -> Optional[str]:
+        cleaned = self._sanitize_next_waypoint_text(text)
+        if cleaned is None:
+            return None
+        cleaned = str(cleaned).strip()
+        if not cleaned:
+            return cleaned
+        if "'s" in cleaned:
+            return cleaned
+        if " / " in cleaned:
+            space_part, local_part = cleaned.split(" / ", 1)
+            space_part = space_part.strip(" ,;:-")
+            local_part = local_part.strip(" ,;:-")
+            if space_part and local_part:
+                return f"{space_part}'s {local_part}"
+
+        current_waypoint = str((response or {}).get("current_waypoint") or "").strip()
+        goal_object = self._ovon_goal_object_name()
+        if goal_object and self._ovon_text_contains_goal_label(cleaned) and " - " in current_waypoint:
+            space_part, _local = current_waypoint.split(" - ", 1)
+            space_part = space_part.strip(" ,;:-")
+            if space_part:
+                return f"{space_part}'s {goal_object}"
+        return cleaned
 
     def _ovon_persist_thinking_response_artifact(
         self,
@@ -458,9 +580,9 @@ class OVONObjectNavigationController(VLMNavigationController):
         current_landmark = self._normalize_landmark_candidate(
             self._get_subtask_landmark_field(response)
         )
-        if not exact_goal or current_landmark != exact_goal:
+        if not exact_goal or not self._ovon_text_contains_goal_label(current_landmark):
             self._ovon_reset_forced_early_stop_subtask_history()
-            return False, "current subtask landmark is not the exact final target object"
+            return False, "current subtask landmark does not contain the final target object"
 
         previous_action_ok, previous_action_reason = self._ovon_previous_action_landmark_matches_goal()
         if not previous_action_ok:
@@ -469,7 +591,17 @@ class OVONObjectNavigationController(VLMNavigationController):
 
         if not self._ovon_current_waypoint_mentions_goal(response):
             self._ovon_reset_forced_early_stop_subtask_history()
-            return False, "current_waypoint does not localize the exact target object as the current anchor"
+            return False, "current_waypoint does not localize the target object as the current anchor"
+
+        previous_summary_ok, _previous_summary_entry = self._ovon_previous_subtask_target_within_distance(
+            float(self.FORCED_EARLY_STOP_DISTANCE_M)
+        )
+        if not previous_summary_ok:
+            self._ovon_reset_forced_early_stop_subtask_history()
+            return False, (
+                "Previous Subtask landmark summary does not show the target object within "
+                f"{float(self.FORCED_EARLY_STOP_DISTANCE_M):.2f}m"
+            )
 
         target_seen, matched_entry = self._ovon_target_detection_within_distance(
             float(self.FORCED_EARLY_STOP_DISTANCE_M)
@@ -757,9 +889,9 @@ class OVONObjectNavigationController(VLMNavigationController):
             ordered_entries = [
                 entry
                 for entry in ordered_entries
-                if self._ovon_text_exactly_matches_goal(entry.get("name"))
+                if self._ovon_text_contains_goal_label(entry.get("name"))
             ]
-            candidate_names = [name for name in candidate_names if self._ovon_text_exactly_matches_goal(name)]
+            candidate_names = [name for name in candidate_names if self._ovon_text_contains_goal_label(name)]
             if not candidate_names:
                 goal_name = self._ovon_goal_object_name()
                 if goal_name:

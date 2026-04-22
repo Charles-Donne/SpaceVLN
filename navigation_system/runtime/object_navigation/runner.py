@@ -123,6 +123,77 @@ def _build_parser_defaults(run_defaults: dict | None = None) -> dict:
     }
 
 
+def _unique_path_candidates(paths: Sequence[Path]) -> List[Path]:
+    unique: List[Path] = []
+    seen: set[str] = set()
+    for path in paths:
+        normalized = str(Path(path).resolve())
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        unique.append(Path(normalized))
+    return unique
+
+
+def _build_ovon_dataset_path_candidates(
+    *,
+    split: str,
+    configured_path: str | None = None,
+) -> List[Path]:
+    normalized_split = str(split or "val_unseen").strip() or "val_unseen"
+    default_root = _nav_ws_root() / "data" / "datasets" / "ovon" / "hm3d" / "v1" / normalized_split
+    ovon_repo_root = _nav_ws_root() / "ovon" / "data" / "datasets" / "ovon" / "hm3d" / "v1" / normalized_split
+
+    default_names: List[str] = []
+    if normalized_split == "val_unseen":
+        default_names.extend([
+            "val_unseen_hard.json.gz",
+            "val_unseen.json.gz",
+            "val_unseen_easy.json.gz",
+        ])
+    else:
+        default_names.append(f"{normalized_split}.json.gz")
+
+    candidates: List[Path] = []
+    if str(configured_path or "").strip():
+        resolved_configured = _resolve_nav_ws_path(str(configured_path))
+        candidates.append(resolved_configured)
+        parent_dir = resolved_configured.parent
+        for file_name in default_names:
+            candidates.append(parent_dir / file_name)
+
+    for base_dir in (default_root, ovon_repo_root):
+        for file_name in default_names:
+            candidates.append(base_dir / file_name)
+        if base_dir.is_dir():
+            candidates.extend(sorted(base_dir.glob("*.json.gz")))
+
+    return _unique_path_candidates(candidates)
+
+
+def _resolve_ovon_dataset_path(
+    *,
+    split: str,
+    configured_path: str | None = None,
+) -> Path:
+    candidates = _build_ovon_dataset_path_candidates(
+        split=split,
+        configured_path=configured_path,
+    )
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+
+    tried_lines = "\n".join(f"  - {candidate}" for candidate in candidates[:12])
+    raise RuntimeError(
+        "OVON dataset file not found.\n"
+        f"Requested split: '{split}'.\n"
+        f"Tried:\n{tried_lines}\n"
+        "Install or symlink the OVON dataset under "
+        "`data/datasets/ovon/hm3d/v1/<split>/`, or pass the exact file with `--data-path`."
+    )
+
+
 def _default_results_dir() -> str:
     return str((Path(build_default_results_family_root("ovon")) / "ovon_smoke").resolve())
 
@@ -218,9 +289,14 @@ def _prepare_ovon_config(
     register_hydra_plugin(HabitatConfigPlugin)
     config = habitat.get_config(str(Path(exp_config).resolve()))
 
+    resolved_data_path = _resolve_ovon_dataset_path(
+        split=split,
+        configured_path=data_path,
+    )
+
     with read_write(config):
         config.habitat.dataset.split = str(split)
-        config.habitat.dataset.data_path = str(Path(data_path).resolve())
+        config.habitat.dataset.data_path = str(resolved_data_path)
         config.habitat.environment.max_episode_steps = int(max_steps)
         config.habitat.simulator.turn_angle = 30
         config.habitat.simulator.scene_dataset = str(

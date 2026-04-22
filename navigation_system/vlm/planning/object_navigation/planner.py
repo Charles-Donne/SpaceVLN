@@ -6,11 +6,31 @@ from navigation_system.vlm.prompts.object_navigation.builders import (
     get_ovon_initial_planning_prompt,
     get_ovon_verification_replanning_prompt,
 )
+from navigation_system.vlm.contracts.schema import normalize_objectnav_subtask_payload
 from navigation_system.vlm.planning.vlnce.planner import LLMPlanner
 
 
 class OVONPlanner(LLMPlanner):
     """Planner variant with OVON/object-search-specific prompts."""
+
+    def _normalize_response_payload(
+        self,
+        payload: Optional[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        return normalize_objectnav_subtask_payload(payload)
+
+    @classmethod
+    def _direction_is_available(
+        cls,
+        chosen_direction: Optional[str],
+        direction_names: Optional[List[str]],
+    ) -> bool:
+        chosen_text = str(chosen_direction or "").strip()
+        if not chosen_text:
+            return False
+        if cls._extract_image_index(chosen_text) is None:
+            return False
+        return super()._direction_is_available(chosen_direction, direction_names)
 
     def generate_initial_subtask(
         self,

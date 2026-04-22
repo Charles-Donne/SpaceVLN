@@ -71,7 +71,7 @@ Usage:
 
 ## 2. Action Command Interface Published by SpaceVLN
 
-To keep ROS1 and ROS2 integration lightweight, the runtime uses:
+To keep ROS2 integration lightweight, the runtime uses:
 
 - Topic: `/spacevln/action_cmd`
 - Type: `std_msgs/String`
@@ -249,4 +249,3 @@ Second-stage additions:
 - `/spacevln/capture/request`
 - `distance_to_goal_m`
 - `goal_reached`
-

@@ -126,17 +126,12 @@ def _resolve_space_area_colors(
 
     color_assignments: Dict[int, Tuple[int, int, int]] = {}
     palette = list(self.SPACE_AREA_COLOR_PALETTE)
-    assigned_type_colors: Dict[str, set] = {}
     for area_id in ordered_area_ids:
-        normalized_type = self._normalize_space_area_type(
-            str(record_by_id.get(int(area_id), {}).get("space_type", ""))
-        )
         neighbor_colors = {
             color_assignments[neighbor_id]
             for neighbor_id in adjacency.get(int(area_id), set())
             if neighbor_id in color_assignments
         }
-        same_type_colors = assigned_type_colors.get(normalized_type, set())
         preference_order = self._space_area_color_preference_order(
             area_id=int(area_id),
             space_type=str(record_by_id.get(int(area_id), {}).get("space_type", "")),
@@ -144,19 +139,12 @@ def _resolve_space_area_colors(
         chosen_color = None
         for color_index in preference_order:
             candidate = palette[int(color_index) % len(palette)]
-            if candidate not in neighbor_colors and candidate not in same_type_colors:
+            if candidate not in neighbor_colors:
                 chosen_color = candidate
                 break
         if chosen_color is None:
-            for color_index in preference_order:
-                candidate = palette[int(color_index) % len(palette)]
-                if candidate not in neighbor_colors:
-                    chosen_color = candidate
-                    break
-        if chosen_color is None:
             chosen_color = palette[preference_order[0] % len(palette)]
         color_assignments[int(area_id)] = chosen_color
-        assigned_type_colors.setdefault(normalized_type, set()).add(chosen_color)
     return color_assignments
 
 
@@ -233,6 +221,27 @@ def _draw_space_areas_in_place(
     color_assignments: Dict[int, Tuple[int, int, int]] = {}
     color_cache_key = None
     if cache_token is not None:
+        layer_ids, counts = np.unique(np.asarray(display_layer, dtype=np.int32), return_counts=True)
+        visible_area_signature = tuple(
+            (
+                int(area_id),
+                int(count),
+            )
+            for area_id, count in zip(layer_ids.tolist(), counts.tolist())
+            if int(area_id) > 0
+        )
+        visible_area_ids = [int(area_id) for area_id, _count in visible_area_signature]
+        adjacency = self._build_space_area_adjacency(display_layer, visible_area_ids)
+        adjacency_signature = tuple(
+            sorted(
+                (
+                    int(area_id),
+                    tuple(sorted(int(neighbor_id) for neighbor_id in list(neighbors or []))),
+                )
+                for area_id, neighbors in adjacency.items()
+                if int(area_id) > 0
+            )
+        )
         record_signature = tuple(
             sorted(
                 (
@@ -247,6 +256,8 @@ def _draw_space_areas_in_place(
             cache_token,
             int(image.shape[1]),
             record_signature,
+            visible_area_signature,
+            adjacency_signature,
         )
         cached_colors = self._render_cache["space_area_color_assignments"].get(color_cache_key)
         if isinstance(cached_colors, dict):

@@ -2385,6 +2385,103 @@ class VLMNavigationController(BaseNavigationController):
         return re.sub(r"\s+", " ", base).strip(" ,;:-")
 
     @staticmethod
+    def _normalize_current_waypoint_area_token(text: Optional[str]) -> str:
+        cleaned = strip_space_type_variant_suffixes(str(text or "")).strip()
+        cleaned = re.sub(r"\s*\[links:[^\]]*\]\s*", " ", cleaned, flags=re.IGNORECASE)
+        cleaned = cleaned.replace("’", "'").replace("`", "'")
+        cleaned = re.sub(r"[^A-Za-z0-9\s]+", " ", cleaned)
+        return re.sub(r"\s+", " ", cleaned).strip().lower()
+
+    def _get_runtime_current_area_label(self) -> str:
+        mapper = getattr(self, "mapper", None)
+        if mapper is None:
+            return ""
+        current_area = (
+            getattr(mapper, "current_space_area_display_label", "")
+            or getattr(mapper, "current_space_area_label", "")
+            or ""
+        )
+        current_area = self._strip_visual_brackets_from_text(
+            strip_space_type_variant_suffixes(str(current_area).strip())
+        )
+        current_area = re.sub(r"\s*\[links:[^\]]*\]\s*", " ", current_area, flags=re.IGNORECASE)
+        return re.sub(r"\s+", " ", current_area).strip(" ,;:-")
+
+    def _get_runtime_current_area_terms(self) -> set:
+        mapper = getattr(self, "mapper", None)
+        terms = set()
+        for raw_text in (
+            self._get_runtime_current_area_label(),
+            getattr(mapper, "current_space_area_type", "") if mapper is not None else "",
+        ):
+            normalized = self._normalize_current_waypoint_area_token(raw_text)
+            if normalized:
+                terms.add(normalized)
+        return terms
+
+    def _split_current_waypoint_local_cues(self, local_text: Optional[str]) -> List[str]:
+        cues: List[str] = []
+        for raw_chunk in str(local_text or "").split("/"):
+            chunk = self._strip_visual_brackets_from_text(
+                strip_space_type_variant_suffixes(raw_chunk)
+            ).strip(" ,;:-")
+            if not chunk:
+                continue
+            lowered = chunk.lower()
+            split_for_near = False
+            for prefix in ("near ", "by ", "at "):
+                if lowered.startswith(prefix):
+                    chunk = chunk[len(prefix):].strip(" ,;:-")
+                    lowered = chunk.lower()
+                    split_for_near = True
+                    break
+            if not chunk:
+                continue
+            if split_for_near:
+                subparts = [
+                    part.strip(" ,;:-")
+                    for part in re.split(r"\s*(?:&| and |,)\s*", chunk)
+                    if part.strip(" ,;:-")
+                ]
+                if subparts:
+                    cues.extend(subparts)
+                    continue
+            cues.append(chunk)
+        return cues
+
+    def _align_current_waypoint_with_runtime_area(
+        self,
+        waypoint_text: Optional[str],
+    ) -> Optional[str]:
+        cleaned = self._sanitize_current_waypoint_text(waypoint_text)
+        if cleaned is None:
+            return None
+
+        runtime_area = self._get_runtime_current_area_label()
+        runtime_area_norm = self._normalize_current_waypoint_area_token(runtime_area)
+        if not runtime_area_norm:
+            return cleaned
+
+        if " - " in cleaned:
+            _space_part, local_part = cleaned.split(" - ", 1)
+        else:
+            local_part = ""
+
+        area_terms = self._get_runtime_current_area_terms()
+        deduped_cues: List[str] = []
+        seen_norms = set()
+        for cue in self._split_current_waypoint_local_cues(local_part):
+            cue_norm = self._normalize_current_waypoint_area_token(cue)
+            if not cue_norm or cue_norm in area_terms or cue_norm in seen_norms:
+                continue
+            deduped_cues.append(re.sub(r"\s+", " ", cue).strip(" ,;:-"))
+            seen_norms.add(cue_norm)
+
+        if deduped_cues:
+            return f"{runtime_area} - {' / '.join(deduped_cues[:3])}"
+        return runtime_area
+
+    @staticmethod
     def _sanitize_next_waypoint_text(next_waypoint_text: Optional[str]) -> Optional[str]:
         """Keep next_waypoint in single `space's landmark` form."""
         if next_waypoint_text is None:
@@ -2454,11 +2551,20 @@ class VLMNavigationController(BaseNavigationController):
         cleaned = re.sub(r"\s+", " ", cleaned).strip()
         return cleaned
 
+    def _normalize_controller_response_payload(
+        self,
+        response: Optional[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        return normalize_subtask_payload(response)
+
     def _sanitize_planner_response(self, response: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """Normalize planner outputs while keeping the full view-prefixed instruction."""
         if not response:
             return response
-        response = dict(normalize_subtask_payload(response))
+        response = self._normalize_controller_response_payload(response)
+        if not response:
+            return response
+        response = dict(response)
         for key in (
             "current_waypoint",
             "waypoint_sequence",
@@ -2473,6 +2579,9 @@ class VLMNavigationController(BaseNavigationController):
                     strip_space_type_variant_suffixes(response.get(key))
                 )
         response["current_waypoint"] = self._sanitize_current_waypoint_text(
+            response.get("current_waypoint")
+        )
+        response["current_waypoint"] = self._align_current_waypoint_with_runtime_area(
             response.get("current_waypoint")
         )
         response["next_waypoint"] = self._sanitize_next_waypoint_text(

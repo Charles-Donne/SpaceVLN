@@ -26,6 +26,12 @@ from navigation_system.vlm.contracts.schema import (
 class LLMPlanner(BaseAPIClient):
     """LLM规划器 - 负责子任务生成和验证"""
 
+    def _normalize_response_payload(
+        self,
+        payload: Optional[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        return normalize_subtask_payload(payload)
+
     def __init__(self, config_path: str = "navigation_system/config/vlm/vlm_api_config.yaml", 
                  action_space: str = None):
         """
@@ -94,7 +100,7 @@ class LLMPlanner(BaseAPIClient):
     
     def validate_response(self, response: Dict, mode: str = 'initial') -> bool:
         """验证响应字段"""
-        response = normalize_subtask_payload(response)
+        response = self._normalize_response_payload(response)
         if not response:
             return False
 
@@ -136,7 +142,7 @@ class LLMPlanner(BaseAPIClient):
             )
             attempt_duration_s = time.perf_counter() - attempt_start_time
 
-            normalized_response = normalize_subtask_payload(response)
+            normalized_response = self._normalize_response_payload(response)
             is_valid = bool(normalized_response and self.validate_response(normalized_response, mode=mode))
             direction_is_available = False
             if is_valid:
