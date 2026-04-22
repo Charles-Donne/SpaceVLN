@@ -161,6 +161,7 @@ class BaseNavigationController:
         self.landmark_memory.record_step(
             step_idx=step_idx,
             detected_landmarks=detected_landmarks_step,
+            landmark_queries=list(getattr(self, "landmark_classes", []) or []),
         )
 
     def _get_detected_custom_landmarks(self) -> set:
@@ -997,12 +998,16 @@ class BaseNavigationController:
             )
 
         if not force:
-            if enable_landmark_detection and self.landmark_memory.has_step(self.current_step):
+            current_landmark_queries = list(getattr(self, "landmark_classes", []) or [])
+            if enable_landmark_detection and self.landmark_memory.has_step(
+                self.current_step,
+                current_landmark_queries,
+            ):
                 return True
             if required_paths and all(os.path.exists(path) for path in required_paths):
                 if not enable_landmark_detection:
                     return True
-                if self.landmark_memory.has_step(self.current_step):
+                if self.landmark_memory.has_step(self.current_step, current_landmark_queries):
                     return True
 
         self._batch_obs([self.latest_obs], save_object_detection=enable_landmark_detection)

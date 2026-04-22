@@ -211,6 +211,7 @@ class ThinkingViewRenderer:
         current_space_area_label: str,
         full_map: Optional[np.ndarray],
         crop_offset: Optional[Tuple[int, int]],
+        current_space_area_type: str = "",
         current_floor_id: int = 0,
         initial_waypoint_index: Optional[int] = 0,
     ) -> List[Dict[str, Any]]:
@@ -299,6 +300,8 @@ class ThinkingViewRenderer:
             current_pose=current_pose,
             resolution_cm=resolution_cm,
             current_space_area_label=current_space_area_label,
+            current_space_area_type=current_space_area_type,
+            waypoint_descriptions=current_floor_descriptions,
             full_map=full_map,
             crop_offset=crop_offset,
         )

@@ -7,6 +7,18 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 DetectedLandmark = Tuple[str, Any]
 
 
+def _normalize_landmark_queries(landmark_queries: Optional[Sequence[Any]]) -> Tuple[str, ...]:
+    normalized: List[str] = []
+    seen = set()
+    for query in list(landmark_queries or []):
+        text = " ".join(str(query or "").strip().lower().split())
+        if not text or text in seen:
+            continue
+        normalized.append(text)
+        seen.add(text)
+    return tuple(normalized)
+
+
 def _clone_entry(entry: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if not isinstance(entry, dict):
         return {}
@@ -79,6 +91,7 @@ class LandmarkMemory:
     latest_dist_map: Dict[str, Tuple[Any, Any]] = field(default_factory=dict)
     latest_dist_map_multi: Dict[str, List[Tuple[Any, Any]]] = field(default_factory=dict)
     detected_by_step: Dict[int, List[DetectedLandmark]] = field(default_factory=dict)
+    landmark_queries_by_step: Dict[int, Tuple[str, ...]] = field(default_factory=dict)
     visible_entries_by_step: Dict[int, List[Dict[str, Any]]] = field(default_factory=dict)
     prompt_entries_by_step: Dict[int, List[Dict[str, Any]]] = field(default_factory=dict)
 
@@ -89,6 +102,7 @@ class LandmarkMemory:
         self.world_instances.clear()
         self.clear_latest_detection_cache()
         self.detected_by_step.clear()
+        self.landmark_queries_by_step.clear()
         self.visible_entries_by_step.clear()
         self.prompt_entries_by_step.clear()
 
@@ -161,9 +175,11 @@ class LandmarkMemory:
         detected_landmarks: Optional[Sequence[Any]],
         visible_entries: Optional[Sequence[Dict[str, Any]]] = None,
         prompt_entries: Optional[Sequence[Dict[str, Any]]] = None,
+        landmark_queries: Optional[Sequence[Any]] = None,
     ) -> None:
         step_key = int(step_idx)
         self.detected_by_step[step_key] = _clone_detected_landmarks(detected_landmarks)
+        self.landmark_queries_by_step[step_key] = _normalize_landmark_queries(landmark_queries)
         self.visible_entries_by_step[step_key] = _clone_entries(
             visible_entries if visible_entries is not None else self.latest_visible_entries
         )
@@ -171,8 +187,19 @@ class LandmarkMemory:
             prompt_entries if prompt_entries is not None else self.latest_prompt_entries
         )
 
-    def has_step(self, step_idx: int) -> bool:
-        return int(step_idx) in self.detected_by_step
+    def has_step(
+        self,
+        step_idx: int,
+        landmark_queries: Optional[Sequence[Any]] = None,
+    ) -> bool:
+        step_key = int(step_idx)
+        if step_key not in self.detected_by_step:
+            return False
+        if landmark_queries is None:
+            return True
+        return self.landmark_queries_by_step.get(step_key, ()) == _normalize_landmark_queries(
+            landmark_queries
+        )
 
     def get_world_instances(self) -> List[Dict[str, Any]]:
         return _clone_entries(self.world_instances)
@@ -205,6 +232,10 @@ class LandmarkMemory:
         self.detected_by_step = {
             int(step_idx): _clone_detected_landmarks(entries)
             for step_idx, entries in dict(history or {}).items()
+        }
+        self.landmark_queries_by_step = {
+            step_idx: self.landmark_queries_by_step.get(step_idx, ())
+            for step_idx in self.detected_by_step.keys()
         }
 
     def set_visible_entries_by_step(

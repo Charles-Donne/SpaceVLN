@@ -22,8 +22,23 @@ from navigation_system.space.geometry.connectivity import (
     build_bounded_geodesic_distance_field,
     query_world_distance_from_field_m,
 )
-from navigation_system.space.structure.space_types import strip_space_type_variant_suffixes
+from navigation_system.space.structure.space_types import (
+    infer_space_type_from_texts,
+    strip_space_type_variant_suffixes,
+)
 from navigation_system.space.geometry.map_projection import RotatedMapProjector
+
+
+_UNRESOLVED_AREA_LABELS = {
+    "unknown",
+    "area",
+    "room",
+    "space",
+    "zone",
+    "section",
+    "place",
+    "location",
+}
 
 
 def _counterclockwise_direction_sort_key(bearing_deg: float) -> Tuple[int, float]:
@@ -58,13 +73,30 @@ def _clean_area_label(area_label: str) -> str:
 
 
 def _is_unknown_area_label(area_label: str) -> bool:
-    return _clean_area_label(area_label).strip().lower() == "unknown"
+    normalized = re.sub(
+        r"[^a-z0-9]+",
+        " ",
+        _clean_area_label(area_label).strip().lower(),
+    ).strip()
+    if not normalized:
+        return True
+    if normalized in _UNRESOLVED_AREA_LABELS:
+        return True
+    if re.fullmatch(r"(?:area|room|space|zone|section)\s*\d+", normalized):
+        return True
+    if normalized.startswith("unknown"):
+        return True
+    if "not yet determined" in normalized or "to infer" in normalized:
+        return True
+    if "infer" in normalized and "view" in normalized:
+        return True
+    return False
 
 
-def _format_area_display_label(
+def _resolve_display_area_label(
     area_label: str,
     area_type: str = "",
-    fallback: str = "area",
+    cue_texts: Optional[Sequence[str]] = None,
 ) -> str:
     clean_area = _clean_area_label(area_label)
     if not _is_unknown_area_label(clean_area):
@@ -73,14 +105,36 @@ def _format_area_display_label(
     clean_type = _clean_area_label(area_type)
     if not _is_unknown_area_label(clean_type):
         return clean_type
-    return str(fallback or "area").strip() or "area"
+
+    inferred_type = infer_space_type_from_texts(
+        [clean_area, clean_type, *list(cue_texts or [])]
+    )
+    if not _is_unknown_area_label(inferred_type):
+        return inferred_type
+    return ""
+
+
+def _format_area_display_label(
+    area_label: str,
+    area_type: str = "",
+    fallback: str = "infer from current views",
+    cue_texts: Optional[Sequence[str]] = None,
+) -> str:
+    resolved_label = _resolve_display_area_label(
+        area_label=area_label,
+        area_type=area_type,
+        cue_texts=cue_texts,
+    )
+    if resolved_label:
+        return resolved_label
+    return str(fallback or "infer from current views").strip() or "infer from current views"
 
 
 def _format_current_area_header_label(area_label: str, area_type: str = "") -> str:
-    clean_area = _clean_area_label(area_label)
-    if _is_unknown_area_label(clean_area):
-        return "you need to infer actual area from current views"
-    return clean_area
+    display_label = _resolve_display_area_label(area_label, area_type)
+    if display_label:
+        return display_label
+    return "you need to infer actual area from current views"
 
 
 def _format_current_area_chain_label(area_label: str) -> str:
@@ -127,7 +181,11 @@ def _format_waypoint_description_for_display(
 
     space_text, local_text = _split_waypoint_description(clean_desc)
     if _is_unknown_area_label(space_text):
-        display_space = _format_area_display_label(area_label, area_type, fallback="area")
+        display_space = _format_area_display_label(
+            area_label,
+            area_type,
+            cue_texts=[clean_desc, local_text],
+        )
         if local_text:
             return f"{display_space} - {local_text}"
         return display_space
@@ -162,8 +220,8 @@ def _format_space_waypoint_chain_member(
 
 
 def _format_space_waypoint_chain_group(area_label: str, member_labels: Sequence[str]) -> str:
-    clean_area = _format_area_display_label(area_label)
     members = [str(item).strip() for item in member_labels if str(item).strip()]
+    clean_area = _format_area_display_label(area_label, cue_texts=members)
     if not members:
         return clean_area
     return f"{clean_area} ({' -> '.join(members)})"
@@ -560,6 +618,8 @@ def resolve_display_current_area(
     current_pose: Optional[Sequence[float]],
     resolution_cm: float,
     current_space_area_label: str = "",
+    current_space_area_type: str = "",
+    waypoint_descriptions: Optional[Sequence[str]] = None,
     full_map: Optional[np.ndarray] = None,
     crop_offset: Optional[Tuple[int, int]] = None,
 ) -> Tuple[str, Optional[int]]:
@@ -603,12 +663,34 @@ def resolve_display_current_area(
     )
     if anchor_index is not None and waypoint_area_labels and anchor_index < len(waypoint_area_labels):
         anchor_label = str(waypoint_area_labels[anchor_index] or "").strip()
+        anchor_description = (
+            str(waypoint_descriptions[anchor_index] or "").strip()
+            if waypoint_descriptions and anchor_index < len(waypoint_descriptions)
+            else ""
+        )
         if anchor_label:
-            if _clean_area_label(current_area_label) == "Unknown":
-                return anchor_label, int(anchor_index)
+            if _is_unknown_area_label(current_area_label):
+                display_label = _resolve_display_area_label(
+                    anchor_label,
+                    current_space_area_type,
+                    cue_texts=[anchor_description],
+                )
+                if display_label:
+                    return display_label, int(anchor_index)
             if _clean_area_label(anchor_label) == _clean_area_label(current_area_label):
-                return anchor_label, int(anchor_index)
-    return current_area_label or "Unknown", anchor_index
+                display_label = _resolve_display_area_label(
+                    anchor_label,
+                    current_space_area_type,
+                    cue_texts=[anchor_description],
+                )
+                return display_label or anchor_label, int(anchor_index)
+
+    display_current_label = _resolve_display_area_label(
+        current_area_label,
+        current_space_area_type,
+        cue_texts=list(waypoint_descriptions or []),
+    )
+    return display_current_label or current_area_label or "Unknown", anchor_index
 
 
 def select_display_waypoint_indices(
@@ -735,8 +817,9 @@ def _format_area_with_floor(
     area_label: str,
     floor_id: int,
     multi_floor_active: bool,
+    cue_texts: Optional[Sequence[str]] = None,
 ) -> str:
-    clean_area = _format_area_display_label(area_label)
+    clean_area = _format_area_display_label(area_label, cue_texts=cue_texts)
     if not multi_floor_active:
         return clean_area
     return f"{clean_area} [{_format_floor_label(floor_id)}]"
@@ -930,6 +1013,8 @@ def build_waypoint_summary(
         current_pose=current_pose,
         resolution_cm=resolution_cm,
         current_space_area_label=current_space_area_label,
+        current_space_area_type=current_space_area_type,
+        waypoint_descriptions=current_floor_descriptions,
         full_map=full_map,
         crop_offset=crop_offset,
     )
@@ -1235,7 +1320,14 @@ def build_waypoint_summary(
                 continue
             visit_count = int(area_visit_counts.get((int(floor_id), _clean_area_label(area_label)), 0))
             visit_label = "visit" if visit_count == 1 else "visits"
-            display_node_area = _format_area_display_label(area_label)
+            area_cue_texts = [
+                str(waypoint_descriptions[index] if index < len(waypoint_descriptions) else "")
+                for index in area_indices
+            ]
+            display_node_area = _format_area_display_label(
+                area_label,
+                cue_texts=area_cue_texts,
+            )
             area_prefix = "  Area:" if render_multi_floor else "Area:"
             node_lines.append(f"{area_prefix} {display_node_area} ({visit_count} {visit_label})")
 
@@ -1244,7 +1336,7 @@ def build_waypoint_summary(
                 raw_wp_desc = waypoint_descriptions[index] if index < len(waypoint_descriptions) else ""
                 wp_desc = _format_waypoint_description_for_display(
                     raw_wp_desc,
-                    area_label=area_label,
+                    area_label=display_node_area,
                     area_type=display_area_type,
                 )
                 local_index = current_floor_index_map.get(index)
@@ -1287,6 +1379,7 @@ def build_waypoint_summary(
                             waypoint_id=wp_id,
                             waypoint_ids=current_floor_ids,
                             waypoint_positions=current_floor_positions,
+                            waypoint_descriptions=current_floor_descriptions,
                             waypoint_area_labels=current_floor_area_labels,
                             current_pose=current_pose,
                             resolution_cm=resolution_cm,
@@ -1433,6 +1526,7 @@ def _build_waypoint_reachability_note(
     waypoint_id: int,
     waypoint_ids: Sequence[int],
     waypoint_positions: Sequence[Tuple[int, int]],
+    waypoint_descriptions: Sequence[str],
     waypoint_area_labels: Sequence[str],
     current_pose: Optional[Sequence[float]],
     resolution_cm: float,
@@ -1478,10 +1572,19 @@ def _build_waypoint_reachability_note(
             waypoint_area_labels[next_index]
             if next_index < len(waypoint_area_labels) else "Unknown"
         )
-        return f"blocked to current position; reach via {_format_waypoint_area_ref(next_waypoint_id, next_area)}"
+        next_description = (
+            str(waypoint_descriptions[next_index] or "").strip()
+            if next_index < len(waypoint_descriptions)
+            else ""
+        )
+        next_area_ref = f"Space WP#{int(next_waypoint_id)}(" + _format_area_display_label(
+            next_area,
+            cue_texts=[next_description],
+        ) + ")"
+        return f"blocked to current position; reach via {next_area_ref}"
 
     if current_pose is not None:
-        current_area_display = _clean_area_label(current_space_area_label)
+        current_area_display = _format_area_display_label(current_space_area_label)
         return f"blocked to current position; reach via Current({current_area_display})"
     return "blocked to current position"
 
@@ -1614,10 +1717,16 @@ def _build_waypoint_area_path_line(
 
     def _format_group(entry: Dict[str, Any]) -> str:
         entry_members = list(entry.get("members", []) or [])
+        cue_texts = [
+            str(member.get("description", "") or "")
+            for member in entry_members
+            if str(member.get("description", "") or "").strip()
+        ]
         formatted_area_label = _format_area_with_floor(
             area_label=str(entry.get("area_label", "Unknown") or "Unknown"),
             floor_id=_coerce_floor_id(entry.get("floor_id"), current_floor_id),
             multi_floor_active=multi_floor_active,
+            cue_texts=cue_texts,
         )
         if (
             _clean_area_label(str(entry.get("area_label", "") or "")) == "Current Position"

@@ -86,12 +86,7 @@ def get_verification_replanning_prompt(
     """Render the verification/replanning prompt."""
     if not waypoint_summary:
         waypoint_summary = "Unavailable"
-    if verify_replan_prompt_notice:
-        verify_replan_prompt_notice_block = (
-            f"\n**Stuck Notice**: {verify_replan_prompt_notice.strip()}"
-        )
-    else:
-        verify_replan_prompt_notice_block = ""
+    del verify_replan_prompt_notice
 
     previous_subtask_landmark_summary = str(previous_subtask_landmark_summary or "").strip()
     previous_subtask_landmark_block = (
@@ -110,7 +105,7 @@ def get_verification_replanning_prompt(
         waypoint_summary=waypoint_summary,
         previous_subtask_landmark_summary=previous_subtask_landmark_summary,
         previous_subtask_landmark_block=previous_subtask_landmark_block,
-        verify_replan_prompt_notice_block=verify_replan_prompt_notice_block,
+        verify_replan_prompt_notice_block="",
         verify_view_count=verify_view_count,
         obs_blocked_m=_fmt_threshold_m(OBS_BLOCKED_M),
         obs_risky_m=_fmt_threshold_m(OBS_RISKY_M),

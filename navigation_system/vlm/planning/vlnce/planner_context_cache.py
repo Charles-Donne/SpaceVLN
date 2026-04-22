@@ -88,8 +88,8 @@ class ContextCachePlanner(QwenContextCacheMixin, LLMPlanner):
             print("✗ Error: global_map_image is required")
             return None, ""
 
-        subtask_destination = get_next_waypoint(current_subtask) or "Unknown"
-        subtask_instruction = str((current_subtask or {}).get("subtask_instruction", "") or "Unknown")
+        subtask_destination = get_next_waypoint(current_subtask) or "not set"
+        subtask_instruction = str((current_subtask or {}).get("subtask_instruction", "") or "not set")
         prompt_bundle = build_verify_planner_cache_prompt_bundle(
             instruction=instruction,
             subtask_destination=subtask_destination,

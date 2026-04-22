@@ -131,9 +131,17 @@ class LLMPlanner(BaseAPIClient):
                 self._last_response_rejection_notice = (
                     f"Your previous response was rejected because `{field_name}` contained `Unknown`. "
                     "Do not output `Unknown`, `Unknown's ...`, or any unresolved current area. "
-                    "Treat `Unknown` in Space Structure as raw unresolved metadata only; infer the actual current space "
-                    "from the current views, nearby landmarks, openings, map, and trajectory. "
-                    "Do not copy an old waypoint's space area unless current observations support it."
+                    "Treat `Unknown` in Space Structure as weak metadata only. Infer the actual current area from the current views, "
+                    "nearby landmarks, openings, map, and trajectory, and do not reuse an old waypoint space type unless current observations still support it."
+                )
+                return False
+            if re.search(r"(?i)(^|->\s*)(?:area|room|space)(?:'s|\s*-)", field_text):
+                print(f"  [WARN] Planner returned placeholder `{field_name}` with generic area label; reject and retry")
+                self._last_response_rejection_notice = (
+                    f"Your previous response was rejected because `{field_name}` used a generic placeholder such as "
+                    "`area`, `room`, or `space` as the space name. Infer one concrete space type from "
+                    "the current views, nearby landmarks, openings, map, and trajectory. Do not output bare "
+                    "`area - ...`, `room - ...`, or `space's ...`."
                 )
                 return False
 
@@ -146,21 +154,6 @@ class LLMPlanner(BaseAPIClient):
             return False
 
         return True
-
-    @staticmethod
-    def _append_retry_notice_to_prompt(prompt: PromptLike, notice: str) -> PromptLike:
-        notice_text = str(notice or "").strip()
-        if not notice_text:
-            return prompt
-        retry_block = f"**Retry Notice**: {notice_text}"
-        if isinstance(prompt, ExplicitCachePromptBundle):
-            user_prompt = f"{str(prompt.user_prompt or '').rstrip()}\n\n{retry_block}"
-            return ExplicitCachePromptBundle(
-                system_prompt=prompt.system_prompt,
-                user_prompt=user_prompt,
-                full_prompt=compose_full_prompt(prompt.system_prompt, user_prompt),
-            )
-        return f"{str(prompt or '').rstrip()}\n\n{retry_block}"
 
     def _call_planner_with_retry(
         self,
@@ -218,10 +211,6 @@ class LLMPlanner(BaseAPIClient):
             if retry < max_retries - 1:
                 wait = (retry + 1) * 2
                 self.last_call_timing_info["failed_retry_wait_duration_s"] += float(wait)
-                retry_notice = str(getattr(self, "_last_response_rejection_notice", "") or "").strip()
-                if retry_notice:
-                    prompt = self._append_retry_notice_to_prompt(prompt, retry_notice)
-                    prompt_debug_text = extract_prompt_debug_text(prompt)
                 print(
                     f"  [WARN] {failure_label} failed, retry {retry + 1}/{max_retries - 1} "
                     f"in {wait}s..."
@@ -357,8 +346,8 @@ class LLMPlanner(BaseAPIClient):
             return None, ""
         
         # 获取当前子任务信息
-        subtask_destination = get_next_waypoint(current_subtask) or 'Unknown'
-        subtask_instruction = current_subtask.get('subtask_instruction', 'Unknown')
+        subtask_destination = get_next_waypoint(current_subtask) or 'not set'
+        subtask_instruction = current_subtask.get('subtask_instruction', 'not set')
         # 使用预计算的距离（如果没有则设为Unknown）
         if not obstacle_distances:
             obstacle_distances = {

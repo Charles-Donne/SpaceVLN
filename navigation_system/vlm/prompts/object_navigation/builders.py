@@ -56,11 +56,7 @@ def get_ovon_verification_replanning_prompt(
     previous_subtask_landmark_summary: str = None,
     verify_replan_prompt_notice: str = None,
 ) -> str:
-    verify_replan_prompt_notice_block = (
-        f"\n**Stuck Notice**: {verify_replan_prompt_notice.strip()}"
-        if str(verify_replan_prompt_notice or "").strip()
-        else ""
-    )
+    del verify_replan_prompt_notice
     previous_subtask_landmark_block = (
         f"- {previous_subtask_landmark_summary.strip()}"
         if str(previous_subtask_landmark_summary or "").strip()
@@ -72,7 +68,7 @@ def get_ovon_verification_replanning_prompt(
         subtask_instruction=subtask_instruction,
         waypoint_summary=str(waypoint_summary or "Unavailable"),
         previous_subtask_landmark_block=previous_subtask_landmark_block,
-        verify_replan_prompt_notice_block=verify_replan_prompt_notice_block,
+        verify_replan_prompt_notice_block="",
         action_space=action_space,
         obs_blocked_m=_fmt_threshold_m(OBS_BLOCKED_M),
         obs_risky_m=_fmt_threshold_m(OBS_RISKY_M),

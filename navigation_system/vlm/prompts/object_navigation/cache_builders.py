@@ -118,16 +118,14 @@ def build_ovon_verify_planner_cache_prompt_bundle(
     del action_space
     del detected_landmarks
     del direction_names
+    del verify_replan_prompt_notice
     waypoint_text = str(waypoint_summary or "Unavailable").strip() or "Unavailable"
     previous_summary = str(previous_subtask_landmark_summary or "").strip()
     previous_block = f"- {previous_summary}" if previous_summary else ""
-    notice_block = ""
-    if str(verify_replan_prompt_notice or "").strip():
-        notice_block = f"**Stuck Notice**: {str(verify_replan_prompt_notice).strip()}"
 
     system_prompt = _render_verify_planning_system_prompt()
     user_prompt = VERIFY_PLANNING_CACHE_USER_PROMPT.format(
-        verify_replan_prompt_notice_block=notice_block,
+        verify_replan_prompt_notice_block="",
         instruction=instruction,
         subtask_destination=subtask_destination,
         subtask_instruction=subtask_instruction,

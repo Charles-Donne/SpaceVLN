@@ -118,9 +118,9 @@ class OVONContextCachePlanner(QwenContextCacheMixin, LLMPlanner):
 
         prompt_bundle = build_ovon_verify_planner_cache_prompt_bundle(
             instruction=instruction,
-            subtask_destination=get_next_waypoint(current_subtask) or "Unknown",
+            subtask_destination=get_next_waypoint(current_subtask) or "not set",
             subtask_instruction=str(
-                (current_subtask or {}).get("subtask_instruction", "") or "Unknown"
+                (current_subtask or {}).get("subtask_instruction", "") or "not set"
             ),
             action_space=self.action_space,
             detected_landmarks=detected_landmarks,

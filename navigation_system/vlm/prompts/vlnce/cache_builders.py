@@ -111,6 +111,7 @@ def build_verify_planner_cache_prompt_bundle(
     del action_space
     del detected_landmarks
     del direction_names
+    del verify_replan_prompt_notice
 
     waypoint_text = str(waypoint_summary or "Unavailable").strip() or "Unavailable"
     previous_subtask_landmark_summary = str(previous_subtask_landmark_summary or "").strip()
@@ -119,14 +120,10 @@ def build_verify_planner_cache_prompt_bundle(
         if previous_subtask_landmark_summary
         else ""
     )
-    notice_block_for_user = ""
-    if str(verify_replan_prompt_notice or "").strip():
-        notice_text = str(verify_replan_prompt_notice).strip()
-        notice_block_for_user = f"**Stuck Notice**: {notice_text}"
 
     system_prompt = _render_verify_planning_system_prompt()
     user_prompt = VERIFY_PLANNING_CACHE_USER_PROMPT.format(
-        verify_replan_prompt_notice_block=notice_block_for_user,
+        verify_replan_prompt_notice_block="",
         instruction=instruction,
         subtask_destination=subtask_destination,
         subtask_instruction=subtask_instruction,

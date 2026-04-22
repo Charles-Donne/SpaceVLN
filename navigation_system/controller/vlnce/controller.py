@@ -1455,8 +1455,14 @@ class VLMNavigationController(BaseNavigationController):
         history = self.landmark_memory.prompt_entries_by_step
         latest_history_step = max(history.keys(), default=-1)
         history_tail_count = len(history.get(latest_history_step, []) or []) if latest_history_step >= 0 else 0
+        tracked_landmark_queries = tuple(
+            self._normalize_landmark_text(name)
+            for name in list(getattr(self, "landmark_classes", []) or [])
+            if self._normalize_landmark_text(name)
+        )
         cache_key = (
             int(getattr(self, "current_step", -1) or -1),
+            tracked_landmark_queries,
             len(latest_prompt_entries or []),
             len(history),
             latest_history_step,
@@ -2141,6 +2147,7 @@ class VLMNavigationController(BaseNavigationController):
         fallback_sources: Optional[List[Optional[str]]] = None,
     ) -> None:
         """Keep only the current target landmark for each subtask."""
+        previous_landmark = self._normalize_landmark_text(getattr(self, "target_landmark", None))
         self.tracked_landmark_classes.clear()
         clean_landmark = self._resolve_landmark_name(subtask_landmark, fallback_sources)
 
@@ -2152,6 +2159,10 @@ class VLMNavigationController(BaseNavigationController):
             self.target_landmark = None
             self.landmark_classes = []
         self.classes = list(self.landmark_classes)
+        if clean_landmark != previous_landmark:
+            self.landmark_memory.clear_latest_detection_cache()
+            self.latest_action_detection_vis = None
+            self._invalidate_action_landmark_summary_cache()
 
     def _reset_custom_landmark_state(self) -> None:
         """Clear custom landmark classes, records, and map channels before a new subtask."""
@@ -2334,6 +2345,33 @@ class VLMNavigationController(BaseNavigationController):
         cleaned = re.sub(r"[^A-Za-z0-9\s]+", " ", cleaned)
         return re.sub(r"\s+", " ", cleaned).strip().lower()
 
+    @classmethod
+    def _is_unresolved_current_waypoint_area(cls, text: Optional[str]) -> bool:
+        normalized = cls._normalize_current_waypoint_area_token(text)
+        if not normalized:
+            return True
+        if normalized in {
+            "unknown",
+            "area",
+            "room",
+            "space",
+            "zone",
+            "section",
+            "place",
+            "location",
+            "current position",
+        }:
+            return True
+        if re.fullmatch(r"(?:area|room|space|zone|section)\s*\d+", normalized):
+            return True
+        if normalized.startswith("unknown"):
+            return True
+        if "infer actual" in normalized or "infer the actual" in normalized:
+            return True
+        if "infer" in normalized and "view" in normalized:
+            return True
+        return False
+
     def _get_runtime_current_area_label(self) -> str:
         mapper = getattr(self, "mapper", None)
         if mapper is None:
@@ -2401,7 +2439,7 @@ class VLMNavigationController(BaseNavigationController):
 
         runtime_area = self._get_runtime_current_area_label()
         runtime_area_norm = self._normalize_current_waypoint_area_token(runtime_area)
-        if not runtime_area_norm:
+        if not runtime_area_norm or self._is_unresolved_current_waypoint_area(runtime_area):
             return cleaned
 
         if " - " in cleaned:
