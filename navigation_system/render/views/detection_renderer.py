@@ -251,7 +251,7 @@ def render_detection_bbox(owner,
                 normalized["instance_idx"] = int(landmark_display_index_lookup[uid])
 
         cls_name = str(normalized.get("name", "") or "")
-        normalized["source"] = "vis" if source == "vis" else "off"
+        normalized["source"] = "vis" if source == "vis" else "mem"
         normalized["selection_rank"] = int(normalized.get("selection_rank", 0) or 0)
         display_id = _entry_display_id(normalized)
         if display_id is not None:
@@ -303,11 +303,11 @@ def render_detection_bbox(owner,
         strip = None
         selected_visible_entries = [
             entry for entry in ordered_entries
-            if str(entry.get("source", "off")) == "vis"
+            if str(entry.get("source", "mem")) == "vis"
         ][:effective_landmark_strip_topk]
         selected_offscreen_entries = [
             entry for entry in ordered_entries
-            if str(entry.get("source", "off")) != "vis"
+            if str(entry.get("source", "mem")) != "vis"
         ][:effective_landmark_strip_topk]
         if selected_visible_entries or selected_offscreen_entries or action_waypoint_entries:
             item_lines = build_landmark_strip_lines(
@@ -345,7 +345,7 @@ def render_detection_bbox(owner,
         for selected_inst in selected_world_landmark_instances:
             offscreen_entry = _normalize_selected_world_entry(
                 selected_inst,
-                source="off",
+                source="mem",
                 candidate=None,
             )
             selected_topk_entries.append(offscreen_entry)
@@ -553,7 +553,7 @@ def render_detection_bbox(owner,
                 continue
             offscreen_entry = _normalize_selected_world_entry(
                 selected_inst,
-                source="off",
+                source="mem",
                 candidate=None,
             )
             selected_topk_entries.append(offscreen_entry)

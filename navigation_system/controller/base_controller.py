@@ -1043,22 +1043,21 @@ class BaseNavigationController:
         )
 
     def _refresh_post_action_landmark_detection_state(self, action_phase: str) -> bool:
-        """Refresh the latest moved-to frame for action landmark memory and auto-stop checks."""
+        """Refresh tracked landmark distances after a low-level action without new detection."""
         if self.latest_obs is None or self.mapper is None:
             return False
         if not getattr(self, "landmark_classes", None):
             return False
 
-        self._batch_obs([self.latest_obs], save_object_detection=True)
         map_state = self.mapper.get_map_state()
         rgb_bgr = cv2.cvtColor(self.latest_obs["rgb"], cv2.COLOR_RGB2BGR)
-        _, detected_landmarks_step, _ = self._save_visualization_snapshot(
+        self._save_visualization_snapshot(
             map_state=map_state,
             rgb_bgr=rgb_bgr,
             phase=action_phase,
-            detections=self.latest_detections_full if hasattr(self, "latest_detections_full") else None,
-            labels=self.latest_labels_full if hasattr(self, "latest_labels_full") else None,
-            masks=self.latest_masks_full if hasattr(self, "latest_masks_full") else None,
+            detections=None,
+            labels=None,
+            masks=None,
             landmark_classes=list(self.landmark_classes),
             render_policy={
                 "save_rgb": False,
@@ -1070,7 +1069,6 @@ class BaseNavigationController:
                 "save_detection": False,
             },
         )
-        self._record_landmark_detection_step(self.current_step, detected_landmarks_step)
         return True
 
     def _update_obstacle_distances_12_directions(self, lookaround_depths: Optional[List[np.ndarray]] = None):

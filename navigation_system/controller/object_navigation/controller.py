@@ -63,7 +63,6 @@ class OVONObjectNavigationController(VLMNavigationController):
         self.ovon_forced_early_stop_subtask_history = []
         self.ovon_stop_gate_requested = False
         self.ovon_stop_gate_rejection_notice = ""
-        self.ovon_next_subtask_landmark_for_memory_reset = None
 
     def _get_landmark_detection_thresholds(
         self,
@@ -764,17 +763,11 @@ class OVONObjectNavigationController(VLMNavigationController):
             self._print_subtask_info(response, is_initial=True)
             print("[DONE] Global task complete at initial planning")
             return True
-        self.ovon_next_subtask_landmark_for_memory_reset = self._get_subtask_landmark_field(
-            response
+        return super()._apply_thinking_cycle_result(
+            response=response,
+            cycle_info=cycle_info,
+            mode=mode,
         )
-        try:
-            return super()._apply_thinking_cycle_result(
-                response=response,
-                cycle_info=cycle_info,
-                mode=mode,
-            )
-        finally:
-            self.ovon_next_subtask_landmark_for_memory_reset = None
 
     def _run_thinking_cycle(
         self,
@@ -872,27 +865,8 @@ class OVONObjectNavigationController(VLMNavigationController):
         print("[OVONAutoStop] STOP was issued but episode did not finish; continue.")
         return False
 
-    def _ovon_should_preserve_landmark_memory_for_next_subtask(self) -> bool:
-        next_landmark = self._normalize_landmark_text(
-            getattr(self, "ovon_next_subtask_landmark_for_memory_reset", None)
-        )
-        previous_subtask = getattr(self, "current_subtask", None)
-        previous_landmark = self._normalize_landmark_text(
-            self._get_subtask_landmark_field(previous_subtask)
-            if isinstance(previous_subtask, dict)
-            else getattr(self, "target_landmark", None)
-        )
-
-        if not next_landmark or not previous_landmark:
-            return False
-        if next_landmark != previous_landmark:
-            return False
-        return self._ovon_text_contains_goal_label(next_landmark)
-
     def _reset_custom_landmark_state(self) -> None:
-        """Reset per-subtask landmark state unless consecutive OVON final-target tracking continues."""
-        if self._ovon_should_preserve_landmark_memory_for_next_subtask():
-            return
+        """OVON resets landmark memory at every new subtask, same as VLNCE."""
         VLMNavigationController._reset_custom_landmark_state(self)
 
     def _should_autocomplete_subtask_during_action_step(
