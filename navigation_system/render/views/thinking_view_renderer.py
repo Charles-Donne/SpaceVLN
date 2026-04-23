@@ -19,6 +19,7 @@ from navigation_system.config.core.params.api import (
 )
 from navigation_system.config.core.params.spatial import (
     CURRENT_AREA_OVERLAP_THRESHOLD_M as CFG_CURRENT_AREA_OVERLAP_THRESHOLD_M,
+    SPACE_AREA_CURRENT_WAYPOINT_MAX_DISTANCE_M as CFG_SPACE_AREA_CURRENT_WAYPOINT_MAX_DISTANCE_M,
     THINKING_DETECTION_GROUP_MAX_VIEWS as CFG_THINKING_DETECTION_GROUP_MAX_VIEWS,
     THINKING_DETECTION_OBJECT_TOTAL_MAX_VIEWS as CFG_THINKING_DETECTION_OBJECT_TOTAL_MAX_VIEWS,
     THINKING_DETECTION_TRANSITION_TOTAL_MAX_VIEWS as CFG_THINKING_DETECTION_TRANSITION_TOTAL_MAX_VIEWS,
@@ -49,6 +50,11 @@ from navigation_system.space.description.spatial_formatter import (
     resolve_last_distinct_waypoint_index,
     select_display_waypoint_indices,
 )
+from navigation_system.space.structure.space_types import (
+    infer_space_type_from_texts,
+    normalize_space_type,
+    strip_space_type_variant_suffixes,
+)
 from navigation_system.vlm.contracts.schema import DIRECTION_CONFIG
 from navigation_system.space.geometry.map_projection import RotatedMapProjector
 
@@ -65,6 +71,7 @@ class ThinkingViewRenderer:
     VIEW_HFOV_DEG = CFG_THINKING_VIEW_HFOV_DEG
     WAYPOINT_VISIBILITY_RADIUS_M = CFG_WAYPOINT_VISIBILITY_RADIUS_M
     WAYPOINT_VISIBILITY_SAMPLES = CFG_WAYPOINT_VISIBILITY_SAMPLES
+    WAYPOINT_STRIP_MIN_DISTANCE_M = CFG_SPACE_AREA_CURRENT_WAYPOINT_MAX_DISTANCE_M
     SAME_OBJECT_BEARING_THRESHOLD_DEG = CFG_THINKING_SAME_OBJECT_BEARING_THRESHOLD_DEG
     SAME_OBJECT_DISTANCE_THRESHOLD_M = CFG_THINKING_SAME_OBJECT_DISTANCE_THRESHOLD_M
     SAME_OBJECT_DISTANCE_RATIO = CFG_THINKING_SAME_OBJECT_DISTANCE_RATIO
@@ -199,6 +206,50 @@ class ThinkingViewRenderer:
         if len(text) <= max_len:
             return text
         return text[: max(0, max_len - 2)].rstrip() + ".."
+
+    @staticmethod
+    def _title_case_space_type(text: str) -> str:
+        return " ".join(word.capitalize() for word in str(text or "").split())
+
+    @classmethod
+    def _strip_space_waypoint_suffix(cls, text: str) -> str:
+        cleaned = cls._strip_visual_brackets(strip_space_type_variant_suffixes(text) or text)
+        cleaned = cleaned.strip()
+        if not cleaned:
+            return ""
+        for separator in (" - ", " / ", " | "):
+            if separator in cleaned:
+                cleaned = cleaned.split(separator, 1)[0].strip()
+        possessive_match = re.match(r"^(.+?)'s\b", cleaned, flags=re.IGNORECASE)
+        if possessive_match:
+            cleaned = possessive_match.group(1).strip()
+        return cleaned
+
+    @classmethod
+    def _build_waypoint_center_tag_text(
+        cls,
+        area_label: str,
+        description: str,
+        display_text: str,
+    ) -> str:
+        clean_area_label, _connected_area_labels = cls._split_area_label_links(area_label)
+        candidates = [
+            cls._strip_space_waypoint_suffix(clean_area_label),
+            cls._strip_space_waypoint_suffix(description),
+            cls._strip_space_waypoint_suffix(display_text),
+        ]
+        for candidate in candidates:
+            normalized_space_type = normalize_space_type(candidate)
+            if str(normalized_space_type).strip().lower() != "unknown":
+                return cls._title_case_space_type(normalized_space_type)
+        inferred_space_type = infer_space_type_from_texts(candidates)
+        if str(inferred_space_type).strip().lower() != "unknown":
+            return cls._title_case_space_type(inferred_space_type)
+        for candidate in candidates:
+            lowered = str(candidate or "").strip().lower()
+            if lowered and lowered not in {"unknown", "area", "room", "space", "zone", "section", "place", "location"}:
+                return candidate
+        return ""
 
     @classmethod
     def _build_waypoint_view_entries(
@@ -369,6 +420,11 @@ class ThinkingViewRenderer:
                 "relative_bearing_deg": relative_bearing_deg,
                 "snapped_relative_bearing_deg": snapped_relative_bearing_deg,
                 "view_angle_deg": view_angle_deg,
+                "center_tag_text": cls._build_waypoint_center_tag_text(
+                    area_label=area_label,
+                    description=description,
+                    display_text=display_text,
+                ),
                 "is_last_visited": local_index == last_visited_local_index,
                 "is_task_initial_position": (
                     current_floor_initial_index is not None
@@ -529,35 +585,32 @@ class ThinkingViewRenderer:
         for entry in waypoint_entries:
             if bool(entry.get("is_current_area")):
                 updated_entry = dict(entry)
+                updated_entry["is_connected_to_current"] = True
                 assigned_view_angle = cls._assigned_view_angle_for_waypoint(updated_entry, view_angles_deg)
                 if assigned_view_angle is not None:
                     updated_entry["assigned_view_angle"] = float(assigned_view_angle)
                 filtered_entries.append(updated_entry)
                 continue
 
-            if bool(entry.get("is_last_visited")) or bool(entry.get("is_task_initial_position")):
-                updated_entry = dict(entry)
-                assigned_view_angle = cls._assigned_view_angle_for_waypoint(updated_entry, view_angles_deg)
-                if assigned_view_angle is None:
-                    continue
-                updated_entry["assigned_view_angle"] = float(assigned_view_angle)
-                filtered_entries.append(updated_entry)
-                continue
-
+            is_connected_to_current = False
             if obstacle_mask is not None and projector is not None and current_pose is not None:
-                if cls._has_visible_waypoint_ray(
+                is_connected_to_current = cls._has_visible_waypoint_ray(
                     entry=entry,
                     obstacle_mask=obstacle_mask,
                     projector=projector,
                     current_pose=current_pose,
                     resolution_cm=resolution_cm,
-                ):
-                    updated_entry = dict(entry)
-                    assigned_view_angle = cls._assigned_view_angle_for_waypoint(updated_entry, view_angles_deg)
-                    if assigned_view_angle is None:
-                        continue
-                    updated_entry["assigned_view_angle"] = float(assigned_view_angle)
-                    filtered_entries.append(updated_entry)
+                )
+            if not is_connected_to_current:
+                continue
+
+            updated_entry = dict(entry)
+            updated_entry["is_connected_to_current"] = True
+            assigned_view_angle = cls._assigned_view_angle_for_waypoint(updated_entry, view_angles_deg)
+            if assigned_view_angle is None:
+                continue
+            updated_entry["assigned_view_angle"] = float(assigned_view_angle)
+            filtered_entries.append(updated_entry)
 
         return filtered_entries
 
@@ -703,6 +756,17 @@ class ThinkingViewRenderer:
                 )
                 continue
 
+            if not bool(entry.get("is_connected_to_current")):
+                continue
+            try:
+                waypoint_distance_m = float(entry.get("distance_m"))
+            except (TypeError, ValueError):
+                continue
+            if (
+                not np.isfinite(waypoint_distance_m)
+                or waypoint_distance_m <= float(cls.WAYPOINT_STRIP_MIN_DISTANCE_M) + 1e-6
+            ):
+                continue
             note_parts: List[str] = []
             if bool(entry.get("is_last_visited")) and not bool(entry.get("is_task_initial_position")):
                 note_parts.append("LAST POSITION")
@@ -722,7 +786,7 @@ class ThinkingViewRenderer:
                 or "Unknown"
             ).strip() or "Unknown"
             waypoint_text = f"WP#{int(entry.get('id', 0))} {waypoint_display_text}".strip()
-            distance_m = entry.get("distance_m")
+            distance_m = waypoint_distance_m
             sort_key = (cls._distance_sort_value(distance_m), 1.0, 0.0)
             segments = [
                 LandmarkStripSegment("space waypoint: ", prefix_color),

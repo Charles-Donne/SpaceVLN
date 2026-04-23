@@ -591,8 +591,10 @@ class BaseNavigationController:
         if not waypoint_entry:
             return image
 
+        center_tag_text = str(waypoint_entry.get("center_tag_text") or "").strip()
         label_text = str(
-            waypoint_entry.get("label")
+            center_tag_text
+            or waypoint_entry.get("label")
             or waypoint_entry.get("area_label")
             or waypoint_entry.get("description")
             or "Unknown"
@@ -605,12 +607,14 @@ class BaseNavigationController:
         if len(label_text) > 26:
             label_text = label_text[:24].rstrip() + ".."
 
-        try:
-            distance_text = f"{float(waypoint_entry.get('distance_m', 0.0)):.1f}m"
-        except (TypeError, ValueError):
-            distance_text = "unknown"
-
-        display_text = f"{label_text} {distance_text}".strip()
+        if center_tag_text:
+            display_text = label_text
+        else:
+            try:
+                distance_text = f"{float(waypoint_entry.get('distance_m', 0.0)):.1f}m"
+            except (TypeError, ValueError):
+                distance_text = "unknown"
+            display_text = f"{label_text} {distance_text}".strip()
         h, w = image.shape[:2]
         font = cv2.FONT_HERSHEY_SIMPLEX
         font_scale = 0.50

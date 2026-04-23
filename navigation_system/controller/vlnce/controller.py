@@ -1690,7 +1690,8 @@ class VLMNavigationController(BaseNavigationController):
             autocomplete_display_id = self._safe_int(autocomplete_info.get("display_id"))
             entry_display_id = self._safe_int(entry.get("display_id"))
             has_arrived = bool(entry.get("has_arrived"))
-            if not has_arrived and entry_name_norm and autocomplete_name_norm:
+            matched_autocomplete_anchor = False
+            if entry_name_norm and autocomplete_name_norm:
                 same_name = (
                     entry_name_norm == autocomplete_name_norm
                     or entry_name_norm in autocomplete_name_norm
@@ -1698,13 +1699,26 @@ class VLMNavigationController(BaseNavigationController):
                 )
                 if same_name:
                     if autocomplete_instance_uid is not None and entry_instance_uid is not None:
-                        has_arrived = entry_instance_uid == autocomplete_instance_uid
+                        matched_autocomplete_anchor = entry_instance_uid == autocomplete_instance_uid
                     elif autocomplete_display_id is not None and entry_display_id is not None:
-                        has_arrived = entry_display_id == autocomplete_display_id
+                        matched_autocomplete_anchor = entry_display_id == autocomplete_display_id
                     else:
                         autocomplete_class_total = self._safe_int(autocomplete_info.get("class_total")) or 1
                         entry_class_total = self._safe_int(entry.get("class_total")) or 1
-                        has_arrived = autocomplete_class_total <= 1 and entry_class_total <= 1
+                        matched_autocomplete_anchor = (
+                            autocomplete_class_total <= 1 and entry_class_total <= 1
+                        )
+            if matched_autocomplete_anchor and autocomplete_info:
+                autocomplete_distance_m = self._safe_float(autocomplete_info.get("final_distance_m"))
+                if autocomplete_distance_m is not None:
+                    distance_m = autocomplete_distance_m
+                autocomplete_angle_deg = self._safe_float(autocomplete_info.get("final_angle_deg"))
+                if autocomplete_angle_deg is not None:
+                    angle_deg = autocomplete_angle_deg
+                stop_distance_m = float(
+                    self._safe_float(autocomplete_info.get("stop_distance_m")) or stop_distance_m
+                )
+                has_arrived = bool(autocomplete_info.get("has_arrived", True))
             if not has_arrived:
                 has_arrived = self._entry_reaches_action_arrival_threshold(
                     entry,

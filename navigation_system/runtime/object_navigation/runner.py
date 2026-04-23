@@ -484,12 +484,15 @@ def _build_episode_id_specs(dataset, episode_ids: Sequence[int]) -> List[dict]:
         selected_episode_id = int(episode_id)
         if selected_episode_id not in episode_lookup:
             continue
+        sample_index = split_index_lookup.get(selected_episode_id)
         specs.append(
             {
                 "episode_id": selected_episode_id,
-                "sample_index": split_index_lookup.get(selected_episode_id),
-                "storage_entry_id": selected_episode_id,
-                "entry_kind": "episode",
+                "sample_index": sample_index,
+                "storage_entry_id": (
+                    int(sample_index) if sample_index is not None else selected_episode_id
+                ),
+                "entry_kind": "sample" if sample_index is not None else "episode",
             }
         )
     return specs
@@ -713,6 +716,27 @@ def _cleanup_interrupted_specs(*, results_dir: str, episode_specs: Sequence[dict
         )
 
 
+def _cleanup_failed_artifacts(
+    *,
+    results_dir: str,
+    storage_entry_id: int,
+    entry_kind: str,
+    result: dict,
+) -> dict:
+    if bool((result or {}).get("success", False)):
+        return dict(result or {})
+    _cleanup_entry_artifacts(
+        results_dir=results_dir,
+        storage_entry_id=int(storage_entry_id),
+        entry_kind=str(entry_kind or "episode"),
+    )
+    cleaned = dict(result or {})
+    cleaned["gif_path"] = ""
+    cleaned["topdown_path"] = ""
+    cleaned["result_file"] = ""
+    return cleaned
+
+
 def _build_episode_summary_row(
     episode_id: int,
     result: dict,
@@ -888,6 +912,13 @@ def _run_parallel_episode_job(job_spec: dict) -> dict:
             "topdown_path": "",
             "result_file": "",
         }
+
+    result = _cleanup_failed_artifacts(
+        results_dir=str(job_spec["results_dir"]),
+        storage_entry_id=storage_entry_id,
+        entry_kind=entry_kind,
+        result=result,
+    )
 
     summary_row = _build_episode_summary_row(
         episode_id,
@@ -1401,7 +1432,7 @@ def build_arg_parser(run_defaults: dict | None = None) -> argparse.ArgumentParse
         "--save-step-images",
         dest="save_step_images",
         action="store_true",
-        help="save per-step visualization PNGs under detail/<bucket>/episode_xxx/visualization",
+        help="save per-step visualization PNGs under detail/<bucket>/sample_xxx/visualization",
     )
     parser.add_argument(
         "--no-save-step-images",
@@ -1579,6 +1610,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                         episode_specs=[episode_spec],
                     )
                     raise
+                result = _cleanup_failed_artifacts(
+                    results_dir=args.results_dir,
+                    storage_entry_id=int(
+                        episode_spec.get("storage_entry_id", episode_id)
+                    ),
+                    entry_kind=str(episode_spec.get("entry_kind", "episode") or "episode"),
+                    result=result,
+                )
                 summary_row = _build_episode_summary_row(
                     int(episode_id),
                     result,
