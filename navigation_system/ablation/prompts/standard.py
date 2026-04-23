@@ -121,6 +121,7 @@ def get_action_execution_prompt(
     subtask_instruction: str,
     progress_summary: str = "",
     waypoint_summary: str = "",
+    subtask_landmark: str = "",
     detected_landmarks: str = None,
     obstacle_distances=None,
     landmark_map_info: str = None,
@@ -159,6 +160,7 @@ def get_action_execution_prompt(
     return standard_builders._normalize_action_prompt_text(template.format(
         subtask_destination=next_waypoint,
         subtask_instruction=subtask_instruction,
+        subtask_landmark=str(subtask_landmark or "").strip() or "none",
         progress_summary=prompt_progress_summary,
         waypoint_summary=waypoint_summary,
         detected_landmarks=prompt_detected_landmarks or "none",
