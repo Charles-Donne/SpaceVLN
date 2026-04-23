@@ -38,6 +38,10 @@ spacevln_select_python() {
         printf '%s\n' "$HOME/anaconda3/envs/spatial_agent/bin/python"
         return
     fi
+    if command -v python >/dev/null 2>&1; then
+        command -v python
+        return
+    fi
     printf '%s\n' "python"
 }
 
@@ -98,6 +102,14 @@ PY
 
 spacevln_setup_runtime_env() {
     local python_bin="$1"
+    local resolved_python_bin=""
+
+    if [[ "$python_bin" != /* ]]; then
+        resolved_python_bin="$(command -v "$python_bin" 2>/dev/null || true)"
+        if [[ -n "$resolved_python_bin" ]]; then
+            python_bin="$resolved_python_bin"
+        fi
+    fi
 
     export GLOG_minloglevel="${GLOG_minloglevel:-2}"
     export HABITAT_SIM_LOG="${HABITAT_SIM_LOG:-quiet}"
@@ -110,7 +122,7 @@ spacevln_setup_runtime_env() {
     export __EGL_VENDOR_LIBRARY_FILENAMES="${__EGL_VENDOR_LIBRARY_FILENAMES:-/usr/share/glvnd/egl_vendor.d/10_nvidia.json}"
     export __GLX_VENDOR_LIBRARY_NAME="${__GLX_VENDOR_LIBRARY_NAME:-nvidia}"
 
-    if [[ "$python_bin" == "$HOME/anaconda3/envs/"*"/bin/python" ]]; then
+    if [[ "$python_bin" == */envs/*/bin/python ]]; then
         local env_root
         local torch_lib
         local preload_libs=()
@@ -133,8 +145,21 @@ spacevln_setup_runtime_env() {
         if [[ -f "$env_root/lib/libgcc_s.so.1" ]]; then
             preload_libs+=("$env_root/lib/libgcc_s.so.1")
         fi
+        if [[ -f "/lib/x86_64-linux-gnu/libEGL.so.1" ]]; then
+            preload_libs+=("/lib/x86_64-linux-gnu/libEGL.so.1")
+        elif [[ -f "/usr/lib/x86_64-linux-gnu/libEGL.so.1" ]]; then
+            preload_libs+=("/usr/lib/x86_64-linux-gnu/libEGL.so.1")
+        fi
+        if [[ -f "/lib/x86_64-linux-gnu/libGLdispatch.so.0" ]]; then
+            preload_libs+=("/lib/x86_64-linux-gnu/libGLdispatch.so.0")
+        elif [[ -f "/usr/lib/x86_64-linux-gnu/libGLdispatch.so.0" ]]; then
+            preload_libs+=("/usr/lib/x86_64-linux-gnu/libGLdispatch.so.0")
+        fi
         if [[ ${#preload_libs[@]} -gt 0 ]]; then
-            spacevln_prepend_colon_var LD_PRELOAD "$(IFS=:; printf '%s' "${preload_libs[*]}")"
+            local preload_lib
+            for preload_lib in "${preload_libs[@]}"; do
+                spacevln_prepend_colon_var LD_PRELOAD "$preload_lib"
+            done
         fi
     fi
 }

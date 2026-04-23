@@ -341,6 +341,19 @@ def run_parallel_episodes(
     total = len(episode_ids)
     results_summary: List[Dict[str, Any]] = []
     next_job_cursor = 0
+    pool_broken_error = ""
+
+    def _build_parallel_failure(episode_id: int, error_text: str) -> Dict[str, Any]:
+        return {
+            "episode_id": int(episode_id),
+            "success": False,
+            "steps": 0,
+            "episode_duration_s": 0.0,
+            "api_total_duration_s": 0.0,
+            "failed_wasted_duration_s": 0.0,
+            "error": error_text,
+        }
+
     mp_context = multiprocessing.get_context("spawn")
     with concurrent.futures.ProcessPoolExecutor(
         max_workers=worker_count,
@@ -349,7 +362,7 @@ def run_parallel_episodes(
         future_to_job: Dict[concurrent.futures.Future, Dict[str, Any]] = {}
 
         def _submit_next_job(worker_index: int) -> bool:
-            nonlocal next_job_cursor
+            nonlocal next_job_cursor, pool_broken_error
             if next_job_cursor >= total:
                 return False
             job_spec = _build_parallel_episode_spec(
@@ -361,7 +374,18 @@ def run_parallel_episodes(
                 worker_count=worker_count,
                 profile=profile,
             )
-            future = executor.submit(_run_parallel_episode_job, job_spec)
+            try:
+                future = executor.submit(_run_parallel_episode_job, job_spec)
+            except concurrent.futures.process.BrokenProcessPool as exc:
+                pool_broken_error = str(exc)
+                results_summary.append(
+                    _build_parallel_failure(
+                        int(job_spec["episode_id"]),
+                        f"parallel worker pool broken while submitting episode: {exc}",
+                    )
+                )
+                next_job_cursor += 1
+                return False
             future_to_job[future] = job_spec
             next_job_cursor += 1
             return True
@@ -382,17 +406,22 @@ def run_parallel_episodes(
                     results_summary.append(job_result.get("result", {}))
                 except Exception as exc:
                     results_summary.append(
-                        {
-                            "episode_id": int(job_spec["episode_id"]),
-                            "success": False,
-                            "steps": 0,
-                            "episode_duration_s": 0.0,
-                            "api_total_duration_s": 0.0,
-                            "failed_wasted_duration_s": 0.0,
-                            "error": f"parallel worker failed: {exc}",
-                        }
+                        _build_parallel_failure(
+                            int(job_spec["episode_id"]),
+                            f"parallel worker failed: {exc}",
+                        )
                     )
-                _submit_next_job(int(job_spec["worker_index"]))
+                if not pool_broken_error:
+                    _submit_next_job(int(job_spec["worker_index"]))
+
+    if pool_broken_error and next_job_cursor < total:
+        for episode_id in episode_ids[next_job_cursor:]:
+            results_summary.append(
+                _build_parallel_failure(
+                    int(episode_id),
+                    f"parallel worker pool broken, skipped pending episode: {pool_broken_error}",
+                )
+            )
 
     results_summary.sort(key=lambda item: int(item.get("episode_id", 0)))
     return results_summary
