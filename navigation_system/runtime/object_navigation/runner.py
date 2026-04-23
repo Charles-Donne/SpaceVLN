@@ -201,11 +201,8 @@ def _default_results_dir() -> str:
 
 def _default_api_config(runtime: str) -> str:
     runtime_name = str(runtime or "context_cache").strip().lower()
-    file_name = (
-        "vlm_api_config_context_cache.yaml"
-        if runtime_name == "context_cache"
-        else "vlm_api_config.yaml"
-    )
+    del runtime_name
+    file_name = "vlm_api_config.yaml"
     return str(
         (
             _nav_ws_root()
@@ -345,7 +342,10 @@ def _prepare_ovon_config(
 
         if not hasattr(config.habitat.task.measurements, "top_down_map"):
             config.habitat.task.measurements["top_down_map"] = TopDownMapMeasurementConfig()
-        config.habitat.task.measurements.top_down_map.draw_goal_aabbs = False
+        config.habitat.task.measurements.top_down_map.draw_goal_aabbs = True
+        config.habitat.task.measurements.top_down_map.draw_shortest_path = True
+        config.habitat.task.measurements.top_down_map.draw_goal_positions = True
+        config.habitat.task.measurements.top_down_map.draw_view_points = True
 
         if hasattr(config.habitat.task.measurements, "frontier_exploration_map"):
             config.habitat.task.measurements.pop("frontier_exploration_map")

@@ -207,10 +207,10 @@ Runtime credentials are not committed. Create local config files from templates:
 ```bash
 cp navigation_system/config/vlm/vlm_api_config.yaml.template \
    navigation_system/config/vlm/vlm_api_config.yaml
-
-cp navigation_system/config/vlm/vlm_api_config_context_cache.yaml.template \
-   navigation_system/config/vlm/vlm_api_config_context_cache.yaml
 ```
+
+Use the unified `vlm_api_config.yaml` for both standard and `context_cache` runtimes.
+The same file now contains the `qwen_context_cache` switch.
 
 The templates can read provider keys from environment variables such as:
 

@@ -103,6 +103,11 @@ class OVONObjectNavigationController(VLMNavigationController):
                         ) from exc
 
         BaseNavigationController.reset_episode(self, episode_id)
+        if hasattr(self.visualizer, "set_storage_entry"):
+            self.visualizer.set_storage_entry(
+                self.ovon_storage_entry_id,
+                self.ovon_storage_entry_kind,
+            )
 
         self.save_manager = SaveManager(
             self.config.PATHS.RESULTS_DIR,

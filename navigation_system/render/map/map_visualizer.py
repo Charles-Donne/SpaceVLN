@@ -41,37 +41,43 @@ from navigation_system.render.image_resize import (
 class MapVisualizer:
     """Thin coordinator that owns render policy, caching, and save orchestration."""
 
-    GLOBAL_TRAJECTORY_COLOR = (160, 32, 214)
-    LOCAL_TRAJECTORY_COLOR = (178, 48, 230)
+    GLOBAL_TRAJECTORY_COLOR = (255, 108, 142)
+    LOCAL_TRAJECTORY_COLOR = (245, 122, 152)
+    OBSTACLE_COLOR = (26, 26, 26)
+    AGENT_ARROW_COLOR = (45, 30, 139)
+    SPACE_AREA_TAG_BG_COLOR = (255, 255, 255)
+    SPACE_AREA_TAG_BG_ALPHA = 0.85
+    SPACE_AREA_TAG_BORDER_COLOR = (71, 52, 36)
+    SPACE_AREA_TAG_TEXT_COLOR = (43, 43, 43)
     SPACE_AREA_COLOR_PALETTE: Tuple[Tuple[int, int, int], ...] = (
-        (196, 143, 127),
-        (166, 168, 111),
-        (138, 179, 150),
-        (105, 167, 198),
-        (158, 145, 208),
-        (107, 135, 201),
-        (215, 167, 154),
-        (175, 191, 142),
-        (200, 149, 182),
-        (138, 191, 215),
-        (184, 155, 125),
-        (122, 181, 169),
-        (139, 155, 211),
-        (190, 144, 158),
+        (193, 179, 255),  # #FFB3C1 草莓奶昔粉
+        (163, 223, 255),  # #FFDFA3 奶油杏
+        (165, 198, 255),  # #FFC6A5 蜜桃果肉
+        (201, 241, 255),  # #FFF1C9 香草奶油
+        (250, 188, 214),  # #D6BCFA 薰衣草牛奶紫
+        (254, 224, 189),  # #BDE0FE 奶蓝云雾
+        (233, 228, 255),  # #FFE4E9 樱花白粉
+        (214, 201, 255),  # 亮樱花粉
+        (184, 232, 255),  # 暖奶杏变体
+        (188, 214, 255),  # 柔蜜桃变体
+        (220, 246, 255),  # 奶油浅黄变体
+        (255, 206, 226),  # 亮薰衣草粉变体
+        (255, 236, 210),  # 糖果浅蓝变体
+        (242, 239, 255),  # 极浅粉白变体
     )
     SPACE_TYPE_PREFERRED_COLOR_INDEX: Dict[str, int] = {
-        "hallway": 0,
-        "stairs": 6,
-        "living room": 1,
-        "bedroom": 3,
+        "hallway": 3,
+        "stairs": 2,
+        "living room": 0,
+        "bedroom": 4,
         "kitchen": 4,
-        "bathroom": 7,
-        "dining room": 2,
-        "office": 8,
+        "bathroom": 5,
+        "dining room": 1,
+        "office": 6,
         "laundry room": 5,
         "closet": 9,
-        "balcony": 7,
-        "garage": 8,
+        "balcony": 10,
+        "garage": 11,
     }
     SPACE_TYPE_ALIAS_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
         ("hallway", ("hallway", "hall", "corridor", "passage", "entry", "entryway", "foyer", "doorway")),
@@ -152,6 +158,8 @@ class MapVisualizer:
         self.enable_adaptive_zoom = enable_adaptive_zoom
         self.debug_save_renderings = bool(debug_save_renderings)
         self.save_step_map_artifacts = bool(save_step_map_artifacts)
+        self.storage_entry_id = None
+        self.entry_kind = "episode"
         self.color_palette = [int(x * 255.) for x in color_palette]
         self._render_cache: Dict[str, Dict[Any, Any]] = {
             "obstacle_mask_raw": {},
@@ -164,6 +172,10 @@ class MapVisualizer:
             "space_area_color_assignments": {},
         }
         self._active_render_cache_key = None
+
+    def set_storage_entry(self, entry_id: Optional[int], entry_kind: str = "episode") -> None:
+        self.storage_entry_id = int(entry_id) if entry_id is not None else None
+        self.entry_kind = str(entry_kind or "episode").strip() or "episode"
 
     def _build_map_projector(
         self,
@@ -618,7 +630,16 @@ class MapVisualizer:
 
     def _create_episode_directories(self, episode_id: int):
         """为特定episode创建保存目录"""
-        episode_dir = get_episode_detail_dir(self.results_dir, episode_id)
+        storage_entry_id = (
+            int(self.storage_entry_id)
+            if self.storage_entry_id is not None
+            else int(episode_id)
+        )
+        episode_dir = get_episode_detail_dir(
+            self.results_dir,
+            storage_entry_id,
+            entry_kind=str(self.entry_kind or "episode"),
+        )
         os.makedirs(episode_dir, exist_ok=True)
         return episode_dir
 
@@ -874,7 +895,7 @@ class MapVisualizer:
                     paths['global_map_input'] = {
                         "image_array": global_map_with_trajectory,
                         "color_space": "bgr",
-                        "artifact_name": "global_map.jpg",
+                        "artifact_name": "global_map.png",
                         "name": "global_map",
                         "original_artifact_path": self.get_model_input_map_artifact_path(
                             step=step,

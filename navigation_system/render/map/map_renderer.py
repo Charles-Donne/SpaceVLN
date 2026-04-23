@@ -210,7 +210,7 @@ def render_global_map(owner,
         show_labels=False,
     )
     obstacle_mask_display = owner._build_display_obstacle_mask(full_map)
-    sem_map_vis[obstacle_mask_display] = [0, 0, 0]
+    sem_map_vis[obstacle_mask_display] = owner.OBSTACLE_COLOR
 
     # ===== 阶段3: 提取Landmark位置（但不绘制）=====
     landmarks = []
@@ -335,8 +335,8 @@ def render_global_map(owner,
         agent_arrow = vu.get_contour_points(agent_pos, origin=(0, 0), size=arrow_size)
         cv2.drawContours(global_map_rotated, [agent_arrow], 0, (255, 255, 255), 1)
         cv2.drawContours(global_map_with_trajectory, [agent_arrow], 0, (255, 255, 255), 1)
-        cv2.drawContours(global_map_rotated, [agent_arrow], 0, (0, 0, 255), -1)
-        cv2.drawContours(global_map_with_trajectory, [agent_arrow], 0, (0, 0, 255), -1)
+        cv2.drawContours(global_map_rotated, [agent_arrow], 0, owner.AGENT_ARROW_COLOR, -1)
+        cv2.drawContours(global_map_with_trajectory, [agent_arrow], 0, owner.AGENT_ARROW_COLOR, -1)
 
     # 添加方位标签到global map
     global_map_with_trajectory = owner.add_orientation_labels(global_map_with_trajectory)
@@ -436,7 +436,7 @@ def render_local_map(owner,
         show_labels=False,
     )
     obstacle_mask_resized = owner._build_display_obstacle_mask(full_map)
-    sem_map_vis[obstacle_mask_resized] = [0, 0, 0]
+    sem_map_vis[obstacle_mask_resized] = owner.OBSTACLE_COLOR
 
     # ===== 阶段3: 准备显示（地图已在提取时旋转）=====
     projector = owner._build_map_projector(full_map, current_pose, crop_offset)
@@ -541,7 +541,7 @@ def render_local_map(owner,
                      color=border_color, thickness=border_thickness)
 
     # ===== 阶段6.4: 先把 obstacle 重新压回 FOV 之上，再画轨迹/landmark/箭头 =====
-    local_map[obstacle_local] = [0, 0, 0]  # 黑色BGR
+    local_map[obstacle_local] = owner.OBSTACLE_COLOR
 
     # ===== 阶段6.5: 绘制轨迹线（在 obstacle 之后，确保轨迹位于其上）=====
     if len(trajectory_display_points) > 1:
@@ -641,7 +641,7 @@ def render_local_map(owner,
                 )
 
     # ===== 阶段9: 绘制朝上的箭头（最上层）=====
-    arrow_color = (0, 0, 255)
+    arrow_color = owner.AGENT_ARROW_COLOR
     arrow_angle = np.deg2rad(-90)
     agent_pos = (fov_center_x, fov_center_y, arrow_angle)
     agent_arrow = vu.get_contour_points(agent_pos, origin=(0, 0), size=26)
@@ -712,13 +712,13 @@ def add_orientation_labels(owner, map_image: np.ndarray) -> np.ndarray:
 
     return labeled_map
 
-def save_global_map(owner, 
+def save_global_map(owner,
                    step: int,
                    episode_id: int,
                    global_map: np.ndarray,
                    phase: str = "action") -> str:
     """
-    保存全局地图（添加标签）
+    保存全局地图原图（无标题叠加，PNG无压缩）
 
     Args:
         step: 步数
@@ -732,41 +732,13 @@ def save_global_map(owner,
     if global_map is None:
         return None
 
-    labeled_map = global_map.copy()
-    label_text = "Global Map"
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    font_scale = 0.7
-    font_thickness = 2
-    text_x = 6
-    text_y = max(20, labeled_map.shape[0] - 8)
-    cv2.putText(
-        labeled_map,
-        label_text,
-        (text_x, text_y),
-        font,
-        font_scale,
-        (255, 255, 255),
-        3,
-        cv2.LINE_AA,
-    )
-    cv2.putText(
-        labeled_map,
-        label_text,
-        (text_x, text_y),
-        font,
-        font_scale,
-        (0, 0, 180),
-        font_thickness,
-        cv2.LINE_AA,
-    )
-
     save_path = owner.get_map_artifact_path(
         step=step,
         episode_id=episode_id,
         phase=phase,
         map_kind="global",
     )
-    cv2.imwrite(save_path, labeled_map)
+    cv2.imwrite(save_path, global_map, [cv2.IMWRITE_PNG_COMPRESSION, 0])
     return save_path
 
 def save_local_map(owner,

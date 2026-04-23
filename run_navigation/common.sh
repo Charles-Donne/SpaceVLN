@@ -167,7 +167,7 @@ PY
 }
 
 spacevln_default_context_cache_api_config() {
-    printf '%s\n' "navigation_system/config/vlm/vlm_api_config_context_cache.yaml"
+    printf '%s\n' "navigation_system/config/vlm/vlm_api_config.yaml"
 }
 
 spacevln_validate_parallel_workers() {

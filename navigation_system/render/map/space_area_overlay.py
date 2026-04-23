@@ -637,9 +637,10 @@ def _draw_space_area_label(
     draw_x2 = max(x1, x2 - 1)
     draw_y2 = max(y1, y2 - 1)
     label_style = self._get_space_area_label_style(image.shape)
-    label_bg_color = (255, 0, 0)
-    label_border_color = (255, 255, 255)
-    label_text_color = (255, 255, 255)
+    label_bg_color = tuple(int(v) for v in self.SPACE_AREA_TAG_BG_COLOR)
+    label_border_color = tuple(int(v) for v in self.SPACE_AREA_TAG_BORDER_COLOR)
+    label_text_color = tuple(int(v) for v in self.SPACE_AREA_TAG_TEXT_COLOR)
+    label_bg_alpha = float(getattr(self, "SPACE_AREA_TAG_BG_ALPHA", 0.85))
 
     if label_anchor is not None and label_center is not None:
         connector_distance = float(np.hypot(label_center[0] - label_anchor[0], label_center[1] - label_anchor[1]))
@@ -648,12 +649,16 @@ def _draw_space_area_label(
                 image,
                 (int(label_anchor[0]), int(label_anchor[1])),
                 (int(label_center[0]), int(label_center[1])),
-                label_bg_color,
+                label_border_color,
                 1,
                 cv2.LINE_AA,
             )
 
-    cv2.rectangle(image, (x1, y1), (draw_x2, draw_y2), label_bg_color, -1)
+    roi = image[y1:draw_y2 + 1, x1:draw_x2 + 1]
+    if roi.size > 0:
+        bg = np.full_like(roi, label_bg_color, dtype=np.uint8)
+        blended = cv2.addWeighted(bg, label_bg_alpha, roi, 1.0 - label_bg_alpha, 0.0)
+        image[y1:draw_y2 + 1, x1:draw_x2 + 1] = blended
     cv2.rectangle(image, (x1, y1), (draw_x2, draw_y2), label_border_color, 1)
     cv2.putText(
         image,

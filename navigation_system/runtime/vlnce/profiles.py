@@ -19,9 +19,7 @@ from navigation_system.vlm.vlnce.runtime_factory import (
 
 
 DEFAULT_API_CONFIG = "navigation_system/config/vlm/vlm_api_config.yaml"
-DEFAULT_CONTEXT_CACHE_API_CONFIG = (
-    "navigation_system/config/vlm/vlm_api_config_context_cache.yaml"
-)
+DEFAULT_CONTEXT_CACHE_API_CONFIG = DEFAULT_API_CONFIG
 
 
 @dataclass(frozen=True)

@@ -16,7 +16,7 @@ class ContextCacheActionExecutor(QwenContextCacheMixin, ActionExecutor):
 
     def __init__(
         self,
-        config_path: str = "navigation_system/config/vlm/vlm_api_config_context_cache.yaml",
+        config_path: str = "navigation_system/config/vlm/vlm_api_config.yaml",
         turn_angle: float = 30.0,
         move_distance: float = 0.25,
     ):

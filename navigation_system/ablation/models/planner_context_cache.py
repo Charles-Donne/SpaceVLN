@@ -20,7 +20,7 @@ class AblationContextCachePlanner(QwenContextCacheMixin, LLMPlanner):
 
     def __init__(
         self,
-        config_path: str = "navigation_system/config/vlm/vlm_api_config_context_cache.yaml",
+        config_path: str = "navigation_system/config/vlm/vlm_api_config.yaml",
         action_space: str = None,
         ablation_spec: Optional[AblationSpec] = None,
     ):

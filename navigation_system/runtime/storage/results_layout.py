@@ -15,7 +15,7 @@ DEFAULT_CONTEXT_CACHE_API_CONFIG = os.path.join(
     "navigation_system",
     "config",
     "vlm",
-    "vlm_api_config_context_cache.yaml",
+    "vlm_api_config.yaml",
 )
 DEFAULT_SYSTEM_RUNTIME_CONFIG_RELATIVE = os.path.join(
     "navigation_system",

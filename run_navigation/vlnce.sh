@@ -141,7 +141,7 @@ esac
 if [[ "${RUNTIME_MODE}" == "context_cache" ]]; then
     API_CONFIG="${VLM_API_CONFIG:-$(spacevln_default_context_cache_api_config)}"
     API_MISSING_MESSAGE="Context-cache API config does not exist"
-    API_MISSING_HINT="Copy and fill navigation_system/config/vlm/vlm_api_config_context_cache.yaml.template"
+    API_MISSING_HINT="Copy and fill navigation_system/config/vlm/vlm_api_config.yaml.template"
 else
     API_CONFIG="${VLM_API_CONFIG:-navigation_system/config/vlm/vlm_api_config.yaml}"
     API_MISSING_MESSAGE="API config does not exist"

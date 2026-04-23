@@ -69,3 +69,11 @@ llm_timeout:    25     # 大模型首 token 慢，给足等待时间
 # VLM 执行器参数
 vlm_max_tokens: 500     # action prompt较长时，给足JSON收尾空间，减少500截断
 vlm_timeout:    6      # 给动作模型留够输出完成时间，避免6s时刚好超时
+
+# Qwen 显式缓存参数（仅 context_cache runtime 会使用）
+# 统一保留在这一份 YAML 中；标准 runtime 会忽略该块。
+qwen_context_cache:
+  enabled: true
+  cache_type: "ephemeral"
+  print_usage: true
+  results_dir_suffix: "_cache"

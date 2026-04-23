@@ -207,11 +207,7 @@ if [[ ${#POSITIONAL_ARGS[@]} -gt 0 ]]; then
     fi
 fi
 
-if [[ "${RUNTIME_MODE}" == "context_cache" ]]; then
-    API_CONFIG="${VLM_API_CONFIG:-navigation_system/config/vlm/vlm_api_config_context_cache.yaml}"
-else
-    API_CONFIG="${VLM_API_CONFIG:-navigation_system/config/vlm/vlm_api_config.yaml}"
-fi
+API_CONFIG="${VLM_API_CONFIG:-navigation_system/config/vlm/vlm_api_config.yaml}"
 
 cd "$PROJECT_ROOT"
 exec "$PYTHON_BIN" object_navigation.py \

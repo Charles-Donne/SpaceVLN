@@ -17,7 +17,7 @@ class ContextCachePlanner(QwenContextCacheMixin, LLMPlanner):
 
     def __init__(
         self,
-        config_path: str = "navigation_system/config/vlm/vlm_api_config_context_cache.yaml",
+        config_path: str = "navigation_system/config/vlm/vlm_api_config.yaml",
         action_space: str = None,
     ):
         super().__init__(config_path=config_path, action_space=action_space)
