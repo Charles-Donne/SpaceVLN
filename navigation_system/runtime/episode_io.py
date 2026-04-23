@@ -150,6 +150,8 @@ def build_episode_console_summary(
     steps = int(result.get("steps", result.get("total_steps", 0)) or 0)
     reason = str(result.get("reason") or "").strip()
     error = str(result.get("error") or "").strip()
+    if status == "FAIL" and not reason and not error:
+        reason = "failed_before_first_step" if steps <= 0 else "episode_failed"
 
     parts = [
         (
@@ -190,7 +192,12 @@ def build_episode_console_summary(
             except Exception:
                 continue
 
-    if reason:
+    normal_failure_reasons = {
+        "episode_done_without_success",
+        "max_episode_steps_reached",
+        "goal_not_reached",
+    }
+    if reason and not (status == "FAIL" and not error and reason in normal_failure_reasons):
         parts.append(f"reason={reason}")
     if error:
         parts.append(f"error={error}")

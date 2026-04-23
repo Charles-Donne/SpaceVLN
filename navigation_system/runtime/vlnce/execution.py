@@ -4,6 +4,7 @@ import argparse
 import concurrent.futures
 import multiprocessing
 import os
+import signal
 from typing import Any, Dict, List, Tuple
 
 from navigation_system.config import ConfigHelper, get_config
@@ -34,6 +35,45 @@ INITIAL_FAILURE_RETRY_REASONS = {
     "initial_subtask_failed",
     "initial_lookaround_failed",
 }
+
+
+def _format_exception_message(exc: BaseException) -> str:
+    exc_type = type(exc).__name__
+    exc_text = str(exc).strip()
+    return f"{exc_type}: {exc_text}" if exc_text else exc_type
+
+
+def _parallel_worker_initializer() -> None:
+    try:
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+    except Exception:
+        pass
+
+
+def _shutdown_parallel_executor(
+    executor: concurrent.futures.ProcessPoolExecutor,
+    *,
+    interrupted: bool,
+) -> None:
+    if interrupted:
+        processes = list((getattr(executor, "_processes", None) or {}).values())
+        for process in processes:
+            try:
+                if process is not None and process.is_alive():
+                    process.terminate()
+            except Exception:
+                pass
+        for process in processes:
+            try:
+                if process is not None:
+                    process.join(timeout=0.5)
+            except Exception:
+                pass
+    try:
+        executor.shutdown(wait=not interrupted)
+    except Exception:
+        if not interrupted:
+            raise
 
 
 def load_runtime_config(
@@ -173,7 +213,7 @@ def _run_single_episode_attempt(
         if isinstance(exc, KeyboardInterrupt):
             raise
 
-        error_msg = str(exc)
+        error_msg = _format_exception_message(exc)
         timing_summary = {}
         finalized_success = False
         finalized_steps = 0
@@ -400,10 +440,13 @@ def run_parallel_episodes(
         }
 
     mp_context = multiprocessing.get_context("spawn")
-    with concurrent.futures.ProcessPoolExecutor(
+    interrupted = False
+    executor = concurrent.futures.ProcessPoolExecutor(
         max_workers=worker_count,
         mp_context=mp_context,
-    ) as executor:
+        initializer=_parallel_worker_initializer,
+    )
+    try:
         future_to_job: Dict[concurrent.futures.Future, Dict[str, Any]] = {}
 
         def _submit_next_job(worker_index: int) -> bool:
@@ -440,24 +483,39 @@ def run_parallel_episodes(
                 break
 
         while future_to_job:
-            done, _ = concurrent.futures.wait(
-                list(future_to_job.keys()),
-                return_when=concurrent.futures.FIRST_COMPLETED,
-            )
+            try:
+                done, _ = concurrent.futures.wait(
+                    list(future_to_job.keys()),
+                    return_when=concurrent.futures.FIRST_COMPLETED,
+                )
+            except KeyboardInterrupt:
+                interrupted = True
+                for pending_future in list(future_to_job.keys()):
+                    pending_future.cancel()
+                raise
             for future in done:
                 job_spec = future_to_job.pop(future)
                 try:
                     job_result = future.result()
                     results_summary.append(job_result.get("result", {}))
+                except (KeyboardInterrupt, SystemExit):
+                    interrupted = True
+                    future.cancel()
+                    for pending_future in list(future_to_job.keys()):
+                        pending_future.cancel()
+                    raise
                 except Exception as exc:
                     results_summary.append(
                         _build_parallel_failure(
                             int(job_spec["episode_id"]),
-                            f"parallel worker failed: {exc}",
+                            f"parallel worker failed: {_format_exception_message(exc)}",
                         )
                     )
                 if not pool_broken_error:
                     _submit_next_job(int(job_spec["worker_index"]))
+
+    finally:
+        _shutdown_parallel_executor(executor, interrupted=interrupted)
 
     if pool_broken_error and next_job_cursor < total:
         for episode_id in episode_ids[next_job_cursor:]:

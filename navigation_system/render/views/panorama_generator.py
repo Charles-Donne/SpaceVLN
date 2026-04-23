@@ -156,7 +156,8 @@ class PanoramaGenerator:
         
         for pos, key in zip(positions, ["left", "center", "right"]):
             text = labels_deg[key]
-            (text_width, text_height), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 1.0, 2)
+            font_thickness = 1
+            (text_width, text_height), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 1.0, font_thickness)
             text_x = pos[0] - text_width // 2
             text_y = pos[1]
             
@@ -165,9 +166,9 @@ class PanoramaGenerator:
                 for offset_y in range(-2, 3):
                     if offset_x != 0 or offset_y != 0:
                         cv2.putText(panorama, text, (text_x + offset_x, text_y + offset_y),
-                                  cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+                                  cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), font_thickness)
             # 红色文字
             cv2.putText(panorama, text, (text_x, text_y),
-                      cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
+                      cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), font_thickness)
         
         return panorama

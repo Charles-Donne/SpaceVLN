@@ -4043,6 +4043,13 @@ class VLMNavigationController(BaseNavigationController):
 
         normalized_env_metrics = self._normalize_final_env_metrics(env_metrics)
         final_success = bool((normalized_env_metrics or {}).get('success', 0))
+        final_failure_reason = self._infer_navigation_failure_reason(
+            explicit_reason=failure_reason,
+            env_metrics=normalized_env_metrics,
+            total_steps=total_steps,
+            max_steps=max_steps,
+            final_success=final_success,
+        )
         final_result = self._save_navigation_result(total_steps, normalized_env_metrics)
         episode_timing_summary = self._build_episode_timing_summary()
 
@@ -4050,6 +4057,15 @@ class VLMNavigationController(BaseNavigationController):
             'success': final_success,
             'total_steps': total_steps,
             'subtask_count': self.subtask_count,
+            'distance_to_goal': float(
+                (normalized_env_metrics or {}).get('distance_to_goal', -1.0) or -1.0
+            ),
+            'spl': float((normalized_env_metrics or {}).get('spl', 0.0) or 0.0),
+            'soft_spl': float(
+                (normalized_env_metrics or {}).get('soft_spl', 0.0)
+                or (normalized_env_metrics or {}).get('oracle_spl', 0.0)
+                or 0.0
+            ),
             'detected_classes': list(self.detected_classes),
             'episode_duration_s': episode_timing_summary['episode_duration_s'],
             'failed_api_total_duration_s': episode_timing_summary['failed_api_total_duration_s'],
@@ -4060,7 +4076,7 @@ class VLMNavigationController(BaseNavigationController):
             'gif_path': gif_path,
             'topdown_path': topdown_path,
             'result_file': final_result,
-            'reason': failure_reason,
+            'reason': final_failure_reason,
         }
 
     def _build_nav_visualizer_info(self, info: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -4135,6 +4151,51 @@ class VLMNavigationController(BaseNavigationController):
             metrics['_final_success_inferred'] = True
 
         return metrics
+
+    def _infer_navigation_failure_reason(
+        self,
+        *,
+        explicit_reason: str,
+        env_metrics: Optional[Dict[str, Any]],
+        total_steps: int,
+        max_steps: int,
+        final_success: bool,
+    ) -> str:
+        reason_text = str(explicit_reason or "").strip()
+        if final_success:
+            return ""
+        if reason_text:
+            return reason_text
+
+        cycle_reason = str(
+            getattr(self, "latest_thinking_cycle_info", {}).get("reason", "") or ""
+        ).strip()
+        if cycle_reason == "insufficient_steps_for_lookaround":
+            return "episode_budget_exhausted_before_replan"
+        if cycle_reason:
+            return cycle_reason
+
+        metrics = dict(env_metrics or self.latest_info or {})
+        success_distance_m = self._get_success_distance_m()
+        distance_to_goal = metrics.get("distance_to_goal", -1.0)
+        try:
+            distance_to_goal = float(distance_to_goal)
+        except (TypeError, ValueError):
+            distance_to_goal = -1.0
+
+        if int(total_steps or 0) >= int(max_steps or 0) > 0:
+            return "max_episode_steps_reached"
+
+        episode_done = bool(metrics.get("done", False) or self._episode_done_cached())
+        if episode_done:
+            return "episode_done_without_success"
+
+        if distance_to_goal >= 0.0:
+            return "goal_not_reached"
+
+        if int(total_steps or 0) <= 0:
+            return "failed_before_first_step"
+        return "navigation_failed"
 
     def _save_navigation_result(self, total_steps: int, env_metrics: Dict = None) -> str:
         """

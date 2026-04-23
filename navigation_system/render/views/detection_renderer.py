@@ -687,7 +687,7 @@ def _build_action_distance_label_boxes(
         end_x = int(center_x + line_length * np.cos(angle_rad))
         end_y = int(bottom_y + line_length * np.sin(angle_rad))
         font_scale = 0.72 if config['key'] == 'front' else 0.62
-        font_thickness = 2
+        font_thickness = 1
         combined_label = f"{config['label']} {dist_str}"
         label_size = cv2.getTextSize(combined_label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thickness)[0]
         label_offset = 25
@@ -886,7 +886,7 @@ def draw_distance_on_action_view(owner, image: np.ndarray, distance_dict: Dict[s
 
         # FRONT用大字号，其他用稍大字号
         font_scale = 0.72 if config['key'] == 'front' else 0.62
-        font_thickness = 2 if config['key'] == 'front' else 2
+        font_thickness = 1
 
         # 合并标签为单行："Left 90 1.3m" 或 "FRONT 0.70m"
         combined_label = f"{config['label']} {dist_str}"

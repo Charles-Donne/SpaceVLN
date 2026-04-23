@@ -11,6 +11,7 @@ import multiprocessing
 import os
 import random
 import shutil
+import signal
 import sys
 from pathlib import Path
 from typing import List, Sequence
@@ -41,6 +42,45 @@ from navigation_system.runtime.storage.artifacts import (
 
 
 RUNTIME_CHOICES = ("standard", "context_cache")
+
+
+def _format_exception_message(exc: BaseException) -> str:
+    exc_type = type(exc).__name__
+    exc_text = str(exc).strip()
+    return f"{exc_type}: {exc_text}" if exc_text else exc_type
+
+
+def _parallel_worker_initializer() -> None:
+    try:
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+    except Exception:
+        pass
+
+
+def _shutdown_parallel_executor(
+    executor: concurrent.futures.ProcessPoolExecutor,
+    *,
+    interrupted: bool,
+) -> None:
+    if interrupted:
+        processes = list((getattr(executor, "_processes", None) or {}).values())
+        for process in processes:
+            try:
+                if process is not None and process.is_alive():
+                    process.terminate()
+            except Exception:
+                pass
+        for process in processes:
+            try:
+                if process is not None:
+                    process.join(timeout=0.5)
+            except Exception:
+                pass
+    try:
+        executor.shutdown(wait=not interrupted)
+    except Exception:
+        if not interrupted:
+            raise
 
 
 def _nav_ws_root() -> Path:
@@ -268,6 +308,14 @@ def _prepare_ovon_config(
     import contextlib
     import io
 
+    ovon_repo = str((_nav_ws_root() / "ovon").resolve())
+    ovon_habitat_lab = str(
+        (_nav_ws_root() / "ovon" / "habitat-lab-v0.2.3" / "habitat-lab").resolve()
+    )
+    for source_path in (ovon_habitat_lab, ovon_repo):
+        if source_path not in sys.path:
+            sys.path.insert(0, source_path)
+
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
         import habitat
         from habitat.config import read_write
@@ -276,13 +324,14 @@ def _prepare_ovon_config(
             TopDownMapMeasurementConfig,
             register_hydra_plugin,
         )
+        from navigation_system.runtime.object_navigation.visualization_patch import (
+            install_ovon_topdown_visualization_patch,
+        )
 
-    ovon_repo = str((_nav_ws_root() / "ovon").resolve())
-    if ovon_repo not in sys.path:
-        sys.path.insert(0, ovon_repo)
     ovon_repo_root = (_nav_ws_root() / "ovon").resolve()
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
         from ovon.config import HabitatConfigPlugin
+        install_ovon_topdown_visualization_patch()
 
     register_hydra_plugin(HabitatConfigPlugin)
     config = habitat.get_config(str(Path(exp_config).resolve()))
@@ -700,6 +749,27 @@ def _cleanup_entry_artifacts(
             _prune_empty_parents(candidate.parent, stop_at=log_root)
 
 
+def _cleanup_entry_log_artifacts(
+    *,
+    results_dir: str,
+    storage_entry_id: int,
+    entry_kind: str,
+) -> None:
+    log_root = Path(results_dir) / "log"
+    for log_path in get_episode_log_path_candidates(
+        results_dir,
+        int(storage_entry_id),
+        entry_kind=entry_kind,
+    ):
+        candidate = Path(log_path)
+        if candidate.exists():
+            try:
+                candidate.unlink()
+            except IsADirectoryError:
+                shutil.rmtree(candidate, ignore_errors=True)
+            _prune_empty_parents(candidate.parent, stop_at=log_root)
+
+
 def _cleanup_interrupted_specs(*, results_dir: str, episode_specs: Sequence[dict]) -> None:
     seen: set[tuple[str, int]] = set()
     for spec in episode_specs:
@@ -709,11 +779,30 @@ def _cleanup_interrupted_specs(*, results_dir: str, episode_specs: Sequence[dict
         if key in seen:
             continue
         seen.add(key)
-        _cleanup_entry_artifacts(
+        _cleanup_entry_log_artifacts(
             results_dir=results_dir,
             storage_entry_id=storage_entry_id,
             entry_kind=entry_kind,
         )
+
+
+def _is_abnormal_failure(result: dict | None) -> bool:
+    payload = dict(result or {})
+    if bool(payload.get("success", False)):
+        return False
+
+    error_text = str(payload.get("error", "") or "").strip()
+    if error_text:
+        return True
+
+    reason = str(payload.get("reason", "") or "").strip().lower()
+    abnormal_reasons = {
+        "runtime_exception",
+        "parallel_worker_failed",
+        "interrupted",
+        "incomplete",
+    }
+    return reason in abnormal_reasons
 
 
 def _cleanup_failed_artifacts(
@@ -723,17 +812,17 @@ def _cleanup_failed_artifacts(
     entry_kind: str,
     result: dict,
 ) -> dict:
-    if bool((result or {}).get("success", False)):
-        return dict(result or {})
-    _cleanup_entry_artifacts(
+    cleaned = dict(result or {})
+    if bool(cleaned.get("success", False)):
+        return cleaned
+    if not _is_abnormal_failure(cleaned):
+        return cleaned
+
+    _cleanup_entry_log_artifacts(
         results_dir=results_dir,
         storage_entry_id=int(storage_entry_id),
         entry_kind=str(entry_kind or "episode"),
     )
-    cleaned = dict(result or {})
-    cleaned["gif_path"] = ""
-    cleaned["topdown_path"] = ""
-    cleaned["result_file"] = ""
     return cleaned
 
 
@@ -906,8 +995,8 @@ def _run_parallel_episode_job(job_spec: dict) -> dict:
             "steps": 0,
             "total_steps": 0,
             "distance_to_goal": -1.0,
-            "reason": "",
-            "error": str(exc),
+            "reason": "runtime_exception",
+            "error": _format_exception_message(exc),
             "gif_path": "",
             "topdown_path": "",
             "result_file": "",
@@ -958,6 +1047,7 @@ def _run_parallel_episodes(
     executor = concurrent.futures.ProcessPoolExecutor(
         max_workers=worker_count,
         mp_context=mp_context,
+        initializer=_parallel_worker_initializer,
     )
     try:
         future_to_job: dict[concurrent.futures.Future, dict] = {}
@@ -1025,12 +1115,12 @@ def _run_parallel_episodes(
                         "gif_path": "",
                         "topdown_path": "",
                         "result_file": "",
-                        "reason": "",
-                        "error": str(exc),
+                        "reason": "parallel_worker_failed",
+                        "error": _format_exception_message(exc),
                     }
                 _submit_next_job(int(job_spec["worker_index"]))
     finally:
-        executor.shutdown(wait=not interrupted)
+        _shutdown_parallel_executor(executor, interrupted=interrupted)
 
     return [item for item in results_by_order if item is not None]
 
@@ -1639,7 +1729,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 all_results.append(summary_row)
     except KeyboardInterrupt:
         print(
-            "\n[OVON-ObjectNav] interrupted by user; incomplete jobs were discarded.",
+            "\n[OVON-ObjectNav] interrupted by user; incomplete log entries were discarded, detail artifacts were kept.",
             flush=True,
         )
         return 130

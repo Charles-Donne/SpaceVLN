@@ -44,26 +44,25 @@ class MapVisualizer:
     GLOBAL_TRAJECTORY_COLOR = (255, 108, 142)
     LOCAL_TRAJECTORY_COLOR = (245, 122, 152)
     OBSTACLE_COLOR = (26, 26, 26)
-    AGENT_ARROW_COLOR = (45, 30, 139)
+    AGENT_ARROW_COLOR = (45, 45, 255)  # #FF2D2D bright red
     SPACE_AREA_TAG_BG_COLOR = (255, 255, 255)
     SPACE_AREA_TAG_BG_ALPHA = 0.85
-    SPACE_AREA_TAG_BORDER_COLOR = (71, 52, 36)
-    SPACE_AREA_TAG_TEXT_COLOR = (43, 43, 43)
+    SPACE_AREA_TAG_BORDER_COLOR = (71, 52, 36)  # #243447 ink blue
+    SPACE_AREA_TAG_TEXT_COLOR = (71, 52, 36)  # #243447 ink blue
     SPACE_AREA_COLOR_PALETTE: Tuple[Tuple[int, int, int], ...] = (
         (193, 179, 255),  # #FFB3C1 草莓奶昔粉
         (163, 223, 255),  # #FFDFA3 奶油杏
         (165, 198, 255),  # #FFC6A5 蜜桃果肉
-        (201, 241, 255),  # #FFF1C9 香草奶油
         (250, 188, 214),  # #D6BCFA 薰衣草牛奶紫
         (254, 224, 189),  # #BDE0FE 奶蓝云雾
-        (233, 228, 255),  # #FFE4E9 樱花白粉
-        (214, 201, 255),  # 亮樱花粉
-        (184, 232, 255),  # 暖奶杏变体
-        (188, 214, 255),  # 柔蜜桃变体
-        (220, 246, 255),  # 奶油浅黄变体
-        (255, 206, 226),  # 亮薰衣草粉变体
-        (255, 236, 210),  # 糖果浅蓝变体
-        (242, 239, 255),  # 极浅粉白变体
+        (214, 201, 255),  # #FFC9D6 亮樱花粉
+        (184, 232, 255),  # #FFE8B8 暖奶杏
+        (188, 214, 255),  # #FFD6BC 柔蜜桃
+        (255, 206, 226),  # #E2CEFF 亮薰衣草紫
+        (255, 224, 189),  # #BDE0FF 糖果奶蓝
+        (163, 207, 255),  # #FFCFA3 奶橙
+        (180, 190, 255),  # #FFBEB4 珊瑚桃
+        (250, 170, 205),  # #CDAAFA 饱和薰衣草
     )
     SPACE_TYPE_PREFERRED_COLOR_INDEX: Dict[str, int] = {
         "hallway": 3,
