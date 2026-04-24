@@ -28,12 +28,9 @@ from navigation_system.space.map.semantic_mapping import Semantic_Mapping
 from navigation_system.render import MapVisualizer
 from navigation_system.space.map.obstacle_analysis import (
     calculate_obstacle_distances_from_depth,
-    classify_obstacle_distance_text,
     format_distance,
-    parse_distance_text_m,
     sample_depth_distance_from_region,
 )
-from navigation_system.config.core.params.thresholds import OBS_OPEN_M, OBS_RISKY_M
 from navigation_system.vlm.contracts.schema import DIRECTION_CONFIG
 from navigation_system.runtime.storage.artifacts import get_episode_detail_dir
 from navigation_system.runtime.storage.naming import build_step_artifact_filename
@@ -647,46 +644,10 @@ class BaseNavigationController:
         return image
 
     def _draw_distance_rays_on_first_person_view(self, image: np.ndarray, distances: Dict[str, str]) -> np.ndarray:
-        """Overlay the action-view obstacle rays on the first-person image."""
-        h, w = image.shape[:2]
-        center_x, bottom_y = w // 2, h - 20
-        hfov = float(self.space_sensor_config.HFOV_DEG)
-        fov_half = hfov / 2.0
-        ray_map = {
-            'left_30': -30,
-            'front': 0,
-            'right_30': 30,
-        }
-
-        for key, angle in ray_map.items():
-            if key not in distances or abs(angle) > fov_half:
-                continue
-
-            dist_str = distances[key]
-            status = classify_obstacle_distance_text(dist_str)
-            if status == "blocked":
-                color, y_ratio = (0, 0, 255), 0.7
-            elif status == "open":
-                color, y_ratio = (0, 255, 0), 0.1
-            else:
-                try:
-                    dist_val = float(parse_distance_text_m(dist_str))
-                    color = (0, 255, 255)
-                    y_ratio = (
-                        0.7 if dist_val < float(OBS_RISKY_M)
-                        else (0.5 if dist_val < float(OBS_OPEN_M) else 0.3)
-                    )
-                except Exception:
-                    color, y_ratio = (0, 255, 255), 0.5
-
-            x_ratio = (angle + fov_half) / (2 * fov_half)
-            end_x, end_y = int(x_ratio * w), int(bottom_y - bottom_y * y_ratio)
-            cv2.line(image, (center_x, bottom_y), (end_x, end_y), color, 2)
-            text_x = end_x - len(dist_str) * 3
-            text_y = end_y - 5
-            cv2.rectangle(image, (text_x - 2, text_y - 12), (text_x + len(dist_str) * 7, text_y + 2), (0, 0, 0), -1)
-            cv2.putText(image, dist_str, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
-
+        """Backward-compatible wrapper; actual drawing lives in the render layer."""
+        visualizer = getattr(self, "visualizer", None)
+        if hasattr(visualizer, "draw_distance_on_action_view"):
+            return visualizer.draw_distance_on_action_view(image, distances or {})
         return image
     
     def look_around(self) -> None:

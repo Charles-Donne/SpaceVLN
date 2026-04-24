@@ -11,6 +11,14 @@ from navigation_system.runtime.storage.artifacts import (
 )
 
 
+_NORMAL_FAILURE_REASONS = {
+    "episode_done_without_success",
+    "max_episode_steps_reached",
+    "goal_not_reached",
+    "episode_budget_exhausted_before_replan",
+}
+
+
 def get_episode_records_log_path(
     results_dir: str,
     episode_id: int,
@@ -110,6 +118,19 @@ def load_json_if_exists(path: str) -> Dict[str, Any]:
         return {}
 
 
+def should_suppress_normal_failure_reason(
+    *,
+    status: str,
+    reason: str,
+    error: str,
+) -> bool:
+    return bool(
+        status == "FAIL"
+        and not str(error or "").strip()
+        and str(reason or "").strip() in _NORMAL_FAILURE_REASONS
+    )
+
+
 def extract_episode_metrics(result: Dict[str, Any]) -> Dict[str, Any]:
     metrics: Dict[str, Any] = {}
     candidate_paths = [
@@ -192,12 +213,11 @@ def build_episode_console_summary(
             except Exception:
                 continue
 
-    normal_failure_reasons = {
-        "episode_done_without_success",
-        "max_episode_steps_reached",
-        "goal_not_reached",
-    }
-    if reason and not (status == "FAIL" and not error and reason in normal_failure_reasons):
+    if reason and not should_suppress_normal_failure_reason(
+        status=status,
+        reason=reason,
+        error=error,
+    ):
         parts.append(f"reason={reason}")
     if error:
         parts.append(f"error={error}")
@@ -237,4 +257,5 @@ __all__ = [
     "redirect_process_output_to_file",
     "redirect_process_output_to_null",
     "save_episode_stdout_log_enabled",
+    "should_suppress_normal_failure_reason",
 ]

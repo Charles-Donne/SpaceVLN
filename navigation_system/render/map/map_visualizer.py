@@ -41,7 +41,7 @@ from navigation_system.render.image_resize import (
 class MapVisualizer:
     """Thin coordinator that owns render policy, caching, and save orchestration."""
 
-    GLOBAL_TRAJECTORY_COLOR = (255, 108, 142)
+    GLOBAL_TRAJECTORY_COLOR = (185, 72, 190)
     LOCAL_TRAJECTORY_COLOR = (245, 122, 152)
     OBSTACLE_COLOR = (26, 26, 26)
     AGENT_ARROW_COLOR = (45, 45, 255)  # #FF2D2D bright red
@@ -134,7 +134,7 @@ class MapVisualizer:
             )
         return lines
 
-    def __init__(self, 
+    def __init__(self,
                  results_dir: str,
                  resolution: int = 5,
                  map_shape: Tuple[int, int] = (480, 480),
@@ -480,7 +480,13 @@ class MapVisualizer:
         os.makedirs(save_dir, exist_ok=True)
         return save_dir
 
-    def get_map_artifact_path(self, step: int, episode_id: int, phase: str, map_kind: str) -> str:
+    def get_map_artifact_path(
+        self,
+        step: int,
+        episode_id: int,
+        phase: str,
+        map_kind: str,
+    ) -> str:
         return os.path.join(
             self.get_map_artifact_dir(episode_id, map_kind),
             self.get_map_artifact_filename(step, phase),
@@ -921,7 +927,12 @@ class MapVisualizer:
                 )
 
             paths['global_map'] = (
-                self.save_global_map(step, episode_id, global_map_with_trajectory, phase)
+                self.save_global_map(
+                    step,
+                    episode_id,
+                    global_map_with_trajectory,
+                    phase,
+                )
                 if policy.get('save_global_map', False) and global_map_with_trajectory is not None else None
             )
 

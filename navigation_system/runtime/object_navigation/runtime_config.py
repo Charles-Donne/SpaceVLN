@@ -165,14 +165,14 @@ def build_objectnav_runtime_config(
                     "DEBUG_SAVE_RENDERINGS": bool(DEFAULT_DEBUG_SAVE_RENDERINGS),
                 }
             },
-            "OUTPUT": {
-                "REQUESTS": {
-                    "SAVE_VLM_ARTIFACTS": bool(save_request_artifacts),
-                },
-                "MAPS": {
-                    "SAVE_STEP_ARTIFACTS": False,
-                },
-                "REPLAY": {
+                "OUTPUT": {
+                    "REQUESTS": {
+                        "SAVE_VLM_ARTIFACTS": bool(save_request_artifacts),
+                    },
+                    "MAPS": {
+                        "SAVE_STEP_ARTIFACTS": False,
+                    },
+                    "REPLAY": {
                     "SAVE_STEP_IMAGES": bool(save_step_images),
                     "SAVE_GIF": bool(save_gif),
                     "CLEANUP_STEP_IMAGES_AFTER_GIF": bool(save_gif and not save_step_images),

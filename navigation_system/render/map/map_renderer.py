@@ -15,6 +15,21 @@ GLOBAL_MAP_BASE_SIZE = 480
 GLOBAL_MAP_OUTPUT_SIZE = 440
 
 
+def _compute_global_map_sizes(output_scale: int = 1) -> Tuple[int, int]:
+    scale = max(1, int(output_scale))
+    return GLOBAL_MAP_BASE_SIZE * scale, GLOBAL_MAP_OUTPUT_SIZE * scale
+
+
+def _contour_bounding_box(points: np.ndarray, image_shape: Tuple[int, int], padding: int = 0) -> Tuple[int, int, int, int]:
+    contour = np.asarray(points, dtype=np.int32).reshape(-1, 2)
+    x, y, w, h = cv2.boundingRect(contour)
+    x1 = max(0, int(x) - int(padding))
+    y1 = max(0, int(y) - int(padding))
+    x2 = min(int(image_shape[1]), int(x + w) + int(padding))
+    y2 = min(int(image_shape[0]), int(y + h) + int(padding))
+    return x1, y1, x2, y2
+
+
 def _crop_square_image(
     image: Optional[np.ndarray],
     crop_box: Optional[Tuple[int, int, int, int]],
@@ -111,7 +126,8 @@ def render_global_map(owner,
                      space_area_layer: Optional[np.ndarray] = None,
                      space_area_records: Optional[List[Dict[str, Any]]] = None,
                      crop_offset: Optional[Tuple[int, int]] = None,
-                     mapping_classes: Optional[List[str]] = None) -> Tuple[np.ndarray, np.ndarray, List, np.ndarray, Optional[float]]:
+                     mapping_classes: Optional[List[str]] = None,
+                     output_scale: int = 1) -> Tuple[np.ndarray, np.ndarray, List, np.ndarray, Optional[float]]:
     """
     渲染全局地图（严格按照ZS_Evaluator的渲染逻辑 + 平滑轨迹线）
 
@@ -192,14 +208,15 @@ def render_global_map(owner,
     sem_map_vis = np.flipud(sem_map_vis)
     sem_map_vis = np.array(sem_map_vis)
     sem_map_vis = sem_map_vis[:, :, [2, 1, 0]]  # RGB → BGR
+    global_map_base_size, global_map_output_size = _compute_global_map_sizes(output_scale)
     sem_map_vis = cv2.resize(
         sem_map_vis,
-        (GLOBAL_MAP_BASE_SIZE, GLOBAL_MAP_BASE_SIZE),
+        (global_map_base_size, global_map_base_size),
         interpolation=cv2.INTER_NEAREST,
     )
     global_label_display_layer = owner._prepare_space_area_display_layer(
         space_area_layer,
-        output_size=GLOBAL_MAP_BASE_SIZE,
+        output_size=global_map_base_size,
     )
     owner._draw_space_areas_in_place(
         sem_map_vis,
@@ -210,6 +227,12 @@ def render_global_map(owner,
         show_labels=False,
     )
     obstacle_mask_display = owner._build_display_obstacle_mask(full_map)
+    if obstacle_mask_display.shape[:2] != sem_map_vis.shape[:2]:
+        obstacle_mask_display = cv2.resize(
+            obstacle_mask_display.astype(np.uint8),
+            (global_map_base_size, global_map_base_size),
+            interpolation=cv2.INTER_NEAREST,
+        ) > 0
     sem_map_vis[obstacle_mask_display] = owner.OBSTACLE_COLOR
 
     # ===== 阶段3: 提取Landmark位置（但不绘制）=====
@@ -238,8 +261,8 @@ def render_global_map(owner,
     display_ops: List[Dict[str, Any]] = []
     preview_image = sem_map_vis.copy()
 
-    if owner.enable_global_map_crop and preview_image.shape[0] > GLOBAL_MAP_OUTPUT_SIZE:
-        crop_margin = max(0, (preview_image.shape[0] - GLOBAL_MAP_OUTPUT_SIZE) // 2)
+    if owner.enable_global_map_crop and preview_image.shape[0] > global_map_output_size:
+        crop_margin = max(0, (preview_image.shape[0] - global_map_output_size) // 2)
         center_crop_box = (
             crop_margin,
             crop_margin,
@@ -255,12 +278,12 @@ def render_global_map(owner,
             display_ops.append({"kind": "crop", "box": zoom_crop_box})
             preview_image = _crop_square_image(preview_image, zoom_crop_box)
 
-    if preview_image.shape[0] != GLOBAL_MAP_OUTPUT_SIZE:
+    if preview_image.shape[0] != global_map_output_size:
         display_ops.append(
             {
                 "kind": "resize",
                 "input_size": int(preview_image.shape[0]),
-                "output_size": GLOBAL_MAP_OUTPUT_SIZE,
+                "output_size": global_map_output_size,
             }
         )
 
@@ -306,22 +329,14 @@ def render_global_map(owner,
             show_labels=True,
             use_display_label=True,
             display_layer_override=transformed_label_display_layer,
-        )
-        owner._draw_space_areas_in_place(
-            global_map_with_trajectory,
-            space_area_layer,
-            space_area_records,
-            fill_regions=False,
-            show_labels=True,
-            use_display_label=True,
-            display_layer_override=transformed_label_display_layer,
+            reserved_boxes=[],
         )
 
         # Anchor the agent arrow to the pre-crop agent center, then project it
         # through crop/resize ops so adaptive zoom does not force it to the
         # visual center of the final 440x440 map.
         agent_display_center = _apply_display_ops_to_point(
-            (GLOBAL_MAP_BASE_SIZE / 2.0, GLOBAL_MAP_BASE_SIZE / 2.0),
+            (global_map_base_size / 2.0, global_map_base_size / 2.0),
             display_ops,
         )
         if agent_display_center is None:
@@ -333,14 +348,35 @@ def render_global_map(owner,
         agent_pos = (center_x, center_y, arrow_angle)
         arrow_size = max(20, int(round(min(global_map_rotated.shape[:2]) * 0.05)))
         agent_arrow = vu.get_contour_points(agent_pos, origin=(0, 0), size=arrow_size)
+        agent_arrow_box = _contour_bounding_box(
+            agent_arrow,
+            global_map_rotated.shape[:2],
+            padding=max(6, int(round(min(global_map_rotated.shape[:2]) * 0.01))),
+        )
+        owner._draw_space_areas_in_place(
+            global_map_with_trajectory,
+            space_area_layer,
+            space_area_records,
+            fill_regions=False,
+            show_labels=True,
+            use_display_label=True,
+            display_layer_override=transformed_label_display_layer,
+            reserved_boxes=[agent_arrow_box],
+        )
         cv2.drawContours(global_map_rotated, [agent_arrow], 0, (255, 255, 255), 1)
         cv2.drawContours(global_map_with_trajectory, [agent_arrow], 0, (255, 255, 255), 1)
         cv2.drawContours(global_map_rotated, [agent_arrow], 0, owner.AGENT_ARROW_COLOR, -1)
         cv2.drawContours(global_map_with_trajectory, [agent_arrow], 0, owner.AGENT_ARROW_COLOR, -1)
 
     # 添加方位标签到global map
-    global_map_with_trajectory = owner.add_orientation_labels(global_map_with_trajectory)
-    global_map_rotated = owner.add_orientation_labels(global_map_rotated)
+    global_map_with_trajectory = owner.add_orientation_labels(
+        global_map_with_trajectory,
+        text_thickness=1,
+    )
+    global_map_rotated = owner.add_orientation_labels(
+        global_map_rotated,
+        text_thickness=1,
+    )
 
     # 返回：基础地图 + 显示副本（带轨迹和landmark+waypoint） + 无轨迹的旋转地图（供local_map裁剪） + 距离信息 + 最后waypoint角度
     return sem_map_vis, global_map_with_trajectory, landmarks, global_map_rotated, last_waypoint_angle
@@ -657,7 +693,12 @@ def render_local_map(owner,
 
     return local_map_cropped
 
-def add_orientation_labels(owner, map_image: np.ndarray) -> np.ndarray:
+def add_orientation_labels(
+    owner,
+    map_image: np.ndarray,
+    *,
+    text_thickness: int = 2,
+) -> np.ndarray:
     """
     在地图四周添加方位标签（俯视图）- 深红字+白底
     地图尺寸：440x440
@@ -673,7 +714,6 @@ def add_orientation_labels(owner, map_image: np.ndarray) -> np.ndarray:
 
     font = cv2.FONT_HERSHEY_SIMPLEX
     font_scale = 0.58
-    text_thickness = 2
     text_color = (0, 0, 139)  # 深红色BGR
     bg_color = (255, 255, 255)  # 白色背景
 
@@ -701,10 +741,24 @@ def add_orientation_labels(owner, map_image: np.ndarray) -> np.ndarray:
         padding_top = 3
         padding_side = 3
         padding_bottom = 1
-        cv2.rectangle(labeled_map,
-                     (text_x - padding_side, text_y - text_height - padding_top),
-                     (text_x + text_width + padding_side, text_y + baseline + padding_bottom),
-                     bg_color, -1)
+        rect_x1 = text_x - padding_side
+        rect_y1 = text_y - text_height - padding_top
+        rect_x2 = text_x + text_width + padding_side
+        rect_y2 = text_y + baseline + padding_bottom
+        cv2.rectangle(
+            labeled_map,
+            (rect_x1, rect_y1),
+            (rect_x2, rect_y2),
+            bg_color,
+            -1,
+        )
+        cv2.rectangle(
+            labeled_map,
+            (rect_x1, rect_y1),
+            (rect_x2, rect_y2),
+            text_color,
+            1,
+        )
 
         # 绘制深红色文字
         cv2.putText(labeled_map, text, (text_x, text_y),

@@ -214,10 +214,28 @@ class SaveManager:
     def is_complete_result(cls, result: Optional[Dict]) -> bool:
         if not cls._has_required_keys(result, cls.REQUIRED_RESULT_FIELDS):
             return False
-        return all(
+        if not all(
             cls._has_complete_api_summary(result, key)
             for key in ("thinking_api_summary", "action_api_summary")
+        ):
+            return False
+
+        sr = cls._safe_int(
+            (result or {}).get("sr", (result or {}).get("success", 0)),
+            0,
         )
+        total_steps = cls._safe_int((result or {}).get("total_steps", 0), 0)
+        spl = cls._safe_float((result or {}).get("spl", 0.0), 0.0)
+
+        if sr == 1 and total_steps > 0:
+            # Historical OVON sample logs often store `path_length=0.0` even
+            # when SR/SPL are already valid and complete. Treat positive SPL as
+            # the completeness gate for successful results so skip-sr1 works on
+            # the saved sample summary logs. Keep SR=1 + SPL=0 as incomplete.
+            if spl <= 0.0:
+                return False
+
+        return True
 
     @classmethod
     def result_has_complete_sr1(cls, result: Optional[Dict]) -> bool:

@@ -1,5 +1,6 @@
 """Generic API client base shared by planner and action runtimes."""
 
+import copy
 import base64
 import io
 import json
@@ -30,6 +31,26 @@ class BaseAPIClient(ABC):
         self.compression_max_size = DEFAULT_IMAGE_COMPRESSION_MAX_SIZE
         self.compression_quality = DEFAULT_IMAGE_COMPRESSION_QUALITY
         self.save_request_artifacts = False
+        self.last_call_status = "uninitialized"
+        self.last_call_error = ""
+        self.last_response_text = ""
+        self.last_parsed_response_payload = None
+
+    def _set_last_call_outcome(self, status: str, error: str = "") -> None:
+        self.last_call_status = str(status or "unknown").strip() or "unknown"
+        self.last_call_error = str(error or "").strip()
+
+    def _set_last_response_artifacts(
+        self,
+        *,
+        response_text: Optional[str] = None,
+        parsed_payload: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        self.last_response_text = str(response_text or "")
+        if isinstance(parsed_payload, dict):
+            self.last_parsed_response_payload = copy.deepcopy(parsed_payload)
+        else:
+            self.last_parsed_response_payload = None
 
     def _apply_reasoning_disabled_defaults(self, payload: Dict) -> Dict:
         """Best-effort disable provider-side thinking/reasoning by default."""
@@ -546,8 +567,18 @@ class BaseAPIClient(ABC):
                 original_artifact_path = str(image_input.get("original_artifact_path") or "").strip()
                 if original_artifact_path:
                     os.makedirs(os.path.dirname(original_artifact_path), exist_ok=True)
+                    original_artifact_input = image_input
+                    artifact_image_array = image_input.get("original_artifact_image_array")
+                    if artifact_image_array is not None:
+                        original_artifact_input = dict(image_input)
+                        original_artifact_input["image_array"] = artifact_image_array
+                        original_artifact_input["color_space"] = str(
+                            image_input.get("original_artifact_color_space")
+                            or image_input.get("color_space")
+                            or "bgr"
+                        )
                     original_bytes, _original_mime_type = self._load_image_input_bytes(
-                        image_input,
+                        original_artifact_input,
                         compress=False,
                         max_size=self.compression_max_size,
                         quality=self.compression_quality,
@@ -739,6 +770,8 @@ class BaseAPIClient(ABC):
         """
         t_start = time.time()
         response = None
+        self._set_last_call_outcome("pending")
+        self._set_last_response_artifacts(response_text="", parsed_payload=None)
         try:
             # 确保 prompt 是 UTF-8 编码的字符串
             if isinstance(prompt, bytes):
@@ -857,6 +890,7 @@ class BaseAPIClient(ABC):
                         failed_attempt_count=1,
                     ),
                 )
+                self._set_last_call_outcome("http_error", f"status={response.status_code}")
                 return None
             
             result = response.json()
@@ -891,6 +925,7 @@ class BaseAPIClient(ABC):
             # 检查响应
             if not content or len(content.strip()) < 10:
                 print(f"✗ Empty or too short API response: {content}")
+                self._set_last_response_artifacts(response_text=content, parsed_payload=None)
                 self._save_vlm_info_artifact(
                     save_dir,
                     self._build_vlm_info_payload(
@@ -901,6 +936,7 @@ class BaseAPIClient(ABC):
                         failed_attempt_count=1,
                     ),
                 )
+                self._set_last_call_outcome("empty_response")
                 return None
             
             # 检查截断
@@ -916,6 +952,7 @@ class BaseAPIClient(ABC):
                     print(f"[WARN] Response truncated (max_tokens={self.config.max_tokens})")
             
             parsed = self.parse_json_response(content)
+            self._set_last_response_artifacts(response_text=content, parsed_payload=parsed)
             self._save_vlm_info_artifact(
                 save_dir,
                 self._build_vlm_info_payload(
@@ -929,12 +966,15 @@ class BaseAPIClient(ABC):
             
             if parsed is None:
                 print(f"✗ JSON parse failed | Raw (first 300): {content[:300]}")
-                
+                self._set_last_call_outcome("json_parse_failed")
+            else:
+                self._set_last_call_outcome("ok")
             return parsed
             
         except requests.exceptions.Timeout:
             elapsed = time.time() - t_start
             print(f"✗ API timeout after {elapsed:.1f}s (limit={self.config.timeout}s)")
+            self._set_last_response_artifacts(response_text="", parsed_payload=None)
             self._save_vlm_info_artifact(
                 save_dir,
                 self._build_vlm_info_payload(
@@ -945,12 +985,17 @@ class BaseAPIClient(ABC):
                     failed_attempt_count=1,
                 ),
             )
+            self._set_last_call_outcome("timeout")
             return None
         except json.JSONDecodeError as e:
             elapsed = time.time() - t_start
             print(f"✗ JSON decode error ({elapsed:.1f}s): {e}")
             if response is not None:
                 print(f"✗ Response text: {response.text[:300]}")
+            self._set_last_response_artifacts(
+                response_text=response.text if response is not None else "",
+                parsed_payload=None,
+            )
             self._save_vlm_info_artifact(
                 save_dir,
                 self._build_vlm_info_payload(
@@ -961,10 +1006,15 @@ class BaseAPIClient(ABC):
                     failed_attempt_count=1,
                 ),
             )
+            self._set_last_call_outcome("json_decode_error", str(e))
             return None
         except Exception as e:
             elapsed = time.time() - t_start
             print(f"✗ API call failed ({elapsed:.1f}s): {e}")
+            self._set_last_response_artifacts(
+                response_text=response.text if response is not None else "",
+                parsed_payload=None,
+            )
             self._save_vlm_info_artifact(
                 save_dir,
                 self._build_vlm_info_payload(
@@ -975,6 +1025,7 @@ class BaseAPIClient(ABC):
                     failed_attempt_count=1,
                 ),
             )
+            self._set_last_call_outcome("api_error", str(e))
             return None
     
     def validate_fields(self, response: Dict, required_fields: List[str]) -> bool:

@@ -320,7 +320,7 @@ def render_detection_bbox(owner,
                 strip = render_landmark_strip(
                     detection_vis.shape[1],
                     item_lines,
-                    font_scale=0.58,
+                    font_scale=0.60,
                     font_thickness=1,
                     compact=True,
                 )
@@ -687,7 +687,7 @@ def _build_action_distance_label_boxes(
         end_x = int(center_x + line_length * np.cos(angle_rad))
         end_y = int(bottom_y + line_length * np.sin(angle_rad))
         font_scale = 0.72 if config['key'] == 'front' else 0.62
-        font_thickness = 1
+        font_thickness = 2
         combined_label = f"{config['label']} {dist_str}"
         label_size = cv2.getTextSize(combined_label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thickness)[0]
         label_offset = 25
@@ -730,7 +730,16 @@ def save_rgb(owner, step: int, episode_id: int, rgb: np.ndarray, phase: str = "a
     # 如果是action阶段且提供了controller，绘制距离线
     if phase.startswith('action') and controller is not None:
         if hasattr(controller, '_draw_distance_rays_on_first_person_view') and hasattr(controller, 'latest_obstacle_distances'):
-            rgb = controller._draw_distance_rays_on_first_person_view(rgb.copy(), controller.latest_obstacle_distances)
+            if hasattr(getattr(controller, "visualizer", None), "draw_distance_on_action_view"):
+                rgb = controller.visualizer.draw_distance_on_action_view(
+                    rgb.copy(),
+                    controller.latest_obstacle_distances,
+                )
+            else:
+                rgb = controller._draw_distance_rays_on_first_person_view(
+                    rgb.copy(),
+                    controller.latest_obstacle_distances,
+                )
 
     episode_dir = owner._create_episode_directories(episode_id)
     save_path = os.path.join(episode_dir, 'rgb', build_step_artifact_filename(step, phase))
@@ -886,7 +895,7 @@ def draw_distance_on_action_view(owner, image: np.ndarray, distance_dict: Dict[s
 
         # FRONT用大字号，其他用稍大字号
         font_scale = 0.72 if config['key'] == 'front' else 0.62
-        font_thickness = 1
+        font_thickness = 2
 
         # 合并标签为单行："Left 90 1.3m" 或 "FRONT 0.70m"
         combined_label = f"{config['label']} {dist_str}"

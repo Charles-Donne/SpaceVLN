@@ -58,6 +58,7 @@ class LLMPlanner(BaseAPIClient):
         self.last_call_timing_info = {
             "records": [],
             "failed_retry_wait_duration_s": 0.0,
+            "final_failure_reason": "",
         }
         
         # print(f"✓ LLM Planner initialized")
@@ -67,7 +68,45 @@ class LLMPlanner(BaseAPIClient):
         self.last_call_timing_info = {
             "records": [],
             "failed_retry_wait_duration_s": 0.0,
+            "final_failure_reason": "",
         }
+
+    @staticmethod
+    def _classify_attempt_failure(
+        *,
+        response: Optional[Dict[str, Any]],
+        normalized_response: Optional[Dict[str, Any]],
+        is_valid: bool,
+        direction_is_available: bool,
+        api_status: str,
+    ) -> str:
+        normalized_status = str(api_status or "").strip() or "unknown"
+        if response is None:
+            return normalized_status
+        if not normalized_response:
+            return "invalid_payload"
+        if not is_valid:
+            return "invalid_response"
+        if not direction_is_available:
+            return "invalid_direction"
+        return "unknown"
+
+    def _summarize_final_failure_reason(self) -> str:
+        failed_records = [
+            dict(record)
+            for record in list(self.last_call_timing_info.get("records", []) or [])
+            if not bool(record.get("success", False))
+        ]
+        if not failed_records:
+            return ""
+        failure_kinds = [
+            str(record.get("failure_kind") or "").strip()
+            for record in failed_records
+            if str(record.get("failure_kind") or "").strip()
+        ]
+        if failure_kinds and all(kind == "timeout" for kind in failure_kinds):
+            return "planner_timeout"
+        return "planner_failed"
 
     def _finalize_vlm_info_retry_summary(self, save_dir: Optional[str]) -> None:
         """Patch the saved vlm_info.json with aggregate retry stats for this call."""
@@ -198,12 +237,23 @@ class LLMPlanner(BaseAPIClient):
                     )
 
             attempt_success = bool(is_valid and direction_is_available)
+            failure_kind = ""
+            if not attempt_success:
+                failure_kind = self._classify_attempt_failure(
+                    response=response,
+                    normalized_response=normalized_response,
+                    is_valid=is_valid,
+                    direction_is_available=direction_is_available,
+                    api_status=str(getattr(self, "last_call_status", "") or ""),
+                )
             self.last_call_timing_info["records"].append({
                 "attempt": retry + 1,
                 "success": attempt_success,
                 "duration_s": max(0.0, float(attempt_duration_s)),
+                "failure_kind": failure_kind,
             })
             if attempt_success:
+                self.last_call_timing_info["final_failure_reason"] = ""
                 self._finalize_vlm_info_retry_summary(save_dir)
                 return normalized_response, prompt_debug_text
 
@@ -217,6 +267,7 @@ class LLMPlanner(BaseAPIClient):
                 time.sleep(wait)
 
         print(f"  [ERR] {failure_label} failed after {max_retries} attempts")
+        self.last_call_timing_info["final_failure_reason"] = self._summarize_final_failure_reason()
         self._finalize_vlm_info_retry_summary(save_dir)
         return None, prompt_debug_text
 

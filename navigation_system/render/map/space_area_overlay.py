@@ -198,6 +198,7 @@ def _draw_space_areas_in_place(
     use_display_label: bool = True,
     cache_key: Optional[Any] = None,
     display_layer_override: Optional[np.ndarray] = None,
+    reserved_boxes: Optional[List[Tuple[int, int, int, int]]] = None,
 ) -> np.ndarray:
     cache_token = cache_key if cache_key is not None else self._active_render_cache_key
     fill_alpha = float(max(0.0, min(1.0, alpha)))
@@ -324,7 +325,11 @@ def _draw_space_areas_in_place(
                     )
 
     if show_labels and label_candidates:
-        placed_boxes: List[Tuple[int, int, int, int]] = []
+        placed_boxes: List[Tuple[int, int, int, int]] = [
+            tuple(box)
+            for box in list(reserved_boxes or [])
+            if isinstance(box, (list, tuple)) and len(box) == 4
+        ]
         for candidate in sorted(
             label_candidates,
             key=lambda item: (-int(item.get("mask_pixels", 0) or 0), str(item.get("label", ""))),
@@ -363,6 +368,7 @@ def _overlay_space_areas(
     use_display_label: bool = True,
     cache_key: Optional[Any] = None,
     display_layer_override: Optional[np.ndarray] = None,
+    reserved_boxes: Optional[List[Tuple[int, int, int, int]]] = None,
 ) -> np.ndarray:
     output = image.copy()
     return self._draw_space_areas_in_place(
@@ -375,6 +381,7 @@ def _overlay_space_areas(
         use_display_label=use_display_label,
         cache_key=cache_key,
         display_layer_override=display_layer_override,
+        reserved_boxes=reserved_boxes,
     )
 
 

@@ -34,6 +34,7 @@ from navigation_system.vlm.api.api_client import (
 INITIAL_FAILURE_RETRY_REASONS = {
     "initial_subtask_failed",
     "initial_lookaround_failed",
+    "initial_planner_timeout",
 }
 
 

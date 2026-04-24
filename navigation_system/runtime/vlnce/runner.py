@@ -4,6 +4,9 @@ import argparse
 import os
 from typing import List
 
+from navigation_system.runtime.episode_io import (
+    should_suppress_normal_failure_reason,
+)
 from navigation_system.runtime.vlnce.episode_selection import (
     filter_episode_ids,
     resolve_episode_ids,
@@ -209,7 +212,11 @@ def run_navigation_from_args(
             error = str(item.get("error") or "").strip()
             reason = str(item.get("reason") or "").strip()
             parts = [f"Episode {episode_id}"]
-            if reason:
+            if reason and not should_suppress_normal_failure_reason(
+                status="FAIL",
+                reason=reason,
+                error=error,
+            ):
                 parts.append(f"reason={reason}")
             if error:
                 parts.append(f"error={error}")

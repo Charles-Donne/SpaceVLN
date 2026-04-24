@@ -34,8 +34,8 @@ from navigation_system.runtime.object_navigation.thresholds import (
     OVON_AUTOCOMPLETE_OPENING_M,
     OVON_AUTOCOMPLETE_SOLID_M,
     OVON_AUTOCOMPLETE_TOPK,
-    OVON_FINAL_OBJECT_STOP_DISTANCE_M,
     OVON_FINAL_OBJECT_LANDMARK_TOPK,
+    OVON_FINAL_OBJECT_STOP_DISTANCE_M,
     OVON_FORCED_EARLY_STOP_DISTANCE_M,
     OVON_FORCED_EARLY_STOP_MAX_DELTA_M,
     OVON_FORCED_EARLY_STOP_THINKING_POINTS,
@@ -148,6 +148,8 @@ class OVONObjectNavigationController(VLMNavigationController):
         return self._ovon_text_contains_goal_label(subtask_landmark)
 
     def _get_action_landmark_topk(self) -> int:
+        # Final target-object stage keeps the narrower prompt context, but the
+        # detection pipeline itself must still be allowed to observe landmarks.
         if self._ovon_is_final_object_stage():
             return int(OVON_FINAL_OBJECT_LANDMARK_TOPK)
         return int(self.ACTION_SUBTASK_AUTOCOMPLETE_TOPK)
@@ -156,32 +158,30 @@ class OVONObjectNavigationController(VLMNavigationController):
         self,
         entries: Sequence[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
-        ordered_entries = [
+        ordered_entries = self._sort_action_landmark_entries([
             dict(entry)
             for entry in (entries or [])
             if isinstance(entry, dict)
-        ]
+        ])
         if not self._ovon_is_final_object_stage():
-            return self._sort_action_landmark_entries(ordered_entries)
+            return ordered_entries
 
-        target_entries = [
-            entry
-            for entry in ordered_entries
-            if self._ovon_text_contains_goal_label(entry.get("name"))
-        ]
-        target_entries.sort(
+        # In OVON action, keep non-goal landmarks visible/detectable. Only bias
+        # the ranking so the true target object appears earlier when present.
+        ordered_entries.sort(
             key=lambda entry: (
+                0 if self._ovon_text_contains_goal_label(entry.get("name")) else 1,
+                self._safe_int(entry.get("selection_rank"))
+                if self._safe_int(entry.get("selection_rank")) is not None
+                else 1e9,
                 -float(self._safe_float(entry.get("confidence")) or 0.0),
                 self._safe_float(entry.get("distance_m"))
                 if self._safe_float(entry.get("distance_m")) is not None
                 else float("inf"),
-                self._safe_int(entry.get("selection_rank"))
-                if self._safe_int(entry.get("selection_rank")) is not None
-                else 1e9,
                 str(entry.get("name", "")),
             )
         )
-        return target_entries[: max(1, int(OVON_FINAL_OBJECT_LANDMARK_TOPK))]
+        return ordered_entries
 
     def _get_latest_action_local_map_landmark_entries(self) -> List[Dict[str, Any]]:
         return self._ovon_select_final_stage_landmark_entries(
@@ -352,9 +352,22 @@ class OVONObjectNavigationController(VLMNavigationController):
                 entry.get("raw_name") or entry.get("name")
             ):
                 continue
+            has_arrived = bool(entry.get("has_arrived", False))
             distance_m = self._ovon_float(
                 entry.get("final_distance_m", entry.get("distance_m"))
             )
+            stop_distance_m = self._ovon_float(entry.get("stop_distance_m"))
+            if has_arrived:
+                if distance_m is None:
+                    return True, dict(entry)
+                effective_arrival_threshold_m = float(distance_threshold_m)
+                if stop_distance_m is not None and stop_distance_m > 0.0:
+                    effective_arrival_threshold_m = max(
+                        effective_arrival_threshold_m,
+                        float(stop_distance_m),
+                    )
+                if distance_m <= effective_arrival_threshold_m:
+                    return True, dict(entry)
             if distance_m is None:
                 continue
             if distance_m <= float(distance_threshold_m):
@@ -368,7 +381,8 @@ class OVONObjectNavigationController(VLMNavigationController):
             f"Set `global_landmark_arrival=true` on verify only when the current "
             f"`subtask_landmark` contains `{exact_goal}`, the previous executed action subtask also used "
             f"a landmark containing `{exact_goal}` as its `subtask_landmark`, and the Previous Subtask landmark summary shows "
-            f"`{exact_goal}` within about 0.75m. Then judge from the current views and surrounding space whether "
+            f"`{exact_goal}` within about {float(self.FORCED_EARLY_STOP_DISTANCE_M):.2f}m or explicitly as already reached. "
+            f"Then judge from the current views and surrounding space whether "
             f"this is the real target object in a reasonable location rather than a misdetection. "
             f"If any of these is missing, keep `global_landmark_arrival=false` and continue approaching `{exact_goal}`."
         )
@@ -568,11 +582,12 @@ class OVONObjectNavigationController(VLMNavigationController):
         if not thinking_dir:
             return
         try:
-            os.makedirs(thinking_dir, exist_ok=True)
             artifact_payload = dict(response or {})
             artifact_payload.pop("global_task_finish", None)
-            with open(os.path.join(thinking_dir, "response.json"), "w", encoding="utf-8") as handle:
-                json.dump(artifact_payload, handle, ensure_ascii=False, indent=2)
+            self._write_json_artifact(
+                os.path.join(thinking_dir, "response.controller.json"),
+                artifact_payload,
+            )
         except OSError:
             return
 
@@ -814,12 +829,15 @@ class OVONObjectNavigationController(VLMNavigationController):
         if not retry_response:
             return response, prompt, cycle_info
 
+        raw_retry_response = self._get_latest_planner_raw_response_payload(retry_response)
         retry_response = self._sanitize_planner_response(retry_response)
         thinking_dir = str(cycle_info.get("thinking_dir") or "").strip()
         if thinking_dir:
             try:
-                with open(os.path.join(thinking_dir, "response.json"), "w", encoding="utf-8") as handle:
-                    json.dump(retry_response, handle, ensure_ascii=False, indent=2)
+                self._persist_response_artifacts(
+                    save_dir=thinking_dir,
+                    raw_payload=raw_retry_response,
+                )
             except OSError:
                 pass
 
@@ -870,6 +888,12 @@ class OVONObjectNavigationController(VLMNavigationController):
         print("[OVONAutoStop] STOP was issued but episode did not finish; continue.")
         return False
 
+    def _normalize_final_env_metrics(self, env_metrics: Optional[Dict] = None) -> Dict[str, Any]:
+        metrics = dict(env_metrics or self.latest_info or {})
+        if bool(getattr(self, "final_stop_skipped_due_to_done", False)):
+            metrics["_final_success_inferred"] = False
+        return metrics
+
     def _reset_custom_landmark_state(self) -> None:
         """OVON resets landmark memory at every new subtask, same as VLNCE."""
         VLMNavigationController._reset_custom_landmark_state(self)
@@ -883,7 +907,7 @@ class OVONObjectNavigationController(VLMNavigationController):
             return None
 
         final_object_stage = self._ovon_is_final_object_stage()
-        effective_topk = 1 if final_object_stage else int(self.ACTION_SUBTASK_AUTOCOMPLETE_TOPK)
+        effective_topk = self._get_action_landmark_topk()
         ordered_entries = [
             dict(entry)
             for entry in self._sort_action_landmark_entries(step_landmark_entries or [])

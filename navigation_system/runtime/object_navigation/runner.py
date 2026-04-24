@@ -36,6 +36,7 @@ from navigation_system.runtime.storage.results_layout import (
     resolve_results_root_path,
 )
 from navigation_system.runtime.storage.artifacts import (
+    SaveManager,
     get_episode_detail_path_candidates,
     get_episode_log_path_candidates,
 )
@@ -602,17 +603,64 @@ def _discover_random_episode_ids(
 
 
 def _result_payload_is_sr1(payload: dict | None) -> bool:
-    if not isinstance(payload, dict):
-        return False
-    for key in ("sr", "success"):
-        value = payload.get(key)
-        if value is None:
+    return bool(SaveManager.result_has_complete_sr1(payload))
+
+
+def _load_existing_entry_log_payload(
+    results_dir: str,
+    storage_entry_id: int,
+    *,
+    entry_kind: str = "episode",
+) -> dict | None:
+    seen = set()
+    for path in get_episode_log_path_candidates(
+        results_dir,
+        storage_entry_id,
+        entry_kind=entry_kind,
+    ):
+        if path in seen:
             continue
-        try:
-            return bool(int(value))
-        except Exception:
-            return bool(value)
+        seen.add(path)
+        payload = load_json_if_exists(path)
+        if payload is not None:
+            return payload
+    return None
+
+
+def _entry_has_any_detail_artifacts(
+    results_dir: str,
+    storage_entry_id: int,
+    *,
+    entry_kind: str = "episode",
+) -> bool:
+    for detail_dir in get_episode_detail_path_candidates(
+        results_dir,
+        storage_entry_id,
+        entry_kind=entry_kind,
+    ):
+        if Path(detail_dir).exists():
+            return True
     return False
+
+
+def _cleanup_incomplete_existing_entry_artifacts(
+    *,
+    results_dir: str,
+    storage_entry_id: int,
+    entry_kind: str,
+) -> bool:
+    if not _entry_has_any_detail_artifacts(
+        results_dir,
+        int(storage_entry_id),
+        entry_kind=entry_kind,
+    ):
+        return False
+    _cleanup_entry_detail_artifacts(
+        results_dir=results_dir,
+        storage_entry_id=int(storage_entry_id),
+        entry_kind=entry_kind,
+    )
+    return True
 
 
 def _episode_has_existing_sr1(
@@ -621,29 +669,12 @@ def _episode_has_existing_sr1(
     *,
     entry_kind: str = "episode",
 ) -> bool:
-    candidate_paths = []
-    candidate_paths.extend(
-        get_episode_log_path_candidates(
-            results_dir,
-            episode_id,
-            entry_kind=entry_kind,
-        )
-    )
-    for detail_dir in get_episode_detail_path_candidates(
+    existing_log = _load_existing_entry_log_payload(
         results_dir,
-        episode_id,
+        int(episode_id),
         entry_kind=entry_kind,
-    ):
-        candidate_paths.append(os.path.join(detail_dir, "records", "result.json"))
-
-    seen = set()
-    for path in candidate_paths:
-        if path in seen:
-            continue
-        seen.add(path)
-        if _result_payload_is_sr1(load_json_if_exists(path)):
-            return True
-    return False
+    )
+    return _result_payload_is_sr1(existing_log)
 
 
 def _filter_existing_sr1(
@@ -663,7 +694,7 @@ def _filter_existing_sr1(
         suffix = "..." if len(skipped) > 20 else ""
         print(
             f"[OVON-ObjectNav] skip-sr1 skipped {len(skipped)} existing "
-            f"successful episodes: {preview}{suffix}"
+            f"complete successful episodes: {preview}{suffix}"
         )
     return kept
 
@@ -691,7 +722,7 @@ def _filter_existing_sr1_specs(
         suffix = "..." if len(skipped) > 20 else ""
         print(
             f"[OVON-ObjectNav] skip-sr1 skipped {len(skipped)} existing "
-            f"successful samples: {preview}{suffix}"
+            f"complete successful samples: {preview}{suffix}"
         )
     return kept
 
@@ -716,14 +747,13 @@ def _prune_empty_parents(path: str | Path, *, stop_at: str | Path) -> None:
         current = current.parent
 
 
-def _cleanup_entry_artifacts(
+def _cleanup_entry_detail_artifacts(
     *,
     results_dir: str,
     storage_entry_id: int,
     entry_kind: str,
 ) -> None:
     detail_root = Path(results_dir) / "detail"
-    log_root = Path(results_dir) / "log"
 
     for detail_dir in get_episode_detail_path_candidates(
         results_dir,
@@ -734,19 +764,6 @@ def _cleanup_entry_artifacts(
         if detail_path.exists():
             shutil.rmtree(detail_path, ignore_errors=True)
             _prune_empty_parents(detail_path.parent, stop_at=detail_root)
-
-    for log_path in get_episode_log_path_candidates(
-        results_dir,
-        int(storage_entry_id),
-        entry_kind=entry_kind,
-    ):
-        candidate = Path(log_path)
-        if candidate.exists():
-            try:
-                candidate.unlink()
-            except IsADirectoryError:
-                shutil.rmtree(candidate, ignore_errors=True)
-            _prune_empty_parents(candidate.parent, stop_at=log_root)
 
 
 def _cleanup_entry_log_artifacts(
@@ -771,19 +788,11 @@ def _cleanup_entry_log_artifacts(
 
 
 def _cleanup_interrupted_specs(*, results_dir: str, episode_specs: Sequence[dict]) -> None:
-    seen: set[tuple[str, int]] = set()
-    for spec in episode_specs:
-        storage_entry_id = int(spec.get("storage_entry_id", spec.get("episode_id", 0)) or 0)
-        entry_kind = str(spec.get("entry_kind", "episode") or "episode")
-        key = (entry_kind, storage_entry_id)
-        if key in seen:
-            continue
-        seen.add(key)
-        _cleanup_entry_log_artifacts(
-            results_dir=results_dir,
-            storage_entry_id=storage_entry_id,
-            entry_kind=entry_kind,
-        )
+    _ = results_dir
+    _ = episode_specs
+    # Leave summary logs untouched on interruption.
+    # They are the source of truth for skip-sr1 and best-result comparison, and
+    # incomplete interrupted runs should never erase a pre-existing log.
 
 
 def _is_abnormal_failure(result: dict | None) -> bool:
@@ -817,12 +826,11 @@ def _cleanup_failed_artifacts(
         return cleaned
     if not _is_abnormal_failure(cleaned):
         return cleaned
-
-    _cleanup_entry_log_artifacts(
-        results_dir=results_dir,
-        storage_entry_id=int(storage_entry_id),
-        entry_kind=str(entry_kind or "episode"),
-    )
+    _ = results_dir
+    _ = storage_entry_id
+    _ = entry_kind
+    # Abnormal / incomplete runs should not produce a new best log, but they
+    # also must not delete any existing best log.
     return cleaned
 
 
@@ -955,6 +963,12 @@ def _run_parallel_episode_job(job_spec: dict) -> dict:
             worker_count=worker_count,
         ),
         flush=True,
+    )
+
+    _cleanup_incomplete_existing_entry_artifacts(
+        results_dir=str(job_spec["results_dir"]),
+        storage_entry_id=storage_entry_id,
+        entry_kind=entry_kind,
     )
 
     with redirect_process_output_to_null():
@@ -1674,6 +1688,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                     ),
                     flush=True,
                 )
+                _cleanup_incomplete_existing_entry_artifacts(
+                    results_dir=args.results_dir,
+                    storage_entry_id=int(
+                        episode_spec.get("storage_entry_id", episode_id)
+                    ),
+                    entry_kind=str(episode_spec.get("entry_kind", "episode") or "episode"),
+                )
                 try:
                     result = _run_one_episode(
                         ovon_config=ovon_config,
@@ -1729,7 +1750,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 all_results.append(summary_row)
     except KeyboardInterrupt:
         print(
-            "\n[OVON-ObjectNav] interrupted by user; incomplete log entries were discarded, detail artifacts were kept.",
+            "\n[OVON-ObjectNav] interrupted by user; summary logs were left untouched, detail artifacts were kept.",
             flush=True,
         )
         return 130

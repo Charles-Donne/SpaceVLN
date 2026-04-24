@@ -52,9 +52,21 @@ class SingleOVONVectorEnvAdapter:
         self.env = env
         self.number_of_episodes = int(episode_count or 1)
         self._last_pose: Optional[Sequence[float]] = None
+        self._last_sim_position: Optional[np.ndarray] = None
+        self._path_length_m: float = 0.0
 
     def _current_pose(self) -> Sequence[float]:
         return get_sim_location(self.env.sim)
+
+    def _current_sim_position(self) -> np.ndarray:
+        agent_state_getter = getattr(self.env.sim, "get_agent_state", None)
+        if callable(agent_state_getter):
+            try:
+                state = agent_state_getter()
+            except TypeError:
+                state = agent_state_getter(0)
+            return np.asarray(state.position[:3], dtype=np.float32)
+        return np.asarray((0.0, 0.0, 0.0), dtype=np.float32)
 
     def _augment_observation(self, obs: Any, *, reset: bool) -> Any:
         if obs is None:
@@ -62,14 +74,27 @@ class SingleOVONVectorEnvAdapter:
 
         obs = dict(obs)
         current_pose = self._current_pose()
+        current_sim_position = self._current_sim_position()
         if reset or self._last_pose is None:
             sensor_pose = np.zeros((3,), dtype=np.float32)
+            self._last_sim_position = current_sim_position
+            self._path_length_m = 0.0
         else:
             dx, dy, do = get_rel_pose_change(current_pose, self._last_pose)
             sensor_pose = np.asarray([dx, dy, do], dtype=np.float32)
+            if self._last_sim_position is not None:
+                self._path_length_m += float(
+                    np.linalg.norm(current_sim_position - self._last_sim_position, ord=2)
+                )
+            self._last_sim_position = current_sim_position
         self._last_pose = current_pose
         obs["sensor_pose"] = sensor_pose
         return obs
+
+    def _augment_metrics(self, metrics: Any) -> dict:
+        payload = dict(metrics or {})
+        payload["path_length"] = float(self._path_length_m)
+        return payload
 
     @staticmethod
     def _normalize_action(action: Any) -> dict:
@@ -99,12 +124,13 @@ class SingleOVONVectorEnvAdapter:
         action = list(actions)[0]
         obs = self.env.step(self._normalize_action(action))
         done = bool(getattr(self.env, "episode_over", False))
-        info = dict(self.env.get_metrics() or {})
+        obs = self._augment_observation(obs, reset=False)
+        info = self._augment_metrics(self.env.get_metrics())
         info["done"] = done
         reward = float(info.get("distance_to_goal_reward", 0.0) or 0.0)
         return [
             (
-                self._augment_observation(obs, reset=False),
+                obs,
                 reward,
                 done,
                 info,
@@ -118,7 +144,7 @@ class SingleOVONVectorEnvAdapter:
         if int(index) != 0:
             raise IndexError(f"SingleOVONVectorEnvAdapter only supports env index 0, got {index}")
         if method_name == "get_metrics":
-            return dict(self.env.get_metrics() or {})
+            return self._augment_metrics(self.env.get_metrics())
         if method_name == "get_agent_pose":
             return self._current_pose()
         target = getattr(self.env, method_name)

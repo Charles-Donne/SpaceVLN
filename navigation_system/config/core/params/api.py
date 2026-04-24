@@ -13,5 +13,5 @@ ACTION_IMAGE_COMPRESSION_QUALITY = 75
 # Pre-layout sizing for model-input images. We resize content first, then add
 # prompt-specific white strips so every request keeps a stable visual scale.
 THINKING_VIEW_MODEL_CONTENT_WIDTH = 512
-ACTION_VIEW_MODEL_CONTENT_WIDTH = 480
+ACTION_VIEW_MODEL_CONTENT_WIDTH = 512
 GLOBAL_MAP_MODEL_INPUT_SIZE = 440

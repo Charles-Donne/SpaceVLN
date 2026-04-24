@@ -880,6 +880,51 @@ class VLMNavigationController(BaseNavigationController):
             if key in payload
         }
 
+    @staticmethod
+    def _write_json_artifact(path: str, payload: Optional[Dict[str, Any]]) -> None:
+        if not path or not isinstance(payload, dict):
+            return
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+
+    @staticmethod
+    def _copy_response_payload(payload: Optional[Dict[str, Any]], fallback: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        if isinstance(payload, dict):
+            return dict(payload)
+        return dict(fallback or {})
+
+    def _get_latest_planner_raw_response_payload(
+        self,
+        fallback: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        planner = getattr(self, "planner", None)
+        payload = getattr(planner, "last_parsed_response_payload", None)
+        return self._copy_response_payload(payload, fallback)
+
+    def _get_latest_action_raw_response_payload(
+        self,
+        fallback: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        executor = getattr(self, "action_executor", None)
+        payload = getattr(executor, "last_parsed_response_payload", None)
+        return self._copy_response_payload(payload, fallback)
+
+    def _persist_response_artifacts(
+        self,
+        *,
+        save_dir: Optional[str],
+        raw_payload: Optional[Dict[str, Any]],
+        controller_payload: Optional[Dict[str, Any]] = None,
+        controller_filename: str = "response.controller.json",
+    ) -> None:
+        target_dir = str(save_dir or "").strip()
+        if not target_dir:
+            return
+        self._write_json_artifact(os.path.join(target_dir, "response.json"), self._copy_response_payload(raw_payload))
+        if isinstance(controller_payload, dict):
+            self._write_json_artifact(os.path.join(target_dir, controller_filename), dict(controller_payload))
+
     def _build_forced_blocked_front_recovery_action(
         self,
         step_landmark_entries: Optional[Sequence[Dict[str, Any]]] = None,
@@ -2924,15 +2969,20 @@ class VLMNavigationController(BaseNavigationController):
             )
 
         if not response:
+            planner_failure_reason = str(
+                planner_timing_info.get("final_failure_reason", "") or "planner_failed"
+            ).strip() or "planner_failed"
             self.latest_thinking_cycle_info = {
                 "mode": mode_key,
                 "phase": phase,
                 "thinking_dir": thinking_dir,
-                "reason": "planner_failed",
+                "reason": planner_failure_reason,
                 "detected_landmarks": detected_landmarks,
                 "waypoint_summary": waypoint_summary,
                 "previous_subtask_landmark_summary": previous_subtask_landmark_summary,
                 "previous_subtask_landmark_final_info": dict(getattr(self, "previous_subtask_landmark_final_info", {}) or {}),
+                "planner_failure_reason": planner_failure_reason,
+                "planner_timing_info": dict(planner_timing_info or {}),
             }
             if mode_key == "initial":
                 print("[ERR] LLM Planning failed")
@@ -2940,9 +2990,12 @@ class VLMNavigationController(BaseNavigationController):
                 print("[ERR] LLM Verify failed")
             return None, prompt, dict(self.latest_thinking_cycle_info)
 
+        raw_response = self._get_latest_planner_raw_response_payload(response)
         response = self._sanitize_planner_response(response)
-        with open(os.path.join(thinking_dir, "response.json"), 'w', encoding='utf-8') as f:
-            json.dump(response, f, ensure_ascii=False, indent=2)
+        self._persist_response_artifacts(
+            save_dir=thinking_dir,
+            raw_payload=raw_response,
+        )
 
         cycle_info = {
             "mode": mode_key,
@@ -3604,14 +3657,10 @@ class VLMNavigationController(BaseNavigationController):
             print("[ERR] VLM decision failed")
             return None, None, True, 1, None
         
-        # Save the raw response under the same request artifact directory.
-        with open(os.path.join(action_context["action_save_dir"], "response.json"), 'w', encoding='utf-8') as f:
-            json.dump(
-                self._build_action_response_artifact_payload(response),
-                f,
-                ensure_ascii=False,
-                indent=2,
-            )
+        self._persist_response_artifacts(
+            save_dir=action_context["action_save_dir"],
+            raw_payload=self._get_latest_action_raw_response_payload(response),
+        )
         
         # Save planned action parameters for later actual-progress estimation.
         self.last_planned_degrees = degrees
@@ -3962,9 +4011,19 @@ class VLMNavigationController(BaseNavigationController):
                         )
                         break
                     if thinking_mode == 'initial':
-                        failure_reason = 'initial_lookaround_failed' if cycle_reason == 'lookaround_failed' else 'initial_subtask_failed'
+                        if cycle_reason == 'lookaround_failed':
+                            failure_reason = 'initial_lookaround_failed'
+                        elif cycle_reason == 'planner_timeout':
+                            failure_reason = 'initial_planner_timeout'
+                        else:
+                            failure_reason = 'initial_subtask_failed'
                     else:
-                        failure_reason = 'verify_lookaround_failed' if cycle_reason == 'lookaround_failed' else 'verify_replan_failed'
+                        if cycle_reason == 'lookaround_failed':
+                            failure_reason = 'verify_lookaround_failed'
+                        elif cycle_reason == 'planner_timeout':
+                            failure_reason = 'verify_replan_timeout'
+                        else:
+                            failure_reason = 'verify_replan_failed'
                     print(f"[ERR] Thinking controller failed ({thinking_mode})")
                     print(
                         "[WARN] Finalize the episode with current trajectory/metrics "

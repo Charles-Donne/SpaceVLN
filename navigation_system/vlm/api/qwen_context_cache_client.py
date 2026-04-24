@@ -376,6 +376,7 @@ class QwenContextCacheMixin:
             raise RuntimeError("Explicit context cache is disabled in qwen_context_cache settings")
 
         t_start = time.time()
+        self._set_last_call_outcome("pending")
         try:
             if prompt_bundle is not None:
                 system_prompt = prompt_bundle.system_prompt
@@ -475,6 +476,7 @@ class QwenContextCacheMixin:
                         ),
                     ),
                 )
+                self._set_last_call_outcome("http_error", f"status={response.status_code}")
                 return None
 
             result = response.json()
@@ -536,6 +538,7 @@ class QwenContextCacheMixin:
                         ),
                     ),
                 )
+                self._set_last_call_outcome("empty_response")
                 return None
 
             finish_reason = dict((result.get("choices") or [{}])[0] or {}).get(
@@ -562,6 +565,9 @@ class QwenContextCacheMixin:
             )
             if parsed is None:
                 print(f"✗ JSON parse failed | Raw (first 300): {content[:300]}")
+                self._set_last_call_outcome("json_parse_failed")
+            else:
+                self._set_last_call_outcome("ok")
             return parsed
 
         except requests.exceptions.Timeout:
@@ -581,6 +587,7 @@ class QwenContextCacheMixin:
                     ),
                 ),
             )
+            self._set_last_call_outcome("timeout")
             return None
         except json.JSONDecodeError as exc:
             elapsed = time.time() - t_start
@@ -599,6 +606,7 @@ class QwenContextCacheMixin:
                     ),
                 ),
             )
+            self._set_last_call_outcome("json_decode_error", str(exc))
             return None
         except Exception as exc:
             elapsed = time.time() - t_start
@@ -617,4 +625,5 @@ class QwenContextCacheMixin:
                     ),
                 ),
             )
+            self._set_last_call_outcome("api_error", str(exc))
             return None
