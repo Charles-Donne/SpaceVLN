@@ -20,6 +20,7 @@ from navigation_system.vlm.prompts.object_navigation.common import (
 )
 from navigation_system.vlm.prompts.vlnce.builders import (
     _build_allowed_action_bullets,
+    _build_previous_subtask_landmark_block,
     _build_landmark_perception_summary,
     _build_obstacle_perception_summary,
     _fmt_threshold_m,
@@ -118,14 +119,14 @@ def build_ovon_verify_planner_cache_prompt_bundle(
     del action_space
     del detected_landmarks
     del direction_names
-    del verify_replan_prompt_notice
     waypoint_text = str(waypoint_summary or "Unavailable").strip() or "Unavailable"
     previous_summary = str(previous_subtask_landmark_summary or "").strip()
-    previous_block = f"- {previous_summary}" if previous_summary else ""
+    previous_block = _build_previous_subtask_landmark_block(previous_summary)
+    verify_notice_block = str(verify_replan_prompt_notice or "").strip()
 
     system_prompt = _render_verify_planning_system_prompt()
     user_prompt = VERIFY_PLANNING_CACHE_USER_PROMPT.format(
-        verify_replan_prompt_notice_block="",
+        verify_replan_prompt_notice_block=verify_notice_block,
         instruction=instruction,
         subtask_destination=subtask_destination,
         subtask_instruction=subtask_instruction,

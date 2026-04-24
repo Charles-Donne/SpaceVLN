@@ -14,6 +14,7 @@ from navigation_system.config.core.params.thresholds import (
 )
 from navigation_system.vlm.prompts.vlnce.builders import (
     _build_allowed_action_bullets,
+    _build_previous_subtask_landmark_block,
     _build_landmark_perception_summary,
     _normalize_anchor_notation_text,
     _normalize_action_prompt_text,
@@ -111,19 +112,17 @@ def build_verify_planner_cache_prompt_bundle(
     del action_space
     del detected_landmarks
     del direction_names
-    del verify_replan_prompt_notice
 
     waypoint_text = str(waypoint_summary or "Unavailable").strip() or "Unavailable"
     previous_subtask_landmark_summary = str(previous_subtask_landmark_summary or "").strip()
-    previous_subtask_landmark_block = (
-        f"- {previous_subtask_landmark_summary}"
-        if previous_subtask_landmark_summary
-        else ""
+    previous_subtask_landmark_block = _build_previous_subtask_landmark_block(
+        previous_subtask_landmark_summary
     )
+    verify_notice_block = str(verify_replan_prompt_notice or "").strip()
 
     system_prompt = _render_verify_planning_system_prompt()
     user_prompt = VERIFY_PLANNING_CACHE_USER_PROMPT.format(
-        verify_replan_prompt_notice_block="",
+        verify_replan_prompt_notice_block=verify_notice_block,
         instruction=instruction,
         subtask_destination=subtask_destination,
         subtask_instruction=subtask_instruction,

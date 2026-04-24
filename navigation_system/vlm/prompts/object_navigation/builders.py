@@ -19,6 +19,7 @@ from navigation_system.vlm.prompts.vlnce.builders import (
     _build_allowed_action_output,
     _build_landmark_perception_summary,
     _build_obstacle_perception_summary,
+    _build_previous_subtask_landmark_block,
     _normalize_anchor_notation_text,
 )
 
@@ -56,19 +57,17 @@ def get_ovon_verification_replanning_prompt(
     previous_subtask_landmark_summary: str = None,
     verify_replan_prompt_notice: str = None,
 ) -> str:
-    del verify_replan_prompt_notice
-    previous_subtask_landmark_block = (
-        f"- {previous_subtask_landmark_summary.strip()}"
-        if str(previous_subtask_landmark_summary or "").strip()
-        else ""
+    previous_subtask_landmark_block = _build_previous_subtask_landmark_block(
+        previous_subtask_landmark_summary
     )
+    verify_notice_block = str(verify_replan_prompt_notice or "").strip()
     return _normalize_anchor_notation_text(VERIFICATION_REPLANNING_PROMPT.format(
         instruction=instruction,
         subtask_destination=subtask_destination,
         subtask_instruction=subtask_instruction,
         waypoint_summary=str(waypoint_summary or "Unavailable"),
         previous_subtask_landmark_block=previous_subtask_landmark_block,
-        verify_replan_prompt_notice_block="",
+        verify_replan_prompt_notice_block=verify_notice_block,
         action_space=action_space,
         obs_blocked_m=_fmt_threshold_m(OBS_BLOCKED_M),
         obs_risky_m=_fmt_threshold_m(OBS_RISKY_M),

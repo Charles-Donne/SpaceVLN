@@ -50,6 +50,16 @@ def _normalize_anchor_notation_text(prompt: str) -> str:
     return normalized
 
 
+def _build_previous_subtask_landmark_block(previous_subtask_landmark_summary: str) -> str:
+    summary_text = str(previous_subtask_landmark_summary or "").strip()
+    if not summary_text:
+        return ""
+    return (
+        f"- {summary_text}\n"
+        "- 要根据previous subtask landmark 来检查自己是不是到了这个landmark。"
+    )
+
+
 def get_initial_planning_prompt(instruction: str, action_space: str) -> str:
     """Render the initial planning prompt."""
     return _normalize_anchor_notation_text(INITIAL_PLANNING_PROMPT.format(
@@ -86,14 +96,12 @@ def get_verification_replanning_prompt(
     """Render the verification/replanning prompt."""
     if not waypoint_summary:
         waypoint_summary = "Unavailable"
-    del verify_replan_prompt_notice
 
     previous_subtask_landmark_summary = str(previous_subtask_landmark_summary or "").strip()
-    previous_subtask_landmark_block = (
-        f"- {previous_subtask_landmark_summary}"
-        if previous_subtask_landmark_summary
-        else ""
+    previous_subtask_landmark_block = _build_previous_subtask_landmark_block(
+        previous_subtask_landmark_summary
     )
+    verify_notice_block = str(verify_replan_prompt_notice or "").strip()
     verify_view_count = _get_verify_view_count(direction_names)
 
     return _normalize_anchor_notation_text(VERIFICATION_REPLANNING_PROMPT.format(
@@ -105,7 +113,7 @@ def get_verification_replanning_prompt(
         waypoint_summary=waypoint_summary,
         previous_subtask_landmark_summary=previous_subtask_landmark_summary,
         previous_subtask_landmark_block=previous_subtask_landmark_block,
-        verify_replan_prompt_notice_block="",
+        verify_replan_prompt_notice_block=verify_notice_block,
         verify_view_count=verify_view_count,
         obs_blocked_m=_fmt_threshold_m(OBS_BLOCKED_M),
         obs_risky_m=_fmt_threshold_m(OBS_RISKY_M),
