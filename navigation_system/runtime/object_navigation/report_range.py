@@ -5,15 +5,46 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, Sequence
 
-from navigation_system.runtime.object_navigation.runner import (
-    _build_aggregate,
-    _format_ovon_metric,
-    _resolve_success_distance_from_ovon_config,
-    _prepare_ovon_config,
-)
+from navigation_system.runtime.object_navigation.thresholds import OVON_SUCCESS_DISTANCE_M
+
+
+def _format_ovon_metric(value: float, digits: int = 4) -> str:
+    try:
+        return f"{float(value):.{digits}f}"
+    except Exception:
+        return "0.0"
+
+
+def _build_aggregate(all_results: Sequence[dict]) -> dict:
+    rows = list(all_results or [])
+    count = len(rows)
+    if count <= 0:
+        return {
+            "episodes": 0,
+            "successes": 0,
+            "success_rate": 0.0,
+            "avg_steps": 0.0,
+            "avg_distance_to_goal": 0.0,
+            "avg_spl": 0.0,
+            "avg_soft_spl": 0.0,
+        }
+
+    return {
+        "episodes": count,
+        "successes": sum(1 for item in rows if bool(item.get("success", False))),
+        "success_rate": sum(1 for item in rows if bool(item.get("success", False))) / count,
+        "avg_steps": sum(float(item.get("steps", 0) or 0) for item in rows) / count,
+        "avg_distance_to_goal": (
+            sum(float(item.get("distance_to_goal", -1.0) or -1.0) for item in rows) / count
+        ),
+        "avg_spl": sum(float(item.get("spl", 0.0) or 0.0) for item in rows) / count,
+        "avg_soft_spl": sum(float(item.get("soft_spl", 0.0) or 0.0) for item in rows) / count,
+    }
 
 
 def _iter_sample_log_paths(results_dir: Path) -> Iterable[Path]:
@@ -30,6 +61,13 @@ def _iter_sample_log_paths(results_dir: Path) -> Iterable[Path]:
     return paths
 
 
+def _sample_index_from_path(log_path: Path) -> int:
+    stem = str(log_path.stem or "")
+    if not stem.startswith("sample_"):
+        return 0
+    return _safe_int(stem.split("_", 1)[1], 0)
+
+
 def _safe_int(value, default: int = 0) -> int:
     try:
         return int(value)
@@ -44,49 +82,99 @@ def _safe_float(value, default: float = 0.0) -> float:
         return default
 
 
+def _default_load_workers() -> int:
+    raw_value = str(os.environ.get("SPACEVLN_REPORT_WORKERS", "") or "").strip()
+    if raw_value:
+        try:
+            return max(1, int(raw_value))
+        except (TypeError, ValueError):
+            return 1
+
+    cpu_count = int(os.cpu_count() or 4)
+    recommended = max(8, cpu_count * 4)
+    return min(64, recommended)
+
+
+def _bounded_load_workers(load_workers: int, item_count: int) -> int:
+    try:
+        parsed_workers = int(load_workers)
+    except (TypeError, ValueError):
+        parsed_workers = 1
+    return max(1, min(parsed_workers, max(1, int(item_count))))
+
+
+def _read_sample_row(log_path: Path) -> Optional[Dict]:
+    sample_index_hint = _sample_index_from_path(log_path)
+    try:
+        with log_path.open("r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except Exception:
+        return None
+
+    sample_index = _safe_int(payload.get("sample_index"), default=sample_index_hint)
+    if sample_index <= 0:
+        return None
+
+    return {
+        "sample_index": sample_index,
+        "episode_id": _safe_int(payload.get("episode_id"), -1),
+        "success": bool(_safe_int(payload.get("sr", payload.get("success", 0)), 0)),
+        "steps": _safe_int(payload.get("total_steps", payload.get("steps", 0)), 0),
+        "distance_to_goal": _safe_float(
+            payload.get("ne", payload.get("distance_to_goal", -1.0)),
+            -1.0,
+        ),
+        "spl": _safe_float(payload.get("spl", 0.0), 0.0),
+        "soft_spl": _safe_float(
+            payload.get("soft_spl", payload.get("oracle_spl", 0.0)),
+            0.0,
+        ),
+        "reason": str(payload.get("reason", "") or ""),
+        "error": str(payload.get("error", "") or ""),
+    }
+
+
 def _load_sample_rows(
     results_dir: Path,
     *,
     start_index: Optional[int],
     end_index: Optional[int],
+    load_workers: int,
+    verbose: bool,
 ) -> List[Dict]:
-    rows: List[Dict] = []
+    candidate_paths = []
     for log_path in _iter_sample_log_paths(results_dir):
-        try:
-            payload = json.loads(log_path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
+        sample_index = _sample_index_from_path(log_path)
+        if sample_index > 0:
+            if start_index is not None and sample_index < start_index:
+                continue
+            if end_index is not None and sample_index > end_index:
+                continue
+        candidate_paths.append(log_path)
 
-        sample_index = _safe_int(
-            payload.get("sample_index"),
-            default=_safe_int(log_path.stem.split("_", 1)[1], 0),
-        )
-        if sample_index <= 0:
+    worker_count = _bounded_load_workers(load_workers, len(candidate_paths))
+    if verbose:
+        log_root = results_dir / "log"
+        print(f"📂 Loading {len(candidate_paths)} OVON sample logs from {log_root}")
+        if worker_count > 1:
+            print(f"⚙️  Parallel JSON workers: {worker_count}")
+
+    if worker_count <= 1:
+        loaded_rows = [_read_sample_row(log_path) for log_path in candidate_paths]
+    else:
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            loaded_rows = list(executor.map(_read_sample_row, candidate_paths))
+
+    rows: List[Dict] = []
+    for row in loaded_rows:
+        if row is None:
             continue
+        sample_index = _safe_int(row.get("sample_index"), 0)
         if start_index is not None and sample_index < start_index:
             continue
         if end_index is not None and sample_index > end_index:
             continue
-
-        rows.append(
-            {
-                "sample_index": sample_index,
-                "episode_id": _safe_int(payload.get("episode_id"), -1),
-                "success": bool(_safe_int(payload.get("sr", payload.get("success", 0)), 0)),
-                "steps": _safe_int(payload.get("total_steps", payload.get("steps", 0)), 0),
-                "distance_to_goal": _safe_float(
-                    payload.get("ne", payload.get("distance_to_goal", -1.0)),
-                    -1.0,
-                ),
-                "spl": _safe_float(payload.get("spl", 0.0), 0.0),
-                "soft_spl": _safe_float(
-                    payload.get("soft_spl", payload.get("oracle_spl", 0.0)),
-                    0.0,
-                ),
-                "reason": str(payload.get("reason", "") or ""),
-                "error": str(payload.get("error", "") or ""),
-            }
-        )
+        rows.append(row)
 
     rows.sort(key=lambda item: int(item.get("sample_index", 0)))
     return rows
@@ -107,6 +195,7 @@ def _write_ovon_range_reports(
     aggregate: Dict,
     success_distance_m: float,
     summary_meta: Dict,
+    summary_only: bool,
 ) -> Dict[str, str]:
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -137,6 +226,13 @@ def _write_ovon_range_reports(
         json.dumps(metrics_payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+
+    saved_paths = {
+        "summary": str(summary_txt_path),
+        "metrics_json": str(metrics_json_path),
+    }
+    if summary_only:
+        return saved_paths
 
     headers = [
         "episode_id",
@@ -204,12 +300,9 @@ def _write_ovon_range_reports(
     )
     md_path.write_text("\n".join(md_lines) + "\n", encoding="utf-8")
 
-    return {
-        "summary": str(summary_txt_path),
-        "metrics_json": str(metrics_json_path),
-        "csv": str(csv_path),
-        "markdown": str(md_path),
-    }
+    saved_paths["csv"] = str(csv_path)
+    saved_paths["markdown"] = str(md_path)
+    return saved_paths
 
 
 def generate_ovon_range_report(
@@ -222,28 +315,29 @@ def generate_ovon_range_report(
     max_steps: int,
     start_index: Optional[int],
     end_index: Optional[int],
+    summary_only: bool = False,
+    load_workers: int = 1,
+    verbose: bool = True,
 ) -> Dict[str, str]:
     base_results_dir = Path(results_dir).resolve()
     rows = _load_sample_rows(
         base_results_dir,
         start_index=start_index,
         end_index=end_index,
+        load_workers=load_workers,
+        verbose=verbose,
     )
     if not rows:
         range_label = _report_subdir_name(start_index, end_index)
         raise RuntimeError(f"No OVON sample logs found for range '{range_label}' in {base_results_dir}")
 
-    ovon_config = _prepare_ovon_config(
-        exp_config=exp_config,
-        split=split,
-        data_path=data_path,
-        gpu_id=gpu_id,
-        max_steps=max_steps,
-    )
     aggregate = _build_aggregate(rows)
-    success_distance_m = _resolve_success_distance_from_ovon_config(ovon_config)
+    success_distance_m = float(OVON_SUCCESS_DISTANCE_M)
 
     report_dir = base_results_dir / "reports" / _report_subdir_name(start_index, end_index)
+    if verbose:
+        print(f"✅ Loaded {len(rows)} OVON sample logs")
+        print(f"📁 Report directory: {report_dir}")
 
     summary_meta = {
         "selection_mode": "sample_index_range_from_existing_logs",
@@ -252,14 +346,25 @@ def generate_ovon_range_report(
         "results_dir": str(base_results_dir),
         "split": str(split),
         "data_path": str(data_path),
+        "load_workers": int(_bounded_load_workers(load_workers, len(rows))),
+        "summary_only": bool(summary_only),
+        "success_distance_m": success_distance_m,
     }
-    return _write_ovon_range_reports(
+    saved_paths = _write_ovon_range_reports(
         output_dir=report_dir,
         rows=rows,
         aggregate=aggregate,
         success_distance_m=success_distance_m,
         summary_meta=summary_meta,
+        summary_only=summary_only,
     )
+    if verbose:
+        print(f"📋 Saved summary report: {saved_paths['summary']}")
+        print(f"📋 Saved metrics JSON: {saved_paths['metrics_json']}")
+        if not summary_only:
+            print(f"📋 Saved episode CSV: {saved_paths['csv']}")
+            print(f"📋 Saved episode Markdown: {saved_paths['markdown']}")
+    return saved_paths
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -281,6 +386,17 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-steps", type=int, default=500)
     parser.add_argument("--start-index", type=int, default=None)
     parser.add_argument("--end-index", type=int, default=None)
+    parser.add_argument(
+        "--summary-only",
+        action="store_true",
+        help="Fast mode: save only summary + metrics.json, skip episode CSV/Markdown",
+    )
+    parser.add_argument(
+        "--load-workers",
+        type=int,
+        default=_default_load_workers(),
+        help="Number of workers for loading sample JSON files in parallel",
+    )
     return parser
 
 
@@ -295,6 +411,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         max_steps=int(args.max_steps),
         start_index=args.start_index,
         end_index=args.end_index,
+        summary_only=bool(args.summary_only),
+        load_workers=int(args.load_workers),
+        verbose=True,
     )
     print("OVON range report generated:")
     for key, value in report_paths.items():
