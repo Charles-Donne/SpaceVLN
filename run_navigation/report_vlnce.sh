@@ -44,18 +44,20 @@ REPORT_SUMMARY_ONLY=0
 
 usage() {
     echo "Usage:"
-    echo "  bash run_navigation/report_range.sh [start_episode_id|all] [end_episode_id|all] [results_selector]"
-    echo "  bash run_navigation/report_range.sh --start-id ID|all --end-id ID|all --results DIR|NAME|all"
-    echo "  bash run_navigation/report_range.sh --fast --start-id all --end-id all --results DIR|NAME"
+    echo "  bash run_navigation/report_vlnce.sh [start_episode_id|all] [end_episode_id|all] [results_selector]"
+    echo "  bash run_navigation/report_vlnce.sh [start_episode_id|all] [results_selector]"
+    echo "  bash run_navigation/report_vlnce.sh [results_selector]"
+    echo "  bash run_navigation/report_vlnce.sh --start-id ID|all --end-id ID|all --results DIR|NAME|all"
+    echo "  bash run_navigation/report_vlnce.sh --fast --start-id all --end-id all --results DIR|NAME"
     echo ""
     echo "Examples:"
-    echo "  bash run_navigation/report_range.sh 1500 1799"
-    echo "  bash run_navigation/report_range.sh 1 50 qwen3.5-plus__qwen3.5-flash_cache"
-    echo "  bash run_navigation/report_range.sh 1500 1799 /abs/path/to/result/vlnce/qwen3.5-plus__qwen3.5-flash"
-    echo "  bash run_navigation/report_range.sh all all"
-    echo "  bash run_navigation/report_range.sh --start-id 1600 --end-id all --results all"
-    echo "  bash run_navigation/report_range.sh --results qwen3.5-plus__qwen3.5-flash,gemini2.5pro__gemini2.5flash"
-    echo "  bash run_navigation/report_range.sh --fast all all ablation/no-space-structure/qwen3.5-plus__qwen3.5-flash_cache"
+    echo "  bash run_navigation/report_vlnce.sh 1500 1799"
+    echo "  bash run_navigation/report_vlnce.sh 1 50 qwen3.5-plus__qwen3.5-flash_cache"
+    echo "  bash run_navigation/report_vlnce.sh 1500 1799 /abs/path/to/result/vlnce/qwen3.5-plus__qwen3.5-flash"
+    echo "  bash run_navigation/report_vlnce.sh all all"
+    echo "  bash run_navigation/report_vlnce.sh --start-id 1600 --end-id all --results all"
+    echo "  bash run_navigation/report_vlnce.sh --results qwen3.5-plus__qwen3.5-flash,gemini2.5pro__gemini2.5flash"
+    echo "  bash run_navigation/report_vlnce.sh --fast all all ablation/no-space-structure/qwen3.5-plus__qwen3.5-flash_cache"
     echo ""
     echo "Notes:"
     echo "  Reads existing logs only and regenerates reports without rerunning episodes."
@@ -162,6 +164,20 @@ normalize_episode_token() {
     fi
 
     return 1
+}
+
+is_episode_selector_token() {
+    local raw_value="${1:-}"
+    if [ -z "$raw_value" ]; then
+        return 1
+    fi
+
+    local lowered="${raw_value,,}"
+    if [ "$lowered" = "all" ]; then
+        return 0
+    fi
+
+    [[ "$raw_value" =~ ^[0-9]+$ ]]
 }
 
 resolve_dataset_episode_bounds() {
@@ -395,20 +411,53 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [ "${#POSITIONAL_ARGS[@]}" -gt 3 ]; then
+POSITIONAL_COUNT="${#POSITIONAL_ARGS[@]}"
+
+if [ "$POSITIONAL_COUNT" -gt 3 ]; then
     echo "❌ Too many positional arguments"
     usage
     exit 1
 fi
 
-if [ -z "$START_ID_RAW" ] && [ "${#POSITIONAL_ARGS[@]}" -ge 1 ]; then
-    START_ID_RAW="${POSITIONAL_ARGS[0]}"
-fi
-if [ -z "$END_ID_RAW" ] && [ "${#POSITIONAL_ARGS[@]}" -ge 2 ]; then
-    END_ID_RAW="${POSITIONAL_ARGS[1]}"
-fi
-if [ -z "$RESULTS_SELECTOR" ] && [ "${#POSITIONAL_ARGS[@]}" -ge 3 ]; then
-    RESULTS_SELECTOR="${POSITIONAL_ARGS[2]}"
+if [ -z "$START_ID_RAW" ] && [ -z "$END_ID_RAW" ] && [ -z "$RESULTS_SELECTOR" ]; then
+    case "$POSITIONAL_COUNT" in
+        0)
+            ;;
+        1)
+            if is_episode_selector_token "${POSITIONAL_ARGS[0]}"; then
+                START_ID_RAW="${POSITIONAL_ARGS[0]}"
+            else
+                RESULTS_SELECTOR="${POSITIONAL_ARGS[0]}"
+            fi
+            ;;
+        2)
+            if is_episode_selector_token "${POSITIONAL_ARGS[0]}" && is_episode_selector_token "${POSITIONAL_ARGS[1]}"; then
+                START_ID_RAW="${POSITIONAL_ARGS[0]}"
+                END_ID_RAW="${POSITIONAL_ARGS[1]}"
+            elif is_episode_selector_token "${POSITIONAL_ARGS[0]}"; then
+                START_ID_RAW="${POSITIONAL_ARGS[0]}"
+                RESULTS_SELECTOR="${POSITIONAL_ARGS[1]}"
+            else
+                echo "❌ Invalid positional arguments: when passing 2 args, use [start end] or [start results_selector]"
+                exit 1
+            fi
+            ;;
+        3)
+            START_ID_RAW="${POSITIONAL_ARGS[0]}"
+            END_ID_RAW="${POSITIONAL_ARGS[1]}"
+            RESULTS_SELECTOR="${POSITIONAL_ARGS[2]}"
+            ;;
+    esac
+else
+    if [ -z "$START_ID_RAW" ] && [ "$POSITIONAL_COUNT" -ge 1 ]; then
+        START_ID_RAW="${POSITIONAL_ARGS[0]}"
+    fi
+    if [ -z "$END_ID_RAW" ] && [ "$POSITIONAL_COUNT" -ge 2 ]; then
+        END_ID_RAW="${POSITIONAL_ARGS[1]}"
+    fi
+    if [ -z "$RESULTS_SELECTOR" ] && [ "$POSITIONAL_COUNT" -ge 3 ]; then
+        RESULTS_SELECTOR="${POSITIONAL_ARGS[2]}"
+    fi
 fi
 
 if [ ! -f "$CONFIG_FILE" ]; then

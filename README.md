@@ -289,9 +289,9 @@ See `navigation_system/ablation/configs/` and `navigation_system/ablation/templa
 ### Reporting Existing Results
 
 ```bash
-bash run_navigation/report_range.sh 1 100 qwen3.5-plus__qwen3.5-flash_cache
-bash run_navigation/report_range.sh all all qwen3.5-plus__qwen3.5-flash_cache
-bash run_navigation/report_range.sh --start-id all --end-id all --results all
+bash run_navigation/report_vlnce.sh 1 100 qwen3.5-plus__qwen3.5-flash_cache
+bash run_navigation/report_vlnce.sh all all qwen3.5-plus__qwen3.5-flash_cache
+bash run_navigation/report_vlnce.sh --start-id all --end-id all --results all
 ```
 
 ## Result Layout

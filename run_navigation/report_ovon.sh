@@ -101,17 +101,17 @@ RESULTS_SELECTOR="$DEFAULT_RESULTS_DIR"
 if (( HELP_REQUESTED == 1 )) || [[ "$ARG1" == "-h" || "$ARG1" == "--help" || "$ARG1" == "help" ]]; then
     cat <<'EOF'
 Usage:
-  bash run_navigation/report_ovon_range.sh [--fast] [--workers N] [start_sample|all] [end_sample|all] [results_dir]
-  bash run_navigation/report_ovon_range.sh [start_sample|all] [end_sample|all] [results_dir]
-  bash run_navigation/report_ovon_range.sh [start_sample|all] [results_dir]
-  bash run_navigation/report_ovon_range.sh [results_dir]
+    bash run_navigation/report_ovon.sh [--fast] [--workers N] [start_sample|all] [end_sample|all] [results_dir]
+    bash run_navigation/report_ovon.sh [start_sample|all] [end_sample|all] [results_dir]
+    bash run_navigation/report_ovon.sh [start_sample|all] [results_dir]
+    bash run_navigation/report_ovon.sh [results_dir]
 
 Examples:
-  bash run_navigation/report_ovon_range.sh 1 100
-  bash run_navigation/report_ovon_range.sh 501 600 result/ovon/qwen3.5-plus__qwen3.5-flash_cache
-  bash run_navigation/report_ovon_range.sh all result/ovon/qwen3.5-plus__qwen3.5-flash_cache
-  bash run_navigation/report_ovon_range.sh --fast all result/ovon/qwen3.5-plus__qwen3.5-flash_cache
-  bash run_navigation/report_ovon_range.sh all all
+    bash run_navigation/report_ovon.sh 1 100
+    bash run_navigation/report_ovon.sh 501 600 result/ovon/qwen3.5-plus__qwen3.5-flash_cache
+    bash run_navigation/report_ovon.sh all result/ovon/qwen3.5-plus__qwen3.5-flash_cache
+    bash run_navigation/report_ovon.sh --fast all result/ovon/qwen3.5-plus__qwen3.5-flash_cache
+    bash run_navigation/report_ovon.sh all all
 
 Notes:
   - Reads existing OVON sample logs only; does not rerun episodes.
