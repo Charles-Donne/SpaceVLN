@@ -30,7 +30,7 @@ Return exactly one JSON object. Use `reasoning` as one short task-grounded summa
     "next_waypoint_direction": "<IMAGE 1-12 only; choose the task-aligned view>",
     "subtask_instruction": "<One short sentence for the current first stage only. Do not leak later stages into it.>",
     "subtask_landmark": "<One useful visible concrete cue for the current stage, or empty. Prefer the task-mentioned landmark when it is visible; avoid broad room labels or later-stage cues.>",
-    "global_task_finish": "<true only if the exact goal anchor is already proved by the current evidence; otherwise false>"
+    "global_task_finish": false
 }}
 
 **Example note**: Examples below show format only, never current facts. Never copy their names, landmarks, directions, or conclusions; always reason from the real current inputs.

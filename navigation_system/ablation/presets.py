@@ -60,7 +60,7 @@ _PRESET_DEFINITIONS: tuple[AblationPresetDefinition, ...] = (
         slug="no-planning-reasoning",
         config_filename="no_planning_reasoning.yaml",
         description="Remove thinking/planning reasoning flow prompts while keeping key constraints and format.",
-        aliases=("thinking_reasoning", "thinking-planning_reasoning"),
+        aliases=("thinking_reasoning", "thinking-planning_reasoning", "planing_reasoning"),
     ),
     AblationPresetDefinition(
         key="action_reasoning",
@@ -73,13 +73,56 @@ _PRESET_DEFINITIONS: tuple[AblationPresetDefinition, ...] = (
         slug="no-planning-action-reasoning",
         config_filename="no_planning_action_reasoning.yaml",
         description="Remove both thinking/planning and action reasoning flow prompts while keeping key constraints and format.",
-        aliases=("thinking_action_reasoning", "thinking-action_reasoning", "thinking_action", "all_reasoning"),
+        aliases=(
+            "thinking_action_reasoning",
+            "thinking-action_reasoning",
+            "thinking_action",
+            "all_reasoning",
+            "planing_action_reasoning",
+        ),
+    ),
+    AblationPresetDefinition(
+        key="planning_reasoning_no_progress",
+        slug="no-planning-reasoning-no-progress",
+        config_filename="no_planning_reasoning_no_progress.yaml",
+        description=(
+            "Remove thinking/planning reasoning flow plus task-chain/progress/local-loop guidance, "
+            "while keeping perception inputs, Previous Subtask context, key constraints, examples, and full action prompt."
+        ),
+        aliases=(
+            "thinking_reasoning_no_progress",
+            "planning_no_progress",
+            "planing_reasoning_no_progress",
+            "planing_no_progress",
+        ),
+    ),
+    AblationPresetDefinition(
+        key="planning_action_reasoning_no_progress",
+        slug="no-planning-action-reasoning-no-progress",
+        config_filename="no_planning_action_reasoning_no_progress.yaml",
+        description=(
+            "Remove thinking/planning reasoning flow plus task-chain/progress/local-loop guidance, "
+            "and use the no-action-reasoning action prompt."
+        ),
+        aliases=(
+            "thinking_action_reasoning_no_progress",
+            "all_reasoning_no_progress",
+            "planning_action_no_progress",
+            "planing_action_reasoning_no_progress",
+            "planing_action_no_progress",
+        ),
     ),
     AblationPresetDefinition(
         key="both",
         slug="no-landmark-no-space-structure",
         config_filename="no_landmark_no_space_structure.yaml",
         description="Remove both landmark and space-structure inputs.",
+        aliases=(
+            "landmark_space_structure",
+            "spatial_perception",
+            "space_perception",
+            "no_landmark_no_space_structure",
+        ),
     ),
 )
 

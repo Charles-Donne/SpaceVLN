@@ -36,10 +36,12 @@ Console output:
 Ablation:
   --ablation landmark
   --ablation space_structure
+  --ablation landmark_space_structure
   --ablation planning_reasoning
   --ablation action_reasoning
   --ablation planning_action_reasoning
-  --ablation both
+  --ablation planning_reasoning_no_progress
+  --ablation planning_action_reasoning_no_progress
   --ablation /abs/path/to/config.yaml
 
 Episode-arg examples:
@@ -53,6 +55,7 @@ Examples:
   bash run_navigation/vlnce.sh --runtime context_cache 1 10 260 4
   bash run_navigation/vlnce.sh --ablation landmark 1 100 260 4
   bash run_navigation/vlnce.sh --ablation thinking_reasoning 1 100 260 4
+  bash run_navigation/vlnce.sh --ablation planning_reasoning_no_progress 1 100 260 4
   bash run_navigation/vlnce.sh --runtime context_cache --ablation space_structure 1 100 260 4
 EOF
 }

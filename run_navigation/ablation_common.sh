@@ -21,22 +21,28 @@ spacevln_ablation_resolve_preset_path() {
         ""|default)
             printf '%s\n' "$(spacevln_ablation_default_config)"
             ;;
-        landmark)
+        landmark|no_landmark)
             printf '%s\n' "navigation_system/ablation/configs/no_landmark.yaml"
             ;;
-        space_structure)
+        space_structure|no_space_structure)
             printf '%s\n' "navigation_system/ablation/configs/no_space_structure.yaml"
             ;;
-        planning_reasoning|thinking_reasoning)
+        planning_reasoning|thinking_reasoning|planing_reasoning|no_planning_reasoning)
             printf '%s\n' "navigation_system/ablation/configs/no_planning_reasoning.yaml"
             ;;
-        action_reasoning)
+        action_reasoning|no_action_reasoning)
             printf '%s\n' "navigation_system/ablation/configs/no_action_reasoning.yaml"
             ;;
-        planning_action_reasoning|thinking_action_reasoning|all_reasoning)
+        planning_action_reasoning|thinking_action_reasoning|all_reasoning|planing_action_reasoning|no_planning_action_reasoning)
             printf '%s\n' "navigation_system/ablation/configs/no_planning_action_reasoning.yaml"
             ;;
-        both)
+        planning_reasoning_no_progress|thinking_reasoning_no_progress|planning_no_progress|planing_reasoning_no_progress|planing_no_progress|no_planning_reasoning_no_progress)
+            printf '%s\n' "navigation_system/ablation/configs/no_planning_reasoning_no_progress.yaml"
+            ;;
+        planning_action_reasoning_no_progress|thinking_action_reasoning_no_progress|all_reasoning_no_progress|planning_action_no_progress|planing_action_reasoning_no_progress|planing_action_no_progress|no_planning_action_reasoning_no_progress)
+            printf '%s\n' "navigation_system/ablation/configs/no_planning_action_reasoning_no_progress.yaml"
+            ;;
+        both|landmark_space_structure|spatial_perception|space_perception|no_landmark_no_space_structure)
             printf '%s\n' "navigation_system/ablation/configs/no_landmark_no_space_structure.yaml"
             ;;
         *)

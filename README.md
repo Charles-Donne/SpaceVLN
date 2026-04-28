@@ -271,7 +271,9 @@ Ablation presets are isolated under `navigation_system/ablation/`.
 ```bash
 bash run_navigation/vlnce.sh --ablation landmark 1 100 260 4
 bash run_navigation/vlnce.sh --ablation space_structure 1 100 260 4
+bash run_navigation/vlnce.sh --ablation landmark_space_structure 1 100 260 4
 bash run_navigation/vlnce.sh --ablation planning_action_reasoning 1 100 260 4
+bash run_navigation/vlnce.sh --ablation planning_reasoning_no_progress 1 100 260 4
 bash run_navigation/vlnce.sh --runtime context_cache --ablation space_structure 1 100 260 4
 ```
 
@@ -279,10 +281,12 @@ Supported preset names include:
 
 - `landmark`
 - `space_structure`
+- `landmark_space_structure`
 - `planning_reasoning`
 - `action_reasoning`
 - `planning_action_reasoning`
-- `both`
+- `planning_reasoning_no_progress`
+- `planning_action_reasoning_no_progress`
 
 See `navigation_system/ablation/configs/` and `navigation_system/ablation/templates/` for preset definitions and prompt variants.
 

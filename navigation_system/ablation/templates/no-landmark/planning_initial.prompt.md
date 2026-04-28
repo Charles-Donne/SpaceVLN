@@ -59,7 +59,7 @@ Return exactly one JSON object. Keep all Part 1-4 reasoning inside `"reasoning"`
     "next_waypoint_direction": "<IMAGE 1-12 only; must match the chosen task-aligned view>",
     "subtask_instruction": "<One short sentence in the fixed direct / same-stage path / arrival-stop form. Use the path form only when cue and destination belong to the same current task piece; use the stop form only when the destination is already reached. In initial planning it must stay on first-stage work until that endpoint is reached.>",
     "subtask_landmark": "<One clear visible concrete cue, or empty. Prefer the current-stage task-mentioned landmark; if the destination itself names a concrete landmark, usually reuse that word or a task-faithful synonym. Otherwise infer a necessary cue from the current-stage destination space + current views. Output the phrase itself, not a `space's landmark` rewrite unless the task itself uses a compound landmark phrase. Never use a broad space type or unrelated nearby object, and in initial planning never jump to a stage+1 landmark while the first stage is unfinished.>",
-    "global_task_finish": "<true only if current evidence + `task_progress` + `waypoint_chain` prove the exact goal anchor and no earlier task piece remains unfinished: for landmark goals, the correct target space plus the goal landmark/local anchor near within about {arrival_near_m}m, preferring a closer safe stop if available; for non-object goals, the exact target space / entrance / outside anchor itself; otherwise false>"
+    "global_task_finish": false
 }}
 
 **Example note**: Examples below show format only, never current facts. Never copy their names, landmarks, directions, or conclusions; always reason from the real current inputs.

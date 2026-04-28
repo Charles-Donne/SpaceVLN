@@ -57,7 +57,7 @@ Return exactly one JSON object. Keep all Part 1-4 reasoning inside `"reasoning"`
     "next_waypoint_direction": "<one provided IMAGE label in `IMAGE N (Direction Angledeg)` form; never output a bare direction without image number>",
     "subtask_instruction": "<One short executable sentence for this immediate search stage only. It must start with `From IMAGE N (Direction Angledeg) view, start, ...` using the chosen `next_waypoint_direction`.>",
     "subtask_landmark": "<One visible concrete cue useful for the current search stage, or empty string. If this is the final target-object stage, copy the Global Task target object exactly; a modifier is tolerated only if the phrase still contains the target object word/phrase.>",
-    "global_landmark_arrival": "<always false in initial planning. Apply Part 3 Task Goal Arrival Check, but keep the result false on this initial call and leave the real stop decision to a later verify call.>"
+    "global_landmark_arrival": false
 }}
 
 **Example note**: Example below shows output shape only; never copy its content.
