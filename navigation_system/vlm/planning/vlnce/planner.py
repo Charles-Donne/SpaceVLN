@@ -27,6 +27,7 @@ from navigation_system.vlm.contracts.schema import (
 
 DEFAULT_PLANNER_MAX_RETRIES = 3
 DEFAULT_INITIAL_PLANNER_MAX_RETRIES = 5
+DEFAULT_VERIFY_PLANNER_MAX_RETRIES = 5
 API_NO_RESPONSE_FAILURE_KINDS = {
     "api_error",
     "empty_response",
@@ -141,6 +142,8 @@ class LLMPlanner(BaseAPIClient):
         default = (
             DEFAULT_INITIAL_PLANNER_MAX_RETRIES
             if mode_key == "initial"
+            else DEFAULT_VERIFY_PLANNER_MAX_RETRIES
+            if mode_key == "verify"
             else DEFAULT_PLANNER_MAX_RETRIES
         )
         mode_env_name = f"SPACEVLN_{mode_key.upper()}_PLANNER_MAX_RETRIES" if mode_key else ""

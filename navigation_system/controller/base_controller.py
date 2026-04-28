@@ -214,6 +214,40 @@ class BaseNavigationController:
             )
         return overlay
 
+    @staticmethod
+    def _coerce_detection_vector(
+        values: Any,
+        length: int,
+        dtype: Any,
+        fill_value: Any,
+    ) -> np.ndarray:
+        length = max(0, int(length or 0))
+        if length <= 0:
+            return np.zeros((0,), dtype=dtype)
+
+        if values is None:
+            return np.full((length,), fill_value, dtype=dtype)
+
+        raw_values = np.asarray(values, dtype=object).reshape(-1).tolist()
+        if len(raw_values) < length:
+            raw_values.extend([fill_value] * (length - len(raw_values)))
+        elif len(raw_values) > length:
+            raw_values = raw_values[:length]
+
+        coerced = []
+        integer_dtype = np.issubdtype(np.dtype(dtype), np.integer)
+        for value in raw_values:
+            try:
+                if value is None:
+                    raise TypeError
+                numeric_value = float(value)
+                if not np.isfinite(numeric_value):
+                    raise ValueError
+                coerced.append(int(numeric_value) if integer_dtype else numeric_value)
+            except (TypeError, ValueError):
+                coerced.append(fill_value)
+        return np.asarray(coerced, dtype=dtype)
+
     def _merge_detection_batches(self, rgb: np.ndarray, detection_batches) -> tuple:
         """合并多次检测结果，保留重叠框的多个 query 输出。"""
         merged_labels = []
@@ -244,27 +278,43 @@ class BaseNavigationController:
 
             xyxy_parts.append(detections.xyxy.astype(np.float32))
 
+            detection_count = len(detections.xyxy)
+
             confidence = getattr(detections, 'confidence', None)
-            if confidence is None:
-                confidence_parts.append(np.zeros((len(detections.xyxy),), dtype=np.float32))
-            else:
-                confidence_parts.append(np.asarray(confidence, dtype=np.float32))
+            confidence_parts.append(
+                self._coerce_detection_vector(
+                    confidence,
+                    detection_count,
+                    np.float32,
+                    0.0,
+                )
+            )
 
             class_id = getattr(detections, 'class_id', None)
-            if class_id is None:
-                class_id_arr = np.full((len(detections.xyxy),), -1, dtype=np.int32)
-            else:
-                class_id_arr = np.asarray(class_id, dtype=np.int32).copy()
-                valid_mask = class_id_arr >= 0
-                class_id_arr[valid_mask] += class_offset
+            class_id_arr = self._coerce_detection_vector(
+                class_id,
+                detection_count,
+                np.int32,
+                0,
+            )
+            valid_mask = class_id_arr >= 0
+            class_id_arr[valid_mask] += int(class_offset)
+            class_id_arr[~valid_mask] = -1
             class_id_parts.append(class_id_arr)
 
             tracker_id = getattr(detections, 'tracker_id', None)
             if tracker_id is not None:
                 tracker_available = True
-                tracker_id_parts.append(np.asarray(tracker_id))
+                tracker_id_parts.append(
+                    self._coerce_detection_vector(
+                        tracker_id,
+                        detection_count,
+                        np.int32,
+                        -1,
+                    )
+                )
             else:
-                tracker_id_parts.append(np.full((len(detections.xyxy),), -1, dtype=np.int32))
+                tracker_id_parts.append(np.full((detection_count,), -1, dtype=np.int32))
 
         merged_mask_array = (
             np.concatenate(merged_masks, axis=0)

@@ -21,8 +21,6 @@ from navigation_system.config.core.params.spatial import (
     CURRENT_AREA_OVERLAP_THRESHOLD_M as CFG_CURRENT_AREA_OVERLAP_THRESHOLD_M,
     SPACE_AREA_CURRENT_WAYPOINT_MAX_DISTANCE_M as CFG_SPACE_AREA_CURRENT_WAYPOINT_MAX_DISTANCE_M,
     THINKING_DETECTION_GROUP_MAX_VIEWS as CFG_THINKING_DETECTION_GROUP_MAX_VIEWS,
-    THINKING_DETECTION_OBJECT_TOTAL_MAX_VIEWS as CFG_THINKING_DETECTION_OBJECT_TOTAL_MAX_VIEWS,
-    THINKING_DETECTION_TRANSITION_TOTAL_MAX_VIEWS as CFG_THINKING_DETECTION_TRANSITION_TOTAL_MAX_VIEWS,
     THINKING_DETECTION_TOPK as CFG_THINKING_DETECTION_TOPK,
     THINKING_SAME_OBJECT_BEARING_THRESHOLD_DEG as CFG_THINKING_SAME_OBJECT_BEARING_THRESHOLD_DEG,
     THINKING_SAME_OBJECT_DISTANCE_RATIO as CFG_THINKING_SAME_OBJECT_DISTANCE_RATIO,
@@ -65,8 +63,6 @@ class ThinkingViewRenderer:
     MODEL_CONTENT_WIDTH = THINKING_VIEW_MODEL_CONTENT_WIDTH
     THINKING_DETECTION_TOPK = CFG_THINKING_DETECTION_TOPK
     THINKING_DETECTION_GROUP_MAX_VIEWS = CFG_THINKING_DETECTION_GROUP_MAX_VIEWS
-    THINKING_DETECTION_TRANSITION_TOTAL_MAX_VIEWS = CFG_THINKING_DETECTION_TRANSITION_TOTAL_MAX_VIEWS
-    THINKING_DETECTION_OBJECT_TOTAL_MAX_VIEWS = CFG_THINKING_DETECTION_OBJECT_TOTAL_MAX_VIEWS
     CURRENT_AREA_OVERLAP_THRESHOLD_M = CFG_CURRENT_AREA_OVERLAP_THRESHOLD_M
     VIEW_HFOV_DEG = CFG_THINKING_VIEW_HFOV_DEG
     WAYPOINT_VISIBILITY_RADIUS_M = CFG_WAYPOINT_VISIBILITY_RADIUS_M
@@ -873,6 +869,39 @@ class ThinkingViewRenderer:
         return strip
 
     @staticmethod
+    def _coerce_detection_vector(
+        values: Any,
+        length: int,
+        dtype: Any,
+        fill_value: Any,
+    ) -> np.ndarray:
+        length = max(0, int(length or 0))
+        if length <= 0:
+            return np.zeros((0,), dtype=dtype)
+        if values is None:
+            return np.full((length,), fill_value, dtype=dtype)
+
+        raw_values = np.asarray(values, dtype=object).reshape(-1).tolist()
+        if len(raw_values) < length:
+            raw_values.extend([fill_value] * (length - len(raw_values)))
+        elif len(raw_values) > length:
+            raw_values = raw_values[:length]
+
+        coerced = []
+        integer_dtype = np.issubdtype(np.dtype(dtype), np.integer)
+        for value in raw_values:
+            try:
+                if value is None:
+                    raise TypeError
+                numeric_value = float(value)
+                if not np.isfinite(numeric_value):
+                    raise ValueError
+                coerced.append(int(numeric_value) if integer_dtype else numeric_value)
+            except (TypeError, ValueError):
+                coerced.append(fill_value)
+        return np.asarray(coerced, dtype=dtype)
+
+    @staticmethod
     def _filter_detection_payload(detections, labels: List[str], keep_indices: List[int]):
         if detections is None or getattr(detections, "xyxy", None) is None:
             return None, []
@@ -895,20 +924,30 @@ class ThinkingViewRenderer:
         all_class_id = getattr(detections, "class_id", None)
         all_tracker_id = getattr(detections, "tracker_id", None)
         all_mask = getattr(detections, "mask", None)
+        detection_count = len(all_xyxy)
 
         return (
             SimpleNamespace(
                 xyxy=all_xyxy[keep],
-                confidence=(
-                    np.asarray(all_conf, dtype=np.float32)[keep]
-                    if all_conf is not None else np.zeros((len(keep),), dtype=np.float32)
-                ),
-                class_id=(
-                    np.asarray(all_class_id, dtype=np.int32)[keep]
-                    if all_class_id is not None else np.full((len(keep),), -1, dtype=np.int32)
-                ),
+                confidence=ThinkingViewRenderer._coerce_detection_vector(
+                    all_conf,
+                    detection_count,
+                    np.float32,
+                    0.0,
+                )[keep],
+                class_id=ThinkingViewRenderer._coerce_detection_vector(
+                    all_class_id,
+                    detection_count,
+                    np.int32,
+                    -1,
+                )[keep],
                 tracker_id=(
-                    np.asarray(all_tracker_id, dtype=np.int32)[keep]
+                    ThinkingViewRenderer._coerce_detection_vector(
+                        all_tracker_id,
+                        detection_count,
+                        np.int32,
+                        -1,
+                    )[keep]
                     if all_tracker_id is not None else None
                 ),
                 mask=(
@@ -918,6 +957,30 @@ class ThinkingViewRenderer:
             ),
             [labels[idx] for idx in keep if 0 <= idx < len(labels)],
         )
+
+    @staticmethod
+    def _normalize_detection_name(name: str) -> str:
+        return " ".join(str(name or "").strip().lower().split())
+
+    @classmethod
+    def _is_transition_like_detection(cls, name: str) -> bool:
+        normalized_name = cls._normalize_detection_name(name)
+        if not normalized_name:
+            return False
+        normalized_text = f" {normalized_name.replace('-', ' ').replace('/', ' ')} "
+        tokens = set(normalized_text.split())
+        for keyword in cls.TRANSITION_DETECTION_KEYWORDS:
+            keyword_text = str(keyword).strip().lower()
+            if not keyword_text:
+                continue
+            keyword_tokens = keyword_text.split()
+            if len(keyword_tokens) == 1:
+                if keyword_tokens[0] in tokens:
+                    return True
+                continue
+            if f" {' '.join(keyword_tokens)} " in normalized_text:
+                return True
+        return False
 
     @classmethod
     def _remove_transition_like_detections(cls, detections, labels: List[str]):
@@ -945,43 +1008,6 @@ class ThinkingViewRenderer:
             return name, confidence
         except ValueError:
             return " ".join(parts).strip(), 0.0
-
-    @staticmethod
-    def _normalize_detection_name(name: str) -> str:
-        return " ".join(str(name or "").strip().lower().split())
-
-    @classmethod
-    def _is_transition_like_detection(cls, name: str) -> bool:
-        normalized_name = cls._normalize_detection_name(name)
-        if not normalized_name:
-            return False
-        normalized_text = f" {normalized_name.replace('-', ' ').replace('/', ' ')} "
-        tokens = set(normalized_text.split())
-        for keyword in cls.TRANSITION_DETECTION_KEYWORDS:
-            keyword_text = str(keyword).strip().lower()
-            if not keyword_text:
-                continue
-            keyword_tokens = keyword_text.split()
-            if len(keyword_tokens) == 1:
-                if keyword_tokens[0] in tokens:
-                    return True
-                continue
-            if f" {' '.join(keyword_tokens)} " in normalized_text:
-                return True
-        return False
-
-    @classmethod
-    def _cross_view_detection_family_key(cls, name: str) -> str:
-        normalized_name = cls._normalize_detection_name(name)
-        if cls._is_transition_like_detection(normalized_name):
-            return "__transition_like__"
-        return normalized_name or "__unknown__"
-
-    @classmethod
-    def _cross_view_total_limit(cls, name: str) -> int:
-        if cls._is_transition_like_detection(name):
-            return int(max(1, cls.THINKING_DETECTION_TRANSITION_TOTAL_MAX_VIEWS))
-        return int(max(1, cls.THINKING_DETECTION_OBJECT_TOTAL_MAX_VIEWS))
 
     @classmethod
     def _estimate_detection_distance_m(
@@ -1168,16 +1194,7 @@ class ThinkingViewRenderer:
         )
 
         keep_by_view: Dict[int, List[int]] = {}
-        kept_family_counts: Dict[str, int] = {}
         for group in groups[:max(1, int(topk))]:
-            group_name = str(group.get("name", "unknown"))
-            family_key = cls._cross_view_detection_family_key(group_name)
-            family_kept_count = int(kept_family_counts.get(family_key, 0))
-            family_limit = cls._cross_view_total_limit(group_name)
-            remaining_family_budget = max(0, family_limit - family_kept_count)
-            if remaining_family_budget <= 0:
-                continue
-
             members = sorted(
                 group.get("members", []),
                 key=lambda item: (
@@ -1188,10 +1205,7 @@ class ThinkingViewRenderer:
             )
             used_views = set()
             kept_count = 0
-            # Preserve the original same-object grouping and per-group 3-view cap.
-            # Only the 12-view detection retention budget changes here:
-            # transition-like detections can occupy up to 4 views, regular objects up to 2.
-            group_limit = min(int(max(1, cls.THINKING_DETECTION_GROUP_MAX_VIEWS)), remaining_family_budget)
+            group_limit = int(max(1, cls.THINKING_DETECTION_GROUP_MAX_VIEWS))
             for member in members:
                 view_idx = int(member.get("view_idx", -1))
                 det_idx = int(member.get("det_idx", -1))
@@ -1202,8 +1216,6 @@ class ThinkingViewRenderer:
                 kept_count += 1
                 if kept_count >= group_limit:
                     break
-            if kept_count > 0:
-                kept_family_counts[family_key] = family_kept_count + kept_count
         return keep_by_view
 
     @classmethod
@@ -1393,12 +1405,6 @@ class ThinkingViewRenderer:
                 text_color=(0, 0, 255),
             )
             view_waypoint_entries = list(waypoint_entries_by_view.get(float(angle), []))
-            marker_entry = next(
-                (entry for entry in view_waypoint_entries if bool(entry.get("is_last_visited"))),
-                None,
-            )
-            if marker_entry is not None:
-                image = draw_waypoints_fn(image, marker_entry)
             bottom_lines = self._build_bottom_strip_lines(
                 visible_entries_meta=visible_entries_meta,
                 waypoint_entries=view_waypoint_entries,

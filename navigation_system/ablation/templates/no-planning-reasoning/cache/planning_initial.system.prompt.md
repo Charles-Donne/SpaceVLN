@@ -7,7 +7,7 @@
 - **RGB scene content**: this is the primary evidence. First read the actual image content: layout, openings, walls, furniture, room cues, stairs, boundaries, and object relations.
 - **Obstacle distance**: nearest obstacle only. <{obs_blocked_m}m=blocked | {obs_blocked_m}-{obs_risky_m}m=caution | >{obs_risky_m}m=passable
 - **Landmark / Space Waypoint** (if present): `Landmark` and `Space Waypoint` labels may appear on the RGB view, and custom landmark bbox may add name + distance/angle cues. Use only the shown values.
-- **Bottom white strip** (if present): bottom summary rows may show `your current area`, `space waypoint`, and `landmark` entries, including names, distances, directions, confidence, connection info, or status tags. Treat it as structured current-view / nearby-memory summary, not obstacle/free-space/path-clearance proof.
+- **Bottom white strip** (if present): bottom summary rows may show `your current area`, `space waypoint`, and `landmark` entries, including names, distances, directions, confidence, connection info, or status tags. Treat it as structured current-view / nearby-memory summary, not obstacle/free-space/path-clearance proof. Use the preserved `your current area` row only as a supporting current space/area tag for the left side of `current_waypoint` when it agrees with RGB/layout.
 **Space Structure**: rendered current-area / Space Waypoint / connection evidence if provided; use it with the views and map, not as a replacement for current-view localization.
 **Global Map**: explored area + obstacles + trajectory + current pose + space structure if rendered
 - **Map colors**: White=unexplored | Black=obstacles | Green=safe floor | Purple/magenta=trajectory | Red Arrow=you position | Colored regions + blue tags=space structure on Global Map when present
@@ -23,7 +23,7 @@ Return exactly one JSON object. Use `reasoning` as one short task-grounded summa
 
 {{
     "reasoning": "<One short task-grounded summary of the current start position, the active first task stage, and the chosen destination/direction.>",
-    "current_waypoint": "<`[space] - [landmark1 / landmark2 / landmark3]`. Anchor the current place from nearby evidence and the space you are actually in now, not a later visible target.>",
+    "current_waypoint": "<Write exactly `space area - landmark1 / landmark2 / landmark3`. The left side must be the current space/area type or name inferred from nearby evidence and the preserved `your current area` tag when consistent; the right side must contain only nearby current landmarks/cues, not a later visible target.>",
     "task_progress": "<Task-ordered natural-language pieces from the Global Task. In initial planning, the first unfinished piece is `(Current)` and later pieces remain unmarked.>",
     "waypoint_chain": "<Ordered task-defined chain with full `[space]'s [landmark]` nodes only. The current/start node must be `(Current)`, and the next node must be the first unfinished task anchor.>",
     "next_waypoint": "<One `[space]'s [landmark]` only: the first unfinished task-defined anchor after the current/start anchor.>",

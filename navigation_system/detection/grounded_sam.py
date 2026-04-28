@@ -242,12 +242,24 @@ class GroundedSAM(Segment):
         # 兼容不同版本的 supervision：使用属性而不是迭代
         for i in range(len(detections.xyxy)):
             confidence = detections.confidence[i] if detections.confidence is not None else 0.0
+            try:
+                confidence = float(confidence)
+            except (TypeError, ValueError):
+                confidence = 0.0
+
             class_id = detections.class_id[i] if detections.class_id is not None else None
-            
-            if class_id is not None:
-                labels.append(f"{classes[class_id]} {confidence:0.2f}")
-            else:
-                labels.append(f"unknown {confidence:0.2f}")
+            class_name = None
+            try:
+                if class_id is not None:
+                    class_index = int(class_id)
+                    if 0 <= class_index < len(classes):
+                        class_name = str(classes[class_index])
+            except (TypeError, ValueError):
+                class_name = None
+
+            if class_name is None and len(classes) == 1:
+                class_name = str(classes[0])
+            labels.append(f"{class_name or 'unknown'} {confidence:0.2f}")
         # t3 = time.time()
         detections.mask = self._segment(
             sam_predictor=self.sam_predictor,

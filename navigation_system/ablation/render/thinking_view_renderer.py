@@ -126,7 +126,6 @@ class AblationThinkingViewRenderer(ThinkingViewRenderer):
         keep_by_view = self._select_grouped_detection_indices(view_payloads, topk=topk)
         include_detection_boxes = bool(self.ablation_spec.thinking_image.include_detection_boxes)
         include_obstacle_text = bool(self.ablation_spec.thinking_image.include_obstacle_text)
-        include_last_visited_marker = bool(self.ablation_spec.thinking_image.include_last_visited_marker)
 
         for view_idx, (dets_view, labels_view, original_image, depth_meters, angle, direction_name) in enumerate(view_payloads):
             image = original_image.copy()
@@ -167,12 +166,6 @@ class AblationThinkingViewRenderer(ThinkingViewRenderer):
                 text_color=(0, 0, 255),
             )
             view_waypoint_entries = list(waypoint_entries_by_view.get(float(angle), []))
-            marker_entry = next(
-                (entry for entry in view_waypoint_entries if bool(entry.get("is_last_visited"))),
-                None,
-            )
-            if marker_entry is not None and include_last_visited_marker:
-                image = draw_waypoints_fn(image, marker_entry)
 
             bottom_lines = self._filter_bottom_lines(
                 self._build_bottom_strip_lines(
