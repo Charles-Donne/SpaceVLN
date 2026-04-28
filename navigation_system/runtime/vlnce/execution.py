@@ -5,7 +5,7 @@ import concurrent.futures
 import multiprocessing
 import os
 import signal
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from navigation_system.config import ConfigHelper, get_config
 from navigation_system.config.runtime.default import apply_runtime_derived_fields
@@ -20,6 +20,7 @@ from navigation_system.runtime.episode_io import (
     redirect_process_output_to_null,
     save_episode_stdout_log_enabled,
 )
+from navigation_system.runtime.storage.artifacts import get_episode_log_path
 from navigation_system.runtime.vlnce.profiles import (
     NavigationRuntimeProfile,
     STANDARD_RUNTIME_PROFILE,
@@ -34,8 +35,105 @@ from navigation_system.vlm.api.api_client import (
 INITIAL_FAILURE_RETRY_REASONS = {
     "initial_subtask_failed",
     "initial_lookaround_failed",
+    "initial_planner_no_response",
     "initial_planner_timeout",
 }
+
+UNRECORDED_INITIAL_FAILURE_REASONS = {
+    "initial_planner_no_response",
+    "initial_planner_timeout",
+}
+
+DEFAULT_INITIAL_FAILURE_MAX_ATTEMPTS = 3
+
+
+def _positive_int(value: Any, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return int(default)
+    return max(1, parsed)
+
+
+def _resolve_initial_failure_max_attempts(args: argparse.Namespace) -> int:
+    cli_value = getattr(args, "initial_failure_max_attempts", None)
+    if cli_value is not None:
+        return _positive_int(cli_value, DEFAULT_INITIAL_FAILURE_MAX_ATTEMPTS)
+    env_value = str(os.getenv("SPACEVLN_INITIAL_FAILURE_MAX_ATTEMPTS", "") or "").strip()
+    if env_value:
+        return _positive_int(env_value, DEFAULT_INITIAL_FAILURE_MAX_ATTEMPTS)
+    return DEFAULT_INITIAL_FAILURE_MAX_ATTEMPTS
+
+
+def _snapshot_file(path: str) -> Optional[bytes]:
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        with open(path, "rb") as f:
+            return f.read()
+    except Exception:
+        return None
+
+
+def _restore_file(path: str, snapshot: Optional[bytes]) -> None:
+    if not path:
+        return
+    if snapshot is None:
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except Exception:
+            pass
+        return
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(snapshot)
+    except Exception:
+        pass
+
+
+def _snapshot_episode_result_artifacts(
+    *,
+    result_path: str,
+    best_log_path: str,
+    stdout_log_path: str,
+) -> Dict[str, Optional[bytes]]:
+    return {
+        "result_path": _snapshot_file(result_path),
+        "best_log_path": _snapshot_file(best_log_path),
+        "stdout_log_path": _snapshot_file(stdout_log_path),
+    }
+
+
+def _restore_episode_result_artifacts(
+    snapshots: Dict[str, Optional[bytes]],
+    *,
+    result_path: str,
+    best_log_path: str,
+    stdout_log_path: str,
+) -> None:
+    _restore_file(result_path, snapshots.get("result_path"))
+    _restore_file(best_log_path, snapshots.get("best_log_path"))
+    _restore_file(stdout_log_path, snapshots.get("stdout_log_path"))
+
+
+def _should_suppress_initial_failure_record(result: Dict[str, Any]) -> bool:
+    if not isinstance(result, dict):
+        return False
+    if bool(result.get("success", False)):
+        return False
+    if str(result.get("error") or "").strip():
+        return False
+    reason = str(result.get("reason") or "").strip().lower()
+    return reason in UNRECORDED_INITIAL_FAILURE_REASONS
+
+
+def _mark_result_unrecorded(result: Dict[str, Any]) -> None:
+    result["recorded"] = False
+    result["record_suppressed_reason"] = str(result.get("reason") or "").strip()
+    result["result_file"] = ""
+    result["result_detail_file"] = ""
 
 
 def _format_exception_message(exc: BaseException) -> str:
@@ -291,6 +389,7 @@ def run_single_episode(
         else ""
     )
     result_path = get_episode_result_path(results_dir, episode_id)
+    best_log_path = get_episode_log_path(results_dir, episode_id)
     print(
         build_episode_start_summary(
             episode_id=episode_id,
@@ -302,19 +401,16 @@ def run_single_episode(
         flush=True,
     )
 
-    max_attempts = 2
+    max_attempts = _resolve_initial_failure_max_attempts(args)
     attempts_run = 0
     for attempt_index in range(max_attempts):
         attempts_run = attempt_index + 1
-        stdout_log_mode = "w" if attempt_index == 0 else "a"
-        if save_stdout_log and episode_log_path and attempt_index > 0:
-            with redirect_process_output_to_file(episode_log_path, mode="a"):
-                print("\n" + "-" * 60)
-                print(
-                    f"[Retry] Episode {int(episode_id)} rerun attempt "
-                    f"{attempt_index + 1}/{max_attempts}"
-                )
-                print("-" * 60)
+        artifact_snapshots = _snapshot_episode_result_artifacts(
+            result_path=result_path,
+            best_log_path=best_log_path,
+            stdout_log_path=episode_log_path if save_stdout_log else "",
+        )
+        stdout_log_mode = "w"
 
         console_result = _run_single_episode_attempt(
             base_config,
@@ -326,7 +422,21 @@ def run_single_episode(
             save_stdout_log=save_stdout_log,
             stdout_log_mode=stdout_log_mode,
         )
-        if attempt_index >= max_attempts - 1 or not _should_retry_initial_failure(console_result):
+        should_retry = (
+            attempt_index < max_attempts - 1
+            and _should_retry_initial_failure(console_result)
+        )
+        should_suppress_record = _should_suppress_initial_failure_record(console_result)
+        if should_retry or should_suppress_record:
+            _restore_episode_result_artifacts(
+                artifact_snapshots,
+                result_path=result_path,
+                best_log_path=best_log_path,
+                stdout_log_path=episode_log_path if save_stdout_log else "",
+            )
+            if should_suppress_record:
+                _mark_result_unrecorded(console_result)
+        if not should_retry:
             break
         retry_reason = str(console_result.get("reason") or "").strip()
         print(
@@ -372,6 +482,7 @@ def _build_parallel_episode_spec(
         "vlm_api_config": args.vlm_api_config,
         "max_subtask_steps": int(args.max_subtask_steps),
         "max_steps": args.max_steps,
+        "initial_failure_max_attempts": _resolve_initial_failure_max_attempts(args),
         "worker_index": int(worker_index),
         "worker_count": int(worker_count),
         "runtime_profile_name": profile.name,
@@ -389,6 +500,7 @@ def _run_parallel_episode_job(job_spec: Dict[str, Any]) -> Dict[str, Any]:
         vlm_api_config=job_spec["vlm_api_config"],
         max_subtask_steps=job_spec["max_subtask_steps"],
         max_steps=job_spec.get("max_steps"),
+        initial_failure_max_attempts=int(job_spec.get("initial_failure_max_attempts", DEFAULT_INITIAL_FAILURE_MAX_ATTEMPTS)),
         skip_sr1=False,
         parallel_workers=1,
         worker_index=int(job_spec["worker_index"]),

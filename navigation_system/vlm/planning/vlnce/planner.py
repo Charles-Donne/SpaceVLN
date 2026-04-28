@@ -3,6 +3,7 @@ LLM规划模块
 ===========
 高层规划：分析环境生成子任务
 """
+import os
 import re
 import time
 from typing import Any, Dict, List, Tuple, Optional
@@ -23,6 +24,20 @@ from navigation_system.vlm.contracts.schema import (
     get_next_waypoint,
     normalize_subtask_payload,
 )
+
+DEFAULT_PLANNER_MAX_RETRIES = 3
+DEFAULT_INITIAL_PLANNER_MAX_RETRIES = 5
+API_NO_RESPONSE_FAILURE_KINDS = {
+    "api_error",
+    "empty_response",
+    "http_error",
+    "json_decode_error",
+    "json_parse_failed",
+    "pending",
+    "timeout",
+    "unknown",
+    "uninitialized",
+}
 
 
 class LLMPlanner(BaseAPIClient):
@@ -106,7 +121,32 @@ class LLMPlanner(BaseAPIClient):
         ]
         if failure_kinds and all(kind == "timeout" for kind in failure_kinds):
             return "planner_timeout"
+        if failure_kinds and all(kind in API_NO_RESPONSE_FAILURE_KINDS for kind in failure_kinds):
+            return "planner_no_response"
         return "planner_failed"
+
+    @staticmethod
+    def _read_positive_int_env(name: str, default: int) -> int:
+        raw_value = str(os.getenv(name, "") or "").strip()
+        if not raw_value:
+            return int(default)
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            return int(default)
+        return max(1, parsed)
+
+    def _resolve_planner_max_retries(self, mode: str) -> int:
+        mode_key = str(mode or "").strip().lower()
+        default = (
+            DEFAULT_INITIAL_PLANNER_MAX_RETRIES
+            if mode_key == "initial"
+            else DEFAULT_PLANNER_MAX_RETRIES
+        )
+        mode_env_name = f"SPACEVLN_{mode_key.upper()}_PLANNER_MAX_RETRIES" if mode_key else ""
+        if mode_env_name and str(os.getenv(mode_env_name, "") or "").strip():
+            return self._read_positive_int_env(mode_env_name, default)
+        return self._read_positive_int_env("SPACEVLN_PLANNER_MAX_RETRIES", default)
 
     def _finalize_vlm_info_retry_summary(self, save_dir: Optional[str]) -> None:
         """Patch the saved vlm_info.json with aggregate retry stats for this call."""
@@ -203,7 +243,7 @@ class LLMPlanner(BaseAPIClient):
         no_compress: Optional[set] = None,
         failure_label: str = "LLM Planning",
     ) -> Tuple[Optional[Dict[str, Any]], str]:
-        max_retries = 3
+        max_retries = self._resolve_planner_max_retries(mode)
         self._reset_last_call_timing_info()
         prompt_debug_text = extract_prompt_debug_text(prompt)
 

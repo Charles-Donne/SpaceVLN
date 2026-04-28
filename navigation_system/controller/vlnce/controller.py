@@ -4015,6 +4015,8 @@ class VLMNavigationController(BaseNavigationController):
                             failure_reason = 'initial_lookaround_failed'
                         elif cycle_reason == 'planner_timeout':
                             failure_reason = 'initial_planner_timeout'
+                        elif cycle_reason == 'planner_no_response':
+                            failure_reason = 'initial_planner_no_response'
                         else:
                             failure_reason = 'initial_subtask_failed'
                     else:
@@ -4022,6 +4024,8 @@ class VLMNavigationController(BaseNavigationController):
                             failure_reason = 'verify_lookaround_failed'
                         elif cycle_reason == 'planner_timeout':
                             failure_reason = 'verify_replan_timeout'
+                        elif cycle_reason == 'planner_no_response':
+                            failure_reason = 'verify_replan_no_response'
                         else:
                             failure_reason = 'verify_replan_failed'
                     print(f"[ERR] Thinking controller failed ({thinking_mode})")

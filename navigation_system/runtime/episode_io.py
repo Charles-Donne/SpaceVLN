@@ -167,7 +167,12 @@ def build_episode_console_summary(
     worker_count: int = 0,
     sample_index: Optional[int] = None,
 ) -> str:
-    status = "OK" if bool(result.get("success", False)) else "FAIL"
+    if bool(result.get("success", False)):
+        status = "OK"
+    elif result.get("recorded") is False:
+        status = "UNRECORDED"
+    else:
+        status = "FAIL"
     steps = int(result.get("steps", result.get("total_steps", 0)) or 0)
     reason = str(result.get("reason") or "").strip()
     error = str(result.get("error") or "").strip()

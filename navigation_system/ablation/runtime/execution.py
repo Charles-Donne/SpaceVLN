@@ -25,7 +25,14 @@ from navigation_system.runtime.episode_io import (
     redirect_process_output_to_null,
     save_episode_stdout_log_enabled,
 )
+from navigation_system.runtime.storage.artifacts import get_episode_log_path
 from navigation_system.runtime.vlnce.execution import (
+    DEFAULT_INITIAL_FAILURE_MAX_ATTEMPTS,
+    _mark_result_unrecorded,
+    _resolve_initial_failure_max_attempts,
+    _restore_episode_result_artifacts,
+    _should_suppress_initial_failure_record,
+    _snapshot_episode_result_artifacts,
     build_episode_config,
     load_runtime_config,
 )
@@ -34,6 +41,8 @@ from navigation_system.runtime.vlnce.execution import (
 INITIAL_FAILURE_RETRY_REASONS = {
     "initial_subtask_failed",
     "initial_lookaround_failed",
+    "initial_planner_no_response",
+    "initial_planner_timeout",
 }
 
 
@@ -200,6 +209,7 @@ def run_single_episode(
         else ""
     )
     result_path = get_episode_result_path(results_dir, episode_id)
+    best_log_path = get_episode_log_path(results_dir, episode_id)
     print(
         build_episode_start_summary(
             episode_id=episode_id,
@@ -211,19 +221,16 @@ def run_single_episode(
         flush=True,
     )
 
-    max_attempts = 2
+    max_attempts = _resolve_initial_failure_max_attempts(args)
     attempts_run = 0
     for attempt_index in range(max_attempts):
         attempts_run = attempt_index + 1
-        stdout_log_mode = "w" if attempt_index == 0 else "a"
-        if save_stdout_log and episode_log_path and attempt_index > 0:
-            with redirect_process_output_to_file(episode_log_path, mode="a"):
-                print("\n" + "-" * 60)
-                print(
-                    f"[Retry] Episode {int(episode_id)} rerun attempt "
-                    f"{attempt_index + 1}/{max_attempts}"
-                )
-                print("-" * 60)
+        artifact_snapshots = _snapshot_episode_result_artifacts(
+            result_path=result_path,
+            best_log_path=best_log_path,
+            stdout_log_path=episode_log_path if save_stdout_log else "",
+        )
+        stdout_log_mode = "w"
 
         console_result = _run_single_episode_attempt(
             base_config,
@@ -235,7 +242,21 @@ def run_single_episode(
             save_stdout_log=save_stdout_log,
             stdout_log_mode=stdout_log_mode,
         )
-        if attempt_index >= max_attempts - 1 or not _should_retry_initial_failure(console_result):
+        should_retry = (
+            attempt_index < max_attempts - 1
+            and _should_retry_initial_failure(console_result)
+        )
+        should_suppress_record = _should_suppress_initial_failure_record(console_result)
+        if should_retry or should_suppress_record:
+            _restore_episode_result_artifacts(
+                artifact_snapshots,
+                result_path=result_path,
+                best_log_path=best_log_path,
+                stdout_log_path=episode_log_path if save_stdout_log else "",
+            )
+            if should_suppress_record:
+                _mark_result_unrecorded(console_result)
+        if not should_retry:
             break
         retry_reason = str(console_result.get("reason") or "").strip()
         print(
@@ -280,6 +301,7 @@ def _build_parallel_episode_spec(
         "vlm_api_config": args.vlm_api_config,
         "max_subtask_steps": int(args.max_subtask_steps),
         "max_steps": args.max_steps,
+        "initial_failure_max_attempts": _resolve_initial_failure_max_attempts(args),
         "worker_index": int(worker_index),
         "worker_count": int(worker_count),
         "runtime_profile_name": profile.name,
@@ -302,6 +324,7 @@ def _run_parallel_episode_job(job_spec: Dict[str, Any]) -> Dict[str, Any]:
         vlm_api_config=job_spec["vlm_api_config"],
         max_subtask_steps=job_spec["max_subtask_steps"],
         max_steps=job_spec.get("max_steps"),
+        initial_failure_max_attempts=int(job_spec.get("initial_failure_max_attempts", DEFAULT_INITIAL_FAILURE_MAX_ATTEMPTS)),
         skip_sr1=False,
         parallel_workers=1,
         worker_index=int(job_spec["worker_index"]),

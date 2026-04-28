@@ -33,6 +33,12 @@ Console output:
     The launcher prints only key progress and failures by default.
     Detailed context-cache statistics are saved under reports/cache instead of being spammed to stdout.
 
+Retries:
+    --initial-failure-max-attempts N
+        Rerun an episode up to N times when initial planning cannot produce a usable subtask.
+        Default: 3. Initial planner API retries default to 5 and can be overridden with
+        SPACEVLN_INITIAL_PLANNER_MAX_RETRIES.
+
 Ablation:
   --ablation landmark
   --ablation space_structure
@@ -68,6 +74,7 @@ CONFIG_FILE="${EXP_CONFIG:-navigation_system/config/experiments/r2r_eval.yaml}"
 RUNTIME_MODE="standard"
 ABLATION_RAW=""
 RESULT_PATH_ARGS=()
+PASSTHROUGH_ARGS=()
 FORWARD_ARGS=()
 
 while [[ $# -gt 0 ]]; do
@@ -124,6 +131,18 @@ while [[ $# -gt 0 ]]; do
             RESULT_PATH_ARGS+=(--results-dir "${1#*=}")
             shift
             ;;
+        --initial-failure-max-attempts)
+            if [[ $# -lt 2 ]]; then
+                echo "❌ --initial-failure-max-attempts requires a positive integer" >&2
+                exit 1
+            fi
+            PASSTHROUGH_ARGS+=(--initial-failure-max-attempts "$2")
+            shift 2
+            ;;
+        --initial-failure-max-attempts=*)
+            PASSTHROUGH_ARGS+=(--initial-failure-max-attempts "${1#*=}")
+            shift
+            ;;
         *)
             FORWARD_ARGS+=("$1")
             shift
@@ -151,7 +170,7 @@ else
     API_MISSING_HINT="Copy and fill navigation_system/config/vlm/vlm_api_config.yaml.template"
 fi
 
-EXTRA_ARGS=(--runtime "$RUNTIME_MODE" "${RESULT_PATH_ARGS[@]}")
+EXTRA_ARGS=(--runtime "$RUNTIME_MODE" "${RESULT_PATH_ARGS[@]}" "${PASSTHROUGH_ARGS[@]}")
 
 if [[ ${#RESULT_PATH_ARGS[@]} -gt 0 ]]; then
     echo "⚠️  Detected --results-root/--results-dir overrides."

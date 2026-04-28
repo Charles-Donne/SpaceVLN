@@ -83,6 +83,12 @@ def build_arg_parser(
         help="Episode最大总步数（覆盖配置文件，默认使用配置文件值）",
     )
     parser.add_argument(
+        "--initial-failure-max-attempts",
+        type=int,
+        default=None,
+        help="initial阶段可重试失败的整集重跑次数（默认3）",
+    )
+    parser.add_argument(
         "--skip-sr1",
         "--skip-existing-sr1",
         action="store_true",

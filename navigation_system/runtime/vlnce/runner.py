@@ -82,6 +82,12 @@ def build_arg_parser(
         help="Maximum steps per episode (overrides the config default)",
     )
     parser.add_argument(
+        "--initial-failure-max-attempts",
+        type=int,
+        default=None,
+        help="Episode rerun attempts for retryable initial failures (default: 3)",
+    )
+    parser.add_argument(
         "--skip-sr1",
         "--skip-existing-sr1",
         action="store_true",
