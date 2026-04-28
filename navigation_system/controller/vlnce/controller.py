@@ -921,9 +921,31 @@ class VLMNavigationController(BaseNavigationController):
         target_dir = str(save_dir or "").strip()
         if not target_dir:
             return
-        self._write_json_artifact(os.path.join(target_dir, "response.json"), self._copy_response_payload(raw_payload))
+        if isinstance(raw_payload, dict):
+            self._write_json_artifact(
+                os.path.join(target_dir, "response.json"),
+                self._copy_response_payload(raw_payload),
+            )
         if isinstance(controller_payload, dict):
             self._write_json_artifact(os.path.join(target_dir, controller_filename), dict(controller_payload))
+
+    def _persist_thinking_controller_response(
+        self,
+        response: Optional[Dict[str, Any]],
+        cycle_info: Optional[Dict[str, Any]],
+    ) -> None:
+        # VLNCE keeps only the model parsed payload in response.json. OVON overrides
+        # this behavior because its stop-gate may materially rewrite planner output.
+        return
+
+    @staticmethod
+    def _is_task_finished(response: Optional[Dict[str, Any]]) -> bool:
+        return bool((response or {}).get("global_task_finish", False))
+
+    @staticmethod
+    def _set_response_task_finished(response: Dict[str, Any], value: bool) -> None:
+        response["global_task_finish"] = bool(value)
+        response.pop("global_landmark_arrival", None)
 
     def _build_forced_blocked_front_recovery_action(
         self,
@@ -2860,6 +2882,7 @@ class VLMNavigationController(BaseNavigationController):
         waypoint_summary: Optional[str] = None
         previous_subtask_landmark_summary: Optional[str] = None
         planner_timing_info_chunks: List[Dict[str, Any]] = []
+        selected_raw_response: Dict[str, Any] = {}
 
         if mode_key == "initial":
             response, prompt = self.planner.generate_initial_subtask(
@@ -2874,6 +2897,7 @@ class VLMNavigationController(BaseNavigationController):
             planner_timing_info_chunks.append(
                 dict(getattr(self.planner, "last_call_timing_info", {}) or {})
             )
+            selected_raw_response = self._get_latest_planner_raw_response_payload(response)
         else:
             detected_landmarks = self._collect_thinking_detected_landmarks()
             waypoint_summary = self._get_waypoint_summary(include_area_chain=True)
@@ -2900,9 +2924,10 @@ class VLMNavigationController(BaseNavigationController):
             planner_timing_info_chunks.append(
                 dict(getattr(self.planner, "last_call_timing_info", {}) or {})
             )
+            selected_raw_response = self._get_latest_planner_raw_response_payload(response)
             if (
                 response
-                and bool(response.get("global_task_finish", False))
+                and self._is_task_finished(response)
                 and self._is_in_initial_position_neighborhood(waypoint_summary)
             ):
                 print(
@@ -2910,6 +2935,7 @@ class VLMNavigationController(BaseNavigationController):
                     "reject and re-query once"
                 )
                 fallback_response = dict(response)
+                fallback_raw_response = dict(selected_raw_response or {})
                 retry_notice = self._merge_prompt_notices(
                     verify_replan_prompt_notice,
                     self._build_initial_position_finish_guard_notice(),
@@ -2934,12 +2960,14 @@ class VLMNavigationController(BaseNavigationController):
                 if retry_response:
                     response = retry_response
                     prompt = retry_prompt
+                    selected_raw_response = self._get_latest_planner_raw_response_payload(retry_response)
                 else:
                     response = fallback_response
+                    selected_raw_response = fallback_raw_response
 
                 if (
                     response
-                    and bool(response.get("global_task_finish", False))
+                    and self._is_task_finished(response)
                     and self._is_in_initial_position_neighborhood(waypoint_summary)
                 ):
                     print(
@@ -2947,7 +2975,7 @@ class VLMNavigationController(BaseNavigationController):
                         "force global_task_finish=false"
                     )
                     response = dict(response)
-                    response["global_task_finish"] = False
+                    self._set_response_task_finished(response, False)
             self.verify_replan_prompt_notice = ""
         planner_timing_info = self._merge_planner_timing_infos(*planner_timing_info_chunks)
         planner_timing_records = list(planner_timing_info.get("records", []) or [])
@@ -2990,7 +3018,7 @@ class VLMNavigationController(BaseNavigationController):
                 print("[ERR] LLM Verify failed")
             return None, prompt, dict(self.latest_thinking_cycle_info)
 
-        raw_response = self._get_latest_planner_raw_response_payload(response)
+        raw_response = selected_raw_response or self._get_latest_planner_raw_response_payload(response)
         response = self._sanitize_planner_response(response)
         self._persist_response_artifacts(
             save_dir=thinking_dir,
@@ -3063,13 +3091,13 @@ class VLMNavigationController(BaseNavigationController):
         """Apply a thinking result using the shared replan-style area update flow."""
         mode_key = str(mode).strip().lower()
         is_initial = mode_key == 'initial'
-        task_finished = bool(response.get('global_task_finish', False))
+        task_finished = self._is_task_finished(response)
         if is_initial and task_finished:
             print(
                 "  [WARN] Initial planning returned global_task_finish=true; "
                 "force global_task_finish=false"
             )
-            response['global_task_finish'] = False
+            self._set_response_task_finished(response, False)
             task_finished = False
         phase_default = 'initial' if is_initial else ''
         previous_match_streak = int(getattr(self, 'final_goal_destination_match_streak', 0) or 0)
@@ -3115,7 +3143,7 @@ class VLMNavigationController(BaseNavigationController):
         )
         if auto_finish_by_streak:
             task_finished = True
-            response['global_task_finish'] = True
+            self._set_response_task_finished(response, True)
             response['auto_task_finish_by_destination_streak'] = True
             response['auto_task_finish_by_goal_region_stability'] = True
             print(
@@ -3138,6 +3166,7 @@ class VLMNavigationController(BaseNavigationController):
         self._record_current_position_from_thinking_response(response)
 
         if task_finished:
+            self._persist_thinking_controller_response(response, cycle_info)
             self.current_subtask = response
             if is_initial:
                 self.subtask_count = 1
@@ -3173,7 +3202,9 @@ class VLMNavigationController(BaseNavigationController):
         rotation_ok = self._auto_rotate_to_current_subtask_waypoint()
         if not rotation_ok and self._episode_done_cached():
             print('[WARN] Episode ended while rotating toward the next waypoint; finalize current episode.')
+            self._persist_thinking_controller_response(response, cycle_info)
             return True
+        self._persist_thinking_controller_response(response, cycle_info)
         return False
 
     def _run_thinking_controller(
@@ -3816,7 +3847,7 @@ class VLMNavigationController(BaseNavigationController):
                 print('[ERR] VLM Action failed after all retries, skipping step')
                 continue
 
-            if vlm_response and vlm_response.get('global_task_finish', False):
+            if vlm_response and self._is_task_finished(vlm_response):
                 print(f"[DONE] Task complete (action) | steps={self.current_step}")
                 return 'complete'
 

@@ -34,8 +34,16 @@ spacevln_select_python() {
         printf '%s\n' "$HOME/anaconda3/envs/spacevln/bin/python"
         return
     fi
+    if [ -x "$HOME/.conda/envs/spacevln/bin/python" ]; then
+        printf '%s\n' "$HOME/.conda/envs/spacevln/bin/python"
+        return
+    fi
     if [ -x "$HOME/anaconda3/envs/spatial_agent/bin/python" ]; then
         printf '%s\n' "$HOME/anaconda3/envs/spatial_agent/bin/python"
+        return
+    fi
+    if [ -x "$HOME/.conda/envs/spatial_agent/bin/python" ]; then
+        printf '%s\n' "$HOME/.conda/envs/spatial_agent/bin/python"
         return
     fi
     if command -v python >/dev/null 2>&1; then

@@ -33,43 +33,55 @@ REQUIRED_SUBTASK_FIELDS: Sequence[str] = (
 )
 
 
+def _coerce_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return bool(default)
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "y", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "n", "off", ""}:
+            return False
+    return bool(value)
+
+
 def normalize_subtask_payload(payload: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """Normalize planner output to the canonical field set used across the runtime."""
+    """Normalize VLNCE planner output without adding OVON-only stop fields."""
     if not payload:
         return payload
 
     normalized = dict(payload)
-    arrival_value = normalized.get("global_landmark_arrival")
-    finish_value = normalized.get("global_task_finish")
-    if finish_value is None and arrival_value is not None:
-        finish_value = arrival_value
-        normalized["global_task_finish"] = arrival_value
-    if arrival_value is None and finish_value is not None:
-        arrival_value = finish_value
-        normalized["global_landmark_arrival"] = finish_value
     if normalized.get("subtask_landmark") is None:
         normalized["subtask_landmark"] = ""
-    if normalized.get("global_task_finish") is None:
-        normalized["global_task_finish"] = False
-    if normalized.get("global_landmark_arrival") is None:
-        normalized["global_landmark_arrival"] = bool(
-            normalized.get("global_task_finish", False)
-        )
+    normalized["global_task_finish"] = _coerce_bool(
+        normalized.get("global_task_finish"),
+        default=False,
+    )
+    normalized.pop("global_landmark_arrival", None)
     return normalized
 
 
 def normalize_objectnav_subtask_payload(payload: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """Normalize OVON planner output while keeping only the OVON-facing stop flag."""
-    normalized = normalize_subtask_payload(payload)
+    if not payload:
+        return payload
+
+    normalized = dict(payload)
     if not normalized:
         return normalized
 
-    ovon_payload = dict(normalized)
-    ovon_payload["global_landmark_arrival"] = bool(
-        ovon_payload.get("global_landmark_arrival", False)
+    if normalized.get("subtask_landmark") is None:
+        normalized["subtask_landmark"] = ""
+    normalized["global_landmark_arrival"] = _coerce_bool(
+        normalized.get("global_landmark_arrival"),
+        default=False,
     )
-    ovon_payload.pop("global_task_finish", None)
-    return ovon_payload
+    normalized.pop("global_task_finish", None)
+    return normalized
 
 
 def get_next_waypoint(payload: Optional[Dict[str, Any]]) -> str:

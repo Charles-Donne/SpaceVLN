@@ -6,6 +6,7 @@ from navigation_system.vlm.contracts.schema import (
     REQUIRED_SUBTASK_FIELDS,
     get_next_waypoint,
     get_subtask_landmark,
+    normalize_objectnav_subtask_payload,
     normalize_subtask_payload,
 )
 
@@ -15,5 +16,6 @@ __all__ = [
     "REQUIRED_SUBTASK_FIELDS",
     "get_next_waypoint",
     "get_subtask_landmark",
+    "normalize_objectnav_subtask_payload",
     "normalize_subtask_payload",
 ]

@@ -376,7 +376,9 @@ class QwenContextCacheMixin:
             raise RuntimeError("Explicit context cache is disabled in qwen_context_cache settings")
 
         t_start = time.time()
+        response = None
         self._set_last_call_outcome("pending")
+        self._set_last_response_artifacts(response_text="", parsed_payload=None)
         try:
             if prompt_bundle is not None:
                 system_prompt = prompt_bundle.system_prompt
@@ -477,6 +479,10 @@ class QwenContextCacheMixin:
                     ),
                 )
                 self._set_last_call_outcome("http_error", f"status={response.status_code}")
+                self._set_last_response_artifacts(
+                    response_text=response.text,
+                    parsed_payload=None,
+                )
                 return None
 
             result = response.json()
@@ -539,6 +545,10 @@ class QwenContextCacheMixin:
                     ),
                 )
                 self._set_last_call_outcome("empty_response")
+                self._set_last_response_artifacts(
+                    response_text=content,
+                    parsed_payload=None,
+                )
                 return None
 
             finish_reason = dict((result.get("choices") or [{}])[0] or {}).get(
@@ -549,6 +559,10 @@ class QwenContextCacheMixin:
                 print(f"[WARN] Response truncated (max_tokens={self.config.max_tokens})")
 
             parsed = self.parse_json_response(content)
+            self._set_last_response_artifacts(
+                response_text=content,
+                parsed_payload=parsed,
+            )
             self._save_vlm_info_artifact(
                 save_dir,
                 self._build_vlm_info_payload(
@@ -588,6 +602,7 @@ class QwenContextCacheMixin:
                 ),
             )
             self._set_last_call_outcome("timeout")
+            self._set_last_response_artifacts(response_text="", parsed_payload=None)
             return None
         except json.JSONDecodeError as exc:
             elapsed = time.time() - t_start
@@ -607,6 +622,10 @@ class QwenContextCacheMixin:
                 ),
             )
             self._set_last_call_outcome("json_decode_error", str(exc))
+            self._set_last_response_artifacts(
+                response_text=response.text if response is not None else "",
+                parsed_payload=None,
+            )
             return None
         except Exception as exc:
             elapsed = time.time() - t_start
@@ -626,4 +645,8 @@ class QwenContextCacheMixin:
                 ),
             )
             self._set_last_call_outcome("api_error", str(exc))
+            self._set_last_response_artifacts(
+                response_text=response.text if response is not None else "",
+                parsed_payload=None,
+            )
             return None

@@ -491,6 +491,15 @@ class OVONObjectNavigationController(VLMNavigationController):
         return normalize_objectnav_subtask_payload(response)
 
     @staticmethod
+    def _is_task_finished(response: Optional[Dict[str, Any]]) -> bool:
+        return bool((response or {}).get("global_landmark_arrival", False))
+
+    @staticmethod
+    def _set_response_task_finished(response: Dict[str, Any], value: bool) -> None:
+        response["global_landmark_arrival"] = bool(value)
+        response.pop("global_task_finish", None)
+
+    @staticmethod
     def _ovon_extract_image_index_from_direction_text(text: Optional[str]) -> Optional[int]:
         match = re.search(r"IMAGE\s*(\d+)", str(text or ""), flags=re.IGNORECASE)
         if not match:
@@ -767,7 +776,6 @@ class OVONObjectNavigationController(VLMNavigationController):
                 )
         task_finished = bool(response.get("global_landmark_arrival", False))
         self._ovon_persist_thinking_response_artifact(response, cycle_info)
-        response["global_task_finish"] = bool(task_finished)
         if mode_key == "initial" and bool(task_finished):
             phase = str(cycle_info.get("phase", "initial"))
             self._apply_postplanning_space_area_update(
@@ -837,6 +845,7 @@ class OVONObjectNavigationController(VLMNavigationController):
                 self._persist_response_artifacts(
                     save_dir=thinking_dir,
                     raw_payload=raw_retry_response,
+                    controller_payload=retry_response,
                 )
             except OSError:
                 pass

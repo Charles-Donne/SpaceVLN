@@ -16,8 +16,16 @@ spacevln_select_objectnav_python() {
         printf '%s\n' "$HOME/anaconda3/envs/spacevln_ovon/bin/python"
         return
     fi
+    if [ -x "$HOME/.conda/envs/spacevln_ovon/bin/python" ]; then
+        printf '%s\n' "$HOME/.conda/envs/spacevln_ovon/bin/python"
+        return
+    fi
     if [ -x "$HOME/anaconda3/envs/ovon/bin/python" ]; then
         printf '%s\n' "$HOME/anaconda3/envs/ovon/bin/python"
+        return
+    fi
+    if [ -x "$HOME/.conda/envs/ovon/bin/python" ]; then
+        printf '%s\n' "$HOME/.conda/envs/ovon/bin/python"
         return
     fi
     spacevln_select_python

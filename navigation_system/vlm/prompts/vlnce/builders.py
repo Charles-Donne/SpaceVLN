@@ -56,7 +56,7 @@ def _build_previous_subtask_landmark_block(previous_subtask_landmark_summary: st
         return ""
     return (
         f"- {summary_text}\n"
-        "- 要根据previous subtask landmark 来检查自己是不是到了这个landmark。"
+        "- Use the previous subtask landmark only as supporting evidence to check whether that landmark was reached."
     )
 
 
