@@ -185,6 +185,9 @@ class NavigationAgentController(BaseNavigationController):
         self.action_avoidance_side_lock = ""
         self.action_avoidance_side_lock_subtask_id = ""
         self.action_avoidance_auto_turn_count = 0
+        self.action_avoidance_forward_retry_pending = False
+        self.action_avoidance_forward_retry_meters = 0.0
+        self.action_avoidance_forward_retry_subtask_id = ""
         self.action_stagnation_retry_pending = False
         self.action_stagnation_retry_notice_text = ""
         self.action_stagnation_progress_warning_text = ""
@@ -411,6 +414,44 @@ class NavigationAgentController(BaseNavigationController):
         self.action_avoidance_side_lock = ""
         self.action_avoidance_side_lock_subtask_id = ""
         self.action_avoidance_auto_turn_count = 0
+        self._clear_subtask_avoidance_forward_retry()
+
+    def _clear_subtask_avoidance_forward_retry(self) -> None:
+        self.action_avoidance_forward_retry_pending = False
+        self.action_avoidance_forward_retry_meters = 0.0
+        self.action_avoidance_forward_retry_subtask_id = ""
+
+    def _set_subtask_avoidance_forward_retry(self, meters: Optional[float]) -> None:
+        try:
+            retry_meters = float(meters or 0.0)
+        except (TypeError, ValueError):
+            retry_meters = 0.0
+        if retry_meters <= 0.0:
+            retry_meters = float(self.move_distance)
+
+        self.action_avoidance_forward_retry_pending = True
+        self.action_avoidance_forward_retry_meters = retry_meters
+        self.action_avoidance_forward_retry_subtask_id = self._current_subtask_run_id()
+
+    def _get_pending_avoidance_forward_retry_meters(self) -> Optional[float]:
+        if not bool(getattr(self, "action_avoidance_forward_retry_pending", False)):
+            return None
+        subtask_id = str(getattr(self, "action_avoidance_forward_retry_subtask_id", "") or "")
+        if subtask_id != self._current_subtask_run_id():
+            self._clear_subtask_avoidance_forward_retry()
+            return None
+        locked_side = self._get_active_avoidance_side_lock()
+        if locked_side not in ("LEFT", "RIGHT"):
+            self._clear_subtask_avoidance_forward_retry()
+            return None
+        try:
+            retry_meters = float(getattr(self, "action_avoidance_forward_retry_meters", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            retry_meters = 0.0
+        if retry_meters <= 0.0:
+            self._clear_subtask_avoidance_forward_retry()
+            return None
+        return retry_meters
 
     def _get_active_avoidance_side_lock(self) -> Optional[str]:
         side = str(getattr(self, "action_avoidance_side_lock", "") or "").strip().upper()
@@ -962,6 +1003,8 @@ class NavigationAgentController(BaseNavigationController):
             "action",
             "controller_forced_recovery",
             "controller_non_counting_action",
+            "controller_no_vlm_call",
+            "controller_retries_vlm_forward_after_avoidance",
         )
         return {
             key: payload[key]
@@ -1137,6 +1180,42 @@ class NavigationAgentController(BaseNavigationController):
                 "other_distance_text": other_distance_text,
                 "side_locked": bool(locked_side_norm),
                 "non_counting_action": bool(non_counting_action),
+            },
+        }
+
+    def _build_locked_avoidance_forward_retry_action(
+        self,
+        meters: float,
+    ) -> Dict[str, Any]:
+        try:
+            retry_meters = float(meters or 0.0)
+        except (TypeError, ValueError):
+            retry_meters = 0.0
+        if retry_meters <= 0.0:
+            retry_meters = float(self.move_distance)
+
+        locked_side = self._get_active_avoidance_side_lock() or "same-side"
+        response = self._build_controller_forced_action_response(
+            action_name="MOVE_FORWARD",
+            reasoning=(
+                f"The previous VLM-selected MOVE_FORWARD {retry_meters:.2f}m was blocked. "
+                f"The controller has just turned {locked_side} 30deg to continue the locked obstacle-bypass route, "
+                "so retry that same VLM-selected forward distance before asking for a new action."
+            ),
+        )
+        response["controller_non_counting_action"] = True
+        response["controller_retries_vlm_forward_after_avoidance"] = True
+        return {
+            "action_id": resolve_habitat_action("MOVE_FORWARD"),
+            "action_name": "MOVE_FORWARD",
+            "response": response,
+            "degrees": 0,
+            "meters": retry_meters,
+            "recovery_kind": "locked_forward_retry",
+            "recovery_meta": {
+                "meters": retry_meters,
+                "side_locked": locked_side,
+                "non_counting_action": True,
             },
         }
 
@@ -3587,7 +3666,7 @@ class NavigationAgentController(BaseNavigationController):
     ) -> Tuple[Optional[int], Optional[str], Optional[Dict[str, Any]], int, float]:
         """Run the action VLM once, including blocked-front controller recovery."""
         step_landmark_entries = action_context["step_landmark_entries"]
-        max_blocked_forward_requeries = 1
+        max_blocked_forward_requeries = 2
 
         action_id: Optional[int] = None
         action_name: Optional[str] = None
@@ -3665,14 +3744,17 @@ class NavigationAgentController(BaseNavigationController):
 
             print(
                 "[ActionStagnation] Rejected MOVE_FORWARD after blocked-front warning; "
-                "controller-side recovery will take over from the same current view"
+                "ask Action VLM once more to choose a valid side-turn direction"
             )
             action_id = None
             action_name = None
             if blocked_retry_idx < max_blocked_forward_requeries - 1:
                 continue
 
-            print("[ERR] Action VLM kept choosing forbidden MOVE_FORWARD after a blocked-front warning")
+            print(
+                "[ERR] Action VLM kept choosing forbidden MOVE_FORWARD after a blocked-front warning; "
+                "controller-side recovery will take over as a fallback"
+            )
             forced_recovery = self._build_forced_blocked_front_recovery_action(
                 step_landmark_entries=step_landmark_entries,
             )
@@ -3751,7 +3833,29 @@ class NavigationAgentController(BaseNavigationController):
 
         progress_summary_for_prompt = self._get_action_progress_summary_for_prompt()
         locked_avoidance_side = self._get_active_avoidance_side_lock()
-        if self.action_stagnation_retry_pending and locked_avoidance_side in ("LEFT", "RIGHT"):
+        controller_no_vlm_call = False
+        pending_forward_retry_meters = self._get_pending_avoidance_forward_retry_meters()
+        if (
+            not self.action_stagnation_retry_pending
+            and pending_forward_retry_meters is not None
+        ):
+            controller_no_vlm_call = True
+            forced_forward_retry = self._build_locked_avoidance_forward_retry_action(
+                meters=pending_forward_retry_meters,
+            )
+            action_id = forced_forward_retry["action_id"]
+            action_name = forced_forward_retry["action_name"]
+            response = forced_forward_retry["response"]
+            degrees = int(forced_forward_retry.get("degrees", 0) or 0)
+            meters = float(forced_forward_retry.get("meters", 0.0) or 0.0)
+            self._clear_subtask_avoidance_forward_retry()
+            print(
+                "[ActionStagnation] "
+                f"Controller retries the VLM-selected MOVE_FORWARD {meters:.2f}m after locked "
+                f"{locked_avoidance_side} auto-turn; this does not consume a high-level action step"
+            )
+        elif self.action_stagnation_retry_pending and locked_avoidance_side in ("LEFT", "RIGHT"):
+            controller_no_vlm_call = True
             auto_turn_limit = max(
                 1,
                 int(getattr(self, "ACTION_LOCKED_AVOIDANCE_AUTO_TURN_LIMIT", 6) or 6),
@@ -3824,6 +3928,7 @@ class NavigationAgentController(BaseNavigationController):
                 force_forward_after_turns_pending and
                 self._is_obstacle_distance_blocked((action_context.get("obstacle_distances") or {}).get("front"))
             ):
+                controller_no_vlm_call = True
                 forced_forward = self._build_forced_forward_after_turn_limit_action(
                     step_landmark_entries=action_context.get("step_landmark_entries"),
                     obstacle_distances=action_context.get("obstacle_distances"),
@@ -3857,15 +3962,19 @@ class NavigationAgentController(BaseNavigationController):
         if action_id is None:
             print("[ERR] VLM decision failed")
             return None, None, True, 1, None
+
+        if controller_no_vlm_call and isinstance(response, dict):
+            response["controller_no_vlm_call"] = True
         
         controller_forced_response = bool((response or {}).get("controller_forced_recovery", False))
+        raw_action_payload = (
+            response
+            if controller_no_vlm_call
+            else self._get_latest_action_raw_response_payload(response)
+        )
         self._persist_response_artifacts(
             save_dir=action_context["action_save_dir"],
-            raw_payload=(
-                response
-                if controller_forced_response
-                else self._get_latest_action_raw_response_payload(response)
-            ),
+            raw_payload=raw_action_payload,
             controller_payload=response if controller_forced_response else None,
         )
         
@@ -3887,13 +3996,20 @@ class NavigationAgentController(BaseNavigationController):
                 "LEFT" if str(action_name or "").upper() == "TURN_LEFT" else "RIGHT"
             )
 
-        if not bool((response or {}).get("controller_non_counting_action", False)):
+        non_counting_controller_action = bool(
+            (response or {}).get("controller_non_counting_action", False)
+        )
+        if (
+            not non_counting_controller_action
+            or str(action_name or "").upper() == "MOVE_FORWARD"
+        ):
             self._update_action_consecutive_turn_state(action_name)
 
         if self.action_stagnation_retry_pending and str(action_name or "").upper() in ("TURN_LEFT", "TURN_RIGHT"):
             self._clear_action_stagnation_prompt_state()
         if str(action_name or "").upper() == "STOP":
             self._reset_blocked_front_controller_recovery_state()
+            self._clear_subtask_avoidance_forward_retry()
             self._clear_action_stagnation_prompt_state()
         
         # Check whether the planner requested stop.
@@ -4182,6 +4298,17 @@ class NavigationAgentController(BaseNavigationController):
                     if stagnation_actual_meters is not None
                     else 0.0
                 )
+                locked_avoidance_side = self._get_active_avoidance_side_lock()
+                if (
+                    str(action_name or "").upper() == "MOVE_FORWARD"
+                    and locked_avoidance_side in ("LEFT", "RIGHT")
+                ):
+                    self._set_subtask_avoidance_forward_retry(self.last_planned_meters)
+                    print(
+                        "[ActionStagnation] "
+                        f"Locked {locked_avoidance_side} bypass is active; after the automatic same-side "
+                        f"30deg turn, retry the VLM-selected MOVE_FORWARD {float(self.last_planned_meters or self.move_distance):.2f}m"
+                    )
                 self.action_stagnation_streak = 0
                 self.action_stagnation_retry_pending = True
                 self.action_stagnation_progress_warning_text = "(warning: front route blocked; forced stop)"
