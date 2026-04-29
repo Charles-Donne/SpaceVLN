@@ -1,5 +1,5 @@
 #!/bin/bash
-# Unified SpaceVLN navigation entrypoint.
+# R2R-CE launcher for the shared Navigation Agent.
 
 set -euo pipefail
 
@@ -70,7 +70,7 @@ PROJECT_ROOT="$(spacevln_project_root)"
 PYTHON_BIN="$(spacevln_select_python)"
 spacevln_setup_runtime_env "$PYTHON_BIN"
 
-CONFIG_FILE="${EXP_CONFIG:-navigation_system/config/experiments/r2r_eval.yaml}"
+CONFIG_FILE="${EXP_CONFIG:-navigation_system/config/experiments/vlnce/r2r_eval.yaml}"
 RUNTIME_MODE="standard"
 ABLATION_RAW=""
 RESULT_PATH_ARGS=()
@@ -186,10 +186,9 @@ if [[ -n "$ABLATION_RAW" ]]; then
     EXTRA_ARGS+=(--ablation-config "$ABLATION_CONFIG_PATH")
 fi
 
-spacevln_dispatch_navigation_cli \
+spacevln_dispatch_r2r_cli \
     "$PROJECT_ROOT" \
     "$PYTHON_BIN" \
-    "vlm_navigation.py" \
     "$CONFIG_FILE" \
     "$API_CONFIG" \
     "$API_MISSING_MESSAGE" \

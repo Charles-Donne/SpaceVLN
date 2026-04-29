@@ -200,6 +200,9 @@ def build_action_cache_prompt_bundle(
     allowed_action_bullets = standard_cache_builders._build_allowed_action_bullets(
         allowed_action_names
     )
+    action_space_constraint_notice = standard_cache_builders._build_action_space_constraint_notice(
+        allowed_action_names
+    )
 
     system_prompt = standard_cache_builders._normalize_action_prompt_text(system_template.format(
         obs_blocked_m=standard_cache_builders._fmt_threshold_m(standard_cache_builders.OBS_BLOCKED_M),
@@ -221,6 +224,7 @@ def build_action_cache_prompt_bundle(
         landmark_perception_summary=landmark_summary,
         detected_landmarks=detected_landmark_text,
         allowed_action_bullets=allowed_action_bullets,
+        action_space_constraint_notice=action_space_constraint_notice,
     ))
     full_prompt = compose_full_prompt(system_prompt, user_prompt)
     return ExplicitCachePromptBundle(

@@ -50,13 +50,13 @@ Examples:
   bash run_navigation/object_navigation.sh --start-index 1 --num-episodes 10
   bash run_navigation/object_navigation.sh --runtime context_cache --num-episodes 10
   bash run_navigation/object_navigation.sh --runtime context_cache 1 100 300 5
-  bash run_navigation/object_navigation.sh --run-config navigation_system/config/experiments/ovon_val_unseen_eval.yaml --episode-ids 1074,1081
+  bash run_navigation/object_navigation.sh --run-config navigation_system/config/experiments/object_navigation/ovon_val_unseen_eval.yaml --episode-ids 1074,1081
 
 Notes:
   - Default results root follows the unified workspace layout: nav_ws/result/ovon
   - Default data root follows the unified workspace layout: nav_ws/data
   - The OVON runtime defaults YAML is:
-      navigation_system/config/experiments/ovon_val_unseen_eval.yaml
+      navigation_system/config/experiments/object_navigation/ovon_val_unseen_eval.yaml
   - Positional numeric launch follows split/sample order semantics.
   - Use --start-index explicitly if you want the same behavior in long-form flags.
   - Use --episode-id for an exact OVON episode id.
@@ -69,7 +69,7 @@ PYTHON_BIN="$(spacevln_select_objectnav_python)"
 spacevln_setup_runtime_env "$PYTHON_BIN"
 
 RUNTIME_MODE="context_cache"
-RUN_CONFIG="navigation_system/config/experiments/ovon_val_unseen_eval.yaml"
+RUN_CONFIG="navigation_system/config/experiments/object_navigation/ovon_val_unseen_eval.yaml"
 PASSTHROUGH_ARGS=()
 POSITIONAL_ARGS=()
 
@@ -77,7 +77,8 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help|help)
             usage
-            exec "$PYTHON_BIN" "$PROJECT_ROOT/object_navigation.py" --help
+            cd "$PROJECT_ROOT"
+            exec "$PYTHON_BIN" navigation_agent.py ovon --help
             ;;
         --runtime)
             RUNTIME_MODE="$2"
@@ -218,8 +219,9 @@ fi
 API_CONFIG="${VLM_API_CONFIG:-navigation_system/config/vlm/vlm_api_config.yaml}"
 
 cd "$PROJECT_ROOT"
-exec "$PYTHON_BIN" object_navigation.py \
+exec "$PYTHON_BIN" navigation_agent.py ovon \
     --run-config "$RUN_CONFIG" \
+    --runtime "$RUNTIME_MODE" \
     --vlm-api-config "$API_CONFIG" \
     "${TRANSLATED_ARGS[@]}" \
     "${PASSTHROUGH_ARGS[@]}"

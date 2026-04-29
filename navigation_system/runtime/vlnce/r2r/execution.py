@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from navigation_system.config import ConfigHelper, get_config
 from navigation_system.config.runtime.default import apply_runtime_derived_fields
-from navigation_system.controller.vlnce.controller import VLMNavigationController
+from navigation_system.controller.agent.controller import NavigationAgentController
 from navigation_system.runtime.episode_io import (
     build_episode_console_summary,
     build_episode_start_summary,
@@ -227,12 +227,20 @@ def create_navigation_controller(
     episode_config,
     args: argparse.Namespace,
     profile: NavigationRuntimeProfile = STANDARD_RUNTIME_PROFILE,
-) -> Tuple[VLMNavigationController, str]:
+) -> Tuple[NavigationAgentController, str]:
+    from navigation_system.env.vlnce.r2r.adapter import build_vlnce_vector_env
+
     unified_config = resolve_api_config_path(args.vlm_api_config)
-    controller = VLMNavigationController(
+    envs = build_vlnce_vector_env(
+        episode_config,
+        auto_reset_done=False,
+        episodes_allowed=episode_config.TASK_CONFIG.DATASET.EPISODES_ALLOWED,
+    )
+    controller = NavigationAgentController(
         episode_config,
         config_path=unified_config,
         model_stack_builder=profile.model_stack_builder,
+        envs=envs,
     )
     return controller, unified_config
 
@@ -287,7 +295,7 @@ def _run_single_episode_attempt(
             controller.reset_episode(episode_id=episode_id)
             episode_initialized = True
 
-            result = controller.run_vlm_navigation(max_subtask_steps=args.max_subtask_steps)
+            result = controller.run_navigation(max_subtask_steps=args.max_subtask_steps)
             total_steps = result.get("total_steps", result.get("steps", 0))
 
             console_result = {

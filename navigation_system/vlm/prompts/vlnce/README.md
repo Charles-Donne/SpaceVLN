@@ -12,6 +12,10 @@ This directory contains the prompt definitions and renderers for the main VLNCE 
   - Stores the prompt markdown files used by the standard renderer.
 - `templates/cache/`
   - Stores the explicit-cache prompt split for the same task family.
+- `navgbench/`
+  - Adds NavGBench-specific planner prompt overlays. Complex/grounded
+    NavGBench instructions get an extra route-compression policy; R2R prompts
+    and simple NavGBench instructions stay on the base VLNCE wording.
 
 ## Prompt Files
 

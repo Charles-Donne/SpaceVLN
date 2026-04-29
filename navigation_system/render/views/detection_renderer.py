@@ -722,7 +722,7 @@ def save_rgb(owner, step: int, episode_id: int, rgb: np.ndarray, phase: str = "a
         episode_id: episode ID
         rgb: RGB图像 (H, W, 3) BGR格式
         phase: 阶段标识 ("initial", "action1a", "verify1a" 等)
-        controller: VLMNavigationController实例（用于访问_draw_distance_rays_on_first_person_view）
+        controller: NavigationAgentController实例（用于访问_draw_distance_rays_on_first_person_view）
 
     Returns:
         save_path: 保存路径

@@ -1,4 +1,4 @@
-"""Run SpaceVLN's prompt-based controller on OVON episodes."""
+"""Run the Navigation Agent on OVON object-navigation episodes."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import List, Sequence
 
 import yaml
-from navigation_system.runtime.object_navigation.thresholds import (
+from navigation_system.runtime.object_navigation.ovon.thresholds import (
     OVON_SUCCESS_DISTANCE_M,
 )
 from navigation_system.runtime.episode_io import load_json_if_exists
@@ -85,17 +85,21 @@ def _shutdown_parallel_executor(
 
 
 def _nav_ws_root() -> Path:
+    return Path(__file__).resolve().parents[5]
+
+
+def _project_root() -> Path:
     return Path(__file__).resolve().parents[4]
 
 
 def _default_run_config() -> str:
     return str(
         (
-            _nav_ws_root()
-            / "SpaceVLN"
+            _project_root()
             / "navigation_system"
             / "config"
             / "experiments"
+            / "object_navigation"
             / "ovon_val_unseen_eval.yaml"
         ).resolve()
     )
@@ -246,8 +250,7 @@ def _default_api_config(runtime: str) -> str:
     file_name = "vlm_api_config.yaml"
     return str(
         (
-            _nav_ws_root()
-            / "SpaceVLN"
+            _project_root()
             / "navigation_system"
             / "config"
             / "vlm"
@@ -274,7 +277,7 @@ def _default_results_dir_for_runtime(
 
 
 def _select_model_stack_builder(runtime: str):
-    from navigation_system.vlm.object_navigation.runtime_factory import (
+    from navigation_system.vlm.object_navigation.ovon.runtime_factory import (
         build_ovon_context_cache_navigation_model_stack,
         build_ovon_navigation_model_stack,
     )
@@ -325,7 +328,7 @@ def _prepare_ovon_config(
             TopDownMapMeasurementConfig,
             register_hydra_plugin,
         )
-        from navigation_system.runtime.object_navigation.visualization_patch import (
+        from navigation_system.runtime.object_navigation.ovon.visualization_patch import (
             install_ovon_topdown_visualization_patch,
         )
 
@@ -1155,7 +1158,7 @@ def _run_one_episode(
     storage_entry_id: int | None = None,
     entry_kind: str = "episode",
 ):
-    from navigation_system.runtime.object_navigation.runtime_config import (
+    from navigation_system.runtime.object_navigation.ovon.runtime_config import (
         build_objectnav_runtime_config,
     )
 
@@ -1228,10 +1231,10 @@ def _run_one_episode(
             dataset.episodes = [selected_episode]
 
         import habitat
-        from navigation_system.controller.object_navigation.controller import (
+        from navigation_system.runtime.object_navigation.ovon.controller import (
             OVONObjectNavigationController,
         )
-        from navigation_system.env.object_navigation.adapter import (
+        from navigation_system.env.object_navigation.ovon.adapter import (
             SingleOVONVectorEnvAdapter,
         )
 
@@ -1247,7 +1250,7 @@ def _run_one_episode(
 
         try:
             controller.reset_episode(episode_id=episode_id, sample_index=sample_index)
-            result = controller.run_vlm_navigation(max_subtask_steps=max_subtask_steps)
+            result = controller.run_navigation(max_subtask_steps=max_subtask_steps)
         finally:
             controller.close()
 
@@ -1455,13 +1458,13 @@ def _write_ovon_reports(
 def build_arg_parser(run_defaults: dict | None = None) -> argparse.ArgumentParser:
     defaults = _build_parser_defaults(run_defaults)
     parser = argparse.ArgumentParser(
-        description="Run a small-batch OVON evaluation with the SpaceVLN controller",
+        description="Run a small-batch OVON evaluation with the Navigation Agent",
     )
     parser.add_argument(
         "--run-config",
         type=str,
         default=_default_run_config(),
-        help="SpaceVLN OVON runtime defaults YAML",
+        help="OVON runtime defaults YAML",
     )
     parser.add_argument(
         "--runtime",

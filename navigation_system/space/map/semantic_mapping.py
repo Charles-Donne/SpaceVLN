@@ -10,6 +10,7 @@ https://github.com/devendrachaplot/Object-Goal-Navigation/tree/master
 import os
 import cv2
 import copy
+import math
 import numpy as np
 from PIL import Image
 import matplotlib.pyplot as plt
@@ -143,6 +144,7 @@ class Semantic_Mapping(nn.Module):
         self.cat_pred_threshold = args.CAT_PRED_THRESHOLD
         self.exp_pred_threshold = args.EXP_PRED_THRESHOLD
         self.map_pred_threshold = args.MAP_PRED_THRESHOLD
+        self.explored_ray_fill = bool(getattr(args, "EXPLORED_RAY_FILL", False))
         self.obstacle_clear_explored_threshold = 0.6
         
         # 分块地图：{(tile_x, tile_y): tensor[batch, C, 240, 240]}
@@ -202,6 +204,10 @@ class Semantic_Mapping(nn.Module):
         self.max_height = int(360 / self.z_resolution)  # 72
         self.min_height = int(-40 / self.z_resolution)  # -8
         self.agent_height = args.AGENT_HEIGHT * 100.  # 88cm
+        self.obstacle_min_height_cm = float(getattr(args, "OBSTACLE_MIN_HEIGHT_CM", 15.0))
+        self.obstacle_max_height_cm = float(getattr(args, "OBSTACLE_MAX_HEIGHT_CM", 130.0))
+        if self.obstacle_max_height_cm <= self.obstacle_min_height_cm:
+            self.obstacle_max_height_cm = self.obstacle_min_height_cm + self.z_resolution
         self.shift_loc = [self.vision_range * self.resolution // 2, 0, np.pi / 2.0]
         self.camera_matrix = du.get_camera_matrix(self.screen_w, self.screen_h, self.fov)
 
@@ -1465,6 +1471,76 @@ class Semantic_Mapping(nn.Module):
         
         return sem_map_vis
 
+    def _build_explored_ray_fill_t(
+        self,
+        agent_view_centered_t: torch.Tensor,
+        fp_exp_pred: torch.Tensor,
+    ) -> Optional[torch.Tensor]:
+        """Approximate visible free-space by filling rays up to observed depth endpoints."""
+        if not self.explored_ray_fill:
+            return None
+        if agent_view_centered_t is None or fp_exp_pred is None:
+            return None
+
+        try:
+            xy_cells = (
+                agent_view_centered_t[..., :2].detach().float().cpu().numpy()
+                / float(self.resolution)
+            )
+            bs, _, height, width = fp_exp_pred.shape
+            masks = np.zeros((bs, 1, height, width), dtype=np.float32)
+            origin_x = int(round((width - 1) / 2.0))
+            origin_y = 0
+            min_forward_cells = max(2, int(round(0.20 * 100.0 / float(self.resolution))))
+
+            for batch_idx in range(bs):
+                xy = xy_cells[batch_idx]
+                xs = np.rint(xy[..., 0]).astype(np.int32)
+                ys = np.rint(xy[..., 1]).astype(np.int32)
+                valid = (
+                    np.isfinite(xy[..., 0])
+                    & np.isfinite(xy[..., 1])
+                    & (xs >= 0)
+                    & (xs < width)
+                    & (ys >= min_forward_cells)
+                    & (ys < height)
+                )
+                if int(np.count_nonzero(valid)) < 4:
+                    continue
+
+                y_max = np.full((width,), -1, dtype=np.int32)
+                np.maximum.at(y_max, xs[valid].reshape(-1), ys[valid].reshape(-1))
+
+                mask_u8 = np.zeros((height, width), dtype=np.uint8)
+                valid_columns = np.flatnonzero(y_max >= min_forward_cells)
+                if valid_columns.size < 2:
+                    continue
+                max_gap_cells = max(3, int(round(width * 0.06)))
+                split_points = np.flatnonzero(np.diff(valid_columns) > max_gap_cells) + 1
+                column_runs = np.split(valid_columns, split_points)
+                for column_run in column_runs:
+                    if column_run.size < 2:
+                        continue
+                    boundary = [
+                        (int(x), int(y_max[int(x)]))
+                        for x in column_run.tolist()
+                        if y_max[int(x)] >= min_forward_cells
+                    ]
+                    if len(boundary) < 2:
+                        continue
+                    points = np.asarray([(origin_x, origin_y), *boundary], dtype=np.int32)
+                    cv2.fillPoly(mask_u8, [points], 255)
+
+                if np.count_nonzero(mask_u8) == 0:
+                    continue
+                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+                mask_u8 = cv2.morphologyEx(mask_u8, cv2.MORPH_CLOSE, kernel)
+                masks[batch_idx, 0] = (mask_u8 > 0).astype(np.float32)
+
+            return torch.from_numpy(masks).to(fp_exp_pred.device)
+        except Exception:
+            return None
+
     def forward(self, obs, pose_obs, maps_last, poses_last):
         # if use CoCo the number of categories is 16(i.e. c=16), but now open-vocabulary; 
         bs, c, h, w = obs.size()
@@ -1505,8 +1581,11 @@ class Semantic_Mapping(nn.Module):
         # obs: [b, c, h*w] => [b, 17, 19200], feat is a tensor contains all predicted semantic features
         pool = nn.AvgPool2d(self.du_scale)
         # obs[:, 4, ...] = 0.
-        self.min_z = int(25 / z_resolution - min_h) # 25 / 5 - (-8) = 13
-        # self.min_z = 2 # use grounded-sam to detect floor
+        obstacle_min_z = int(math.floor(self.obstacle_min_height_cm / z_resolution - min_h))
+        obstacle_max_z = int(math.ceil(self.obstacle_max_height_cm / z_resolution - min_h))
+        obstacle_min_z = max(0, min(max_h - min_h - 1, obstacle_min_z))
+        obstacle_max_z = max(obstacle_min_z + 1, min(max_h - min_h, obstacle_max_z))
+        self.min_z = obstacle_min_z
         self.feat[:, 1:, :] = pool(obs[:, 4:, :, :]).view(bs, c - 4, h // self.du_scale * w // self.du_scale)
 
         # self.init_grid: [bs, categories + 1, x=vr, y=vr, z=(max_height - min_height)] => [bs, 17, 100, 100, 80]
@@ -1517,9 +1596,7 @@ class Semantic_Mapping(nn.Module):
         
         # shape: [bs, num_detected_classes + 1, 100, 100, 80]
         voxels = du.splat_feat_nd(self.init_grid * 0., self.feat, XYZ_cm_std).transpose(2, 3)
-        max_z = int((self.agent_height + 1) / z_resolution - min_h) # int((88 + 1) / 5 - (-8))= 25
-        
-        agent_height_proj = voxels[..., self.min_z:max_z].sum(4) # shape: [bs, num_detected_classes + 1, 100, 100]
+        agent_height_proj = voxels[..., obstacle_min_z:obstacle_max_z].sum(4) # shape: [bs, num_detected_classes + 1, 100, 100]
         all_height_proj = voxels.sum(4) # shape: [bs, num_detected_classes + 1, 100, 100]
 
         fp_map_pred = agent_height_proj[:, :1, :, :] # obstacle map（仅取agent高度附近）
@@ -1528,6 +1605,9 @@ class Semantic_Mapping(nn.Module):
         fp_exp_pred = fp_exp_pred / self.exp_pred_threshold
         fp_map_pred = torch.clamp(fp_map_pred, min=0.0, max=1.0)
         fp_exp_pred = torch.clamp(fp_exp_pred, min=0.0, max=1.0)
+        ray_exp_pred = self._build_explored_ray_fill_t(agent_view_centered_t, fp_exp_pred)
+        if ray_exp_pred is not None:
+            fp_exp_pred = torch.maximum(fp_exp_pred, ray_exp_pred)
 
         pose_pred = self.local_pose
 

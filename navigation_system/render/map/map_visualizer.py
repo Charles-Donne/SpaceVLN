@@ -18,6 +18,7 @@ from navigation_system.space.map.obstacle_analysis import (
     ACTION_VIEW_DIRECTIONS,
     build_rotated_obstacle_mask,
     calculate_obstacle_distances_from_depth as scan_obstacle_distances_from_depth,
+    calculate_obstacle_distances_from_map_and_depth as scan_obstacle_distances_from_map_and_depth,
     calculate_obstacle_distances_12_directions as scan_obstacle_distances_12_directions,
     calculate_obstacle_distances_from_rotated_map as scan_obstacle_distances_from_rotated_map,
 )
@@ -698,6 +699,25 @@ class MapVisualizer:
             fallback_distances=fallback_distances,
         )
 
+    def calculate_obstacle_distances_from_map_and_depth(
+        self,
+        depth_meters: np.ndarray,
+        full_map: Optional[np.ndarray],
+        hfov: float = 79.0,
+        angle_band_deg: float = 5.0,
+        sensor_min_depth_m: float = 0.5,
+    ) -> Dict[str, str]:
+        """Estimate action-view obstacle distances from map rays, using depth only for nearer current-view hits."""
+        map_distances = self.calculate_obstacle_distances_from_full_map(full_map)
+        return scan_obstacle_distances_from_map_and_depth(
+            depth_meters,
+            map_distances=map_distances,
+            hfov_deg=hfov,
+            directions=ACTION_VIEW_DIRECTIONS,
+            angle_band_deg=angle_band_deg,
+            sensor_min_depth_m=sensor_min_depth_m,
+        )
+
     def calculate_obstacle_distances_from_full_map(
         self,
         full_map: Optional[np.ndarray],
@@ -807,7 +827,7 @@ class MapVisualizer:
             waypoint_positions: [(map_x, map_y), ...] waypoint位置列表（可选，从mapper.get_waypoints()获取）
             waypoint_ids: [1, 2, 3, ...] waypoint ID列表（可选，从mapper.get_waypoints()获取）
             phase: 阶段标识 ("initial", "action1a", "verify1a" 等)
-            controller: VLMNavigationController实例（用于绘制距离线）
+            controller: NavigationAgentController实例（用于绘制距离线）
         
         Returns:
             (paths, landmarks, obstacle_distances, last_waypoint_angle)
@@ -988,10 +1008,10 @@ class MapVisualizer:
 
             if should_render_detection:
                 try:
-                    obstacle_distances = self.calculate_obstacle_distances_from_depth(
+                    obstacle_distances = self.calculate_obstacle_distances_from_map_and_depth(
                         getattr(controller, 'latest_depth_meters', None) if controller is not None else None,
+                        full_map,
                         hfov=hfov,
-                        fallback_distances=None,
                     )
                 except Exception:
                     obstacle_distances = {

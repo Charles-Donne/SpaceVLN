@@ -9,7 +9,7 @@ import os
 from typing import Any, Dict, List, Tuple
 
 from navigation_system.ablation.config import ABLATION_CONFIG_ENV
-from navigation_system.ablation.models.controller import AblationVLMNavigationController
+from navigation_system.ablation.models.controller import AblationNavigationAgentController
 from navigation_system.ablation.runtime.profiles import (
     ABLATION_STANDARD_RUNTIME_PROFILE,
     AblationRuntimeProfile,
@@ -26,7 +26,7 @@ from navigation_system.runtime.episode_io import (
     save_episode_stdout_log_enabled,
 )
 from navigation_system.runtime.storage.artifacts import get_episode_log_path
-from navigation_system.runtime.vlnce.execution import (
+from navigation_system.runtime.vlnce.r2r.execution import (
     DEFAULT_INITIAL_FAILURE_MAX_ATTEMPTS,
     _mark_result_unrecorded,
     _resolve_initial_failure_max_attempts,
@@ -50,12 +50,20 @@ def create_navigation_controller(
     episode_config,
     args: argparse.Namespace,
     profile: AblationRuntimeProfile = ABLATION_STANDARD_RUNTIME_PROFILE,
-) -> Tuple[AblationVLMNavigationController, str]:
+) -> Tuple[AblationNavigationAgentController, str]:
+    from navigation_system.env.vlnce.r2r.adapter import build_vlnce_vector_env
+
     unified_config = str(getattr(args, "vlm_api_config", "") or "").strip()
-    controller = AblationVLMNavigationController(
+    envs = build_vlnce_vector_env(
+        episode_config,
+        auto_reset_done=False,
+        episodes_allowed=episode_config.TASK_CONFIG.DATASET.EPISODES_ALLOWED,
+    )
+    controller = AblationNavigationAgentController(
         episode_config,
         config_path=unified_config,
         model_stack_builder=profile.model_stack_builder,
+        envs=envs,
     )
     return controller, unified_config
 
@@ -108,7 +116,7 @@ def _run_single_episode_attempt(
             )
             controller.reset_episode(episode_id=episode_id)
 
-            result = controller.run_vlm_navigation(max_subtask_steps=args.max_subtask_steps)
+            result = controller.run_navigation(max_subtask_steps=args.max_subtask_steps)
             total_steps = result.get("total_steps", result.get("steps", 0))
             console_result = {
                 "episode_id": episode_id,

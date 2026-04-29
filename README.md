@@ -10,7 +10,8 @@ The system is built on the Habitat VLN-CE ecosystem and adapts components and de
 
 - VLM planner and VLM action executor with standard and explicit-context-cache runtimes.
 - Persistent spatial memory with space waypoints, area labels, landmark memory, and map-rendered reasoning evidence.
-- VLN-CE and OVON-style object navigation launchers under a unified workspace layout.
+- Two task families under one Navigation Agent core: VLN-CE-style navigation and object navigation.
+- Benchmarks are task plugins: R2R-CE and NavGBench under `vlnce`, OVON under `object_navigation`.
 - GroundingDINO + SAM perception interface for open-vocabulary landmark grounding.
 - Full run artifacts: prompts, responses, step views, maps, per-episode logs, reports, and optional replay visualizations.
 - Isolated ablation subsystem under `navigation_system/ablation/` for subtractive studies without editing the main prompt templates in place.
@@ -20,20 +21,20 @@ The system is built on the Habitat VLN-CE ecosystem and adapts components and de
 ```text
 SpaceVLN/
 ├── navigation_system/
-│   ├── controller/              # navigation controllers and runtime orchestration
-│   ├── vlm/                     # VLM prompts, API clients, planner/action executors
-│   ├── object_navigation/       # OVON/object-navigation runtime and prompts
+│   ├── controller/              # shared Navigation Agent controller
+│   ├── env/                     # shared env adapter contract + task adapters
+│   ├── runtime/                 # task/benchmark runners, storage, reports
+│   ├── vlm/                     # prompts, API clients, model-stack factories
 │   ├── space/                   # semantic maps, topology, landmarks, spatial formatting
 │   ├── render/                  # thinking/action view rendering and episode visualization
 │   ├── detection/               # GroundingDINO/SAM integration
-│   ├── runtime/                 # launch, storage, reporting, metrics utilities
 │   └── ablation/                # ablation configs, prompt variants, wrappers
 ├── habitat_extensions/          # VLN-CE Habitat task, sensors, measures, config
 ├── run_navigation/              # canonical bash launchers
 ├── docs/                        # architecture / deployment notes
 ├── requirements.txt             # validated Python dependency snapshot
-├── vlm_navigation.py            # VLN-CE Python entrypoint
-└── object_navigation.py         # OVON Python entrypoint
+└── navigation_agent.py          # unified Python entrypoint:
+                                  #   r2r | navgbench | ovon
 ```
 
 Recommended workspace layout:
@@ -194,7 +195,7 @@ nav_ws/data/
 Important config files:
 
 - VLN-CE task/data paths: `habitat_extensions/config/spacevln_task.yaml`
-- OVON dataset path: `navigation_system/config/experiments/ovon_val_unseen_eval.yaml`
+- OVON dataset path: `navigation_system/config/experiments/object_navigation/ovon_val_unseen_eval.yaml`
 - detection checkpoint paths: `navigation_system/config/system/10_detection_models.yaml`
 - default result path policy: `navigation_system/config/system/00_runtime.yaml`
 
@@ -260,9 +261,36 @@ Examples:
 ```bash
 bash run_navigation/object_navigation.sh --episode-id 1074
 bash run_navigation/object_navigation.sh --episode-ids 1074,1081
-bash run_navigation/object_navigation.sh --run-config navigation_system/config/experiments/ovon_val_unseen_eval.yaml --num-episodes 10
+bash run_navigation/object_navigation.sh --run-config navigation_system/config/experiments/object_navigation/ovon_val_unseen_eval.yaml --num-episodes 10
 bash run_navigation/object_navigation.sh --help
 ```
+
+### NavGBench / GN-Bench
+
+Run the Navigation Agent on the NavGBench InteriorGS loop:
+
+```bash
+bash run_navigation/navgbench.sh --dry-run --start-sample 1 --num-episodes 3
+bash run_navigation/navgbench.sh 1 1 300
+bash run_navigation/navgbench.sh --simple-instruction 1 10 300
+bash run_navigation/navgbench.sh list 0864_841787_156 300
+```
+
+The runner expects `../Nav-GBench` by default, or `NAVGBENCH_ROOT` if set. It
+prefers a conda environment named `gn_bench` when it can find one; override with
+`SPACEVLN_NAVGBENCH_PYTHON` or `PYTHON_BIN` if needed. It wraps GN-Bench
+episodes with the same small env adapter contract used by VLNCE/OVON,
+enables `RGB_SENSOR` + `DEPTH_SENSOR`, keeps the agent's model-facing turn action
+at `30deg`, expands each turn into two GN-Bench `15deg` primitives, and writes
+SpaceVLN logs under
+`nav_ws/result/navgbench/<complex|simple|moving>/<planner>__<executor>/` plus
+NavGBench-style metric JSON under `navgbench_log/`, so different instruction
+families keep separate best logs and reports.
+
+NavGBench rendering dependencies live in the NavGBench env. SpaceVLN's normal
+`spacevln` env does not need `GN_Bench` installed. For in-process NavGBench
+evaluation, install only the SpaceVLN agent-side dependencies needed by the
+controller into `gn_bench` and keep Habitat/habitat-sim out of that env.
 
 ### Ablation Studies
 
@@ -308,9 +336,11 @@ result/
 │   ├── <planner>__<executor>/
 │   ├── <planner>__<executor>_cache/
 │   └── ablation/<preset>/<model_name>/
-└── ovon/
-    ├── <planner>__<executor>/
-    └── <planner>__<executor>_cache/
+├── ovon/
+│   ├── <planner>__<executor>/
+│   └── <planner>__<executor>_cache/
+└── navgbench/
+    └── <planner>__<executor>/
 ```
 
 Per-episode artifacts may include:

@@ -18,6 +18,7 @@ class VLMControllerOptions:
     cleanup_navigation_step_images_after_gif: bool
     save_episode_stdout_log: bool
     save_waypoint_memory: bool
+    enable_final_destination_match_autostop: bool
     final_destination_match_autostop_streak: int
     final_destination_match_autostop_radius_m: float
     low_level_stagnation_ratio: float
@@ -52,6 +53,9 @@ class VLMControllerOptions:
             ),
             save_episode_stdout_log=bool(getattr(log_cfg, "SAVE_EPISODE_STDOUT", False)),
             save_waypoint_memory=bool(getattr(state_cfg, "SAVE_WAYPOINT_MEMORY", False)),
+            enable_final_destination_match_autostop=bool(
+                getattr(stopping_cfg, "ENABLE_FINAL_DESTINATION_MATCH_AUTOSTOP", True)
+            ),
             final_destination_match_autostop_streak=max(
                 1,
                 int(

@@ -1,5 +1,6 @@
-"""VLNCE-specific environment registration modules."""
+"""VLNCE task environment package.
 
-from navigation_system.env.vlnce.zero_shot_env import VLNCEZeroShotEnv
+Benchmark adapters live under `r2r` and `navgbench`.
+"""
 
-__all__ = ["VLNCEZeroShotEnv"]
+__all__ = []

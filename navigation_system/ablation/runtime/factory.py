@@ -9,9 +9,9 @@ from navigation_system.ablation.models.planner_context_cache import (
     AblationContextCachePlanner,
 )
 from navigation_system.vlm.interfaces import NavigationModelStack
-from navigation_system.vlm.vlnce.runtime_factory import (
-    _build_action_executor,
-    _build_planner,
+from navigation_system.vlm.model_stack_factory import (
+    build_action_executor,
+    build_planner,
 )
 
 
@@ -23,14 +23,14 @@ def build_ablation_navigation_model_stack(
     move_distance: float,
     save_request_artifacts: bool,
 ) -> NavigationModelStack:
-    planner = _build_planner(
+    planner = build_planner(
         AblationLLMPlanner,
         config_path=config_path,
         action_space=action_space,
         save_request_artifacts=save_request_artifacts,
         label="Ablation LLM Planner",
     )
-    action_executor = _build_action_executor(
+    action_executor = build_action_executor(
         AblationActionExecutor,
         config_path=config_path,
         turn_angle=turn_angle,
@@ -52,14 +52,14 @@ def build_ablation_context_cache_navigation_model_stack(
     move_distance: float,
     save_request_artifacts: bool,
 ) -> NavigationModelStack:
-    planner = _build_planner(
+    planner = build_planner(
         AblationContextCachePlanner,
         config_path=config_path,
         action_space=action_space,
         save_request_artifacts=save_request_artifacts,
         label="Ablation Cached LLM Planner",
     )
-    action_executor = _build_action_executor(
+    action_executor = build_action_executor(
         AblationContextCacheActionExecutor,
         config_path=config_path,
         turn_angle=turn_angle,

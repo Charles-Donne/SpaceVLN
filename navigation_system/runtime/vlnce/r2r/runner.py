@@ -1,4 +1,4 @@
-"""Thin runtime orchestrator for SpaceVLN navigation."""
+"""Thin runtime orchestrator for R2R-CE Navigation Agent evaluation."""
 
 import argparse
 import os
@@ -7,11 +7,11 @@ from typing import List
 from navigation_system.runtime.episode_io import (
     should_suppress_normal_failure_reason,
 )
-from navigation_system.runtime.vlnce.episode_selection import (
+from navigation_system.runtime.vlnce.r2r.episode_selection import (
     filter_episode_ids,
     resolve_episode_ids,
 )
-from navigation_system.runtime.vlnce.execution import (
+from navigation_system.runtime.vlnce.r2r.execution import (
     load_runtime_config,
     run_parallel_episodes,
     run_single_episode,
@@ -26,7 +26,7 @@ from navigation_system.runtime.results_report import generate_results_report
 def build_arg_parser(
     profile: NavigationRuntimeProfile = STANDARD_RUNTIME_PROFILE,
 ) -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="SpaceVLN navigation runner")
+    parser = argparse.ArgumentParser(description="Navigation Agent R2R-CE runner")
 
     parser.add_argument("--exp-config", type=str, required=True, help="Habitat experiment config")
     parser.add_argument("--episode-id", type=int, default=0, help="Starting episode id")

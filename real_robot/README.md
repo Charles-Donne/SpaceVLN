@@ -7,7 +7,7 @@ pipeline without changing the simulator workflow.
 ## Scope
 
 - Upstream modules reused as-is:
-  - `VLMNavigationController`
+  - `NavigationAgentController`
   - `GroundedSAM`
   - `SemanticMapper`
   - artifact saving and visualization
@@ -48,7 +48,7 @@ cd SpaceVLN
 bash real_robot/scripts/run_real_navigation.sh \
   --instruction "Move forward through the doorway and approach the table on the left." \
   --real-config real_robot/config/real_robot.yaml \
-  --exp-config navigation_system/config/experiments/r2r_eval.yaml
+  --exp-config navigation_system/config/experiments/vlnce/r2r_eval.yaml
 ```
 
 ## Default Topics

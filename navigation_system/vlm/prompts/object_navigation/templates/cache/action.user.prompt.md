@@ -13,3 +13,5 @@
 
 **Action space**:
 {allowed_action_bullets}
+
+{action_space_constraint_notice}

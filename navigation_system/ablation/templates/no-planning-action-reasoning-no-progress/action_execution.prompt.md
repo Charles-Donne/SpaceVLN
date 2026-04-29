@@ -4,7 +4,7 @@ You are the action execution module for Vision-Language Navigation. Analyze the 
 You have 1 image.
 **Current View (front-facing, RGB HFOV about 79°)** — object detections plus 3 obstacle-distance lines:
 - Directions: Left 30deg, FRONT, Right 30deg
-- Read `Environment Perception` first: `Obstacle` is the current depth-based 3-direction summary; `Landmark` lists the current-view top visible entries
+- Read `Environment Perception` first: `Obstacle` is the current map-fused 3-direction summary; `Landmark` lists the current-view top visible entries
 - Red = nearest obstacle <{obs_blocked_m}m (blocked), Yellow = {obs_blocked_m}-{obs_risky_m}m or {obs_risky_m}-{obs_open_m}m (not open), Green = >{obs_open_m}m (open)
 - For doorway / hallway / passage / stairs stages, follow the visible opening or stair-run middle / centerline from RGB geometry, not a side wall, frame, railing, or corner. Decide upstairs/downstairs first and keep only that run.
 - **Bottom white strip** (if present): auxiliary only; if it is missing or hard to read, trust the text landmark entries in `Environment Perception`
@@ -48,7 +48,7 @@ Return exactly one JSON object. Use `reasoning` as one short task-grounded summa
 - **Visible-evidence only**: mention only visible/listed cues and never invent evidence. Use `Subtask Progress` only as last-step memory; if it says the front route was blocked on the last call, do not push into that same FRONT route again immediately.
 - **Focus**: rely on the current `Instruction`, current `Destination`, visible landmark/route cues, obstacle layout, and `Subtask Progress`.
 - **Landmark validity**: landmark detections are candidate evidence, not ground truth. Validate them against RGB appearance, local geometry, obstacle layout, and task destination.
-- **Forward/turn discipline**: if FRONT is passable and task-aligned, prefer `MOVE_FORWARD`. Turn when the destination is clearly off-front, FRONT is blocked/tight, or the route requires side entry. Avoid left-right oscillation without new evidence. Choose forward distance from the best available target-distance evidence: destination detection, then subtask-landmark detection, then bottom-strip landmark distance, then visible free-space depth.
+- **Forward/turn discipline**: if FRONT is passable and task-aligned, prefer `MOVE_FORWARD`. Turn when the destination is clearly off-front, FRONT is blocked/tight, or the route requires side entry. Avoid left-right oscillation without new evidence. Choose forward distance from the best available target-distance evidence: destination detection, then subtask-landmark detection, then bottom-strip landmark distance, then map-fused free-space clearance.
 - **Stop discipline**: output `STOP` only when the current destination is already reached. Otherwise keep moving within the fixed action space.
 
 # Current Subtask
@@ -65,3 +65,5 @@ Return exactly one JSON object. Use `reasoning` as one short task-grounded summa
 
 **Action space**:
 {allowed_action_bullets}
+
+{action_space_constraint_notice}

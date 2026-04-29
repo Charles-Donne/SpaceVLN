@@ -3,10 +3,34 @@
 import os
 from typing import List, Optional, Union
 
-import habitat_baselines.config.default
-from habitat.config.default import CONFIG_FILE_SEPARATOR
-from habitat.config.default import Config as CN
-from habitat_extensions.config.default import get_extended_config as get_task_config
+try:
+    import habitat_baselines.config.default as habitat_baselines_default
+except ImportError:
+    habitat_baselines_default = None
+
+try:
+    from habitat.config.default import CONFIG_FILE_SEPARATOR
+    from habitat.config.default import Config as CN
+    from habitat_extensions.config.default import get_extended_config as get_task_config
+except ImportError:
+    from yacs.config import CfgNode as _YacsCfgNode
+
+    CONFIG_FILE_SEPARATOR = ","
+
+    def CN(init_dict=None, key_list=None, new_allowed=True):
+        return _YacsCfgNode(
+            init_dict=init_dict,
+            key_list=key_list,
+            new_allowed=new_allowed,
+        )
+
+    def get_task_config(_config_path):
+        cfg = CN()
+        cfg.TASK = CN()
+        cfg.SIMULATOR = CN()
+        cfg.DATASET = CN()
+        cfg.ENVIRONMENT = CN()
+        return cfg
 
 from navigation_system.config.core.setup import apply_runtime_derived_fields
 from navigation_system.config.core.params.detection import (
@@ -24,10 +48,13 @@ from navigation_system.config.core.params.spatial import (
     DEFAULT_MAP_DU_SCALE,
     DEFAULT_MAP_GLOBAL_DOWNSCALING,
     DEFAULT_MAP_MIN_Z_CM,
+    DEFAULT_MAP_EXPLORED_RAY_FILL,
     DEFAULT_MAP_RESOLUTION_CM,
     DEFAULT_MAP_SIZE_CM,
     DEFAULT_MAP_VISION_RANGE,
     DEFAULT_MAX_SEMANTIC_CATEGORIES,
+    DEFAULT_OBSTACLE_MAX_HEIGHT_CM,
+    DEFAULT_OBSTACLE_MIN_HEIGHT_CM,
     DEFAULT_STAIR_CLEAR_RADIUS_M,
 )
 from navigation_system.config.core.params.thresholds import (
@@ -67,6 +94,9 @@ def _build_space_defaults() -> CN:
     cfg.MAP.MAX_SEMANTIC_CATEGORIES = DEFAULT_MAX_SEMANTIC_CATEGORIES
     cfg.MAP.CENTER_RESET_STEPS = DEFAULT_MAP_CENTER_RESET_STEPS
     cfg.MAP.MIN_Z_CM = DEFAULT_MAP_MIN_Z_CM
+    cfg.MAP.OBSTACLE_MIN_HEIGHT_CM = DEFAULT_OBSTACLE_MIN_HEIGHT_CM
+    cfg.MAP.OBSTACLE_MAX_HEIGHT_CM = DEFAULT_OBSTACLE_MAX_HEIGHT_CM
+    cfg.MAP.EXPLORED_RAY_FILL = DEFAULT_MAP_EXPLORED_RAY_FILL
     cfg.MAP.VISUALIZE = False
     cfg.MAP.PRINT_IMAGES = False
 
@@ -123,6 +153,7 @@ def _build_control_defaults() -> CN:
     cfg.STAGNATION.LOW_LEVEL_CAP_M = LOW_LEVEL_STAGNATION_CAP_M
 
     cfg.STOPPING = CN()
+    cfg.STOPPING.ENABLE_FINAL_DESTINATION_MATCH_AUTOSTOP = True
     cfg.STOPPING.FINAL_DESTINATION_MATCH_AUTOSTOP_STREAK = 3
     cfg.STOPPING.FINAL_DESTINATION_MATCH_AUTOSTOP_RADIUS_M = 1.0
     return cfg
@@ -240,9 +271,12 @@ def get_config(
 ) -> CN:
     """Create a SpaceVLN config from system defaults, experiment YAML, and opts."""
     config = CN()
-    config.merge_from_other_cfg(habitat_baselines.config.default._C)
-    purge_keys(config, ["SIMULATOR_GPU_ID", "TEST_EPISODE_COUNT"])
+    if habitat_baselines_default is not None:
+        config.merge_from_other_cfg(habitat_baselines_default._C)
+        purge_keys(config, ["SIMULATOR_GPU_ID", "TEST_EPISODE_COUNT"])
     config.merge_from_other_cfg(_C.clone())
+    if habitat_baselines_default is None and hasattr(config, "set_new_allowed"):
+        config.set_new_allowed(True)
 
     prev_task_config = ""
     merged_config_paths: List[str] = _resolve_default_deployment_config_paths()

@@ -173,6 +173,9 @@ def get_action_execution_prompt(
         ),
         allowed_action_output=standard_builders._build_allowed_action_output(allowed_action_names),
         allowed_action_bullets=standard_builders._build_allowed_action_bullets(allowed_action_names),
+        action_space_constraint_notice=standard_builders._build_action_space_constraint_notice(
+            allowed_action_names
+        ),
         obs_blocked_m=standard_builders._fmt_threshold_m(standard_builders.OBS_BLOCKED_M),
         obs_risky_m=standard_builders._fmt_threshold_m(standard_builders.OBS_RISKY_M),
         obs_open_m=standard_builders._fmt_threshold_m(standard_builders.OBS_OPEN_M),

@@ -5,7 +5,7 @@ from navigation_system.config.core.params.thresholds import (
     OBS_OPEN_M,
     OBS_RISKY_M,
 )
-from navigation_system.runtime.object_navigation.thresholds import (
+from navigation_system.runtime.object_navigation.ovon.thresholds import (
     OVON_ARRIVAL_NEAR_M,
     OVON_AUTOCOMPLETE_OPENING_M,
     OVON_AUTOCOMPLETE_SOLID_M,
@@ -15,6 +15,7 @@ from navigation_system.vlm.prompts.object_navigation.common import (
     load_objectnav_prompt_template,
 )
 from navigation_system.vlm.prompts.vlnce.builders import (
+    _build_action_space_constraint_notice,
     _build_allowed_action_bullets,
     _build_allowed_action_output,
     _build_landmark_perception_summary,
@@ -107,4 +108,7 @@ def get_ovon_action_execution_prompt(
         strict_stop_m=_fmt_threshold_m(OVON_FINAL_OBJECT_STOP_DISTANCE_M),
         allowed_action_output=_build_allowed_action_output(allowed_action_names),
         allowed_action_bullets=_build_allowed_action_bullets(allowed_action_names),
+        action_space_constraint_notice=_build_action_space_constraint_notice(
+            allowed_action_names
+        ),
     )

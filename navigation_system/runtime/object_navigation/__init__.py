@@ -1,8 +1,6 @@
-"""Runtime entrypoints and helpers for OVON object navigation."""
+"""Object-navigation runtime package.
 
-from navigation_system.runtime.object_navigation.runner import (
-    build_arg_parser,
-    main,
-)
+Benchmark-specific entrypoints live under subpackages such as `ovon`.
+"""
 
-__all__ = ["build_arg_parser", "main"]
+__all__ = []

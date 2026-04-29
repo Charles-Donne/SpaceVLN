@@ -15,7 +15,7 @@ You are the action execution module for Vision-Language Navigation. Analyze the 
 You have 1 image.
 **Current View (front-facing, RGB HFOV about 79°)** — object detections plus 3 obstacle-distance lines:
 - Directions: Left 30deg, FRONT, Right 30deg
-- Read `Environment Perception` first: `Obstacle` is the current depth-based 3-direction summary; `Landmark` lists the current-view top visible entries
+- Read `Environment Perception` first: `Obstacle` is the current map-fused 3-direction summary; `Landmark` lists the current-view top visible entries
 - Red = nearest obstacle <{obs_blocked_m}m (blocked), Yellow = {obs_blocked_m}-{obs_risky_m}m or {obs_risky_m}-{obs_open_m}m (not open), Green = >{obs_open_m}m (open)
 - For doorway / hallway / passage / stairs stages, follow the traversable middle / centerline from RGB geometry, not a side wall, frame, railing, or corner. Decide upstairs/downstairs first; if FRONT clearly shows the required stair run, treat short stair-facing depth as stair geometry, not a wall
 - **Yellow bounding box**: candidate current-view landmark detection ({detected_landmarks}); first judge whether it is valid task evidence or noise. If the label/box conflicts with the RGB scene, local geometry, obstacle layout, or task/space context, downweight or ignore it
@@ -29,7 +29,7 @@ You have 1 image.
 4. **Action Decision + Obstacle Avoidance**: choose one safe immediate action that best advances toward the destination.
    **Action guidance**:
    a. **Current cues first**: focus on the current `Instruction`, current `Destination`, visible landmark/route cues, obstacle layout, and `Subtask Progress`.
-   b. **Forward-first when FRONT is usable**: FRONT is a safety cue, not a separate controller rule. If FRONT <{obs_blocked_m}m, normally avoid forward and choose a side `*_AVOID` turn unless arrival is already satisfied or RGB clearly shows a traversable route. If FRONT is at least {obs_blocked_m}m, destination-aligned, and the destination is ahead or mildly side-front, prefer `MOVE_FORWARD`. Do not avoid just because a side looks more open. Choose forward distance from the best target-distance evidence: destination detection > valid subtask-landmark detection > bottom-strip landmark distance > visible free-space depth; use shorter steps for near/tight cases and longer steps for far/open cases.
+   b. **Forward-first when FRONT is usable**: FRONT is a safety cue, not a separate controller rule. If FRONT <{obs_blocked_m}m, normally avoid forward and choose a side `*_AVOID` turn unless arrival is already satisfied or RGB clearly shows a traversable route. If FRONT is at least {obs_blocked_m}m, destination-aligned, and the destination is ahead or mildly side-front, prefer `MOVE_FORWARD`. Do not avoid just because a side looks more open. Choose forward distance from the best target-distance evidence: destination detection > valid subtask-landmark detection > bottom-strip landmark distance > map-fused free-space clearance; use shorter steps for near/tight cases and longer steps for far/open cases.
    c. **Avoid obstacle only when needed**: use `*_AVOID` when FRONT <{obs_blocked_m}m or the current FRONT route clearly cannot continue the correct route. Compare left and right, reject blocked sides first, and prefer the more open side that still supports the destination. Once FRONT reopens to at least {obs_blocked_m}m and the destination is aligned, resume forward progress instead of avoiding again. If `Subtask Progress` contains `(warning: front route blocked; forced stop)`, side-turn first unless arrival is already satisfied.
    d. **Align only when needed**: use `*_ALIGN` only when the destination / required landmark / opening is clearly off-front and needs a turn before forward progress. If a valid destination cue is clearly on one side, align to that same side. Do not center a non-destination reference cue as if it were the stop target.
    e. **No turn oscillation**: after a valid turn, if the new FRONT is usable and still destination-aligned, move forward instead of turning again. After an obstacle-avoidance turn, do not keep turning once FRONT has opened to at least {obs_blocked_m}m toward the destination. Turn again only if new evidence still shows off-front destination or blocked FRONT.
@@ -46,6 +46,8 @@ Return exactly one JSON object. Keep all reasoning inside `"reasoning"`; never e
 
 **Action space**:
 {allowed_action_bullets}
+
+{action_space_constraint_notice}
 
 # Examples
 

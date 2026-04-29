@@ -188,7 +188,7 @@ if [[ -n "$LOAD_WORKERS" ]]; then
 fi
 
 cd "$PROJECT_ROOT"
-exec "$PYTHON_BIN" -m navigation_system.runtime.object_navigation.report_range \
+exec "$PYTHON_BIN" -m navigation_system.runtime.object_navigation.ovon.report_range \
     --path "$RESULTS_DIR" \
     --exp-config "$OVON_EXP_CONFIG" \
     --split "val_unseen" \

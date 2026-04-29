@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from navigation_system.controller.action_compat import resolve_habitat_action
 from navigation_system.controller.base_controller import BaseNavigationController
-from navigation_system.controller.vlnce.controller import VLMNavigationController
+from navigation_system.controller.agent.controller import NavigationAgentController
 from navigation_system.env.object_navigation.goal_task import (
     parse_object_goal_instruction,
 )
@@ -27,10 +27,10 @@ from navigation_system.runtime.storage.artifacts import (
 )
 from navigation_system.vlm.contracts.schema import normalize_objectnav_subtask_payload
 from navigation_system.vlm.contracts import DIRECTION_CONFIG
-from navigation_system.vlm.object_navigation.runtime_factory import (
+from navigation_system.vlm.object_navigation.ovon.runtime_factory import (
     build_ovon_navigation_model_stack,
 )
-from navigation_system.runtime.object_navigation.thresholds import (
+from navigation_system.runtime.object_navigation.ovon.thresholds import (
     OVON_AUTOCOMPLETE_OPENING_M,
     OVON_AUTOCOMPLETE_SOLID_M,
     OVON_AUTOCOMPLETE_TOPK,
@@ -45,7 +45,7 @@ from navigation_system.runtime.object_navigation.thresholds import (
 from navigation_system.vlm.interfaces import NavigationModelStackBuilder
 
 
-class OVONObjectNavigationController(VLMNavigationController):
+class OVONObjectNavigationController(NavigationAgentController):
     """Separate controller entrypoint for OVON/object-navigation runs."""
 
     ACTION_SUBTASK_AUTOCOMPLETE_OPEN_DISTANCE_M = OVON_AUTOCOMPLETE_OPENING_M
@@ -905,7 +905,7 @@ class OVONObjectNavigationController(VLMNavigationController):
 
     def _reset_custom_landmark_state(self) -> None:
         """OVON resets landmark memory at every new subtask, same as VLNCE."""
-        VLMNavigationController._reset_custom_landmark_state(self)
+        NavigationAgentController._reset_custom_landmark_state(self)
 
     def _should_autocomplete_subtask_during_action_step(
         self,

@@ -1,7 +1,5 @@
 """
-VLM Navigation Controller
-=========================
-Task-specific VLN-CE controller built on top of the shared navigation stack.
+Navigation Agent controller.
 
 Inherited base capabilities:
 - semantic mapping
@@ -53,9 +51,6 @@ from navigation_system.vlm.interfaces import (
     NavigationModelStack,
     NavigationModelStackBuilder,
 )
-from navigation_system.vlm.vlnce.runtime_factory import (
-    build_default_navigation_model_stack,
-)
 from navigation_system.runtime.storage.artifacts import (
     SaveManager,
     get_episode_detail_dir,
@@ -89,9 +84,9 @@ from navigation_system.config.core.params.spatial import (
 )
 
 
-class VLMNavigationController(BaseNavigationController):
+class NavigationAgentController(BaseNavigationController):
     """
-    VLN-CE controller with VLM planning and execution.
+    Shared controller with VLM planning and action execution.
 
     Main loop:
     1. Initial 12-step lookaround mapping and four-direction snapshot collection
@@ -112,6 +107,7 @@ class VLMNavigationController(BaseNavigationController):
     FINAL_DESTINATION_MATCH_AUTOSTOP_STREAK = 3
     FINAL_DESTINATION_MATCH_AUTOSTOP_RADIUS_M = 1.0
     ACTION_CONSECUTIVE_TURN_LIMIT = 3
+    ACTION_LOCKED_AVOIDANCE_AUTO_TURN_LIMIT = 6
     LOW_LEVEL_STAGNATION_RATIO = CFG_LOW_LEVEL_STAGNATION_RATIO
     LOW_LEVEL_STAGNATION_CAP_M = CFG_LOW_LEVEL_STAGNATION_CAP_M
     STUCK_RETREAT_DISTANCE_M = 1.0
@@ -125,7 +121,7 @@ class VLMNavigationController(BaseNavigationController):
         envs=None,
     ):
         """
-        Initialize the VLM navigation controller.
+        Initialize the navigation agent controller.
 
         Args:
             config: Habitat config.
@@ -150,20 +146,21 @@ class VLMNavigationController(BaseNavigationController):
         )
         self.latest_action_local_map_debug_lines = []
 
-        self.model_stack_builder = (
-            model_stack_builder or build_default_navigation_model_stack
-        )
-        try:
-            model_stack = self.model_stack_builder(
-                config_path=config_path,
-                action_space=self.action_space,
-                turn_angle=float(self.turn_angle),
-                move_distance=float(self.move_distance),
-                save_request_artifacts=self.runtime_options.save_api_request_artifacts,
-            )
-        except Exception as exc:
-            print(f"[WARN] Navigation model stack init failed: {exc}")
+        self.model_stack_builder = model_stack_builder
+        if self.model_stack_builder is None:
             model_stack = NavigationModelStack(planner=None, action_executor=None)
+        else:
+            try:
+                model_stack = self.model_stack_builder(
+                    config_path=config_path,
+                    action_space=self.action_space,
+                    turn_angle=float(self.turn_angle),
+                    move_distance=float(self.move_distance),
+                    save_request_artifacts=self.runtime_options.save_api_request_artifacts,
+                )
+            except Exception as exc:
+                print(f"[WARN] Navigation model stack init failed: {exc}")
+                model_stack = NavigationModelStack(planner=None, action_executor=None)
         self.planner = model_stack.planner
         self.action_executor = model_stack.action_executor
         
@@ -185,6 +182,9 @@ class VLMNavigationController(BaseNavigationController):
         self.final_goal_destination_match_anchor_xy = None
         self.action_stagnation_streak = 0
         self.blocked_front_controller_recovery_count = 0
+        self.action_avoidance_side_lock = ""
+        self.action_avoidance_side_lock_subtask_id = ""
+        self.action_avoidance_auto_turn_count = 0
         self.action_stagnation_retry_pending = False
         self.action_stagnation_retry_notice_text = ""
         self.action_stagnation_progress_warning_text = ""
@@ -407,6 +407,69 @@ class VLMNavigationController(BaseNavigationController):
     def _reset_blocked_front_controller_recovery_state(self) -> None:
         self.blocked_front_controller_recovery_count = 0
 
+    def _clear_subtask_avoidance_side_lock(self) -> None:
+        self.action_avoidance_side_lock = ""
+        self.action_avoidance_side_lock_subtask_id = ""
+        self.action_avoidance_auto_turn_count = 0
+
+    def _get_active_avoidance_side_lock(self) -> Optional[str]:
+        side = str(getattr(self, "action_avoidance_side_lock", "") or "").strip().upper()
+        if side not in ("LEFT", "RIGHT"):
+            return None
+
+        subtask_id = str(getattr(self, "action_avoidance_side_lock_subtask_id", "") or "")
+        if subtask_id != self._current_subtask_run_id():
+            self._clear_subtask_avoidance_side_lock()
+            return None
+        return side
+
+    def _set_subtask_avoidance_side_lock(self, side: Optional[str]) -> None:
+        side_norm = str(side or "").strip().upper()
+        if side_norm not in ("LEFT", "RIGHT"):
+            return
+
+        previous_side = self._get_active_avoidance_side_lock()
+        self.action_avoidance_side_lock = side_norm
+        self.action_avoidance_side_lock_subtask_id = self._current_subtask_run_id()
+        if previous_side != side_norm:
+            self.action_avoidance_auto_turn_count = 0
+            reverse_side = "RIGHT" if side_norm == "LEFT" else "LEFT"
+            print(
+                "[ActionStagnation] "
+                f"Locked obstacle-bypass side to {side_norm} for subtask #{self._current_subtask_run_id()}; "
+                f"do not turn back {reverse_side} until the next thinking stage"
+            )
+
+    def _build_subtask_avoidance_lock_progress_notice(self) -> str:
+        locked_side = self._get_active_avoidance_side_lock()
+        if locked_side == "LEFT":
+            return "(constraint: obstacle-bypass side is locked to LEFT for this subtask; do not turn back right)"
+        if locked_side == "RIGHT":
+            return "(constraint: obstacle-bypass side is locked to RIGHT for this subtask; do not turn back left)"
+        return ""
+
+    def _apply_subtask_avoidance_side_lock_guard(
+        self,
+        allowed_action_names: Optional[Sequence[str]],
+    ) -> Optional[Tuple[str, ...]]:
+        locked_side = self._get_active_avoidance_side_lock()
+        if locked_side not in ("LEFT", "RIGHT"):
+            return tuple(allowed_action_names) if allowed_action_names else None
+
+        forbidden_turn = "TURN_RIGHT" if locked_side == "LEFT" else "TURN_LEFT"
+        base_actions = list(allowed_action_names) if allowed_action_names else [
+            "MOVE_FORWARD",
+            "TURN_LEFT",
+            "TURN_RIGHT",
+            "STOP",
+        ]
+        filtered_actions = [
+            str(name).strip().upper()
+            for name in base_actions
+            if str(name).strip().upper() != forbidden_turn
+        ]
+        return tuple(filtered_actions or ["STOP"])
+
     def _build_action_force_forward_after_turns_notice(self) -> str:
         limit = max(1, int(getattr(self, "ACTION_CONSECUTIVE_TURN_LIMIT", 3) or 3))
         return (
@@ -443,6 +506,7 @@ class VLMNavigationController(BaseNavigationController):
         last_action_hint = str(getattr(self, "last_action_progress_hint", "") or "").strip()
         warning_text = str(self.action_stagnation_progress_warning_text or "").strip()
         reverse_turn_notice = self._build_reverse_turn_guard_progress_notice()
+        avoidance_lock_notice = self._build_subtask_avoidance_lock_progress_notice()
         summary_text = base_summary
         if last_action_hint:
             if summary_text and summary_text != "(Just started - no actions yet)":
@@ -454,6 +518,11 @@ class VLMNavigationController(BaseNavigationController):
                 summary_text = f"{summary_text} {reverse_turn_notice}"
             else:
                 summary_text = reverse_turn_notice
+        if avoidance_lock_notice:
+            if summary_text and summary_text != "(Just started - no actions yet)":
+                summary_text = f"{summary_text} {avoidance_lock_notice}"
+            else:
+                summary_text = avoidance_lock_notice
         if not warning_text:
             return summary_text
         if summary_text and summary_text != "(Just started - no actions yet)":
@@ -616,13 +685,26 @@ class VLMNavigationController(BaseNavigationController):
         latest_actual_meters: float,
         stagnation_threshold_m: float,
     ) -> str:
+        locked_side = self._get_active_avoidance_side_lock()
+        locked_sentence = ""
+        if locked_side == "LEFT":
+            locked_sentence = (
+                "A same-subtask obstacle-bypass lock is active: choose `TURN_LEFT_AVOID 30deg` "
+                "if a side turn is needed, and do not turn back right. "
+            )
+        elif locked_side == "RIGHT":
+            locked_sentence = (
+                "A same-subtask obstacle-bypass lock is active: choose `TURN_RIGHT_AVOID 30deg` "
+                "if a side turn is needed, and do not turn back left. "
+            )
         return (
             f"The last low-level MOVE_FORWARD {float(self.move_distance):.2f}m step advanced only "
             f"{float(latest_actual_meters):.2f}m (no-move threshold {float(stagnation_threshold_m):.2f}m), "
             "so the current FRONT route is blocked. Stop that forward attempt immediately. "
             "For this call, do not output `MOVE_FORWARD` into the same front route. "
+            f"{locked_sentence}"
             "Use the current view, obstacle lines, destination, and space structure to choose only "
-            "`TURN_LEFT 30deg` or `TURN_RIGHT 30deg` around the obstacle, unless the destination is already reached and `STOP` is valid. "
+            "`TURN_LEFT_AVOID 30deg` or `TURN_RIGHT_AVOID 30deg` around the obstacle, unless the destination is already reached and `STOP` is valid. "
             "Choose the side that best matches the destination and avoids the obstacle. "
             "After one side turn, if FRONT becomes passable and still points toward the destination, prefer forward progress instead of turning back."
         )
@@ -805,6 +887,7 @@ class VLMNavigationController(BaseNavigationController):
 
         payload = dict(getattr(self, "current_subtask", None) or {})
         preferred_hint = None
+        locked_side = self._get_active_avoidance_side_lock()
         for raw_text in (
             payload.get("next_waypoint_direction"),
             payload.get("subtask_instruction"),
@@ -821,6 +904,11 @@ class VLMNavigationController(BaseNavigationController):
                 continue
 
             score = 0.0
+            if locked_side == side_name:
+                score += 10.0
+            elif locked_side in ("LEFT", "RIGHT"):
+                score -= 10.0
+
             if preferred_hint == side_name:
                 score += 3.0
             elif preferred_hint in ("LEFT", "RIGHT"):
@@ -873,6 +961,7 @@ class VLMNavigationController(BaseNavigationController):
             "reasoning",
             "action",
             "controller_forced_recovery",
+            "controller_non_counting_action",
         )
         return {
             key: payload[key]
@@ -950,6 +1039,8 @@ class VLMNavigationController(BaseNavigationController):
     def _build_forced_blocked_front_recovery_action(
         self,
         step_landmark_entries: Optional[Sequence[Dict[str, Any]]] = None,
+        locked_side: Optional[str] = None,
+        non_counting_action: bool = False,
     ) -> Optional[Dict[str, Any]]:
         current_entries = list(step_landmark_entries or [])
         auto_completed_subtask = self._should_autocomplete_subtask_during_action_step(current_entries)
@@ -986,10 +1077,19 @@ class VLMNavigationController(BaseNavigationController):
                 },
             }
 
-        if int(getattr(self, "blocked_front_controller_recovery_count", 0) or 0) >= 1:
+        locked_side_norm = str(locked_side or "").strip().upper()
+        if locked_side_norm not in ("LEFT", "RIGHT"):
+            locked_side_norm = ""
+
+        if (
+            not locked_side_norm
+            and int(getattr(self, "blocked_front_controller_recovery_count", 0) or 0) >= 1
+        ):
             return None
 
         selected_side, side_records = self._choose_blocked_front_recovery_side()
+        if locked_side_norm:
+            selected_side = locked_side_norm
         if selected_side not in ("LEFT", "RIGHT"):
             return None
 
@@ -1007,13 +1107,20 @@ class VLMNavigationController(BaseNavigationController):
                 f"{selected_side.title()} 30deg is the best controller-side recovery because it is "
                 f"{selected_record.get('status', 'passable')} ({selected_distance_text})"
                 + (
-                    f", while {other_side.title()} 30deg is {other_record.get('status', 'unknown')} ({other_distance_text})"
+                    f", while {other_side.title()} 30deg is "
+                    f"{other_record.get('status', 'unknown')} ({other_distance_text})"
                     if other_record
                     else ""
                 )
-                + ". Use one side turn now, then let the next action call continue forward only if the new FRONT route is passable and still task-aligned."
+                + (
+                    ". The obstacle-bypass side is locked for this subtask, so keep turning this same way instead of turning back."
+                    if locked_side_norm
+                    else ". Use one side turn now, then let the next action call continue forward only if the new FRONT route is passable and still task-aligned."
+                )
             ),
         )
+        if non_counting_action:
+            response["controller_non_counting_action"] = True
         return {
             "action_id": resolve_habitat_action("TURN_LEFT")
             if selected_side == "LEFT"
@@ -1022,12 +1129,14 @@ class VLMNavigationController(BaseNavigationController):
             "response": response,
             "degrees": int(self.turn_angle),
             "meters": 0.0,
-            "recovery_kind": "turn",
+            "recovery_kind": "locked_turn" if locked_side_norm else "turn",
             "recovery_meta": {
                 "selected_side": selected_side,
                 "selected_distance_text": selected_distance_text,
                 "other_side": other_side,
                 "other_distance_text": other_distance_text,
+                "side_locked": bool(locked_side_norm),
+                "non_counting_action": bool(non_counting_action),
             },
         }
 
@@ -2548,7 +2657,7 @@ class VLMNavigationController(BaseNavigationController):
         if next_waypoint_text is None:
             return None
 
-        cleaned = VLMNavigationController._strip_visual_brackets_from_text(
+        cleaned = NavigationAgentController._strip_visual_brackets_from_text(
             strip_space_type_variant_suffixes(str(next_waypoint_text)).strip()
         )
         if not cleaned:
@@ -3049,6 +3158,7 @@ class VLMNavigationController(BaseNavigationController):
         self.progress_summary = ""
         self.action_stagnation_streak = 0
         self._reset_blocked_front_controller_recovery_state()
+        self._clear_subtask_avoidance_side_lock()
         self._clear_action_stagnation_prompt_state()
         self.action_consecutive_turn_count = 0
         self._clear_action_force_forward_prompt_state()
@@ -3135,6 +3245,7 @@ class VLMNavigationController(BaseNavigationController):
             print("[GoalRegionMatch] streak reset (final waypoint tail no longer matches destination)")
 
         auto_finish_by_streak = (
+            self.runtime_options.enable_final_destination_match_autostop and
             not is_initial and
             not task_finished and
             match_hit and
@@ -3639,69 +3750,145 @@ class VLMNavigationController(BaseNavigationController):
         )
 
         progress_summary_for_prompt = self._get_action_progress_summary_for_prompt()
-        force_forward_after_turns_pending = bool(
-            getattr(self, "action_force_forward_after_turns_pending", False)
-        ) and (not self.action_stagnation_retry_pending)
-        allowed_action_names = (
-            ("TURN_LEFT", "TURN_RIGHT", "STOP")
-            if self.action_stagnation_retry_pending
-            else ("MOVE_FORWARD", "STOP")
-            if force_forward_after_turns_pending
-            else None
-        )
-        allowed_action_names = self._apply_immediate_reverse_turn_guard(allowed_action_names)
-        if (
-            force_forward_after_turns_pending and
-            self._is_obstacle_distance_blocked((action_context.get("obstacle_distances") or {}).get("front"))
-        ):
-            forced_forward = self._build_forced_forward_after_turn_limit_action(
-                step_landmark_entries=action_context.get("step_landmark_entries"),
-                obstacle_distances=action_context.get("obstacle_distances"),
+        locked_avoidance_side = self._get_active_avoidance_side_lock()
+        if self.action_stagnation_retry_pending and locked_avoidance_side in ("LEFT", "RIGHT"):
+            auto_turn_limit = max(
+                1,
+                int(getattr(self, "ACTION_LOCKED_AVOIDANCE_AUTO_TURN_LIMIT", 6) or 6),
             )
-            if forced_forward is None:
-                print("[ERR] Forced forward-after-turn-limit recovery failed")
-                return None, None, True, 1, None
-            action_id = forced_forward["action_id"]
-            action_name = forced_forward["action_name"]
-            response = forced_forward["response"]
-            degrees = int(forced_forward.get("degrees", 0) or 0)
-            meters = float(forced_forward.get("meters", 0.0) or 0.0)
-            if str(action_name or "").upper() == "STOP":
+            if int(getattr(self, "action_avoidance_auto_turn_count", 0) or 0) >= auto_turn_limit:
                 print(
-                    "[ActionTurnLimit] "
-                    "Consecutive-turn limit is active and FRONT is blocked, so controller ended the current action stage"
+                    "[ActionStagnation] "
+                    f"Locked {locked_avoidance_side} obstacle-bypass auto turns reached "
+                    f"{auto_turn_limit}; hand back to thinking controller"
                 )
+                action_id = resolve_habitat_action("STOP")
+                action_name = "STOP"
+                response = self._build_controller_forced_action_response(
+                    action_name="STOP",
+                    reasoning=(
+                        f"The locked {locked_avoidance_side} obstacle-bypass side already used "
+                        f"{auto_turn_limit} automatic turns and the front route is still blocked, "
+                        "so hand control back to the thinking controller for a fresh replan."
+                    ),
+                )
+                degrees = 0
+                meters = 0.0
             else:
+                forced_recovery = self._build_forced_blocked_front_recovery_action(
+                    step_landmark_entries=action_context.get("step_landmark_entries"),
+                    locked_side=locked_avoidance_side,
+                    non_counting_action=True,
+                )
+                if forced_recovery is None:
+                    print("[ERR] Locked blocked-front recovery failed")
+                    return None, None, True, 1, None
+
+                action_id = forced_recovery["action_id"]
+                action_name = forced_recovery["action_name"]
+                response = forced_recovery["response"]
+                degrees = int(forced_recovery.get("degrees", 0) or 0)
+                meters = float(forced_recovery.get("meters", 0.0) or 0.0)
+                self.action_avoidance_auto_turn_count = int(
+                    getattr(self, "action_avoidance_auto_turn_count", 0) or 0
+                ) + 1
+                self.blocked_front_controller_recovery_count = int(
+                    getattr(self, "blocked_front_controller_recovery_count", 0) or 0
+                ) + 1
                 print(
-                    "[ActionTurnLimit] "
-                    "Controller forced one short MOVE_FORWARD after consecutive turns"
+                    "[ActionStagnation] "
+                    f"Controller auto-forced {action_name} on locked {locked_avoidance_side} bypass "
+                    f"(auto recovery #{self.action_avoidance_auto_turn_count}); "
+                    "this does not consume a high-level action step"
                 )
         else:
-            action_id, action_name, response, degrees, meters = self._request_vlm_action(
-                action_context=action_context,
-                action_subtask_instruction=action_subtask_instruction,
-                progress_summary_for_prompt=progress_summary_for_prompt,
-                allowed_action_names=allowed_action_names,
+            action_id = None
+            action_name = None
+            response = None
+            degrees = 0
+            meters = 0.0
+
+            force_forward_after_turns_pending = bool(
+                getattr(self, "action_force_forward_after_turns_pending", False)
+            ) and (not self.action_stagnation_retry_pending)
+            allowed_action_names = (
+                ("TURN_LEFT", "TURN_RIGHT", "STOP")
+                if self.action_stagnation_retry_pending
+                else ("MOVE_FORWARD", "STOP")
+                if force_forward_after_turns_pending
+                else None
             )
+            allowed_action_names = self._apply_immediate_reverse_turn_guard(allowed_action_names)
+            allowed_action_names = self._apply_subtask_avoidance_side_lock_guard(allowed_action_names)
+            if (
+                force_forward_after_turns_pending and
+                self._is_obstacle_distance_blocked((action_context.get("obstacle_distances") or {}).get("front"))
+            ):
+                forced_forward = self._build_forced_forward_after_turn_limit_action(
+                    step_landmark_entries=action_context.get("step_landmark_entries"),
+                    obstacle_distances=action_context.get("obstacle_distances"),
+                )
+                if forced_forward is None:
+                    print("[ERR] Forced forward-after-turn-limit recovery failed")
+                    return None, None, True, 1, None
+                action_id = forced_forward["action_id"]
+                action_name = forced_forward["action_name"]
+                response = forced_forward["response"]
+                degrees = int(forced_forward.get("degrees", 0) or 0)
+                meters = float(forced_forward.get("meters", 0.0) or 0.0)
+                if str(action_name or "").upper() == "STOP":
+                    print(
+                        "[ActionTurnLimit] "
+                        "Consecutive-turn limit is active and FRONT is blocked, so controller ended the current action stage"
+                    )
+                else:
+                    print(
+                        "[ActionTurnLimit] "
+                        "Controller forced one short MOVE_FORWARD after consecutive turns"
+                    )
+            else:
+                action_id, action_name, response, degrees, meters = self._request_vlm_action(
+                    action_context=action_context,
+                    action_subtask_instruction=action_subtask_instruction,
+                    progress_summary_for_prompt=progress_summary_for_prompt,
+                    allowed_action_names=allowed_action_names,
+                )
 
         if action_id is None:
             print("[ERR] VLM decision failed")
             return None, None, True, 1, None
         
+        controller_forced_response = bool((response or {}).get("controller_forced_recovery", False))
         self._persist_response_artifacts(
             save_dir=action_context["action_save_dir"],
-            raw_payload=self._get_latest_action_raw_response_payload(response),
+            raw_payload=(
+                response
+                if controller_forced_response
+                else self._get_latest_action_raw_response_payload(response)
+            ),
+            controller_payload=response if controller_forced_response else None,
         )
         
         # Save planned action parameters for later actual-progress estimation.
         self.last_planned_degrees = degrees
         self.last_planned_meters = meters
         self.last_action_name = action_name
+        action_was_stagnation_recovery_turn = (
+            self.action_stagnation_retry_pending
+            and str(action_name or "").upper() in ("TURN_LEFT", "TURN_RIGHT")
+        )
         self.last_action_semantic_variant = str(
             self.action_executor._extract_action_variant((response or {}).get("action"))
             or ""
         )
-        self._update_action_consecutive_turn_state(action_name)
+        if action_was_stagnation_recovery_turn:
+            self.last_action_semantic_variant = "avoid_obstacle"
+            self._set_subtask_avoidance_side_lock(
+                "LEFT" if str(action_name or "").upper() == "TURN_LEFT" else "RIGHT"
+            )
+
+        if not bool((response or {}).get("controller_non_counting_action", False)):
+            self._update_action_consecutive_turn_state(action_name)
 
         if self.action_stagnation_retry_pending and str(action_name or "").upper() in ("TURN_LEFT", "TURN_RIGHT"):
             self._clear_action_stagnation_prompt_state()
@@ -3712,10 +3899,10 @@ class VLMNavigationController(BaseNavigationController):
         # Check whether the planner requested stop.
         should_stop = (action_name == "STOP")
         if should_stop:
-                self.last_action_progress_hint = self._build_last_action_progress_hint(
-                    action_name=action_name,
-                )
-                self.last_action_effective_name = str(action_name or "").upper()
+            self.last_action_progress_hint = self._build_last_action_progress_hint(
+                action_name=action_name,
+            )
+            self.last_action_effective_name = str(action_name or "").upper()
         
         # Convert the planned macro-action into repeated low-level actions.
         repeat_count = 1
@@ -3855,7 +4042,16 @@ class VLMNavigationController(BaseNavigationController):
                 print('\n[STOP] -> Thinking controller...')
                 return 'thinking'
 
-            subtask_steps += 1
+            non_counting_action = bool(
+                (vlm_response or {}).get("controller_non_counting_action", False)
+            )
+            if not non_counting_action:
+                subtask_steps += 1
+            else:
+                print(
+                    "[ActionStagnation] "
+                    "Locked obstacle-bypass auto turn will not count against max_subtask_steps"
+                )
             force_replan_after_action = subtask_steps >= max_subtask_steps
             replan_for_stagnation = False
             stagnation_actual_meters = None
@@ -3890,6 +4086,8 @@ class VLMNavigationController(BaseNavigationController):
 
                 if repeat_count > 1:
                     print(f"  [Step {self.current_step}] {action_name} ({i + 1}/{repeat_count})")
+                elif non_counting_action:
+                    print(f"  [Step {self.current_step}] {action_name} | auto recovery (no subtask action step)")
                 else:
                     print(f"  [Step {self.current_step}] {action_name} | subtask {subtask_steps}/{max_subtask_steps}")
 
@@ -4002,13 +4200,13 @@ class VLMNavigationController(BaseNavigationController):
                 print(f'\n[Replan] Force replan after {max_subtask_steps} steps')
                 return 'thinking'
 
-    def run_vlm_navigation(self, max_subtask_steps: int = 5) -> Dict[str, Any]:
+    def run_navigation(self, max_subtask_steps: int = 5) -> Dict[str, Any]:
         """Run the top-level scheduler over the thinking controller and action controller."""
         max_steps = self.config.TASK_CONFIG.ENVIRONMENT.MAX_EPISODE_STEPS
         self.timing_tracker.reset()
 
         print("\n" + "=" * 60)
-        print(f"VLM Navigation | max_steps={max_steps} | subtask_steps={max_subtask_steps}")
+        print(f"Navigation Agent | max_steps={max_steps} | subtask_steps={max_subtask_steps}")
         print(f"Instruction: {self.current_instruction}")
         print(f"{'=' * 60}")
 
@@ -4175,7 +4373,21 @@ class VLMNavigationController(BaseNavigationController):
 
     def _build_nav_visualizer_info(self, info: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         payload = dict(info or {})
+        has_topdown = (
+            payload.get("top_down_map_vlnce") is not None or
+            payload.get("top_down_map") is not None or
+            payload.get("global_map_input") is not None
+        )
+        if not has_topdown:
+            try:
+                env_global_map = self.envs.call_at(0, "get_global_map_input")
+            except Exception:
+                env_global_map = None
+            if env_global_map is not None:
+                payload["global_map_input"] = env_global_map
+                has_topdown = True
         if (
+            not has_topdown and
             "global_map_input" not in payload and
             getattr(self, "latest_global_map_input", None) is not None
         ):

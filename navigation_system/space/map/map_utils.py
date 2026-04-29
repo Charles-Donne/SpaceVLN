@@ -3,7 +3,7 @@ import torch
 import numpy as np
 from typing import Tuple, List
 import torch.nn.functional as F
-from collections import Sequence
+from collections.abc import Sequence
 from scipy.spatial.distance import cdist
 from scipy import ndimage
 

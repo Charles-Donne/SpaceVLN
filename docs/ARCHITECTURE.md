@@ -8,9 +8,9 @@ task-specific overlays second.
 ```text
 navigation_system/
 ├── controller/
-│   └── vlnce/
-│   └── object_navigation/
+│   └── agent/
 ├── env/
+│   └── vlnce/
 │   └── object_navigation/
 ├── runtime/
 │   ├── vlnce/
@@ -43,21 +43,23 @@ same functional areas.
 
 - Owns control flow, episode lifecycle, stopping logic, and integration across
   detection, spatial memory, rendering, and VLM calls.
-- Task-specific controller overlays live in `controller/vlnce/` and
-  `controller/object_navigation/`.
+- The reusable navigation loop lives in `controller/agent/`.
+- Task/benchmark overlays, such as OVON-specific stop-gate behavior, live
+  under their runtime plugin packages instead of the shared controller tree.
 
 ### `env/`
 
-- Owns Habitat environment wiring and environment adapters.
-- Task-specific episode facades and instruction adapters live in
-  `env/object_navigation/`.
+- Owns Habitat environment wiring and benchmark adapters.
+- VLNCE benchmark adapters live under `env/vlnce/r2r/` and
+  `env/vlnce/navgbench/`; OVON lives under `env/object_navigation/ovon/`.
 
 ### `runtime/`
 
 - Owns CLI entrypoints, episode scheduling, result directory selection, and
   evaluation/report generation.
-- VLNCE runtime orchestration lives in `runtime/vlnce/`.
-- OVON runtime orchestration lives in `runtime/object_navigation/`.
+- VLNCE task profiles live in `runtime/vlnce/`; benchmark runners live under
+  `runtime/vlnce/r2r/` and `runtime/vlnce/navgbench/`.
+- OVON runtime orchestration lives in `runtime/object_navigation/ovon/`.
 - Shared artifact layout lives in `runtime/storage/`.
 
 ### `vlm/`
@@ -95,12 +97,11 @@ for example `vlm/planning/vlnce/` and `vlm/planning/object_navigation/`.
 
 ## 3. Main Execution Path
 
-1. A launcher script under `run_navigation/` selects the task entrypoint.
-2. `runtime/vlnce/*` or `runtime/object_navigation/*` resolves task-specific
-   runtime profile, results directories, and
-   episode selection.
-3. `controller/vlnce/*` or `controller/object_navigation/*` drives the
-   navigation loop.
+1. A launcher script under `run_navigation/` calls `navigation_agent.py`.
+2. `runtime/<task>/<benchmark>/*` resolves benchmark-specific episode
+   selection, environment adapters, results directories, and reports.
+3. `controller/agent/*` drives the shared navigation loop; benchmark plugins
+   wrap it only when behavior truly differs.
 4. `vlm/planning/*` proposes subtasks and `vlm/execution/*` chooses actions.
 5. `runtime/storage/*` saves `detail/`, `records/`, `log/`, and summaries.
 6. `runtime/results_report.py` aggregates offline evaluation metrics.
@@ -113,7 +114,7 @@ for example `vlm/planning/vlnce/` and `vlm/planning/object_navigation/`.
   rendering stays in `render/`.
 - Prompt templates live only under `vlm/prompts/`.
 - Result-path policy is centralized in `runtime/storage/`.
-- `run_navigation/` is the canonical shell entry surface for both VLNCE and
-  OVON.
+- `navigation_agent.py` is the only Python entrypoint; `run_navigation/`
+  launchers are thin argument translators.
 - Task-specific code should import canonical module paths directly; the tree no
   longer keeps compatibility wrappers for the old object-navigation layout.

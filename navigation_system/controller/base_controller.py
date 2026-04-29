@@ -14,12 +14,10 @@ try:
     from habitat import Config
 except ImportError:  # Habitat 0.2.x no longer exports Config
     from typing import Any as Config
-from habitat.core.simulator import Observations
-
 try:
-    from habitat_baselines.common.environments import get_env_class
-except ImportError:  # Habitat 0.2.x path/layout differs; only needed when constructing envs here.
-    get_env_class = None
+    from habitat.core.simulator import Observations
+except ImportError:
+    from typing import Any as Observations
 
 from navigation_system.detection import GroundedSAM
 from navigation_system.space import SemanticMapper, SemanticProcessor
@@ -27,8 +25,8 @@ from navigation_system.space.landmarks import LandmarkMemory
 from navigation_system.space.map.semantic_mapping import Semantic_Mapping
 from navigation_system.render import MapVisualizer
 from navigation_system.space.map.obstacle_analysis import (
-    calculate_obstacle_distances_from_depth,
-    format_distance,
+    calculate_obstacle_distances_from_map_and_depth,
+    merge_obstacle_distance_text,
     sample_depth_distance_from_region,
 )
 from navigation_system.vlm.contracts.schema import DIRECTION_CONFIG
@@ -37,7 +35,6 @@ from navigation_system.runtime.storage.naming import build_step_artifact_filenam
 from navigation_system.config.core import ConfigHelper, create_category_config
 from navigation_system.controller.action_compat import resolve_habitat_action
 from navigation_system.controller.state import DetectedClassRegistry
-from navigation_system.env import construct_envs, ensure_env_registered
 from navigation_system.runtime.device import get_device
 
 
@@ -62,28 +59,12 @@ class BaseNavigationController:
         map_size_cm = int(self.space_map_config.SIZE_CM)
         self.map_shape = (map_size_cm // self.resolution, map_size_cm // self.resolution)
         
-        # print("[Init] 初始化Habitat环境...")
         if envs is None:
-            if get_env_class is None:
-                raise RuntimeError(
-                    "Habitat baseline env registry helper is unavailable in this environment. "
-                    "Pass a pre-built env adapter into BaseNavigationController."
-                )
-            ensure_env_registered()
-            env_class = get_env_class(self.config.ENV_NAME)
-            if env_class is None:
-                raise RuntimeError(
-                    f"Habitat environment '{self.config.ENV_NAME}' is not registered. "
-                    "Please check navigation_system.env.vlnce.zero_shot_env."
-                )
-            self.envs = construct_envs(
-                self.config,
-                env_class,
-                auto_reset_done=False,
-                episodes_allowed=self.config.TASK_CONFIG.DATASET.EPISODES_ALLOWED,
+            raise ValueError(
+                "BaseNavigationController requires an environment adapter. "
+                "Build the task-specific env in the runtime layer and pass it as envs."
             )
-        else:
-            self.envs = envs
+        self.envs = envs
         # print(f"[Init] 环境初始化完成，episodes: {self.envs.number_of_episodes}")
         
         # print("[Init] 初始化GroundedSAM...")
@@ -1087,7 +1068,7 @@ class BaseNavigationController:
         return True
 
     def _update_obstacle_distances_12_directions(self, lookaround_depths: Optional[List[np.ndarray]] = None):
-        """Update 12-view obstacle distances from depth, with per-view map fallback only when depth is unknown."""
+        """Update 12-view obstacle distances from current-heading map rays, guarded by nearer depth hits."""
         depth_views = list(lookaround_depths or [])
         map_fallback = {}
         try:
@@ -1120,22 +1101,28 @@ class BaseNavigationController:
             except Exception:
                 distance_m = None
             dist_key = f'angle_{angle}'
-            distances[dist_key] = (
-                format_distance(distance_m)
-                if distance_m is not None else
-                map_fallback.get(dist_key, "Unknown")
+            distances[dist_key] = merge_obstacle_distance_text(
+                map_fallback.get(dist_key),
+                distance_m,
+                default_distance="Unknown",
             )
         self.latest_obstacle_distances_12 = distances
 
     def _update_obstacle_distances(self):
-        """Update action-view obstacle distances from current depth only."""
+        """Update action-view obstacle distances from current-heading map rays, guarded by nearer depth hits."""
         try:
-            self.latest_obstacle_distances = calculate_obstacle_distances_from_depth(
+            map_distances = {}
+            if self.mapper is not None and self.visualizer is not None:
+                map_state = self.mapper.get_map_state()
+                map_distances = self.visualizer.calculate_obstacle_distances_from_full_map(
+                    map_state.get('full_map'),
+                )
+            self.latest_obstacle_distances = calculate_obstacle_distances_from_map_and_depth(
                 getattr(self, 'latest_depth_meters', None),
+                map_distances=map_distances,
                 hfov_deg=float(self.space_sensor_config.HFOV_DEG),
                 angle_band_deg=5.0,
                 sensor_min_depth_m=float(self.config.TASK_CONFIG.SIMULATOR.DEPTH_SENSOR.MIN_DEPTH),
-                fallback_distances=None,
             )
         except Exception:
             self.latest_obstacle_distances = {
@@ -1326,7 +1313,7 @@ class BaseNavigationController:
         depth[mask2] = 0.
         mask1 = depth == 0
         depth[mask1] = 100.0
-        depth = min_depth * 100.0 + depth * max_depth * 100.0
+        depth = min_depth * 100.0 + depth * (max_depth - min_depth) * 100.0
         return depth
     
     def _preprocess_state(self, state: np.ndarray, save_object_detection: bool = False, step: int = None) -> np.ndarray:

@@ -1,22 +1,5 @@
 #!/bin/bash
 
-spacevln_shell_name_for_entry() {
-    local entry_script="$1"
-    local entry_name
-    entry_name="$(basename "$entry_script" .py)"
-    case "$entry_name" in
-        vlm_navigation)
-            printf '%s\n' "vlnce.sh"
-            ;;
-        object_navigation)
-            printf '%s\n' "object_navigation.sh"
-            ;;
-        *)
-            printf '%s.sh\n' "$entry_name"
-            ;;
-    esac
-}
-
 spacevln_common_dir() {
     cd "$(dirname "${BASH_SOURCE[0]}")" && pwd
 }
@@ -51,6 +34,44 @@ spacevln_select_python() {
         return
     fi
     printf '%s\n' "python"
+}
+
+spacevln_find_conda_env_python() {
+    local env_name="$1"
+    local candidate=""
+    local roots=()
+
+    if [[ -n "${CONDA_PREFIX:-}" ]]; then
+        roots+=("$(cd "$CONDA_PREFIX/.." 2>/dev/null && pwd || true)")
+    fi
+    if [[ -n "${MAMBA_ROOT_PREFIX:-}" ]]; then
+        roots+=("$MAMBA_ROOT_PREFIX/envs")
+    fi
+    roots+=(
+        "$HOME/.conda/envs"
+        "$HOME/miniconda3/envs"
+        "$HOME/anaconda3/envs"
+        "$HOME/miniforge3/envs"
+        "$HOME/mambaforge/envs"
+        /home/*/.conda/envs
+        /home/*/miniconda3/envs
+        /home/*/anaconda3/envs
+        /home/*/miniforge3/envs
+        /home/*/mambaforge/envs
+        /opt/conda/envs
+    )
+
+    for root in "${roots[@]}"; do
+        if [[ -z "$root" ]]; then
+            continue
+        fi
+        candidate="$root/$env_name/bin/python"
+        if [[ -x "$candidate" ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
 }
 
 spacevln_env_root() {
@@ -135,7 +156,7 @@ spacevln_setup_runtime_env() {
         local torch_lib
         local preload_libs=()
         env_root="$(spacevln_env_root "$python_bin")"
-        torch_lib="$env_root/lib/python3.8/site-packages/torch/lib"
+        torch_lib="$(find "$env_root/lib" -path '*/site-packages/torch/lib' -type d 2>/dev/null | head -n 1 || true)"
 
         if [[ -d "$torch_lib" ]]; then
             spacevln_prepend_colon_var LD_LIBRARY_PATH "$torch_lib"
@@ -240,16 +261,15 @@ spacevln_is_help_request() {
     return 1
 }
 
-spacevln_dispatch_navigation_cli() {
+spacevln_dispatch_r2r_cli() {
     local project_root="$1"
     local python_bin="$2"
-    local entry_script="$3"
-    local config_file="$4"
-    local api_config="$5"
-    local api_missing_message="$6"
-    local api_missing_hint="$7"
-    local extra_args_name="${8:-}"
-    shift 8
+    local config_file="$3"
+    local api_config="$4"
+    local api_missing_message="$5"
+    local api_missing_hint="$6"
+    local extra_args_name="${7:-}"
+    shift 7
 
     local cli_args=("$@")
     local extra_args=()
@@ -265,12 +285,16 @@ spacevln_dispatch_navigation_cli() {
         exit 1
     fi
 
-    if spacevln_is_help_request "${cli_args[@]}"; then
-        exec "$python_bin" "$entry_script" \
+    spacevln_run_python_entry() {
+        exec "$python_bin" navigation_agent.py r2r \
             --exp-config "$config_file" \
             --vlm-api-config "$api_config" \
             "${extra_args[@]}" \
-            "${cli_args[@]}"
+            "$@"
+    }
+
+    if spacevln_is_help_request "${cli_args[@]}"; then
+        spacevln_run_python_entry "${cli_args[@]}"
     fi
 
     if [ ! -f "$api_config" ]; then
@@ -280,14 +304,6 @@ spacevln_dispatch_navigation_cli() {
         fi
         exit 1
     fi
-
-    spacevln_run_python_entry() {
-        exec "$python_bin" "$entry_script" \
-            --exp-config "$config_file" \
-            --vlm-api-config "$api_config" \
-            "${extra_args[@]}" \
-            "$@"
-    }
 
     for arg in "${cli_args[@]}"; do
         if [[ "$arg" == --* ]]; then
@@ -366,15 +382,13 @@ spacevln_dispatch_navigation_cli() {
     fi
 
     if ! [[ "$first_arg" =~ ^[0-9]+$ ]]; then
-        local shell_name
-        shell_name="$(spacevln_shell_name_for_entry "$entry_script")"
         echo "❌ Unsupported first positional argument: $first_arg"
         echo "   Supported examples:"
-        echo "   bash run_navigation/${shell_name} 832"
-        echo "   bash run_navigation/${shell_name} 832 300"
-        echo "   bash run_navigation/${shell_name} 1 600 260 5"
-        echo "   bash run_navigation/${shell_name} random 20 260 all 4"
-        echo "   bash run_navigation/${shell_name} --episode-id 832 --num-episodes 1"
+        echo "   bash run_navigation/vlnce.sh 832"
+        echo "   bash run_navigation/vlnce.sh 832 300"
+        echo "   bash run_navigation/vlnce.sh 1 600 260 5"
+        echo "   bash run_navigation/vlnce.sh random 20 260 all 4"
+        echo "   bash run_navigation/vlnce.sh --episode-id 832 --num-episodes 1"
         exit 1
     fi
 

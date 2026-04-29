@@ -1,4 +1,4 @@
-"""Single-environment OVON adapter that mimics the small VectorEnv subset SpaceVLN uses."""
+"""Single-environment OVON adapter for the shared Navigation Agent env contract."""
 
 from __future__ import annotations
 
@@ -9,22 +9,19 @@ from typing import Any, Iterable, List, Optional, Sequence
 import numpy as np
 
 from habitat_extensions.pose_utils import get_rel_pose_change, get_sim_location
+from navigation_system.env.common import (
+    check_single_env_index,
+    normalize_action_name,
+    vector_step_result,
+)
 from navigation_system.env.object_navigation.goal_task import (
     build_raw_object_goal_instruction,
 )
 
 
-ACTION_ID_TO_NAME = {
-    0: "stop",
-    1: "move_forward",
-    2: "turn_left",
-    3: "turn_right",
-}
-
-
 @dataclass
-class SpaceVLNEpisodeFacade:
-    """Expose OVON episodes with the `instruction.instruction_text` field SpaceVLN expects."""
+class OVONEpisodeFacade:
+    """Expose OVON episodes with the instruction field consumed by the agent."""
 
     base_episode: Any
 
@@ -46,7 +43,7 @@ class SpaceVLNEpisodeFacade:
 
 
 class SingleOVONVectorEnvAdapter:
-    """Wrap `habitat.Env` so existing SpaceVLN controllers can run unchanged."""
+    """Wrap `habitat.Env` with the small VectorEnv surface used by the agent."""
 
     def __init__(self, env: Any, *, episode_count: Optional[int] = None) -> None:
         self.env = env
@@ -98,23 +95,7 @@ class SingleOVONVectorEnvAdapter:
 
     @staticmethod
     def _normalize_action(action: Any) -> dict:
-        if isinstance(action, dict):
-            if "action" in action:
-                raw_action = action["action"]
-            else:
-                raw_action = action
-        else:
-            raw_action = action
-
-        if hasattr(raw_action, "value"):
-            raw_action = raw_action.value
-
-        if isinstance(raw_action, str):
-            action_name = raw_action.strip().lower()
-        else:
-            action_name = ACTION_ID_TO_NAME.get(int(raw_action), "stop")
-
-        return {"action": action_name}
+        return {"action": normalize_action_name(action, lower=True)}
 
     def reset(self) -> List[Any]:
         obs = self.env.reset()
@@ -126,23 +107,14 @@ class SingleOVONVectorEnvAdapter:
         done = bool(getattr(self.env, "episode_over", False))
         obs = self._augment_observation(obs, reset=False)
         info = self._augment_metrics(self.env.get_metrics())
-        info["done"] = done
         reward = float(info.get("distance_to_goal_reward", 0.0) or 0.0)
-        return [
-            (
-                obs,
-                reward,
-                done,
-                info,
-            )
-        ]
+        return vector_step_result(obs, reward=reward, done=done, info=info)
 
-    def current_episodes(self) -> List[SpaceVLNEpisodeFacade]:
-        return [SpaceVLNEpisodeFacade(self.env.current_episode)]
+    def current_episodes(self) -> List[OVONEpisodeFacade]:
+        return [OVONEpisodeFacade(self.env.current_episode)]
 
     def call_at(self, index: int, method_name: str, *args: Any, **kwargs: Any) -> Any:
-        if int(index) != 0:
-            raise IndexError(f"SingleOVONVectorEnvAdapter only supports env index 0, got {index}")
+        check_single_env_index(index)
         if method_name == "get_metrics":
             return self._augment_metrics(self.env.get_metrics())
         if method_name == "get_agent_pose":

@@ -7,7 +7,10 @@ import os
 import cv2
 import numpy as np
 from typing import List, Dict, Optional
-from habitat.utils.visualizations import maps
+try:
+    from habitat.utils.visualizations import maps
+except ImportError:
+    maps = None
 
 from navigation_system.runtime.storage.naming import build_subtask_name_from_token
 
@@ -107,7 +110,25 @@ class NavigationVisualizer:
             if key not in info or info[key] is None:
                 continue
             try:
-                return maps.colorize_draw_agent_and_fit_to_height(info[key], rgb.shape[0])
+                if maps is not None:
+                    return maps.colorize_draw_agent_and_fit_to_height(info[key], rgb.shape[0])
+                top_down = info[key]
+                if isinstance(top_down, dict):
+                    top_down = top_down.get("map", None)
+                    if top_down is None:
+                        top_down = info[key].get("image_array")
+                image = np.asarray(top_down)
+                if image.ndim == 2:
+                    image = cv2.cvtColor(image.astype(np.uint8), cv2.COLOR_GRAY2RGB)
+                elif image.ndim == 3 and image.shape[-1] == 3:
+                    image = image.astype(np.uint8)
+                else:
+                    continue
+                return cv2.resize(
+                    image,
+                    (rgb.shape[0], rgb.shape[0]),
+                    interpolation=cv2.INTER_AREA,
+                )
             except Exception as exc:
                 print(f"⚠️  [Step {step}] Failed to render `{key}`: {exc}")
 

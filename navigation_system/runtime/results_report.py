@@ -699,7 +699,7 @@ def build_results_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--exp-config",
         type=str,
-        default="navigation_system/config/experiments/r2r_eval.yaml",
+        default="navigation_system/config/experiments/vlnce/r2r_eval.yaml",
         help="Experiment config path used to resolve evaluation thresholds such as success distance",
     )
     parser.add_argument("--save", action="store_true", help="Save summary and result tables")

@@ -9,7 +9,7 @@ from navigation_system.config.core.params.thresholds import (
     OBS_OPEN_M,
     OBS_RISKY_M,
 )
-from navigation_system.runtime.object_navigation.thresholds import (
+from navigation_system.runtime.object_navigation.ovon.thresholds import (
     OVON_ARRIVAL_NEAR_M,
     OVON_AUTOCOMPLETE_OPENING_M,
     OVON_AUTOCOMPLETE_SOLID_M,
@@ -19,6 +19,7 @@ from navigation_system.vlm.prompts.object_navigation.common import (
     load_objectnav_prompt_template,
 )
 from navigation_system.vlm.prompts.vlnce.builders import (
+    _build_action_space_constraint_notice,
     _build_allowed_action_bullets,
     _build_previous_subtask_landmark_block,
     _build_landmark_perception_summary,
@@ -166,6 +167,9 @@ def build_ovon_action_cache_prompt_bundle(
         landmark_map_info=landmark_map_info,
     )
     allowed_action_bullets = _build_allowed_action_bullets(allowed_action_names)
+    action_space_constraint_notice = _build_action_space_constraint_notice(
+        allowed_action_names
+    )
     system_prompt = _normalize_action_prompt_text(_render_action_system_prompt())
     user_prompt = _normalize_action_prompt_text(
         ACTION_CACHE_USER_PROMPT.format(
@@ -177,6 +181,7 @@ def build_ovon_action_cache_prompt_bundle(
             landmark_perception_summary=landmark_summary,
             detected_landmarks=detected_landmark_text,
             allowed_action_bullets=allowed_action_bullets,
+            action_space_constraint_notice=action_space_constraint_notice,
         )
     )
     return ExplicitCachePromptBundle(

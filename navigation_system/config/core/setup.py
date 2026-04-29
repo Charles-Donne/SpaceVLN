@@ -41,11 +41,22 @@ def apply_runtime_derived_fields(config: Config) -> Config:
             rgb_sensor = getattr(simulator, "RGB_SENSOR", None)
             depth_sensor = getattr(simulator, "DEPTH_SENSOR", None)
             agent_cfg = getattr(simulator, "AGENT_0", None)
+            agent_height_m = float(space.SENSOR.AGENT_HEIGHT_M)
+
+            def _sync_sensor_position_height(sensor_cfg) -> None:
+                if sensor_cfg is None or not hasattr(sensor_cfg, "POSITION"):
+                    return
+                position = list(getattr(sensor_cfg, "POSITION", [0.0, agent_height_m, 0.0]) or [])
+                while len(position) < 3:
+                    position.append(0.0)
+                position[1] = agent_height_m
+                sensor_cfg.POSITION = position[:3]
 
             if rgb_sensor is not None:
                 rgb_sensor.HFOV = float(space.SENSOR.HFOV_DEG)
                 rgb_sensor.WIDTH = int(space.SENSOR.FRAME_WIDTH)
                 rgb_sensor.HEIGHT = int(space.SENSOR.FRAME_HEIGHT)
+                _sync_sensor_position_height(rgb_sensor)
             if depth_sensor is not None:
                 if hasattr(depth_sensor, "HFOV"):
                     depth_sensor.HFOV = float(space.SENSOR.HFOV_DEG)
@@ -53,13 +64,17 @@ def apply_runtime_derived_fields(config: Config) -> Config:
                     depth_sensor.WIDTH = int(space.SENSOR.FRAME_WIDTH)
                 if hasattr(depth_sensor, "HEIGHT"):
                     depth_sensor.HEIGHT = int(space.SENSOR.FRAME_HEIGHT)
+                _sync_sensor_position_height(depth_sensor)
             if agent_cfg is not None:
-                agent_cfg.HEIGHT = float(space.SENSOR.AGENT_HEIGHT_M)
+                agent_cfg.HEIGHT = agent_height_m
                 if hasattr(agent_cfg, "SENSORS"):
                     agent_cfg.SENSORS = _bool_list(getattr(task_panel, "SENSORS", []))
 
             if hasattr(task_cfg, "DATASET") and hasattr(config, "EVAL"):
-                task_cfg.DATASET.SPLIT = str(getattr(config.EVAL, "SPLIT", task_cfg.DATASET.SPLIT) or "")
+                current_split = getattr(task_cfg.DATASET, "SPLIT", "")
+                task_cfg.DATASET.SPLIT = str(
+                    getattr(config.EVAL, "SPLIT", current_split) or ""
+                )
         finally:
             if task_was_frozen and hasattr(task_cfg, "freeze"):
                 task_cfg.freeze()
@@ -97,6 +112,9 @@ def apply_runtime_derived_fields(config: Config) -> Config:
     map_cfg.MAX_SEM_CATEGORIES = int(space.MAP.MAX_SEMANTIC_CATEGORIES)
     map_cfg.CENTER_RESET_STEPS = int(space.MAP.CENTER_RESET_STEPS)
     map_cfg.MIN_Z = int(space.MAP.MIN_Z_CM)
+    map_cfg.OBSTACLE_MIN_HEIGHT_CM = float(space.MAP.OBSTACLE_MIN_HEIGHT_CM)
+    map_cfg.OBSTACLE_MAX_HEIGHT_CM = float(space.MAP.OBSTACLE_MAX_HEIGHT_CM)
+    map_cfg.EXPLORED_RAY_FILL = bool(getattr(space.MAP, "EXPLORED_RAY_FILL", False))
     map_cfg.VISUALIZE = bool(space.MAP.VISUALIZE)
     map_cfg.PRINT_IMAGES = bool(space.MAP.PRINT_IMAGES)
 
@@ -127,6 +145,9 @@ def apply_runtime_derived_fields(config: Config) -> Config:
     map_cfg.ACTION_STAGNATION_REPLAN_STREAK = int(control.RECOVERY.ACTION_STAGNATION_REPLAN_STREAK)
     map_cfg.LOW_LEVEL_STAGNATION_RATIO = float(control.STAGNATION.LOW_LEVEL_RATIO)
     map_cfg.LOW_LEVEL_STAGNATION_CAP_M = float(control.STAGNATION.LOW_LEVEL_CAP_M)
+    map_cfg.ENABLE_FINAL_DESTINATION_MATCH_AUTOSTOP = bool(
+        control.STOPPING.ENABLE_FINAL_DESTINATION_MATCH_AUTOSTOP
+    )
     map_cfg.FINAL_DESTINATION_MATCH_AUTOSTOP_STREAK = int(
         control.STOPPING.FINAL_DESTINATION_MATCH_AUTOSTOP_STREAK
     )
@@ -171,20 +192,23 @@ class ConfigHelper:
         config.RUNTIME.TORCH_GPU_ID = int(torch_gpu_id)
         config.RUNTIME.NUM_ENVIRONMENTS = int(num_environments)
 
-        # ===== Enable required Habitat metrics =====
-        required_measurements = [
-            "TOP_DOWN_MAP_VLNCE",
-            "DISTANCE_TO_GOAL",
-            "SUCCESS",
-            "SPL",
-            "ORACLE_NAVIGATION_ERROR",
-            "ORACLE_SUCCESS",
-            "ORACLE_SPL",
-        ]
-        
-        for measurement in required_measurements:
-            if measurement not in config.TASK_CONFIG.TASK.MEASUREMENTS:
-                config.TASK_CONFIG.TASK.MEASUREMENTS.append(measurement)
+        task_cfg = getattr(config, "TASK_CONFIG", None)
+        task_block = getattr(task_cfg, "TASK", None) if task_cfg is not None else None
+        measurements = getattr(task_block, "MEASUREMENTS", None) if task_block is not None else None
+        if measurements is not None:
+            required_measurements = [
+                "TOP_DOWN_MAP_VLNCE",
+                "DISTANCE_TO_GOAL",
+                "SUCCESS",
+                "SPL",
+                "ORACLE_NAVIGATION_ERROR",
+                "ORACLE_SUCCESS",
+                "ORACLE_SPL",
+            ]
+
+            for measurement in required_measurements:
+                if measurement not in measurements:
+                    measurements.append(measurement)
 
         apply_runtime_derived_fields(config)
         config.freeze()

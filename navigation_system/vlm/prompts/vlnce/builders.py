@@ -239,6 +239,25 @@ def _build_allowed_action_bullets(allowed_action_names=None) -> str:
     return "\n".join(lines)
 
 
+def _build_action_space_constraint_notice(allowed_action_names=None) -> str:
+    ordered = _normalize_allowed_action_names(allowed_action_names)
+    forbidden = [name for name in DEFAULT_ALLOWED_ACTION_NAMES if name not in ordered]
+    if not forbidden:
+        return ""
+
+    reason_by_action = {
+        "MOVE_FORWARD": "front-route recovery: forward is temporarily blocked",
+        "TURN_LEFT": "controller-side constraint: left turn is temporarily unavailable",
+        "TURN_RIGHT": "controller-side constraint: right turn is temporarily unavailable",
+        "STOP": "arrival is not available for this retry",
+    }
+    reasons = "; ".join(reason_by_action.get(name, name) for name in forbidden)
+    return (
+        "**Temporary action constraint**: choose only from the Action space above; "
+        f"do not output omitted actions. Reason: {reasons}."
+    )
+
+
 def _normalize_action_prompt_text(prompt: str) -> str:
     normalized = str(prompt or "")
     literal_replacements = (
@@ -359,6 +378,7 @@ def get_action_execution_prompt(
         ),
         allowed_action_output=_build_allowed_action_output(allowed_action_names),
         allowed_action_bullets=_build_allowed_action_bullets(allowed_action_names),
+        action_space_constraint_notice=_build_action_space_constraint_notice(allowed_action_names),
         obs_blocked_m=_fmt_threshold_m(OBS_BLOCKED_M),
         obs_risky_m=_fmt_threshold_m(OBS_RISKY_M),
         obs_open_m=_fmt_threshold_m(OBS_OPEN_M),
@@ -376,6 +396,7 @@ __all__ = [
     "VERIFICATION_REPLANNING_PROMPT",
     "_build_allowed_action_bullets",
     "_build_allowed_action_output",
+    "_build_action_space_constraint_notice",
     "_build_landmark_perception_summary",
     "_normalize_action_prompt_text",
     "_build_obstacle_perception_summary",

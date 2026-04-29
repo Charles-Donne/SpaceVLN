@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 
 PROJECT_ROOT="$(spacevln_project_root)"
-CONFIG_FILE="${EXP_CONFIG:-navigation_system/config/experiments/r2r_eval.yaml}"
+CONFIG_FILE="${EXP_CONFIG:-navigation_system/config/experiments/vlnce/r2r_eval.yaml}"
 PYTHON_BIN="$(spacevln_select_python)"
 spacevln_setup_runtime_env "$PYTHON_BIN"
 
@@ -189,7 +189,7 @@ resolve_dataset_episode_bounds() {
 import sys
 
 from navigation_system.config import get_config
-from navigation_system.runtime.vlnce.episode_selection import (
+from navigation_system.runtime.vlnce.r2r.episode_selection import (
     MAX_EPISODE_ID,
     MIN_EPISODE_ID,
     get_available_episode_ids,

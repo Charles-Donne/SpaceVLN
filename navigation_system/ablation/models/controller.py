@@ -11,11 +11,11 @@ from navigation_system.ablation.render.thinking_view_renderer import (
     AblationThinkingViewRenderer,
 )
 from navigation_system.config.core.params.api import ACTION_VIEW_MODEL_CONTENT_WIDTH
-from navigation_system.controller.vlnce.controller import VLMNavigationController
+from navigation_system.controller.agent.controller import NavigationAgentController
 from navigation_system.render.image_resize import resize_image_to_width
 
 
-class AblationVLMNavigationController(VLMNavigationController):
+class AblationNavigationAgentController(NavigationAgentController):
     """Drop-in controller that only changes final prompt/image exposure."""
 
     def __init__(
@@ -23,12 +23,14 @@ class AblationVLMNavigationController(VLMNavigationController):
         config,
         config_path: str = "navigation_system/config/vlm/vlm_api_config.yaml",
         model_stack_builder=None,
+        envs=None,
     ):
         self.ablation_spec = load_ablation_spec()
         super().__init__(
             config,
             config_path=config_path,
             model_stack_builder=model_stack_builder,
+            envs=envs,
         )
         self.visualizer = AblationMapVisualizer.from_existing(
             self.visualizer,
@@ -64,5 +66,5 @@ class AblationVLMNavigationController(VLMNavigationController):
 
 
 __all__ = [
-    "AblationVLMNavigationController",
+    "AblationNavigationAgentController",
 ]

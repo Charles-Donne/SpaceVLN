@@ -329,6 +329,46 @@ def parse_distance_text_m(distance_text: Optional[str]) -> Optional[float]:
         return None
 
 
+def merge_obstacle_distance_text(
+    map_distance_text: Optional[str],
+    depth_distance_m: Optional[float],
+    default_distance: str = "Unknown",
+    average_close_threshold_m: float = 0.4,
+) -> str:
+    """Fuse map raycast text with current depth.
+
+    When map/depth agree closely, smooth by averaging them; when they disagree,
+    keep the closer obstacle distance.
+    """
+    map_text = str(map_distance_text or "").strip()
+    if not map_text or map_text.lower() == "unknown":
+        if depth_distance_m is None:
+            return default_distance
+        return format_distance(depth_distance_m)
+
+    if depth_distance_m is None:
+        return map_text
+
+    try:
+        depth_m = float(depth_distance_m)
+    except (TypeError, ValueError):
+        return map_text
+    if not np.isfinite(depth_m):
+        return map_text
+    depth_m = max(0.0, depth_m)
+
+    map_distance_m = parse_distance_text_m(map_text)
+    if map_distance_m is None:
+        return format_distance(depth_m)
+    if "open" in map_text.lower() and depth_m > float(OBS_OPEN_M):
+        return map_text
+
+    map_m = max(0.0, float(map_distance_m))
+    if abs(map_m - depth_m) <= float(max(0.0, average_close_threshold_m)) + 1e-6:
+        return format_distance((map_m + depth_m) / 2.0)
+    return format_distance(min(map_m, depth_m))
+
+
 def classify_obstacle_distance_m(distance_m: Optional[float]) -> str:
     if distance_m is None:
         return "unknown"
@@ -444,6 +484,7 @@ def sample_depth_distance_from_region(
         (float(row_start_ratio), float(row_end_ratio)),
         (max(float(row_start_ratio), 0.55), 0.98),
         (max(float(row_start_ratio), 0.78), 0.995),
+        (max(float(row_start_ratio), 0.88), 0.998),
     ]
     sample_total = int(max(1, sample_count))
     percentile = float(np.clip(sample_percentile, 0.0, 100.0))
@@ -511,6 +552,7 @@ def sample_depth_distance_for_angle(
         (float(row_start_ratio), float(row_end_ratio)),
         (max(float(row_start_ratio), 0.55), 0.98),
         (max(float(row_start_ratio), 0.78), 0.995),
+        (max(float(row_start_ratio), 0.88), 0.998),
     ]
     best_distance = None
     for row_start_ratio_i, row_end_ratio_i in row_bands:
@@ -585,6 +627,36 @@ def calculate_obstacle_distances_from_depth(
         ):
             chosen_distance_m = min(float(chosen_distance_m), float(fallback_distance_m))
         distances[key] = format_distance(chosen_distance_m)
+    return distances
+
+
+def calculate_obstacle_distances_from_map_and_depth(
+    depth_meters: np.ndarray,
+    map_distances: Optional[Dict[str, str]] = None,
+    hfov_deg: float = 79.0,
+    directions: Optional[Dict[str, float]] = None,
+    max_distance_m: float = 5.0,
+    angle_band_deg: float = 5.0,
+    sensor_min_depth_m: float = DEFAULT_SENSOR_MIN_DEPTH_M,
+    default_distance: str = "Unknown",
+) -> Dict[str, str]:
+    """Calculate action-side obstacle distances using map raycasts first and depth as a closer-obstacle guard."""
+    direction_map = directions or ACTION_VIEW_DIRECTIONS
+    distances: Dict[str, str] = {}
+    for key, angle_deg in direction_map.items():
+        depth_distance_m = sample_depth_distance_for_angle(
+            depth_meters,
+            angle_deg=angle_deg,
+            hfov_deg=hfov_deg,
+            max_distance_m=max_distance_m,
+            sensor_min_depth_m=sensor_min_depth_m,
+            angle_band_deg=angle_band_deg,
+        )
+        distances[key] = merge_obstacle_distance_text(
+            (map_distances or {}).get(key),
+            depth_distance_m,
+            default_distance=default_distance,
+        )
     return distances
 
 

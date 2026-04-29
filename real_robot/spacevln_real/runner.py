@@ -7,8 +7,8 @@ import sys
 from types import SimpleNamespace
 import uuid
 
-from navigation_system.controller.vlnce.controller import VLMNavigationController
-from navigation_system.runtime.vlnce.execution import load_runtime_config
+from navigation_system.controller.agent.controller import NavigationAgentController
+from navigation_system.runtime.vlnce.r2r.execution import load_runtime_config
 from navigation_system.runtime.vlnce.profiles import (
     CONTEXT_CACHE_RUNTIME_PROFILE,
     STANDARD_RUNTIME_PROFILE,
@@ -76,7 +76,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--exp-config",
         type=str,
-        default="navigation_system/config/experiments/r2r_eval.yaml",
+        default="navigation_system/config/experiments/vlnce/r2r_eval.yaml",
         help="SpaceVLN experiment config",
     )
     parser.add_argument(
@@ -181,14 +181,14 @@ def main() -> int:
 
     controller = None
     try:
-        controller = VLMNavigationController(
+        controller = NavigationAgentController(
             config,
             config_path=args.vlm_api_config,
             model_stack_builder=runtime_profile.model_stack_builder,
             envs=env,
         )
         controller.reset_episode(episode_id=args.episode_id)
-        result = controller.run_vlm_navigation(
+        result = controller.run_navigation(
             max_subtask_steps=int(args.max_subtask_steps or 5),
         )
         print(

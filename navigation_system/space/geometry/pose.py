@@ -1,6 +1,6 @@
 import numpy as np
 from typing import List, Tuple
-from collections import Sequence
+from collections.abc import Sequence
 
 
 def get_agent_position(agent_pose: Sequence, resolution: float) -> Tuple[np.ndarray, float]:

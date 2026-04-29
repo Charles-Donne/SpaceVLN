@@ -1,6 +1,6 @@
 import cv2
 import numpy as np
-from collections import Sequence
+from collections.abc import Sequence
 from navigation_system.config.core.constants import legend_color_palette
 
 

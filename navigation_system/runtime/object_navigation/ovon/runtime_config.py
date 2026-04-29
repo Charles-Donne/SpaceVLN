@@ -1,4 +1,4 @@
-"""Build a lightweight SpaceVLN-style runtime config for OVON object navigation."""
+"""Build a lightweight Navigation Agent runtime config for OVON object navigation."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ from navigation_system.config.core.params.thresholds import (
     LOW_LEVEL_STAGNATION_CAP_M,
     LOW_LEVEL_STAGNATION_RATIO,
 )
-from navigation_system.runtime.object_navigation.thresholds import (
+from navigation_system.runtime.object_navigation.ovon.thresholds import (
     OVON_AUTOCOMPLETE_SOLID_M,
     OVON_DEFAULT_BOX_THRESHOLD,
     OVON_DEFAULT_TEXT_THRESHOLD,
@@ -92,7 +92,7 @@ def build_objectnav_runtime_config(
     save_step_images: bool = True,
     save_gif: bool = False,
 ) -> ConfigNode:
-    nav_ws_root = Path(__file__).resolve().parents[4]
+    nav_ws_root = Path(__file__).resolve().parents[5]
     grounded_sam_dir = nav_ws_root / "data" / "model" / "grounded_sam"
 
     config = _node(

@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence
 
-from navigation_system.runtime.object_navigation.thresholds import OVON_SUCCESS_DISTANCE_M
+from navigation_system.runtime.object_navigation.ovon.thresholds import OVON_SUCCESS_DISTANCE_M
 
 
 def _format_ovon_metric(value: float, digits: int = 4) -> str:

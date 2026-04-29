@@ -4,18 +4,21 @@ from __future__ import annotations
 
 
 def resolve_habitat_action(name: str):
-    from habitat.sims.habitat_simulator.actions import HabitatSimActions
-
     legacy_name = str(name or "").strip().upper()
     modern_name = legacy_name.lower()
 
     try:
-        return getattr(HabitatSimActions, legacy_name)
-    except Exception:
-        pass
+        from habitat.sims.habitat_simulator.actions import HabitatSimActions
 
-    try:
-        return getattr(HabitatSimActions, modern_name)
+        try:
+            return getattr(HabitatSimActions, legacy_name)
+        except Exception:
+            return getattr(HabitatSimActions, modern_name)
     except Exception:
-        return modern_name
-
+        fallback_ids = {
+            "STOP": 0,
+            "MOVE_FORWARD": 1,
+            "TURN_LEFT": 2,
+            "TURN_RIGHT": 3,
+        }
+        return fallback_ids.get(legacy_name, modern_name)
