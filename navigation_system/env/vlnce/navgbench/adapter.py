@@ -53,6 +53,26 @@ def get_navgbench_episode_id(episode: Any) -> str:
     return str(getattr(episode, "episode_id", "") or "").strip()
 
 
+def format_navgbench_complex_instruction(
+    *,
+    simple_instruction: str,
+    grounded_instruction: str,
+) -> str:
+    """Combine NavGBench's short goal and grounded route for complex prompts."""
+    simple_text = str(simple_instruction or "").strip()
+    grounded_text = str(grounded_instruction or "").strip()
+    if not simple_text:
+        return grounded_text
+    if not grounded_text:
+        return simple_text
+    return (
+        "Task Goal: "
+        f"{simple_text}\n"
+        "Task Instruction: "
+        f"{grounded_text}"
+    )
+
+
 def _load_episode_json_payload(episode: Any) -> Dict[str, Any]:
     ref_json = str(getattr(episode, "ref_json", "") or "").strip()
     if not ref_json:
@@ -96,10 +116,19 @@ class NavGBenchEpisodeFacade:
         elif mode == "moving":
             instruction_text = moving_instruction or grounded_instruction or raw_instruction
         elif mode == "grounded":
-            instruction_text = grounded_instruction or raw_instruction or moving_instruction
+            instruction_text = (
+                format_navgbench_complex_instruction(
+                    simple_instruction=raw_instruction,
+                    grounded_instruction=grounded_instruction,
+                )
+                or moving_instruction
+            )
         else:
             instruction_text = (
-                grounded_instruction
+                format_navgbench_complex_instruction(
+                    simple_instruction=raw_instruction,
+                    grounded_instruction=grounded_instruction,
+                )
                 if self.use_grounded_instruction and grounded_instruction
                 else raw_instruction or grounded_instruction or moving_instruction
             )

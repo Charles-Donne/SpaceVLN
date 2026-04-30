@@ -398,6 +398,10 @@ class SaveManager:
             )
         if 'oracle_spl' in result:
             log_result['oracle_spl'] = result.get('oracle_spl', 0.0)
+        if 'reason' in result:
+            log_result['reason'] = str(result.get('reason', '') or '')
+        if 'error' in result:
+            log_result['error'] = str(result.get('error', '') or '')
 
         existing_best_log = self._load_json_if_exists(log_path)
         compare_baseline = existing_best_log if self.is_complete_result(existing_best_log) else None

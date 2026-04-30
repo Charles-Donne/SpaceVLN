@@ -4469,7 +4469,11 @@ class NavigationAgentController(BaseNavigationController):
             max_steps=max_steps,
             final_success=final_success,
         )
-        final_result = self._save_navigation_result(total_steps, normalized_env_metrics)
+        final_result = self._save_navigation_result(
+            total_steps,
+            normalized_env_metrics,
+            failure_reason=final_failure_reason,
+        )
         episode_timing_summary = self._build_episode_timing_summary()
 
         return {
@@ -4630,7 +4634,13 @@ class NavigationAgentController(BaseNavigationController):
             return "failed_before_first_step"
         return "navigation_failed"
 
-    def _save_navigation_result(self, total_steps: int, env_metrics: Dict = None) -> str:
+    def _save_navigation_result(
+        self,
+        total_steps: int,
+        env_metrics: Dict = None,
+        *,
+        failure_reason: str = "",
+    ) -> str:
         """
         Save the final navigation result under `log/`.
 
@@ -4688,6 +4698,9 @@ class NavigationAgentController(BaseNavigationController):
             'action_api_summary': action_api_summary,
             'timestamp': datetime.now().isoformat()
         }
+        reason_text = str(failure_reason or "").strip()
+        if reason_text:
+            result['reason'] = reason_text
 
         result['sr'] = result['success']
         result['osr'] = result['oracle_success']

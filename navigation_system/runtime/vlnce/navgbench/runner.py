@@ -685,6 +685,31 @@ def _navgbench_console_prefix(
     return f"{order} Sample {int(sample_index)} | NavGBench {stable_id}"
 
 
+def _format_navgbench_finish_line(
+    *,
+    prefix: str,
+    success: bool,
+    steps: int,
+    metrics: Dict[str, Any],
+    reason: str = "",
+    error: str = "",
+) -> str:
+    parts = [
+        f"{prefix} | {'OK' if success else 'FAIL'}",
+        f"steps={int(steps or 0)}",
+        f"SR={int(_as_int(metrics.get('success', 0), 0))}",
+        f"DTG={_as_float(metrics.get('distance_to_goal', -1.0), -1.0):.3f}m",
+        f"SPL={_as_float(metrics.get('spl', 0.0), 0.0):.4f}",
+    ]
+    reason_text = str(reason or "").strip()
+    error_text = str(error or "").strip()
+    if reason_text and not success:
+        parts.append(f"reason={reason_text}")
+    if error_text:
+        parts.append(f"error={error_text}")
+    return " | ".join(parts)
+
+
 def _episode_has_existing_sr1(results_dir: str, storage_episode_id: int) -> bool:
     existing = load_json_if_exists(get_episode_log_path(results_dir, int(storage_episode_id)))
     return SaveManager.result_has_complete_sr1(existing)
@@ -848,12 +873,17 @@ def _run_one_episode(
             navgbench_log = _save_navgbench_metrics(space_config.PATHS.RESULTS_DIR, episode, metrics)
         success = int(metrics.get("success", 0) or 0) == 1
         steps = int(result.get("total_steps", result.get("steps", 0)) or 0)
+        reason = str(result.get("reason", "") or "").strip()
+        error = str(result.get("error", "") or "").strip()
         print(
-            f"{prefix} | {'OK' if success else 'FAIL'} "
-            f"| steps={steps} "
-            f"SR={int(metrics.get('success', 0) or 0)} "
-            f"DTG={float(metrics.get('distance_to_goal', -1.0) or -1.0):.3f}m "
-            f"SPL={float(metrics.get('spl', 0.0) or 0.0):.4f}",
+            _format_navgbench_finish_line(
+                prefix=prefix,
+                success=success,
+                steps=steps,
+                metrics=metrics,
+                reason=reason,
+                error=error,
+            ),
             flush=True,
         )
         return {
@@ -862,6 +892,11 @@ def _run_one_episode(
             "navgbench_id": stable_id,
             "success": success,
             "error": "",
+            "reason": reason,
+            "steps": steps,
+            "distance_to_goal": _as_float(metrics.get("distance_to_goal", -1.0), -1.0),
+            "spl": _as_float(metrics.get("spl", 0.0), 0.0),
+            "oracle_success": _as_int(metrics.get("oracle_success", 0), 0),
             "result_file": result.get("result_file", ""),
             "navgbench_log": navgbench_log,
         }
@@ -878,6 +913,7 @@ def _run_one_episode(
             "sample_index": storage_episode_id,
             "navgbench_id": stable_id,
             "success": False,
+            "reason": "runtime_exception",
             "error": error_msg,
             "episode_log_path": episode_log_path if save_stdout_log else "",
         }
@@ -1017,6 +1053,7 @@ def _run_parallel_episodes(
                                 "sample_index": pending.get("episode_id", "?"),
                                 "navgbench_id": pending.get("episode_key", "?"),
                                 "success": False,
+                                "reason": "parallel_worker_pool_broken",
                                 "error": f"parallel worker pool broken: {pool_broken_error}",
                             }
                         )
@@ -1033,6 +1070,7 @@ def _run_parallel_episodes(
                         "sample_index": episode_id,
                         "navgbench_id": stable_id,
                         "success": False,
+                        "reason": "parallel_worker_failed",
                         "error": f"parallel worker failed: {error_msg}",
                     }
                 if not pool_broken_error:
@@ -1051,6 +1089,7 @@ def _run_parallel_episodes(
                 "sample_index": getattr(episode, "episode_id", "?"),
                 "navgbench_id": get_navgbench_episode_id(episode),
                 "success": False,
+                "reason": "parallel_worker_pool_broken",
                 "error": f"parallel worker pool broken: {pool_broken_error}",
             }
             for episode in episodes
@@ -1263,6 +1302,18 @@ def run_navigation_from_args(args: argparse.Namespace) -> int:
             )
 
     failed = [item for item in results if item.get("error") or not item.get("success")]
+    if failed:
+        reason_counts: Dict[str, int] = {}
+        for item in failed:
+            reason = str(item.get("reason") or "").strip()
+            error = str(item.get("error") or "").strip()
+            key = reason or ("runtime_error" if error else "unknown")
+            reason_counts[key] = reason_counts.get(key, 0) + 1
+        reason_text = ", ".join(
+            f"{reason}={count}"
+            for reason, count in sorted(reason_counts.items(), key=lambda pair: (-pair[1], pair[0]))
+        )
+        print(f"\n⚠️ NavGBench failures by reason: {reason_text}", flush=True)
     if not args.no_report:
         _maybe_generate_report(space_config.PATHS.RESULTS_DIR)
 
