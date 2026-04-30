@@ -189,6 +189,41 @@ If the low-level stack does not estimate goal distance, use:
 - `goal_reached: false`
 - `distance_to_goal_m: null`
 
+## 3.5 Recommended Base-Control Pattern for ROS2 Robots
+
+If your robot already exposes the standard ROS2 base-control topic:
+
+- Topic: `/cmd_vel`
+- Type: `geometry_msgs/Twist`
+
+do not make `SpaceVLN` publish `/cmd_vel` directly as an open-loop pulse.
+
+Recommended split:
+
+1. `SpaceVLN` publishes one discrete action on `/spacevln/action_cmd`
+2. A ROS2 executor node subscribes to `/spacevln/action_cmd`
+3. That executor also subscribes to `/odom`
+4. The executor publishes `geometry_msgs/Twist` on `/cmd_vel`
+5. When the target distance or angle is reached, the executor publishes `/spacevln/action_status`
+
+This keeps the high-level planner discrete and lets the low-level control stay
+closed-loop and robot-specific.
+
+Reference implementation in this repository:
+
+- `real_robot/spacevln_real/cmd_vel_executor.py`
+- `real_robot/scripts/run_cmd_vel_executor.sh`
+
+Closed-loop behavior expected from the executor:
+
+- `MOVE_FORWARD`: keep publishing forward velocity until odometry shows the target distance was reached
+- `TURN_LEFT`: keep publishing positive angular velocity until odometry shows the target rotation was reached
+- `TURN_RIGHT`: keep publishing negative angular velocity until odometry shows the target rotation was reached
+- `STOP`: publish zero velocity immediately and return a terminal status
+
+Avoid a pure time-based implementation such as "publish 0.15 m/s for 1.7 seconds
+and assume it moved 0.25 m". That will drift too much on real hardware.
+
 ## 4. Optional Capture Trigger
 
 If the camera stack supports on-demand capture in addition to continuous streaming,
