@@ -35,10 +35,21 @@ class BaseAPIClient(ABC):
         self.last_call_error = ""
         self.last_response_text = ""
         self.last_parsed_response_payload = None
+        self.last_request_latency_s = 0.0
+        self.last_total_call_duration_s = 0.0
 
     def _set_last_call_outcome(self, status: str, error: str = "") -> None:
         self.last_call_status = str(status or "unknown").strip() or "unknown"
         self.last_call_error = str(error or "").strip()
+
+    def _set_last_call_timing(
+        self,
+        *,
+        request_latency_s: float = 0.0,
+        total_call_duration_s: float = 0.0,
+    ) -> None:
+        self.last_request_latency_s = max(0.0, self._safe_float(request_latency_s, 0.0))
+        self.last_total_call_duration_s = max(0.0, self._safe_float(total_call_duration_s, 0.0))
 
     def _set_last_response_artifacts(
         self,
@@ -177,6 +188,11 @@ class BaseAPIClient(ABC):
             "provider": str(getattr(self.config, "provider", "") or ""),
             "success": bool(success),
             "duration_s": round(max(0.0, self._safe_float(latency_s, 0.0)), 4),
+            "request_latency_s": round(max(0.0, self._safe_float(latency_s, 0.0)), 4),
+            "total_call_duration_s": round(
+                max(0.0, self._safe_float(getattr(self, "last_total_call_duration_s", 0.0), 0.0)),
+                4,
+            ),
             "attempts": max(1, self._safe_int(attempt_count, 1)),
             "failed_attempts": max(0, self._safe_int(failed_attempt_count, 0)),
             "failed_retry_wait_time_s": round(
@@ -769,8 +785,10 @@ class BaseAPIClient(ABC):
             no_compress_indices: 不压缩的图片索引集合（如 {4} 表示第5张图不压缩）
         """
         t_start = time.time()
+        request_start = None
         response = None
         self._set_last_call_outcome("pending")
+        self._set_last_call_timing(request_latency_s=0.0, total_call_duration_s=0.0)
         self._set_last_response_artifacts(response_text="", parsed_payload=None)
         try:
             # 确保 prompt 是 UTF-8 编码的字符串
@@ -827,6 +845,7 @@ class BaseAPIClient(ABC):
                     "allow_fallbacks": True       # 阿里云不可用时允许回退
                 }
 
+            request_start = time.time()
             response = self._post_json_with_base_url_fallback(
                 endpoint_suffix=endpoint_suffix,
                 headers=headers,
@@ -852,7 +871,11 @@ class BaseAPIClient(ABC):
                 )
             
             t_response = time.time()
-            latency = t_response - t_start
+            latency = t_response - float(request_start or t_start)
+            self._set_last_call_timing(
+                request_latency_s=latency,
+                total_call_duration_s=t_response - t_start,
+            )
             
             if response.status_code != 200:
                 print(f"✗ API error: {response.status_code} ({latency:.1f}s)")
@@ -972,7 +995,11 @@ class BaseAPIClient(ABC):
             return parsed
             
         except requests.exceptions.Timeout:
-            elapsed = time.time() - t_start
+            elapsed = time.time() - float(request_start or t_start)
+            self._set_last_call_timing(
+                request_latency_s=elapsed,
+                total_call_duration_s=time.time() - t_start,
+            )
             print(f"✗ API timeout after {elapsed:.1f}s (limit={self.config.timeout}s)")
             self._set_last_response_artifacts(response_text="", parsed_payload=None)
             self._save_vlm_info_artifact(
@@ -988,7 +1015,11 @@ class BaseAPIClient(ABC):
             self._set_last_call_outcome("timeout")
             return None
         except json.JSONDecodeError as e:
-            elapsed = time.time() - t_start
+            elapsed = time.time() - float(request_start or t_start)
+            self._set_last_call_timing(
+                request_latency_s=elapsed,
+                total_call_duration_s=time.time() - t_start,
+            )
             print(f"✗ JSON decode error ({elapsed:.1f}s): {e}")
             if response is not None:
                 print(f"✗ Response text: {response.text[:300]}")
@@ -1009,7 +1040,11 @@ class BaseAPIClient(ABC):
             self._set_last_call_outcome("json_decode_error", str(e))
             return None
         except Exception as e:
-            elapsed = time.time() - t_start
+            elapsed = time.time() - float(request_start or t_start)
+            self._set_last_call_timing(
+                request_latency_s=elapsed,
+                total_call_duration_s=time.time() - t_start,
+            )
             print(f"✗ API call failed ({elapsed:.1f}s): {e}")
             self._set_last_response_artifacts(
                 response_text=response.text if response is not None else "",

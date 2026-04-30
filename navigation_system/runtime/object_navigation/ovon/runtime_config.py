@@ -89,8 +89,10 @@ def build_objectnav_runtime_config(
     torch_gpu_id: int = 0,
     simulator_gpu_id: int = 0,
     save_request_artifacts: bool = True,
-    save_step_images: bool = True,
+    save_step_images: bool = False,
     save_gif: bool = False,
+    gif_fps: int = 2,
+    gif_max_width: int = 720,
 ) -> ConfigNode:
     nav_ws_root = Path(__file__).resolve().parents[5]
     grounded_sam_dir = nav_ws_root / "data" / "model" / "grounded_sam"
@@ -172,10 +174,12 @@ def build_objectnav_runtime_config(
                     "MAPS": {
                         "SAVE_STEP_ARTIFACTS": False,
                     },
-                    "REPLAY": {
+                "REPLAY": {
                     "SAVE_STEP_IMAGES": bool(save_step_images),
                     "SAVE_GIF": bool(save_gif),
-                    "CLEANUP_STEP_IMAGES_AFTER_GIF": bool(save_gif and not save_step_images),
+                    "CLEANUP_STEP_IMAGES_AFTER_GIF": False,
+                    "GIF_FPS": int(gif_fps),
+                    "GIF_MAX_WIDTH": int(gif_max_width),
                 },
                 "LOGS": {
                     "SAVE_EPISODE_STDOUT": False,

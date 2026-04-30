@@ -6,6 +6,7 @@ This module saves RGB + top-down composites and optionally assembles GIFs.
 import os
 import cv2
 import numpy as np
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import List, Dict, Optional
 try:
     from habitat.utils.visualizations import maps
@@ -22,6 +23,23 @@ except ImportError:
     print("⚠️  imageio not installed, GIF generation disabled")
 
 
+_GIF_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="spacevln-gif")
+
+
+def _encode_gif(output_path: str, frames_rgb: List[np.ndarray], fps: int) -> Optional[str]:
+    """Encode a replay GIF from already-copied RGB frames."""
+    if not HAS_IMAGEIO or not output_path or not frames_rgb:
+        return None
+    output_dir = os.path.dirname(output_path)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+    duration = 1.0 / max(1, int(fps or 1))
+    imageio.mimsave(output_path, frames_rgb, duration=duration, loop=0)
+    if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+        return output_path
+    return None
+
+
 class NavigationVisualizer:
     """
     Save per-step navigation visualizations and optional episode GIFs.
@@ -33,6 +51,7 @@ class NavigationVisualizer:
         output_dir: str,
         save_step_images: bool = False,
         keep_frames_for_gif: bool = True,
+        gif_max_width: int = 720,
     ):
         """Initialize the visualization helper."""
         self.output_dir = output_dir
@@ -41,6 +60,7 @@ class NavigationVisualizer:
         self.last_top_down_map = None
         self.save_step_images = bool(save_step_images)
         self.keep_frames_for_gif = bool(keep_frames_for_gif)
+        self.gif_max_width = max(0, int(gif_max_width or 0))
         if self.save_step_images or self.keep_frames_for_gif:
             os.makedirs(output_dir, exist_ok=True)
     
@@ -61,6 +81,21 @@ class NavigationVisualizer:
             safe_text = ""
         safe_text = safe_text.strip()
         return safe_text if safe_text else fallback
+
+    def _prepare_gif_frame(self, frame: np.ndarray) -> np.ndarray:
+        """Downscale replay frames before buffering to keep GIF encoding cheap."""
+        if frame is None or frame.size == 0:
+            return frame
+        max_width = int(self.gif_max_width or 0)
+        if max_width <= 0 or frame.shape[1] <= max_width:
+            return frame.copy()
+        scale = float(max_width) / float(frame.shape[1])
+        target_height = max(1, int(round(frame.shape[0] * scale)))
+        return cv2.resize(
+            frame,
+            (max_width, target_height),
+            interpolation=cv2.INTER_AREA,
+        )
     
     def save_step_visualization(self,
                                 observations: Dict,
@@ -72,6 +107,8 @@ class NavigationVisualizer:
                                 action: str = "",
                                 subtask_id: str = None) -> Optional[str]:
         """Save one RGB + top-down composite frame with text overlays."""
+        if not (self.save_step_images or self.keep_frames_for_gif):
+            return None
         if not self.visualization_dir or "rgb" not in observations:
             return None
         
@@ -100,7 +137,7 @@ class NavigationVisualizer:
             cv2.imwrite(filepath, cv2.cvtColor(combined, cv2.COLOR_RGB2BGR))
         
         if self.keep_frames_for_gif:
-            self.video_frames.append(combined)
+            self.video_frames.append(self._prepare_gif_frame(combined))
         
         return filepath
 
@@ -161,6 +198,7 @@ class NavigationVisualizer:
         if output_path is None:
             output_path = os.path.join(self.visualization_dir, "topdown_trajectory_final.png")
         try:
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
             image = self.last_top_down_map
             if image.dtype != np.uint8:
                 image = image.astype(np.uint8)
@@ -169,6 +207,25 @@ class NavigationVisualizer:
         except Exception as exc:
             print(f"⚠️  Failed to save final top-down map: {exc}")
             return None
+
+    def save_final_top_down_map_from_observation(
+        self,
+        observations: Optional[Dict],
+        info: Optional[Dict],
+        step: int,
+        output_path: str = None,
+    ) -> Optional[str]:
+        """Save the final top-down map even when replay frame buffering is disabled."""
+        if self.last_top_down_map is None and observations and "rgb" in observations:
+            try:
+                rgb = observations["rgb"]
+                top_down_map = self._extract_top_down_map(info or {}, rgb, step)
+                self.last_top_down_map = (
+                    top_down_map.copy() if top_down_map is not None else None
+                )
+            except Exception as exc:
+                print(f"⚠️  Failed to extract final top-down map: {exc}")
+        return self.save_final_top_down_map(output_path=output_path)
     
     def _add_text_overlay(self,
                           image: np.ndarray,
@@ -238,6 +295,19 @@ class NavigationVisualizer:
         
         return lines
     
+    def _copy_gif_frames(self) -> List[np.ndarray]:
+        frames_rgb = []
+        for frame in self.video_frames:
+            if frame.dtype != np.uint8:
+                frame = frame.astype(np.uint8)
+            frames_rgb.append(frame.copy())
+        return frames_rgb
+
+    def _resolve_gif_output_path(self, output_path: str = None) -> Optional[str]:
+        if output_path is None and self.visualization_dir:
+            output_path = os.path.join(self.visualization_dir, "navigation.gif")
+        return output_path or None
+
     def save_gif(self, output_path: str = None, fps: int = 2) -> Optional[str]:
         """
         Save all buffered frames as a GIF animation.
@@ -256,27 +326,12 @@ class NavigationVisualizer:
             print("⚠️  imageio not installed, cannot create GIF")
             return None
         
-        if output_path is None and self.visualization_dir:
-            output_path = os.path.join(self.visualization_dir, "navigation.gif")
-        
+        output_path = self._resolve_gif_output_path(output_path)
         if not output_path:
             return None
         
         try:
-            # Convert frames to uint8
-            frames_rgb = []
-            for frame in self.video_frames:
-                if frame.dtype != np.uint8:
-                    frame = frame.astype(np.uint8)
-                frames_rgb.append(frame)
-            
-            # Compute per-frame duration
-            duration = 1.0 / fps
-            
-            # Save the GIF
-            imageio.mimsave(output_path, frames_rgb, duration=duration, loop=0)
-            
-            if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+            if _encode_gif(output_path, self._copy_gif_frames(), fps):
                 return output_path
             else:
                 print("✗ GIF file creation failed")
@@ -285,6 +340,29 @@ class NavigationVisualizer:
         except Exception as e:
             print(f"✗ Error saving GIF: {e}")
             return None
+
+    def save_gif_async(self, output_path: str = None, fps: int = 2) -> Optional[Future]:
+        """Encode navigation.gif in a background thread from copied frames."""
+        if not self.keep_frames_for_gif or not self.video_frames:
+            return None
+        if not HAS_IMAGEIO:
+            print("⚠️  imageio not installed, cannot create GIF")
+            return None
+        output_path = self._resolve_gif_output_path(output_path)
+        if not output_path:
+            return None
+        frames_rgb = self._copy_gif_frames()
+        future = _GIF_EXECUTOR.submit(_encode_gif, output_path, frames_rgb, int(fps or 2))
+
+        def _report_result(done_future: Future) -> None:
+            try:
+                if done_future.result() is None:
+                    print("✗ GIF file creation failed")
+            except Exception as exc:
+                print(f"✗ Error saving GIF: {exc}")
+
+        future.add_done_callback(_report_result)
+        return future
 
     def cleanup_step_images(self) -> int:
         """Delete saved step PNG frames after GIF generation to save disk space."""

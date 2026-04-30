@@ -2217,6 +2217,7 @@ class NavigationAgentController(BaseNavigationController):
             visualization_dir,
             save_step_images=self.runtime_options.save_navigation_step_images,
             keep_frames_for_gif=self.runtime_options.save_navigation_gif,
+            gif_max_width=self.runtime_options.navigation_gif_max_width,
         )
         self.nav_visualizer.setup_maps_dir(self.episode_dir)
         
@@ -3698,11 +3699,17 @@ class NavigationAgentController(BaseNavigationController):
                 allowed_action_names=allowed_action_names,
                 save_dir=action_context["action_save_dir"],
             )
+            action_total_duration_s = time.perf_counter() - action_api_start_time
+            action_request_duration_s = float(
+                getattr(self.action_executor, "last_request_latency_s", 0.0) or 0.0
+            )
+            if action_request_duration_s <= 0.0:
+                action_request_duration_s = action_total_duration_s
             self.timing_tracker.record_action_call(
                 step=int(getattr(self, "current_step", 0) or 0),
                 subtask_count=int(getattr(self, "subtask_count", 0) or 0),
                 subtask_attempt=int(getattr(self, "subtask_attempt", 0) or 0),
-                duration_s=time.perf_counter() - action_api_start_time,
+                duration_s=action_request_duration_s,
                 success=bool(action_id is not None),
                 action_name=action_name,
             )
@@ -4413,6 +4420,7 @@ class NavigationAgentController(BaseNavigationController):
             success=navigation_complete,
             stop_action=True
         )
+        self.timing_tracker.mark_episode_finished()
 
         if self.final_stop_was_executed and self.nav_visualizer and self.latest_obs is not None:
             subtask_text = None
@@ -4438,9 +4446,20 @@ class NavigationAgentController(BaseNavigationController):
         gif_path = None
         topdown_path = None
         if self.nav_visualizer:
-            topdown_path = self.nav_visualizer.save_final_top_down_map()
+            topdown_path = self.nav_visualizer.save_final_top_down_map_from_observation(
+                self.latest_obs,
+                self._build_nav_visualizer_info(self.latest_info),
+                self.current_step,
+            )
         if self.nav_visualizer and self.runtime_options.save_navigation_gif:
-            gif_path = self.nav_visualizer.save_gif(fps=2)
+            gif_future = self.nav_visualizer.save_gif_async(
+                fps=self.runtime_options.navigation_gif_fps,
+            )
+            gif_path = (
+                os.path.join(self.nav_visualizer.visualization_dir, "navigation.gif")
+                if gif_future is not None and self.nav_visualizer.visualization_dir
+                else None
+            )
             if (
                 gif_path
                 and self.runtime_options.cleanup_navigation_step_images_after_gif

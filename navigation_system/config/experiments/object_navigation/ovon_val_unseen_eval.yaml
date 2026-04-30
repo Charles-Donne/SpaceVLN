@@ -6,5 +6,5 @@ OVON:
   gpu_id: 0
   max_steps: 500
   max_subtask_steps: 4
-  save_step_images: true
-  save_gif: false
+save_step_images: false
+save_gif: false

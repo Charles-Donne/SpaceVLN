@@ -32,6 +32,17 @@ Path policy:
 Console output:
     The launcher prints only key progress and failures by default.
     Detailed context-cache statistics are saved under reports/cache instead of being spammed to stdout.
+    --no-report skips post-run report generation when you only need raw episode logs.
+
+Output speed switches:
+    --episode-workdir DIR    Write current episode artifacts to fast local cache first,
+                             then sync them back to the final results directory
+                             in a background transfer thread. If final results
+                             resolve under /media, this is enabled automatically
+                             with nav_ws/.spacevln_episode_cache.
+    --no-gif                 Skip final navigation.gif generation for metric-only runs
+    --no-vlm-artifacts       Skip prompt/image/debug artifact files for maximum speed
+    --save-step-images       Save per-step replay PNGs only when you need detailed visual debugging
 
 Retries:
     --initial-failure-max-attempts N
@@ -141,6 +152,22 @@ while [[ $# -gt 0 ]]; do
             ;;
         --initial-failure-max-attempts=*)
             PASSTHROUGH_ARGS+=(--initial-failure-max-attempts "${1#*=}")
+            shift
+            ;;
+        --episode-workdir)
+            if [[ $# -lt 2 ]]; then
+                echo "❌ --episode-workdir requires a directory" >&2
+                exit 1
+            fi
+            PASSTHROUGH_ARGS+=(--episode-workdir "$2")
+            shift 2
+            ;;
+        --episode-workdir=*)
+            PASSTHROUGH_ARGS+=(--episode-workdir "${1#*=}")
+            shift
+            ;;
+        --no-gif|--no-save-gif|--save-gif|--no-vlm-artifacts|--save-vlm-artifacts|--save-step-images|--no-save-step-images|--no-report)
+            PASSTHROUGH_ARGS+=("$1")
             shift
             ;;
         *)

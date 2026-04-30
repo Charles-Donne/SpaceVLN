@@ -135,6 +135,10 @@ def apply_runtime_derived_fields(config: Config) -> Config:
     map_cfg.CLEANUP_NAVIGATION_STEP_IMAGES_AFTER_GIF = bool(
         output.REPLAY.CLEANUP_STEP_IMAGES_AFTER_GIF
     )
+    map_cfg.NAVIGATION_GIF_FPS = int(getattr(output.REPLAY, "GIF_FPS", 2) or 2)
+    map_cfg.NAVIGATION_GIF_MAX_WIDTH = int(
+        getattr(output.REPLAY, "GIF_MAX_WIDTH", 720) or 0
+    )
     map_cfg.SAVE_EPISODE_STDOUT_LOG = bool(output.LOGS.SAVE_EPISODE_STDOUT)
     map_cfg.SAVE_WAYPOINT_MEMORY = bool(output.STATE.SAVE_WAYPOINT_MEMORY)
 

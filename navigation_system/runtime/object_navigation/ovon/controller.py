@@ -124,6 +124,7 @@ class OVONObjectNavigationController(NavigationAgentController):
             visualization_dir,
             save_step_images=self.runtime_options.save_navigation_step_images,
             keep_frames_for_gif=self.runtime_options.save_navigation_gif,
+            gif_max_width=self.runtime_options.navigation_gif_max_width,
         )
         self.nav_visualizer.setup_maps_dir(self.episode_dir)
 

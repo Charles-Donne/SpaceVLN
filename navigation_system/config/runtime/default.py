@@ -128,9 +128,11 @@ def _build_output_defaults() -> CN:
     cfg.MAPS.SAVE_STEP_ARTIFACTS = False
 
     cfg.REPLAY = CN()
-    cfg.REPLAY.SAVE_STEP_IMAGES = True
+    cfg.REPLAY.SAVE_STEP_IMAGES = False
     cfg.REPLAY.SAVE_GIF = True
-    cfg.REPLAY.CLEANUP_STEP_IMAGES_AFTER_GIF = True
+    cfg.REPLAY.CLEANUP_STEP_IMAGES_AFTER_GIF = False
+    cfg.REPLAY.GIF_FPS = 2
+    cfg.REPLAY.GIF_MAX_WIDTH = 720
 
     cfg.LOGS = CN()
     cfg.LOGS.SAVE_EPISODE_STDOUT = False

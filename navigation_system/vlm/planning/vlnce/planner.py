@@ -260,6 +260,11 @@ class LLMPlanner(BaseAPIClient):
                 no_compress_indices=no_compress,
             )
             attempt_duration_s = time.perf_counter() - attempt_start_time
+            request_duration_s = float(
+                getattr(self, "last_request_latency_s", 0.0) or 0.0
+            )
+            if request_duration_s <= 0.0:
+                request_duration_s = attempt_duration_s
 
             normalized_response = self._normalize_response_payload(response)
             is_valid = bool(normalized_response and self.validate_response(normalized_response, mode=mode))
@@ -292,7 +297,8 @@ class LLMPlanner(BaseAPIClient):
             self.last_call_timing_info["records"].append({
                 "attempt": retry + 1,
                 "success": attempt_success,
-                "duration_s": max(0.0, float(attempt_duration_s)),
+                "duration_s": max(0.0, float(request_duration_s)),
+                "total_call_duration_s": max(0.0, float(attempt_duration_s)),
                 "failure_kind": failure_kind,
             })
             if attempt_success:

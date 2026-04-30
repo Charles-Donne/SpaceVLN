@@ -376,8 +376,10 @@ class QwenContextCacheMixin:
             raise RuntimeError("Explicit context cache is disabled in qwen_context_cache settings")
 
         t_start = time.time()
+        request_start = None
         response = None
         self._set_last_call_outcome("pending")
+        self._set_last_call_timing(request_latency_s=0.0, total_call_duration_s=0.0)
         self._set_last_response_artifacts(response_text="", parsed_payload=None)
         try:
             if prompt_bundle is not None:
@@ -435,6 +437,7 @@ class QwenContextCacheMixin:
                 payload["response_format"] = response_format
             payload = self._apply_reasoning_disabled_defaults(payload)
             headers = self.config.get_headers()
+            request_start = time.time()
             response = requests.post(
                 self._build_qwen_chat_completion_url(),
                 headers=headers,
@@ -457,7 +460,12 @@ class QwenContextCacheMixin:
                     timeout=self.config.timeout,
                 )
 
-            latency_s = time.time() - t_start
+            response_time = time.time()
+            latency_s = response_time - float(request_start or t_start)
+            self._set_last_call_timing(
+                request_latency_s=latency_s,
+                total_call_duration_s=response_time - t_start,
+            )
             if response.status_code != 200:
                 print(f"✗ API error: {response.status_code} ({latency_s:.1f}s)")
                 try:
@@ -585,7 +593,11 @@ class QwenContextCacheMixin:
             return parsed
 
         except requests.exceptions.Timeout:
-            elapsed = time.time() - t_start
+            elapsed = time.time() - float(request_start or t_start)
+            self._set_last_call_timing(
+                request_latency_s=elapsed,
+                total_call_duration_s=time.time() - t_start,
+            )
             print(f"✗ API timeout after {elapsed:.1f}s (limit={self.config.timeout}s)")
             self._save_vlm_info_artifact(
                 save_dir,
@@ -605,7 +617,11 @@ class QwenContextCacheMixin:
             self._set_last_response_artifacts(response_text="", parsed_payload=None)
             return None
         except json.JSONDecodeError as exc:
-            elapsed = time.time() - t_start
+            elapsed = time.time() - float(request_start or t_start)
+            self._set_last_call_timing(
+                request_latency_s=elapsed,
+                total_call_duration_s=time.time() - t_start,
+            )
             print(f"✗ JSON decode error ({elapsed:.1f}s): {exc}")
             self._save_vlm_info_artifact(
                 save_dir,
@@ -628,7 +644,11 @@ class QwenContextCacheMixin:
             )
             return None
         except Exception as exc:
-            elapsed = time.time() - t_start
+            elapsed = time.time() - float(request_start or t_start)
+            self._set_last_call_timing(
+                request_latency_s=elapsed,
+                total_call_duration_s=time.time() - t_start,
+            )
             print(f"✗ Explicit-cache API call failed ({elapsed:.1f}s): {exc}")
             self._save_vlm_info_artifact(
                 save_dir,

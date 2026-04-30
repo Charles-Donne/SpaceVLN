@@ -1,10 +1,15 @@
 """Runtime execution helpers: config loading, controller creation, and episode jobs."""
 
 import argparse
+import atexit
+import copy
 import concurrent.futures
+import hashlib
 import multiprocessing
 import os
+import shutil
 import signal
+import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 from navigation_system.config import ConfigHelper, get_config
@@ -20,7 +25,11 @@ from navigation_system.runtime.episode_io import (
     redirect_process_output_to_null,
     save_episode_stdout_log_enabled,
 )
-from navigation_system.runtime.storage.artifacts import get_episode_log_path
+from navigation_system.runtime.storage.artifacts import (
+    SaveManager,
+    get_episode_detail_dir,
+    get_episode_log_path,
+)
 from navigation_system.runtime.vlnce.profiles import (
     NavigationRuntimeProfile,
     STANDARD_RUNTIME_PROFILE,
@@ -46,6 +55,10 @@ UNRECORDED_INITIAL_FAILURE_REASONS = {
 
 DEFAULT_INITIAL_FAILURE_MAX_ATTEMPTS = 3
 
+_EPISODE_TRANSFER_EXECUTOR: Optional[concurrent.futures.ThreadPoolExecutor] = None
+_EPISODE_TRANSFER_FUTURES: List[concurrent.futures.Future] = []
+_EPISODE_TRANSFER_LOCK = threading.Lock()
+
 
 def _positive_int(value: Any, default: int) -> int:
     try:
@@ -53,6 +66,13 @@ def _positive_int(value: Any, default: int) -> int:
     except (TypeError, ValueError):
         return int(default)
     return max(1, parsed)
+
+
+def _env_flag_enabled(name: str, default: bool = False) -> bool:
+    raw_value = str(os.getenv(name, "") or "").strip().lower()
+    if not raw_value:
+        return bool(default)
+    return raw_value in {"1", "true", "yes", "on", "y"}
 
 
 def _resolve_initial_failure_max_attempts(args: argparse.Namespace) -> int:
@@ -198,6 +218,19 @@ def load_runtime_config(
     config.PATHS.RESULTS_DIR = resolved_results_dir
     if args.max_steps is not None:
         config.TASK_CONFIG.ENVIRONMENT.MAX_EPISODE_STEPS = args.max_steps
+    output_cfg = getattr(config, "OUTPUT", None)
+    if output_cfg is not None:
+        request_cfg = getattr(output_cfg, "REQUESTS", None)
+        replay_cfg = getattr(output_cfg, "REPLAY", None)
+        save_vlm_artifacts = getattr(args, "save_vlm_artifacts", None)
+        if request_cfg is not None and save_vlm_artifacts is not None:
+            request_cfg.SAVE_VLM_ARTIFACTS = bool(save_vlm_artifacts)
+        save_step_images = getattr(args, "save_step_images", None)
+        if replay_cfg is not None and save_step_images is not None:
+            replay_cfg.SAVE_STEP_IMAGES = bool(save_step_images)
+        save_gif = getattr(args, "save_gif", None)
+        if replay_cfg is not None and save_gif is not None:
+            replay_cfg.SAVE_GIF = bool(save_gif)
     apply_runtime_derived_fields(config)
     output_logs = getattr(getattr(config, "OUTPUT", None), "LOGS", None)
     if output_logs is not None:
@@ -245,6 +278,250 @@ def create_navigation_controller(
     return controller, unified_config
 
 
+def _workspace_episode_cache_dir() -> str:
+    workspace_root = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "../../../../..")
+    )
+    return os.path.join(workspace_root, ".spacevln_episode_cache")
+
+
+def _path_matches_any_prefix(path: str, prefixes: List[str]) -> bool:
+    if not path:
+        return False
+    normalized_path = os.path.realpath(os.path.abspath(path))
+    for prefix in prefixes:
+        clean_prefix = os.path.realpath(os.path.abspath(prefix))
+        try:
+            if os.path.commonpath([normalized_path, clean_prefix]) == clean_prefix:
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def _should_auto_stage_results(final_results_dir: str) -> bool:
+    if _env_flag_enabled("SPACEVLN_DISABLE_AUTO_EPISODE_WORKDIR", default=False):
+        return False
+    raw_prefixes = str(
+        os.getenv("SPACEVLN_SLOW_RESULT_PREFIXES", "/media:/mnt:/run/media") or ""
+    ).strip()
+    prefixes = [item for item in raw_prefixes.split(":") if item.strip()]
+    return _path_matches_any_prefix(final_results_dir, prefixes)
+
+
+def _resolve_episode_workdir(
+    args: argparse.Namespace,
+    *,
+    final_results_dir: str = "",
+) -> str:
+    raw_value = (
+        str(getattr(args, "episode_workdir", "") or "").strip()
+        or str(os.getenv("SPACEVLN_EPISODE_WORKDIR", "") or "").strip()
+    )
+    if raw_value:
+        return os.path.abspath(os.path.expanduser(raw_value))
+    if final_results_dir and _should_auto_stage_results(final_results_dir):
+        return _workspace_episode_cache_dir()
+    return ""
+
+
+def _build_staging_results_dir(
+    *,
+    episode_workdir: str,
+    final_results_dir: str,
+    episode_id: int,
+    worker_index: int = 0,
+) -> str:
+    final_leaf = os.path.basename(os.path.abspath(final_results_dir).rstrip(os.sep)) or "results"
+    final_digest = hashlib.sha1(
+        os.path.realpath(os.path.abspath(final_results_dir)).encode("utf-8")
+    ).hexdigest()[:10]
+    result_tag = f"{final_leaf}_{final_digest}"
+    worker_tag = f"worker_{int(worker_index or 0)}" if int(worker_index or 0) > 0 else f"pid_{os.getpid()}"
+    return os.path.join(
+        episode_workdir,
+        result_tag,
+        worker_tag,
+        f"episode_{int(episode_id)}",
+    )
+
+
+def _copytree_replace(src: str, dst: str) -> None:
+    if not os.path.exists(src):
+        return
+    parent = os.path.dirname(dst)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    if os.path.exists(dst):
+        shutil.rmtree(dst)
+    shutil.copytree(src, dst)
+
+
+def _copy_file(src: str, dst: str) -> None:
+    if not os.path.exists(src):
+        return
+    parent = os.path.dirname(dst)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    shutil.copy2(src, dst)
+
+
+def _get_episode_result_path_no_create(results_dir: str, episode_id: int) -> str:
+    return os.path.join(
+        get_episode_detail_dir(results_dir, episode_id),
+        "records",
+        "result.json",
+    )
+
+
+def _remove_empty_parent_dirs(path: str, *, max_levels: int = 2) -> None:
+    parent = os.path.dirname(os.path.abspath(path))
+    for _ in range(max(0, int(max_levels))):
+        if not parent:
+            break
+        try:
+            os.rmdir(parent)
+        except OSError:
+            break
+        parent = os.path.dirname(parent)
+
+
+def _sync_episode_staging_outputs(
+    *,
+    staging_results_dir: str,
+    final_results_dir: str,
+    episode_id: int,
+    save_stdout_log: bool,
+) -> None:
+    """Move one episode's fast local artifacts back to the final results directory."""
+    if not staging_results_dir or not final_results_dir:
+        return
+    staging_detail_dir = get_episode_detail_dir(staging_results_dir, episode_id)
+    final_detail_dir = get_episode_detail_dir(final_results_dir, episode_id)
+    _copytree_replace(staging_detail_dir, final_detail_dir)
+
+    staging_log_path = get_episode_log_path(staging_results_dir, episode_id)
+    final_log_path = get_episode_log_path(final_results_dir, episode_id)
+    staging_log = SaveManager._load_json_if_exists(staging_log_path)
+    if staging_log is not None:
+        final_log = SaveManager._load_json_if_exists(final_log_path)
+        manager = SaveManager(final_results_dir, episode_id)
+        final_baseline = final_log if manager.is_complete_result(final_log) else None
+        if manager.is_complete_result(staging_log) and (
+            final_baseline is None or manager._is_better_result(staging_log, final_baseline)
+        ):
+            _copy_file(staging_log_path, final_log_path)
+
+    if save_stdout_log:
+        _copy_file(
+            get_episode_records_log_path(staging_results_dir, episode_id),
+            get_episode_records_log_path(final_results_dir, episode_id),
+        )
+
+
+def _transfer_episode_staging_outputs(
+    *,
+    staging_results_dir: str,
+    final_results_dir: str,
+    episode_id: int,
+    save_stdout_log: bool,
+) -> None:
+    try:
+        _sync_episode_staging_outputs(
+            staging_results_dir=staging_results_dir,
+            final_results_dir=final_results_dir,
+            episode_id=episode_id,
+            save_stdout_log=save_stdout_log,
+        )
+    finally:
+        if staging_results_dir:
+            shutil.rmtree(staging_results_dir, ignore_errors=True)
+            _remove_empty_parent_dirs(staging_results_dir, max_levels=2)
+
+
+def _get_episode_transfer_executor() -> concurrent.futures.ThreadPoolExecutor:
+    global _EPISODE_TRANSFER_EXECUTOR
+    if _EPISODE_TRANSFER_EXECUTOR is None:
+        worker_count = min(
+            4,
+            _positive_int(os.getenv("SPACEVLN_EPISODE_TRANSFER_WORKERS", "2"), 2),
+        )
+        _EPISODE_TRANSFER_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+            max_workers=worker_count,
+            thread_name_prefix="spacevln-transfer",
+        )
+    return _EPISODE_TRANSFER_EXECUTOR
+
+
+def _forget_episode_transfer_future(future: concurrent.futures.Future) -> None:
+    with _EPISODE_TRANSFER_LOCK:
+        try:
+            _EPISODE_TRANSFER_FUTURES.remove(future)
+        except ValueError:
+            pass
+
+
+def _handle_episode_transfer_done(future: concurrent.futures.Future) -> None:
+    try:
+        future.result()
+    except BaseException as exc:
+        print(f"⚠️  Failed to sync staged episode artifacts: {_format_exception_message(exc)}")
+    finally:
+        _forget_episode_transfer_future(future)
+
+
+def _submit_episode_staging_sync(
+    *,
+    staging_results_dir: str,
+    final_results_dir: str,
+    episode_id: int,
+    save_stdout_log: bool,
+) -> None:
+    if not staging_results_dir:
+        return
+    if _env_flag_enabled("SPACEVLN_SYNC_EPISODE_TRANSFER", default=False):
+        _transfer_episode_staging_outputs(
+            staging_results_dir=staging_results_dir,
+            final_results_dir=final_results_dir,
+            episode_id=episode_id,
+            save_stdout_log=save_stdout_log,
+        )
+        return
+    future = _get_episode_transfer_executor().submit(
+        _transfer_episode_staging_outputs,
+        staging_results_dir=staging_results_dir,
+        final_results_dir=final_results_dir,
+        episode_id=episode_id,
+        save_stdout_log=save_stdout_log,
+    )
+    with _EPISODE_TRANSFER_LOCK:
+        _EPISODE_TRANSFER_FUTURES.append(future)
+    future.add_done_callback(_handle_episode_transfer_done)
+
+
+def _discard_episode_staging(staging_results_dir: str) -> None:
+    if staging_results_dir:
+        shutil.rmtree(staging_results_dir, ignore_errors=True)
+        _remove_empty_parent_dirs(staging_results_dir, max_levels=2)
+
+
+def wait_for_pending_episode_transfers() -> None:
+    while True:
+        with _EPISODE_TRANSFER_LOCK:
+            pending_futures = list(_EPISODE_TRANSFER_FUTURES)
+        if not pending_futures:
+            break
+        for future in concurrent.futures.as_completed(pending_futures):
+            try:
+                future.result()
+            except BaseException:
+                # The done callback already prints the concrete error once.
+                pass
+
+
+atexit.register(wait_for_pending_episode_transfers)
+
+
 def _should_retry_initial_failure(result: Dict[str, Any]) -> bool:
     if not isinstance(result, dict):
         return False
@@ -269,6 +546,33 @@ def _run_single_episode_attempt(
 ) -> Dict[str, Any]:
     controller = None
     episode_initialized = False
+    final_results_dir = os.path.abspath(str(base_config.PATHS.RESULTS_DIR or os.getcwd()))
+    final_episode_log_path = episode_log_path
+    final_result_path = result_path
+    staging_results_dir = ""
+    episode_workdir = _resolve_episode_workdir(args, final_results_dir=final_results_dir)
+    run_args = args
+    run_episode_log_path = episode_log_path
+    run_result_path = result_path
+    if episode_workdir:
+        staging_results_dir = _build_staging_results_dir(
+            episode_workdir=episode_workdir,
+            final_results_dir=final_results_dir,
+            episode_id=episode_id,
+            worker_index=int(getattr(args, "worker_index", 0) or 0),
+        )
+        if os.path.exists(staging_results_dir):
+            shutil.rmtree(staging_results_dir)
+        os.makedirs(staging_results_dir, exist_ok=True)
+        run_args = copy.copy(args)
+        run_args.results_dir = staging_results_dir
+        run_episode_log_path = (
+            get_episode_records_log_path(staging_results_dir, episode_id)
+            if save_stdout_log
+            else ""
+        )
+        run_result_path = get_episode_result_path(staging_results_dir, episode_id)
+
     console_result: Dict[str, Any] = {
         "episode_id": int(episode_id),
         "success": False,
@@ -281,15 +585,15 @@ def _run_single_episode_attempt(
 
     try:
         redirect_context = (
-            redirect_process_output_to_file(episode_log_path, mode=stdout_log_mode)
-            if save_stdout_log and episode_log_path
+            redirect_process_output_to_file(run_episode_log_path, mode=stdout_log_mode)
+            if save_stdout_log and run_episode_log_path
             else redirect_process_output_to_null()
         )
         with redirect_context:
-            episode_config = build_episode_config(base_config, args, episode_id)
+            episode_config = build_episode_config(base_config, run_args, episode_id)
             controller, _config_desc = create_navigation_controller(
                 episode_config,
-                args,
+                run_args,
                 profile=profile,
             )
             controller.reset_episode(episode_id=episode_id)
@@ -310,9 +614,9 @@ def _run_single_episode_attempt(
                 "failed_wasted_duration_s": result.get("failed_wasted_duration_s", 0.0),
                 "error": None,
                 "reason": result.get("reason", ""),
-                "result_file": result.get("result_file", ""),
-                "result_detail_file": result_path,
-                "episode_log_path": episode_log_path,
+                "result_file": get_episode_log_path(final_results_dir, episode_id),
+                "result_detail_file": final_result_path,
+                "episode_log_path": final_episode_log_path,
             }
     except BaseException as exc:
         import traceback
@@ -338,8 +642,8 @@ def _run_single_episode_attempt(
                 finalized_success = bool((normalized_metrics or {}).get("success", 0))
             except Exception:
                 pass
-        if save_stdout_log and episode_log_path:
-            with redirect_process_output_to_file(episode_log_path, mode="a"):
+        if save_stdout_log and run_episode_log_path:
+            with redirect_process_output_to_file(run_episode_log_path, mode="a"):
                 print(f"\n❌ Episode {episode_id} failed: {error_msg}")
                 print("\nFull traceback:")
                 traceback.print_exc()
@@ -359,8 +663,8 @@ def _run_single_episode_attempt(
             "failed_wasted_duration_s": timing_summary.get("failed_wasted_duration_s", 0.0),
             "error": error_msg,
             "result_file": "",
-            "result_detail_file": result_path,
-            "episode_log_path": episode_log_path if save_stdout_log else "",
+            "result_detail_file": final_result_path,
+            "episode_log_path": final_episode_log_path if save_stdout_log else "",
         }
     finally:
         if controller is not None:
@@ -368,6 +672,19 @@ def _run_single_episode_attempt(
                 controller.envs.close()
             except Exception as cleanup_error:
                 print(f"⚠️  Failed to clean up the environment: {cleanup_error}")
+
+    if staging_results_dir:
+        console_result["_staging_results_dir"] = staging_results_dir
+        console_result["_staging_final_results_dir"] = final_results_dir
+        console_result["_staging_save_stdout_log"] = bool(save_stdout_log)
+        console_result["_staging_result_file"] = get_episode_log_path(
+            staging_results_dir,
+            episode_id,
+        )
+        console_result["_staging_result_detail_file"] = get_episode_result_path(
+            staging_results_dir,
+            episode_id,
+        )
 
     return console_result
 
@@ -396,7 +713,7 @@ def run_single_episode(
         if save_stdout_log
         else ""
     )
-    result_path = get_episode_result_path(results_dir, episode_id)
+    result_path = _get_episode_result_path_no_create(results_dir, episode_id)
     best_log_path = get_episode_log_path(results_dir, episode_id)
     print(
         build_episode_start_summary(
@@ -430,6 +747,24 @@ def run_single_episode(
             save_stdout_log=save_stdout_log,
             stdout_log_mode=stdout_log_mode,
         )
+        staging_results_dir = str(console_result.get("_staging_results_dir") or "")
+        staging_final_results_dir = str(
+            console_result.get("_staging_final_results_dir") or results_dir
+        )
+        staging_metrics = {}
+        if staging_results_dir:
+            staging_metrics = extract_episode_metrics(
+                {
+                    "result_detail_file": console_result.get(
+                        "_staging_result_detail_file",
+                        "",
+                    ),
+                    "result_file": console_result.get("_staging_result_file", ""),
+                }
+            )
+            if staging_metrics:
+                console_result["_console_metrics"] = staging_metrics
+
         should_retry = (
             attempt_index < max_attempts - 1
             and _should_retry_initial_failure(console_result)
@@ -444,6 +779,16 @@ def run_single_episode(
             )
             if should_suppress_record:
                 _mark_result_unrecorded(console_result)
+            _discard_episode_staging(staging_results_dir)
+        elif staging_results_dir:
+            _submit_episode_staging_sync(
+                staging_results_dir=staging_results_dir,
+                final_results_dir=staging_final_results_dir,
+                episode_id=episode_id,
+                save_stdout_log=bool(
+                    console_result.get("_staging_save_stdout_log", save_stdout_log)
+                ),
+            )
         if not should_retry:
             break
         retry_reason = str(console_result.get("reason") or "").strip()
@@ -455,7 +800,18 @@ def run_single_episode(
 
     console_result["attempts"] = attempts_run
 
-    metrics = extract_episode_metrics(console_result)
+    metrics = dict(console_result.get("_console_metrics") or {})
+    if not metrics:
+        metrics = extract_episode_metrics(console_result)
+    for internal_key in (
+        "_console_metrics",
+        "_staging_results_dir",
+        "_staging_final_results_dir",
+        "_staging_save_stdout_log",
+        "_staging_result_file",
+        "_staging_result_detail_file",
+    ):
+        console_result.pop(internal_key, None)
     print(
         build_episode_console_summary(
             episode_id=episode_id,
@@ -487,10 +843,15 @@ def _build_parallel_episode_spec(
         "index": int(index),
         "total": int(total),
         "results_dir": args.results_dir,
+        "episode_workdir": str(getattr(args, "episode_workdir", "") or ""),
         "vlm_api_config": args.vlm_api_config,
         "max_subtask_steps": int(args.max_subtask_steps),
         "max_steps": args.max_steps,
         "initial_failure_max_attempts": _resolve_initial_failure_max_attempts(args),
+        "save_step_images": getattr(args, "save_step_images", None),
+        "save_gif": getattr(args, "save_gif", None),
+        "save_vlm_artifacts": getattr(args, "save_vlm_artifacts", None),
+        "no_report": bool(getattr(args, "no_report", False)),
         "worker_index": int(worker_index),
         "worker_count": int(worker_count),
         "runtime_profile_name": profile.name,
@@ -505,12 +866,17 @@ def _run_parallel_episode_job(job_spec: Dict[str, Any]) -> Dict[str, Any]:
         num_episodes=1,
         random=False,
         results_dir=job_spec.get("results_dir"),
+        episode_workdir=job_spec.get("episode_workdir", ""),
         vlm_api_config=job_spec["vlm_api_config"],
         max_subtask_steps=job_spec["max_subtask_steps"],
         max_steps=job_spec.get("max_steps"),
         initial_failure_max_attempts=int(job_spec.get("initial_failure_max_attempts", DEFAULT_INITIAL_FAILURE_MAX_ATTEMPTS)),
         skip_sr1=False,
         parallel_workers=1,
+        save_step_images=job_spec.get("save_step_images"),
+        save_gif=job_spec.get("save_gif"),
+        save_vlm_artifacts=job_spec.get("save_vlm_artifacts"),
+        no_report=bool(job_spec.get("no_report", False)),
         worker_index=int(job_spec["worker_index"]),
         worker_count=int(job_spec["worker_count"]),
         suppress_runtime_prints=True,
@@ -659,4 +1025,5 @@ __all__ = [
     "load_runtime_config",
     "run_parallel_episodes",
     "run_single_episode",
+    "wait_for_pending_episode_transfers",
 ]

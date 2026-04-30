@@ -15,6 +15,7 @@ from navigation_system.runtime.vlnce.r2r.execution import (
     load_runtime_config,
     run_parallel_episodes,
     run_single_episode,
+    wait_for_pending_episode_transfers,
 )
 from navigation_system.runtime.vlnce.profiles import (
     NavigationRuntimeProfile,
@@ -124,6 +125,15 @@ def build_arg_parser(
         default=None,
         help="Final results directory override (compatibility option)",
     )
+    parser.add_argument(
+        "--episode-workdir",
+        type=str,
+        default="",
+        help=(
+            "Fast local per-episode work directory; artifacts are synced to "
+            "results-dir in a background transfer thread after each episode"
+        ),
+    )
 
     parser.add_argument(
         "--vlm-api-config",
@@ -165,11 +175,58 @@ def build_arg_parser(
         default=1,
         help="Number of parallel workers (1 means serial execution)",
     )
+    parser.add_argument(
+        "--save-step-images",
+        dest="save_step_images",
+        action="store_true",
+        default=None,
+        help="Save per-step replay PNGs under episode visualization directories",
+    )
+    parser.add_argument(
+        "--no-save-step-images",
+        dest="save_step_images",
+        action="store_false",
+        help="Do not save per-step replay PNGs",
+    )
+    parser.add_argument(
+        "--save-gif",
+        dest="save_gif",
+        action="store_true",
+        default=None,
+        help="Save final episode navigation.gif replay",
+    )
+    parser.add_argument(
+        "--no-gif",
+        "--no-save-gif",
+        dest="save_gif",
+        action="store_false",
+        help="Skip final episode navigation.gif replay generation",
+    )
+    parser.add_argument(
+        "--save-vlm-artifacts",
+        dest="save_vlm_artifacts",
+        action="store_true",
+        default=None,
+        help="Save VLM prompt/image/debug artifacts",
+    )
+    parser.add_argument(
+        "--no-vlm-artifacts",
+        dest="save_vlm_artifacts",
+        action="store_false",
+        help="Skip VLM prompt/image/debug artifact files for faster metric-only runs",
+    )
+    parser.add_argument(
+        "--no-report",
+        action="store_true",
+        help="Skip post-run report generation for faster batch execution",
+    )
     parser.add_argument("--auto", action="store_true", help="Run without interactive confirmation")
     return parser
 
 
 def maybe_generate_report(args: argparse.Namespace, config, verbose: bool = True) -> None:
+    if bool(getattr(args, "no_report", False)):
+        return
     results_dir = args.results_dir or config.PATHS.RESULTS_DIR
     if not results_dir:
         return
@@ -246,6 +303,7 @@ def run_navigation_from_args(
     if not episode_ids:
         if args.skip_sr1:
             print("\n✅ No episodes need to run: the requested range already has SR=1 results")
+            wait_for_pending_episode_transfers()
             maybe_generate_report(args, config, verbose=True)
             if profile.post_run_hook is not None:
                 profile.post_run_hook(args, config)
@@ -280,6 +338,7 @@ def run_navigation_from_args(
         _print_failed_results(failed_results)
 
     del results_summary
+    wait_for_pending_episode_transfers()
     maybe_generate_report(args, config, verbose=True)
     if profile.post_run_hook is not None:
         profile.post_run_hook(args, config)

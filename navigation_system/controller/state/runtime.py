@@ -16,6 +16,8 @@ class VLMControllerOptions:
     save_navigation_step_images: bool
     save_navigation_gif: bool
     cleanup_navigation_step_images_after_gif: bool
+    navigation_gif_fps: int
+    navigation_gif_max_width: int
     save_episode_stdout_log: bool
     save_waypoint_memory: bool
     enable_final_destination_match_autostop: bool
@@ -50,6 +52,11 @@ class VLMControllerOptions:
             save_navigation_gif=bool(getattr(replay_cfg, "SAVE_GIF", True)),
             cleanup_navigation_step_images_after_gif=bool(
                 getattr(replay_cfg, "CLEANUP_STEP_IMAGES_AFTER_GIF", True)
+            ),
+            navigation_gif_fps=max(1, int(getattr(replay_cfg, "GIF_FPS", 2) or 2)),
+            navigation_gif_max_width=max(
+                0,
+                int(getattr(replay_cfg, "GIF_MAX_WIDTH", 720) or 0),
             ),
             save_episode_stdout_log=bool(getattr(log_cfg, "SAVE_EPISODE_STDOUT", False)),
             save_waypoint_memory=bool(getattr(state_cfg, "SAVE_WAYPOINT_MEMORY", False)),
@@ -170,6 +177,13 @@ class EpisodeTimingTracker:
         if self.episode_wall_start_time is None:
             return
         if str(action_name or "").upper() == "STOP" or bool(episode_done):
+            self.episode_wall_end_time = time.perf_counter()
+
+    def mark_episode_finished(self) -> None:
+        """Close the episode timer before post-run artifact/report saving."""
+        if self.episode_wall_start_time is None:
+            return
+        if self.episode_wall_end_time is None:
             self.episode_wall_end_time = time.perf_counter()
 
     def current_episode_duration_s(self) -> float:
