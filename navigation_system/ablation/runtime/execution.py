@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import copy
 import multiprocessing
 import os
+import shutil
 from typing import Any, Dict, List, Tuple
 
 from navigation_system.ablation.config import ABLATION_CONFIG_ENV
@@ -25,14 +27,26 @@ from navigation_system.runtime.episode_io import (
     redirect_process_output_to_null,
     save_episode_stdout_log_enabled,
 )
+from navigation_system.runtime.output_policy import (
+    build_output_job_fields,
+    build_output_namespace_kwargs,
+)
 from navigation_system.runtime.storage.artifacts import get_episode_log_path
 from navigation_system.runtime.vlnce.r2r.execution import (
     DEFAULT_INITIAL_FAILURE_MAX_ATTEMPTS,
+    _build_staging_results_dir,
+    _discard_episode_staging,
+    _format_exception_message,
+    _get_episode_result_path_no_create,
     _mark_result_unrecorded,
+    _parallel_worker_initializer,
     _resolve_initial_failure_max_attempts,
+    _resolve_episode_workdir,
     _restore_episode_result_artifacts,
     _should_suppress_initial_failure_record,
+    _shutdown_parallel_executor,
     _snapshot_episode_result_artifacts,
+    _submit_episode_staging_sync,
     build_episode_config,
     load_runtime_config,
 )
@@ -91,6 +105,34 @@ def _run_single_episode_attempt(
     stdout_log_mode: str,
 ) -> Dict[str, Any]:
     controller = None
+    episode_initialized = False
+    final_results_dir = os.path.abspath(str(base_config.PATHS.RESULTS_DIR or os.getcwd()))
+    final_episode_log_path = episode_log_path
+    final_result_path = result_path
+    staging_results_dir = ""
+    episode_workdir = _resolve_episode_workdir(args, final_results_dir=final_results_dir)
+    run_args = args
+    run_episode_log_path = episode_log_path
+    run_result_path = result_path
+    if episode_workdir:
+        staging_results_dir = _build_staging_results_dir(
+            episode_workdir=episode_workdir,
+            final_results_dir=final_results_dir,
+            episode_id=episode_id,
+            worker_index=int(getattr(args, "worker_index", 0) or 0),
+        )
+        if os.path.exists(staging_results_dir):
+            shutil.rmtree(staging_results_dir)
+        os.makedirs(staging_results_dir, exist_ok=True)
+        run_args = copy.copy(args)
+        run_args.results_dir = staging_results_dir
+        run_episode_log_path = (
+            get_episode_records_log_path(staging_results_dir, episode_id)
+            if save_stdout_log
+            else ""
+        )
+        run_result_path = _get_episode_result_path_no_create(staging_results_dir, episode_id)
+
     console_result: Dict[str, Any] = {
         "episode_id": int(episode_id),
         "success": False,
@@ -103,18 +145,19 @@ def _run_single_episode_attempt(
 
     try:
         redirect_context = (
-            redirect_process_output_to_file(episode_log_path, mode=stdout_log_mode)
-            if save_stdout_log and episode_log_path
+            redirect_process_output_to_file(run_episode_log_path, mode=stdout_log_mode)
+            if save_stdout_log and run_episode_log_path
             else redirect_process_output_to_null()
         )
         with redirect_context:
-            episode_config = build_episode_config(base_config, args, episode_id)
+            episode_config = build_episode_config(base_config, run_args, episode_id)
             controller, _config_desc = create_navigation_controller(
                 episode_config,
-                args,
+                run_args,
                 profile=profile,
             )
             controller.reset_episode(episode_id=episode_id)
+            episode_initialized = True
 
             result = controller.run_navigation(max_subtask_steps=args.max_subtask_steps)
             total_steps = result.get("total_steps", result.get("steps", 0))
@@ -130,9 +173,9 @@ def _run_single_episode_attempt(
                 "failed_wasted_duration_s": result.get("failed_wasted_duration_s", 0.0),
                 "error": None,
                 "reason": result.get("reason", ""),
-                "result_file": result.get("result_file", ""),
-                "result_detail_file": result_path,
-                "episode_log_path": episode_log_path,
+                "result_file": get_episode_log_path(final_results_dir, episode_id),
+                "result_detail_file": final_result_path,
+                "episode_log_path": final_episode_log_path,
             }
     except BaseException as exc:
         import traceback
@@ -140,7 +183,7 @@ def _run_single_episode_attempt(
         if isinstance(exc, KeyboardInterrupt):
             raise
 
-        error_msg = str(exc)
+        error_msg = _format_exception_message(exc)
         timing_summary = {}
         finalized_success = False
         finalized_steps = 0
@@ -149,7 +192,7 @@ def _run_single_episode_attempt(
                 timing_summary = controller._build_episode_timing_summary()
             except Exception:
                 timing_summary = {}
-        if controller is not None:
+        if controller is not None and episode_initialized:
             try:
                 finalized_steps = int(getattr(controller, "current_step", 0) or 0)
                 final_metrics = controller.finish_episode(success=False, stop_action=True)
@@ -158,8 +201,8 @@ def _run_single_episode_attempt(
                 finalized_success = bool((normalized_metrics or {}).get("success", 0))
             except Exception:
                 pass
-        if save_stdout_log and episode_log_path:
-            with redirect_process_output_to_file(episode_log_path, mode="a"):
+        if save_stdout_log and run_episode_log_path:
+            with redirect_process_output_to_file(run_episode_log_path, mode="a"):
                 print(f"\n❌ Episode {episode_id} 运行失败: {error_msg}")
                 print("\n完整错误堆栈:")
                 traceback.print_exc()
@@ -179,8 +222,8 @@ def _run_single_episode_attempt(
             "failed_wasted_duration_s": timing_summary.get("failed_wasted_duration_s", 0.0),
             "error": error_msg,
             "result_file": "",
-            "result_detail_file": result_path,
-            "episode_log_path": episode_log_path if save_stdout_log else "",
+            "result_detail_file": final_result_path,
+            "episode_log_path": final_episode_log_path if save_stdout_log else "",
         }
     finally:
         if controller is not None:
@@ -188,6 +231,16 @@ def _run_single_episode_attempt(
                 controller.envs.close()
             except Exception as cleanup_error:
                 print(f"⚠️  清理环境时出错: {cleanup_error}")
+
+    if staging_results_dir:
+        console_result["_staging_results_dir"] = staging_results_dir
+        console_result["_staging_final_results_dir"] = final_results_dir
+        console_result["_staging_save_stdout_log"] = bool(save_stdout_log)
+        console_result["_staging_result_file"] = get_episode_log_path(
+            staging_results_dir,
+            episode_id,
+        )
+        console_result["_staging_result_detail_file"] = run_result_path
 
     return console_result
 
@@ -216,7 +269,7 @@ def run_single_episode(
         if save_stdout_log
         else ""
     )
-    result_path = get_episode_result_path(results_dir, episode_id)
+    result_path = _get_episode_result_path_no_create(results_dir, episode_id)
     best_log_path = get_episode_log_path(results_dir, episode_id)
     print(
         build_episode_start_summary(
@@ -250,6 +303,23 @@ def run_single_episode(
             save_stdout_log=save_stdout_log,
             stdout_log_mode=stdout_log_mode,
         )
+        staging_results_dir = str(console_result.get("_staging_results_dir") or "")
+        staging_final_results_dir = str(
+            console_result.get("_staging_final_results_dir") or results_dir
+        )
+        staging_metrics = {}
+        if staging_results_dir:
+            staging_metrics = extract_episode_metrics(
+                {
+                    "result_detail_file": console_result.get(
+                        "_staging_result_detail_file",
+                        "",
+                    ),
+                    "result_file": console_result.get("_staging_result_file", ""),
+                }
+            )
+            if staging_metrics:
+                console_result["_console_metrics"] = staging_metrics
         should_retry = (
             attempt_index < max_attempts - 1
             and _should_retry_initial_failure(console_result)
@@ -264,6 +334,16 @@ def run_single_episode(
             )
             if should_suppress_record:
                 _mark_result_unrecorded(console_result)
+            _discard_episode_staging(staging_results_dir)
+        elif staging_results_dir:
+            _submit_episode_staging_sync(
+                staging_results_dir=staging_results_dir,
+                final_results_dir=staging_final_results_dir,
+                episode_id=episode_id,
+                save_stdout_log=bool(
+                    console_result.get("_staging_save_stdout_log", save_stdout_log)
+                ),
+            )
         if not should_retry:
             break
         retry_reason = str(console_result.get("reason") or "").strip()
@@ -274,7 +354,18 @@ def run_single_episode(
         )
 
     console_result["attempts"] = attempts_run
-    metrics = extract_episode_metrics(console_result)
+    metrics = dict(console_result.get("_console_metrics") or {})
+    if not metrics:
+        metrics = extract_episode_metrics(console_result)
+    for internal_key in (
+        "_console_metrics",
+        "_staging_results_dir",
+        "_staging_final_results_dir",
+        "_staging_save_stdout_log",
+        "_staging_result_file",
+        "_staging_result_detail_file",
+    ):
+        console_result.pop(internal_key, None)
     print(
         build_episode_console_summary(
             episode_id=episode_id,
@@ -306,10 +397,12 @@ def _build_parallel_episode_spec(
         "index": int(index),
         "total": int(total),
         "results_dir": args.results_dir,
+        "episode_workdir": str(getattr(args, "episode_workdir", "") or ""),
         "vlm_api_config": args.vlm_api_config,
         "max_subtask_steps": int(args.max_subtask_steps),
         "max_steps": args.max_steps,
         "initial_failure_max_attempts": _resolve_initial_failure_max_attempts(args),
+        **build_output_job_fields(args),
         "worker_index": int(worker_index),
         "worker_count": int(worker_count),
         "runtime_profile_name": profile.name,
@@ -329,12 +422,14 @@ def _run_parallel_episode_job(job_spec: Dict[str, Any]) -> Dict[str, Any]:
         num_episodes=1,
         random=False,
         results_dir=job_spec.get("results_dir"),
+        episode_workdir=job_spec.get("episode_workdir", ""),
         vlm_api_config=job_spec["vlm_api_config"],
         max_subtask_steps=job_spec["max_subtask_steps"],
         max_steps=job_spec.get("max_steps"),
         initial_failure_max_attempts=int(job_spec.get("initial_failure_max_attempts", DEFAULT_INITIAL_FAILURE_MAX_ATTEMPTS)),
         skip_sr1=False,
         parallel_workers=1,
+        **build_output_namespace_kwargs(job_spec),
         worker_index=int(job_spec["worker_index"]),
         worker_count=int(job_spec["worker_count"]),
         suppress_runtime_prints=True,
@@ -386,10 +481,13 @@ def run_parallel_episodes(
         }
 
     mp_context = multiprocessing.get_context("spawn")
-    with concurrent.futures.ProcessPoolExecutor(
+    interrupted = False
+    executor = concurrent.futures.ProcessPoolExecutor(
         max_workers=worker_count,
         mp_context=mp_context,
-    ) as executor:
+        initializer=_parallel_worker_initializer,
+    )
+    try:
         future_to_job: Dict[concurrent.futures.Future, Dict[str, Any]] = {}
 
         def _submit_next_job(worker_index: int) -> bool:
@@ -426,24 +524,41 @@ def run_parallel_episodes(
                 break
 
         while future_to_job:
-            done, _ = concurrent.futures.wait(
-                list(future_to_job.keys()),
-                return_when=concurrent.futures.FIRST_COMPLETED,
-            )
+            try:
+                done, _ = concurrent.futures.wait(
+                    list(future_to_job.keys()),
+                    return_when=concurrent.futures.FIRST_COMPLETED,
+                )
+            except KeyboardInterrupt:
+                interrupted = True
+                for pending_future in list(future_to_job.keys()):
+                    pending_future.cancel()
+                raise
             for future in done:
                 job_spec = future_to_job.pop(future)
                 try:
                     job_result = future.result()
                     results_summary.append(job_result.get("result", {}))
+                except (KeyboardInterrupt, SystemExit):
+                    interrupted = True
+                    future.cancel()
+                    for pending_future in list(future_to_job.keys()):
+                        pending_future.cancel()
+                    raise
                 except Exception as exc:
+                    if isinstance(exc, concurrent.futures.process.BrokenProcessPool):
+                        pool_broken_error = str(exc)
                     results_summary.append(
                         _build_parallel_failure(
                             int(job_spec["episode_id"]),
-                            f"parallel worker failed: {exc}",
+                            f"parallel worker failed: {_format_exception_message(exc)}",
                         )
                     )
                 if not pool_broken_error:
                     _submit_next_job(int(job_spec["worker_index"]))
+
+    finally:
+        _shutdown_parallel_executor(executor, interrupted=interrupted)
 
     if pool_broken_error and next_job_cursor < total:
         for episode_id in episode_ids[next_job_cursor:]:

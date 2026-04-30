@@ -35,6 +35,10 @@ Console output:
     --no-report skips post-run report generation when you only need raw episode logs.
 
 Output speed switches:
+    --output-profile metric|debug|config
+                             metric keeps only final evaluation artifacts;
+                             debug saves VLM artifacts and navigation.gif;
+                             config preserves YAML defaults.
     --episode-workdir DIR    Write current episode artifacts to fast local cache first,
                              then sync them back to the final results directory
                              in a background transfer thread. If final results
@@ -164,6 +168,18 @@ while [[ $# -gt 0 ]]; do
             ;;
         --episode-workdir=*)
             PASSTHROUGH_ARGS+=(--episode-workdir "${1#*=}")
+            shift
+            ;;
+        --output-profile)
+            if [[ $# -lt 2 ]]; then
+                echo "❌ --output-profile requires metric, debug, or config" >&2
+                exit 1
+            fi
+            PASSTHROUGH_ARGS+=(--output-profile "$2")
+            shift 2
+            ;;
+        --output-profile=*)
+            PASSTHROUGH_ARGS+=(--output-profile "${1#*=}")
             shift
             ;;
         --no-gif|--no-save-gif|--save-gif|--no-vlm-artifacts|--save-vlm-artifacts|--save-step-images|--no-save-step-images|--no-report)

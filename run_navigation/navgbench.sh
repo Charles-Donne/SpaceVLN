@@ -38,6 +38,7 @@ Defaults:
   Instruction:     complex (landmark-rich route)
   Results:         nav_ws/result/navgbench/<complex|simple|moving>/<llm>__<vlm>
   Console output:  episode internals are quiet by default; summaries/reports stay on stdout
+  Output profile:  metric by default; use --output-profile debug for VLM artifacts/GIF
 EOF
 }
 
@@ -103,11 +104,11 @@ while [[ $# -gt 0 ]]; do
             SPACEVLN_CONFIG="${1#*=}"
             shift
             ;;
-        --dry-run|--no-report|--random|--use-raw-instruction|--complex-instruction|--simple-instruction|--skip-sr1|--skip-existing-sr1)
+        --dry-run|--no-report|--random|--use-raw-instruction|--complex-instruction|--simple-instruction|--skip-sr1|--skip-existing-sr1|--save-step-images|--no-save-step-images|--save-gif|--no-gif|--no-save-gif|--save-vlm-artifacts|--no-vlm-artifacts)
             PASSTHROUGH_ARGS+=("$1")
             shift
             ;;
-        --backend|--navgbench-python|--gnbench-root|--gnbench-exp-config|--start-sample|--start-idx|--end-idx|--num-episodes|--episode-id|--episode-ids|--seed|--max-steps|--max-subtask-steps|--parallel-workers|--instruction-mode|--results-root|--results-dir)
+        --backend|--navgbench-python|--gnbench-root|--gnbench-exp-config|--start-sample|--start-idx|--end-idx|--num-episodes|--episode-id|--episode-ids|--seed|--max-steps|--max-subtask-steps|--parallel-workers|--instruction-mode|--results-root|--results-dir|--output-profile)
             if [[ $# -lt 2 ]]; then
                 echo "Missing value for $1" >&2
                 exit 1
@@ -115,7 +116,7 @@ while [[ $# -gt 0 ]]; do
             PASSTHROUGH_ARGS+=("$1" "$2")
             shift 2
             ;;
-        --backend=*|--navgbench-python=*|--gnbench-root=*|--gnbench-exp-config=*|--start-sample=*|--start-idx=*|--end-idx=*|--num-episodes=*|--episode-id=*|--episode-ids=*|--seed=*|--max-steps=*|--max-subtask-steps=*|--parallel-workers=*|--instruction-mode=*|--results-root=*|--results-dir=*)
+        --backend=*|--navgbench-python=*|--gnbench-root=*|--gnbench-exp-config=*|--start-sample=*|--start-idx=*|--end-idx=*|--num-episodes=*|--episode-id=*|--episode-ids=*|--seed=*|--max-steps=*|--max-subtask-steps=*|--parallel-workers=*|--instruction-mode=*|--results-root=*|--results-dir=*|--output-profile=*)
             PASSTHROUGH_ARGS+=("$1")
             shift
             ;;

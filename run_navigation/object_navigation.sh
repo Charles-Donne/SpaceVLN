@@ -61,6 +61,10 @@ Notes:
   - Use --start-index explicitly if you want the same behavior in long-form flags.
   - Use --episode-id for an exact OVON episode id.
   - The workers argument matches the VLNCE launcher style and now enables parallel episode workers.
+  - Output profiles are shared with VLNCE:
+      --output-profile metric   keep final metrics/results only (default)
+      --output-profile debug    save VLM artifacts and navigation.gif
+      --output-profile config   preserve YAML/default save switches
 EOF
 }
 
@@ -96,7 +100,7 @@ while [[ $# -gt 0 ]]; do
             RUN_CONFIG="${1#*=}"
             shift
             ;;
-        --exp-config|--vlm-api-config|--data-path|--split|--episode-id|--episode-ids|--num-episodes|--gpu-id|--max-steps|--max-subtask-steps|--results-root|--results-dir|--seed|--parallel-workers)
+        --exp-config|--vlm-api-config|--data-path|--split|--episode-id|--episode-ids|--num-episodes|--gpu-id|--max-steps|--max-subtask-steps|--results-root|--results-dir|--seed|--parallel-workers|--output-profile)
             if [[ $# -lt 2 ]]; then
                 echo "Missing value for $1" >&2
                 exit 1
@@ -104,11 +108,11 @@ while [[ $# -gt 0 ]]; do
             PASSTHROUGH_ARGS+=("$1" "$2")
             shift 2
             ;;
-        --exp-config=*|--vlm-api-config=*|--data-path=*|--split=*|--episode-id=*|--episode-ids=*|--num-episodes=*|--gpu-id=*|--max-steps=*|--max-subtask-steps=*|--results-root=*|--results-dir=*|--seed=*|--parallel-workers=*)
+        --exp-config=*|--vlm-api-config=*|--data-path=*|--split=*|--episode-id=*|--episode-ids=*|--num-episodes=*|--gpu-id=*|--max-steps=*|--max-subtask-steps=*|--results-root=*|--results-dir=*|--seed=*|--parallel-workers=*|--output-profile=*)
             PASSTHROUGH_ARGS+=("$1")
             shift
             ;;
-        --random|--skip-sr1|--skip-existing-sr1|--save-step-images|--no-save-step-images|--save-gif|--no-save-gif|--no-report)
+        --random|--skip-sr1|--skip-existing-sr1|--save-step-images|--no-save-step-images|--save-gif|--no-gif|--no-save-gif|--save-vlm-artifacts|--no-vlm-artifacts|--no-report)
             PASSTHROUGH_ARGS+=("$1")
             shift
             ;;

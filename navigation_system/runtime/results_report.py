@@ -75,6 +75,15 @@ def _normalize_report_item(item: Dict[str, Any]) -> Dict[str, Any]:
                 0.0,
             ),
         }
+    if "local_non_api_duration_s" not in payload:
+        api_total = sum(
+            _summary_value(payload, prefix, "total_duration_s", 0.0)
+            for prefix in ("thinking", "action")
+        )
+        payload["local_non_api_duration_s"] = max(
+            0.0,
+            _episode_duration_s(payload) - api_total,
+        )
     return payload
 
 
@@ -99,6 +108,7 @@ def _compute_timing_metrics(results: List[Dict[str, Any]]) -> Dict[str, Any]:
     failed_retry_wait_total_s = sum(_as_float(item.get("failed_retry_wait_duration_s", 0.0)) for item in results)
     failed_wasted_total_s = sum(_as_float(item.get("failed_wasted_duration_s", 0.0)) for item in results)
     episode_total_s = sum(_episode_duration_s(item) for item in results)
+    local_non_api_total_s = sum(_as_float(item.get("local_non_api_duration_s", 0.0)) for item in results)
 
     return {
         "thinking_api_count": thinking_count,
@@ -117,6 +127,8 @@ def _compute_timing_metrics(results: List[Dict[str, Any]]) -> Dict[str, Any]:
         "failed_wasted_duration_s_total": failed_wasted_total_s,
         "episode_duration_s_total": episode_total_s,
         "episode_duration_s_avg": episode_total_s / n if n > 0 else 0.0,
+        "local_non_api_duration_s_total": local_non_api_total_s,
+        "local_non_api_duration_s_avg": local_non_api_total_s / n if n > 0 else 0.0,
     }
 
 
@@ -479,6 +491,7 @@ def _build_episode_row(item: Dict[str, Any]) -> Dict[str, str]:
         "ActAvg(s)": _format_metric_value(action_avg, 3),
         "ActTot(s)": _format_metric_value(action_total, 3),
         "API(s)": _format_metric_value(api_total, 3),
+        "Local(s)": _format_metric_value(_as_float(item.get("local_non_api_duration_s", 0.0), 0.0), 3),
         "FailWaste(s)": _format_metric_value(_as_float(item.get("failed_wasted_duration_s", 0.0), 0.0), 3),
         "Episode(s)": _format_metric_value(_episode_duration_s(item), 3),
     }
@@ -505,6 +518,7 @@ def save_episode_tables(
         "ActAvg(s)",
         "ActTot(s)",
         "API(s)",
+        "Local(s)",
         "FailWaste(s)",
         "Episode(s)",
     ]
@@ -527,6 +541,7 @@ def save_episode_tables(
                 "ActAvg(s)": _format_metric_value(timing["action_api_avg_duration_s"], 3),
                 "ActTot(s)": _format_metric_value(timing["action_api_total_duration_s"], 3),
                 "API(s)": _format_metric_value(timing["api_total_duration_s"], 3),
+                "Local(s)": _format_metric_value(timing["local_non_api_duration_s_avg"], 3),
                 "FailWaste(s)": _format_metric_value(timing["failed_wasted_duration_s_total"], 3),
                 "Episode(s)": _format_metric_value(timing["episode_duration_s_avg"], 3),
             }
@@ -535,13 +550,13 @@ def save_episode_tables(
     md_lines = [
         "# Episode Results",
         "",
-        "| Episode | NE(m) | OSR | SR | SPL | nDTW | ThinkAvg(s) | ThinkTot(s) | ActAvg(s) | ActTot(s) | API(s) | FailWaste(s) | Episode(s) |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| Episode | NE(m) | OSR | SR | SPL | nDTW | ThinkAvg(s) | ThinkTot(s) | ActAvg(s) | ActTot(s) | API(s) | Local(s) | FailWaste(s) | Episode(s) |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for item in sorted_results:
         row = _build_episode_row(item)
         md_lines.append(
-            "| {episode} | {ne} | {osr} | {sr} | {spl} | {ndtw} | {think_avg} | {think_total} | {act_avg} | {act_total} | {api_total} | {fail_waste} | {episode_s} |".format(
+            "| {episode} | {ne} | {osr} | {sr} | {spl} | {ndtw} | {think_avg} | {think_total} | {act_avg} | {act_total} | {api_total} | {local_s} | {fail_waste} | {episode_s} |".format(
                 episode=row["episode_id"],
                 ne=row["NE"],
                 osr=row["OSR"],
@@ -553,6 +568,7 @@ def save_episode_tables(
                 act_avg=row["ActAvg(s)"],
                 act_total=row["ActTot(s)"],
                 api_total=row["API(s)"],
+                local_s=row["Local(s)"],
                 fail_waste=row["FailWaste(s)"],
                 episode_s=row["Episode(s)"],
             )
@@ -562,9 +578,9 @@ def save_episode_tables(
             "",
             "## Summary",
             "",
-            "| Episodes | NE(m) | OSR | SR | SPL | nDTW | ThinkAvg(s) | ThinkTot(s) | ActAvg(s) | ActTot(s) | API(s) | FailWaste(s) | Episode(s) |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-            "| {total} | {avg_ne} | {avg_osr} | {avg_sr} | {avg_spl} | {avg_ndtw} | {think_avg} | {think_total} | {action_avg} | {action_total} | {api_total} | {fail_waste} | {episode_avg} |".format(
+            "| Episodes | NE(m) | OSR | SR | SPL | nDTW | ThinkAvg(s) | ThinkTot(s) | ActAvg(s) | ActTot(s) | API(s) | LocalAvg(s) | FailWaste(s) | Episode(s) |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| {total} | {avg_ne} | {avg_osr} | {avg_sr} | {avg_spl} | {avg_ndtw} | {think_avg} | {think_total} | {action_avg} | {action_total} | {api_total} | {local_avg} | {fail_waste} | {episode_avg} |".format(
                 total=metrics["total_episodes"],
                 avg_ne=_format_metric_value(metrics["avg_ne"], 3),
                 avg_osr=_format_metric_value(metrics["avg_osr"], 4),
@@ -576,11 +592,12 @@ def save_episode_tables(
                 action_avg=_format_metric_value(timing["action_api_avg_duration_s"], 3),
                 action_total=_format_metric_value(timing["action_api_total_duration_s"], 3),
                 api_total=_format_metric_value(timing["api_total_duration_s"], 3),
+                local_avg=_format_metric_value(timing["local_non_api_duration_s_avg"], 3),
                 fail_waste=_format_metric_value(timing["failed_wasted_duration_s_total"], 3),
                 episode_avg=_format_metric_value(timing["episode_duration_s_avg"], 3),
             ),
             "",
-            "> `ThinkTot/ActTot/API(s)/FailWaste(s)` in Summary are batch totals; `ThinkAvg/ActAvg/Episode(s)` are batch averages.",
+            "> `ThinkTot/ActTot/API(s)/FailWaste(s)` in Summary are batch totals; `ThinkAvg/ActAvg/LocalAvg/Episode(s)` are batch averages.",
             "",
             "> Repeated evaluation of the same episode keeps only the better result in `log/<range>/episode_XXX.json`.",
         ]

@@ -29,6 +29,11 @@ from navigation_system.runtime.episode_io import (
     redirect_process_output_to_null,
     save_episode_stdout_log_enabled,
 )
+from navigation_system.runtime.output_policy import (
+    add_output_artifact_args,
+    add_output_profile_arg,
+    resolve_output_policy,
+)
 from navigation_system.runtime.storage.results_layout import (
     build_default_results_family_root,
     build_model_results_dir_name,
@@ -54,6 +59,21 @@ def _format_exception_message(exc: BaseException) -> str:
 def _parallel_worker_initializer() -> None:
     try:
         signal.signal(signal.SIGINT, signal.SIG_IGN)
+    except Exception:
+        pass
+    try:
+        import cv2
+
+        cv2.setNumThreads(0)
+    except Exception:
+        pass
+    try:
+        import torch
+
+        torch.set_num_threads(max(1, int(os.getenv("SPACEVLN_TORCH_NUM_THREADS", "1") or 1)))
+        torch.set_num_interop_threads(
+            max(1, int(os.getenv("SPACEVLN_TORCH_INTEROP_THREADS", "1") or 1))
+        )
     except Exception:
         pass
 
@@ -166,6 +186,12 @@ def _build_parser_defaults(run_defaults: dict | None = None) -> dict:
         "max_subtask_steps": int(defaults.get("max_subtask_steps", 4) or 4),
         "save_step_images": bool(defaults.get("save_step_images", True)),
         "save_gif": bool(defaults.get("save_gif", False)),
+        "save_vlm_artifacts": bool(
+            defaults.get(
+                "save_vlm_artifacts",
+                defaults.get("save_request_artifacts", True),
+            )
+        ),
     }
 
 
@@ -926,8 +952,10 @@ def _build_parallel_episode_spec(
         "max_subtask_steps": int(args.max_subtask_steps),
         "results_dir": str(args.results_dir),
         "vlm_api_config": str(args.vlm_api_config),
+        "output_profile": str(getattr(args, "output_profile", "metric") or "metric"),
         "save_step_images": bool(args.save_step_images),
         "save_gif": bool(args.save_gif),
+        "save_vlm_artifacts": bool(args.save_vlm_artifacts),
         "episode_id": int(episode_spec["episode_id"]),
         "sample_index": (
             int(episode_spec["sample_index"])
@@ -997,6 +1025,7 @@ def _run_parallel_episode_job(job_spec: dict) -> dict:
             max_subtask_steps=int(job_spec["max_subtask_steps"]),
             save_step_images=bool(job_spec["save_step_images"]),
             save_gif=bool(job_spec["save_gif"]),
+            save_vlm_artifacts=bool(job_spec["save_vlm_artifacts"]),
             model_stack_builder=_select_model_stack_builder(str(job_spec["runtime"])),
             base_dataset=discovery_dataset,
             episode_lookup=episode_lookup,
@@ -1151,6 +1180,7 @@ def _run_one_episode(
     max_subtask_steps: int,
     save_step_images: bool,
     save_gif: bool,
+    save_vlm_artifacts: bool,
     model_stack_builder,
     base_dataset=None,
     episode_lookup: dict[int, list] | None = None,
@@ -1175,6 +1205,7 @@ def _run_one_episode(
                 or 80
             ),
         ),
+        save_request_artifacts=save_vlm_artifacts,
         save_step_images=save_step_images,
         save_gif=save_gif,
     )
@@ -1532,23 +1563,12 @@ def build_arg_parser(run_defaults: dict | None = None) -> argparse.ArgumentParse
         help="number of parallel episode workers",
     )
     parser.set_defaults(
-        save_step_images=bool(defaults["save_step_images"]),
-        save_gif=bool(defaults["save_gif"]),
+        config_save_step_images=bool(defaults["save_step_images"]),
+        config_save_gif=bool(defaults["save_gif"]),
+        config_save_vlm_artifacts=bool(defaults["save_vlm_artifacts"]),
     )
-    parser.add_argument(
-        "--save-step-images",
-        dest="save_step_images",
-        action="store_true",
-        help="save per-step visualization PNGs under detail/<bucket>/sample_xxx/visualization",
-    )
-    parser.add_argument(
-        "--no-save-step-images",
-        dest="save_step_images",
-        action="store_false",
-        help="disable per-step visualization PNG saving",
-    )
-    parser.add_argument("--save-gif", action="store_true")
-    parser.add_argument("--no-save-gif", dest="save_gif", action="store_false")
+    add_output_profile_arg(parser)
+    add_output_artifact_args(parser)
     parser.add_argument(
         "--no-report",
         action="store_true",
@@ -1581,6 +1601,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         or _default_results_dir()
     )
+    output_policy = resolve_output_policy(
+        args,
+        config_save_step_images=bool(getattr(args, "config_save_step_images", False)),
+        config_save_gif=bool(getattr(args, "config_save_gif", False)),
+        config_save_vlm_artifacts=bool(
+            getattr(args, "config_save_vlm_artifacts", True)
+        ),
+    )
+    args.output_profile = output_policy.profile
+    args.save_step_images = bool(output_policy.save_step_images)
+    args.save_gif = bool(output_policy.save_gif)
+    args.save_vlm_artifacts = bool(output_policy.save_vlm_artifacts)
     model_stack_builder = _select_model_stack_builder(args.runtime)
 
     with redirect_process_output_to_null():
@@ -1707,6 +1739,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         max_subtask_steps=args.max_subtask_steps,
                         save_step_images=bool(args.save_step_images),
                         save_gif=bool(args.save_gif),
+                        save_vlm_artifacts=bool(args.save_vlm_artifacts),
                         model_stack_builder=model_stack_builder,
                         base_dataset=discovery_dataset,
                         episode_lookup=episode_lookup,
@@ -1763,6 +1796,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     summary_payload = {
         "meta": {
             "runtime": str(args.runtime),
+            "output_profile": str(args.output_profile),
+            "save_step_images": bool(args.save_step_images),
+            "save_gif": bool(args.save_gif),
+            "save_vlm_artifacts": bool(args.save_vlm_artifacts),
             "split": str(args.split),
             "data_path": str(Path(args.data_path).resolve()),
             "exp_config": str(Path(args.exp_config).resolve()),

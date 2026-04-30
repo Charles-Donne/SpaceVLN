@@ -39,6 +39,11 @@ from navigation_system.runtime.episode_io import (
     redirect_process_output_to_null,
     save_episode_stdout_log_enabled,
 )
+from navigation_system.runtime.output_policy import (
+    add_output_artifact_args,
+    add_output_profile_arg,
+    apply_output_policy_to_config,
+)
 from navigation_system.runtime.results_report import generate_results_report
 from navigation_system.runtime.storage.artifacts import (
     SaveManager,
@@ -80,6 +85,21 @@ def _format_exception_message(exc: BaseException) -> str:
 def _parallel_worker_initializer() -> None:
     try:
         signal.signal(signal.SIGINT, signal.SIG_IGN)
+    except Exception:
+        pass
+    try:
+        import cv2
+
+        cv2.setNumThreads(0)
+    except Exception:
+        pass
+    try:
+        import torch
+
+        torch.set_num_threads(max(1, int(os.getenv("SPACEVLN_TORCH_NUM_THREADS", "1") or 1)))
+        torch.set_num_interop_threads(
+            max(1, int(os.getenv("SPACEVLN_TORCH_INTEROP_THREADS", "1") or 1))
+        )
     except Exception:
         pass
 
@@ -548,6 +568,7 @@ def _load_spacevln_config(args: argparse.Namespace, *, results_dir: str) -> Any:
     # Keep the agent's model-facing action space at 30 degrees. The NavGBench
     # adapter expands one SpaceVLN turn into two 15-degree GN-Bench primitives.
     simulator.TURN_ANGLE = 30
+    apply_output_policy_to_config(config, args)
     apply_runtime_derived_fields(config)
     config.freeze()
     return config
@@ -1146,6 +1167,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--results-root", default="")
     parser.add_argument("--results-dir", default="")
+    add_output_profile_arg(parser)
+    add_output_artifact_args(parser)
     parser.add_argument(
         "--instruction-mode",
         choices=("complex", "simple", "grounded", "raw", "moving"),

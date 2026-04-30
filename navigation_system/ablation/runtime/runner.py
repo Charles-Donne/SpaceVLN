@@ -25,7 +25,12 @@ from navigation_system.runtime.vlnce.r2r.episode_selection import (
     filter_episode_ids,
     resolve_episode_ids,
 )
+from navigation_system.runtime.output_policy import (
+    add_output_artifact_args,
+    add_output_profile_arg,
+)
 from navigation_system.runtime.results_report import generate_results_report
+from navigation_system.runtime.vlnce.r2r.execution import wait_for_pending_episode_transfers
 
 
 def build_arg_parser(
@@ -101,11 +106,29 @@ def build_arg_parser(
         default=1,
         help="并行运行的worker数量（默认1，表示串行）",
     )
+    parser.add_argument(
+        "--episode-workdir",
+        type=str,
+        default="",
+        help=(
+            "先把当前 episode 写入本地快速缓存目录，结束后再后台同步回最终结果目录。"
+            "当结果目录位于 /media、/mnt 等慢盘时会自动启用默认缓存。"
+        ),
+    )
+    add_output_profile_arg(parser)
+    add_output_artifact_args(parser)
+    parser.add_argument(
+        "--no-report",
+        action="store_true",
+        help="跳过运行后报告生成",
+    )
     parser.add_argument("--auto", action="store_true", help="全自动运行（无需确认）")
     return parser
 
 
 def maybe_generate_report(args: argparse.Namespace, config, verbose: bool = True) -> None:
+    if bool(getattr(args, "no_report", False)):
+        return
     results_dir = args.results_dir or config.PATHS.RESULTS_DIR
     if not results_dir:
         return
@@ -204,8 +227,9 @@ def run_navigation_from_args(
     if not episode_ids:
         if args.skip_sr1:
             print("\n✅ 没有需要运行的 episodes：目标范围内都已有 SR=1 最佳结果")
+            wait_for_pending_episode_transfers()
             maybe_generate_report(args, config, verbose=False)
-            if profile.post_run_hook is not None:
+            if profile.post_run_hook is not None and not bool(getattr(args, "no_report", False)):
                 profile.post_run_hook(args, config)
             return 0
         print("\n❌ 错误: 没有可运行的episodes")
@@ -233,8 +257,9 @@ def run_navigation_from_args(
             print("   " + " | ".join(parts), flush=True)
 
     del results_summary
+    wait_for_pending_episode_transfers()
     maybe_generate_report(args, config, verbose=False)
-    if profile.post_run_hook is not None:
+    if profile.post_run_hook is not None and not bool(getattr(args, "no_report", False)):
         profile.post_run_hook(args, config)
     return 1 if failed_results else 0
 

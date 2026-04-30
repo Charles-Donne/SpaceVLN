@@ -21,6 +21,10 @@ from navigation_system.runtime.vlnce.profiles import (
     NavigationRuntimeProfile,
     STANDARD_RUNTIME_PROFILE,
 )
+from navigation_system.runtime.output_policy import (
+    add_output_artifact_args,
+    add_output_profile_arg,
+)
 from navigation_system.runtime.results_report import generate_results_report
 
 
@@ -175,46 +179,8 @@ def build_arg_parser(
         default=1,
         help="Number of parallel workers (1 means serial execution)",
     )
-    parser.add_argument(
-        "--save-step-images",
-        dest="save_step_images",
-        action="store_true",
-        default=None,
-        help="Save per-step replay PNGs under episode visualization directories",
-    )
-    parser.add_argument(
-        "--no-save-step-images",
-        dest="save_step_images",
-        action="store_false",
-        help="Do not save per-step replay PNGs",
-    )
-    parser.add_argument(
-        "--save-gif",
-        dest="save_gif",
-        action="store_true",
-        default=None,
-        help="Save final episode navigation.gif replay",
-    )
-    parser.add_argument(
-        "--no-gif",
-        "--no-save-gif",
-        dest="save_gif",
-        action="store_false",
-        help="Skip final episode navigation.gif replay generation",
-    )
-    parser.add_argument(
-        "--save-vlm-artifacts",
-        dest="save_vlm_artifacts",
-        action="store_true",
-        default=None,
-        help="Save VLM prompt/image/debug artifacts",
-    )
-    parser.add_argument(
-        "--no-vlm-artifacts",
-        dest="save_vlm_artifacts",
-        action="store_false",
-        help="Skip VLM prompt/image/debug artifact files for faster metric-only runs",
-    )
+    add_output_profile_arg(parser)
+    add_output_artifact_args(parser)
     parser.add_argument(
         "--no-report",
         action="store_true",
@@ -305,7 +271,7 @@ def run_navigation_from_args(
             print("\n✅ No episodes need to run: the requested range already has SR=1 results")
             wait_for_pending_episode_transfers()
             maybe_generate_report(args, config, verbose=True)
-            if profile.post_run_hook is not None:
+            if profile.post_run_hook is not None and not bool(getattr(args, "no_report", False)):
                 profile.post_run_hook(args, config)
             return 0
         print("\n❌ Error: no runnable episodes were selected")
@@ -340,7 +306,7 @@ def run_navigation_from_args(
     del results_summary
     wait_for_pending_episode_transfers()
     maybe_generate_report(args, config, verbose=True)
-    if profile.post_run_hook is not None:
+    if profile.post_run_hook is not None and not bool(getattr(args, "no_report", False)):
         profile.post_run_hook(args, config)
     return 1 if failed_results else 0
 

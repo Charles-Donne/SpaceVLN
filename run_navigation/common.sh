@@ -145,6 +145,12 @@ spacevln_setup_runtime_env() {
     export MAGNUM_LOG="${MAGNUM_LOG:-quiet}"
     export PYTHONWARNINGS="${PYTHONWARNINGS:-ignore}"
     export TRANSFORMERS_VERBOSITY="${TRANSFORMERS_VERBOSITY:-error}"
+    export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
+    export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+    export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
+    export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-1}"
+    export NUMEXPR_NUM_THREADS="${NUMEXPR_NUM_THREADS:-1}"
+    export VECLIB_MAXIMUM_THREADS="${VECLIB_MAXIMUM_THREADS:-1}"
     export MPLCONFIGDIR="${MPLCONFIGDIR:-/tmp/matplotlib-spacevln}"
     mkdir -p "$MPLCONFIGDIR"
 

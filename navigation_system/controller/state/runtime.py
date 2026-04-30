@@ -131,6 +131,7 @@ class EpisodeTimingTracker:
     failed_retry_wait_duration_s: float = 0.0
     thinking_records: List[Dict[str, Any]] = field(default_factory=list)
     action_records: List[Dict[str, Any]] = field(default_factory=list)
+    local_sections: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
     @staticmethod
     def round_duration_s(duration_s: float) -> float:
@@ -167,6 +168,7 @@ class EpisodeTimingTracker:
         self.failed_retry_wait_duration_s = 0.0
         self.thinking_records.clear()
         self.action_records.clear()
+        self.local_sections.clear()
 
     def mark_episode_active(self) -> None:
         if self.episode_wall_start_time is None:
@@ -198,6 +200,42 @@ class EpisodeTimingTracker:
         self.failed_retry_wait_duration_s = self.round_duration_s(
             float(self.failed_retry_wait_duration_s or 0.0) + float(duration_s or 0.0)
         )
+
+    def record_local_section(self, section: str, duration_s: float) -> None:
+        section_name = str(section or "").strip() or "other"
+        duration = max(0.0, float(duration_s or 0.0))
+        if duration <= 0.0:
+            return
+        item = self.local_sections.setdefault(
+            section_name,
+            {
+                "count": 0,
+                "total_duration_s": 0.0,
+                "max_duration_s": 0.0,
+            },
+        )
+        item["count"] = int(item.get("count", 0) or 0) + 1
+        item["total_duration_s"] = float(item.get("total_duration_s", 0.0) or 0.0) + duration
+        item["max_duration_s"] = max(float(item.get("max_duration_s", 0.0) or 0.0), duration)
+
+    def summarize_local_sections(self) -> Dict[str, Any]:
+        sections: Dict[str, Dict[str, Any]] = {}
+        total_duration_s = 0.0
+        for name, payload in sorted(self.local_sections.items()):
+            count = int(payload.get("count", 0) or 0)
+            total = float(payload.get("total_duration_s", 0.0) or 0.0)
+            max_duration = float(payload.get("max_duration_s", 0.0) or 0.0)
+            total_duration_s += total
+            sections[name] = {
+                "count": count,
+                "total_duration_s": self.round_duration_s(total),
+                "avg_duration_s": self.round_duration_s(total / count if count > 0 else 0.0),
+                "max_duration_s": self.round_duration_s(max_duration),
+            }
+        return {
+            "total_duration_s": self.round_duration_s(total_duration_s),
+            "sections": sections,
+        }
 
     def record_thinking_call(
         self,
@@ -253,15 +291,23 @@ class EpisodeTimingTracker:
         failed_api_total_duration_s = float(
             thinking_api_summary.get("failed_total_duration_s", 0.0) or 0.0
         ) + float(action_api_summary.get("failed_total_duration_s", 0.0) or 0.0)
+        api_total_duration_s = float(
+            thinking_api_summary.get("total_duration_s", 0.0) or 0.0
+        ) + float(action_api_summary.get("total_duration_s", 0.0) or 0.0)
         failed_retry_wait_duration_s = self.round_duration_s(self.failed_retry_wait_duration_s)
         failed_wasted_duration_s = self.round_duration_s(
             failed_api_total_duration_s + failed_retry_wait_duration_s
         )
+        local_timing_summary = self.summarize_local_sections()
         return {
             "episode_duration_s": self.round_duration_s(episode_duration_s),
+            "local_non_api_duration_s": self.round_duration_s(
+                episode_duration_s - api_total_duration_s
+            ),
             "failed_api_total_duration_s": self.round_duration_s(failed_api_total_duration_s),
             "failed_retry_wait_duration_s": failed_retry_wait_duration_s,
             "failed_wasted_duration_s": failed_wasted_duration_s,
             "thinking_api_summary": thinking_api_summary,
             "action_api_summary": action_api_summary,
+            "local_timing_summary": local_timing_summary,
         }

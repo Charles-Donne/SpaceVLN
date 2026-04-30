@@ -372,6 +372,7 @@ class SaveManager:
             'total_steps': result.get('total_steps', 0),
             'subtask_count': result.get('subtask_count', 0),
             'episode_duration_s': result.get('episode_duration_s', 0.0),
+            'local_non_api_duration_s': result.get('local_non_api_duration_s', 0.0),
             'failed_api_total_duration_s': result.get('failed_api_total_duration_s', 0.0),
             'failed_retry_wait_duration_s': result.get('failed_retry_wait_duration_s', 0.0),
             'failed_wasted_duration_s': result.get('failed_wasted_duration_s', result.get('failed_api_total_duration_s', 0.0)),

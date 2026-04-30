@@ -986,6 +986,10 @@ class OVONObjectNavigationController(NavigationAgentController):
             "total_steps": total_steps,
             "subtask_count": self.subtask_count,
             "episode_duration_s": episode_timing_summary["episode_duration_s"],
+            "local_non_api_duration_s": episode_timing_summary.get(
+                "local_non_api_duration_s",
+                0.0,
+            ),
             "failed_api_total_duration_s": episode_timing_summary["failed_api_total_duration_s"],
             "failed_retry_wait_duration_s": episode_timing_summary["failed_retry_wait_duration_s"],
             "failed_wasted_duration_s": episode_timing_summary["failed_wasted_duration_s"],
@@ -996,6 +1000,10 @@ class OVONObjectNavigationController(NavigationAgentController):
             "path_length": float(check_inf_nan(metrics_source.get("path_length", 0.0))),
             "thinking_api_summary": episode_timing_summary["thinking_api_summary"],
             "action_api_summary": episode_timing_summary["action_api_summary"],
+            "local_timing_summary": episode_timing_summary.get(
+                "local_timing_summary",
+                {},
+            ),
             "timestamp": datetime.now().isoformat(),
         }
         result["sr"] = result["success"]

@@ -1050,16 +1050,28 @@ class NavigationAgentController(BaseNavigationController):
         controller_payload: Optional[Dict[str, Any]] = None,
         controller_filename: str = "response.controller.json",
     ) -> None:
+        runtime_options = getattr(self, "runtime_options", None)
+        if runtime_options is not None and not bool(
+            getattr(runtime_options, "save_api_request_artifacts", True)
+        ):
+            return
         target_dir = str(save_dir or "").strip()
         if not target_dir:
             return
-        if isinstance(raw_payload, dict):
-            self._write_json_artifact(
-                os.path.join(target_dir, "response.json"),
-                self._copy_response_payload(raw_payload),
+        timing_started = time.perf_counter()
+        try:
+            if isinstance(raw_payload, dict):
+                self._write_json_artifact(
+                    os.path.join(target_dir, "response.json"),
+                    self._copy_response_payload(raw_payload),
+                )
+            if isinstance(controller_payload, dict):
+                self._write_json_artifact(os.path.join(target_dir, controller_filename), dict(controller_payload))
+        finally:
+            self._record_local_timing(
+                "artifact_write_response",
+                time.perf_counter() - timing_started,
             )
-        if isinstance(controller_payload, dict):
-            self._write_json_artifact(os.path.join(target_dir, controller_filename), dict(controller_payload))
 
     def _persist_thinking_controller_response(
         self,
@@ -3054,7 +3066,12 @@ class NavigationAgentController(BaseNavigationController):
             }
             return None, None, dict(self.latest_thinking_cycle_info)
 
-        os.makedirs(thinking_dir, exist_ok=True)
+        save_vlm_artifacts = bool(
+            getattr(getattr(self, "runtime_options", None), "save_api_request_artifacts", True)
+        )
+        planner_save_dir = thinking_dir if save_vlm_artifacts else None
+        if save_vlm_artifacts:
+            os.makedirs(thinking_dir, exist_ok=True)
         obstacle_distances = getattr(self, 'latest_obstacle_distances', {
             'front': 'Unknown',
             'left_30': 'Unknown',
@@ -3081,7 +3098,7 @@ class NavigationAgentController(BaseNavigationController):
                 global_map_image=global_map,
                 local_map_image=None,
                 obstacle_distances=obstacle_distances,
-                save_dir=thinking_dir,
+                save_dir=planner_save_dir,
             )
             planner_timing_info_chunks.append(
                 dict(getattr(self.planner, "last_call_timing_info", {}) or {})
@@ -3108,7 +3125,7 @@ class NavigationAgentController(BaseNavigationController):
                 previous_subtask_landmark_summary=previous_subtask_landmark_summary,
                 obstacle_distances=obstacle_distances,
                 verify_replan_prompt_notice=verify_replan_prompt_notice,
-                save_dir=thinking_dir,
+                save_dir=planner_save_dir,
             )
             planner_timing_info_chunks.append(
                 dict(getattr(self.planner, "last_call_timing_info", {}) or {})
@@ -3141,7 +3158,7 @@ class NavigationAgentController(BaseNavigationController):
                     previous_subtask_landmark_summary=previous_subtask_landmark_summary,
                     obstacle_distances=obstacle_distances,
                     verify_replan_prompt_notice=retry_notice,
-                    save_dir=thinking_dir,
+                    save_dir=planner_save_dir,
                 )
                 planner_timing_info_chunks.append(
                     dict(getattr(self.planner, "last_call_timing_info", {}) or {})
@@ -3632,12 +3649,16 @@ class NavigationAgentController(BaseNavigationController):
         )
 
         subtask_id = self._current_subtask_run_id()
+        save_vlm_artifacts = bool(
+            getattr(getattr(self, "runtime_options", None), "save_api_request_artifacts", True)
+        )
         action_save_dir = self.save_manager.action_step_dir(
             subtask_id,
             self.current_step + 1,
-            create=True,
+            create=save_vlm_artifacts,
         )
-        self._write_action_subtask_info_if_needed(subtask_id)
+        if save_vlm_artifacts:
+            self._write_action_subtask_info_if_needed(subtask_id)
 
         detection_image = self._build_action_detection_image_input(last_step)
         action_landmark_map_info = build_action_landmark_map_info(
@@ -4084,16 +4105,23 @@ class NavigationAgentController(BaseNavigationController):
             
             subtask_id = self._current_subtask_run_id()
             
-            self.nav_visualizer.save_step_visualization(
-                observations=self.latest_obs,
-                info=self._build_nav_visualizer_info(self.latest_info),
-                step=self.current_step,
-                instruction=self.current_instruction,
-                current_subtask=subtask_text,
-                distance=distance,
-                action=action_name,
-                subtask_id=subtask_id
-            )
+            nav_replay_started = time.perf_counter()
+            try:
+                self.nav_visualizer.save_step_visualization(
+                    observations=self.latest_obs,
+                    info=self._build_nav_visualizer_info(self.latest_info),
+                    step=self.current_step,
+                    instruction=self.current_instruction,
+                    current_subtask=subtask_text,
+                    distance=distance,
+                    action=action_name,
+                    subtask_id=subtask_id
+                )
+            finally:
+                self._record_local_timing(
+                    "nav_replay_action",
+                    time.perf_counter() - nav_replay_started,
+                )
         
         return result
     
@@ -4492,6 +4520,8 @@ class NavigationAgentController(BaseNavigationController):
             total_steps,
             normalized_env_metrics,
             failure_reason=final_failure_reason,
+            gif_path=gif_path,
+            topdown_path=topdown_path,
         )
         episode_timing_summary = self._build_episode_timing_summary()
 
@@ -4510,11 +4540,13 @@ class NavigationAgentController(BaseNavigationController):
             ),
             'detected_classes': list(self.detected_classes),
             'episode_duration_s': episode_timing_summary['episode_duration_s'],
+            'local_non_api_duration_s': episode_timing_summary.get('local_non_api_duration_s', 0.0),
             'failed_api_total_duration_s': episode_timing_summary['failed_api_total_duration_s'],
             'failed_retry_wait_duration_s': episode_timing_summary['failed_retry_wait_duration_s'],
             'failed_wasted_duration_s': episode_timing_summary['failed_wasted_duration_s'],
             'thinking_api_summary': episode_timing_summary['thinking_api_summary'],
             'action_api_summary': episode_timing_summary['action_api_summary'],
+            'local_timing_summary': episode_timing_summary.get('local_timing_summary', {}),
             'gif_path': gif_path,
             'topdown_path': topdown_path,
             'result_file': final_result,
@@ -4659,6 +4691,8 @@ class NavigationAgentController(BaseNavigationController):
         env_metrics: Dict = None,
         *,
         failure_reason: str = "",
+        gif_path: Optional[str] = None,
+        topdown_path: Optional[str] = None,
     ) -> str:
         """
         Save the final navigation result under `log/`.
@@ -4684,11 +4718,13 @@ class NavigationAgentController(BaseNavigationController):
         metrics_source = dict(env_metrics if env_metrics else (self.latest_info if self.latest_info else {}))
         episode_timing_summary = self._build_episode_timing_summary()
         episode_duration_s = episode_timing_summary['episode_duration_s']
+        local_non_api_duration_s = episode_timing_summary.get('local_non_api_duration_s', 0.0)
         failed_api_total_duration_s = episode_timing_summary['failed_api_total_duration_s']
         failed_retry_wait_duration_s = episode_timing_summary['failed_retry_wait_duration_s']
         failed_wasted_duration_s = episode_timing_summary['failed_wasted_duration_s']
         thinking_api_summary = episode_timing_summary['thinking_api_summary']
         action_api_summary = episode_timing_summary['action_api_summary']
+        local_timing_summary = episode_timing_summary.get('local_timing_summary', {})
         
         # Extract and validate core metrics.
         result = {
@@ -4697,6 +4733,7 @@ class NavigationAgentController(BaseNavigationController):
             'total_steps': total_steps,
             'subtask_count': self.subtask_count,
             'episode_duration_s': episode_duration_s,
+            'local_non_api_duration_s': local_non_api_duration_s,
             'failed_api_total_duration_s': failed_api_total_duration_s,
             'failed_retry_wait_duration_s': failed_retry_wait_duration_s,
             'failed_wasted_duration_s': failed_wasted_duration_s,
@@ -4715,6 +4752,9 @@ class NavigationAgentController(BaseNavigationController):
 
             'thinking_api_summary': thinking_api_summary,
             'action_api_summary': action_api_summary,
+            'local_timing_summary': local_timing_summary,
+            'gif_path': str(gif_path or ""),
+            'topdown_path': str(topdown_path or ""),
             'timestamp': datetime.now().isoformat()
         }
         reason_text = str(failure_reason or "").strip()

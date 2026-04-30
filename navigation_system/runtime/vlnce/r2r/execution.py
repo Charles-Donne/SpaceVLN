@@ -25,6 +25,11 @@ from navigation_system.runtime.episode_io import (
     redirect_process_output_to_null,
     save_episode_stdout_log_enabled,
 )
+from navigation_system.runtime.output_policy import (
+    apply_output_policy_to_config,
+    build_output_job_fields,
+    build_output_namespace_kwargs,
+)
 from navigation_system.runtime.storage.artifacts import (
     SaveManager,
     get_episode_detail_dir,
@@ -167,6 +172,21 @@ def _parallel_worker_initializer() -> None:
         signal.signal(signal.SIGINT, signal.SIG_IGN)
     except Exception:
         pass
+    try:
+        import cv2
+
+        cv2.setNumThreads(0)
+    except Exception:
+        pass
+    try:
+        import torch
+
+        torch.set_num_threads(_positive_int(os.getenv("SPACEVLN_TORCH_NUM_THREADS", "1"), 1))
+        torch.set_num_interop_threads(
+            _positive_int(os.getenv("SPACEVLN_TORCH_INTEROP_THREADS", "1"), 1)
+        )
+    except Exception:
+        pass
 
 
 def _shutdown_parallel_executor(
@@ -218,19 +238,7 @@ def load_runtime_config(
     config.PATHS.RESULTS_DIR = resolved_results_dir
     if args.max_steps is not None:
         config.TASK_CONFIG.ENVIRONMENT.MAX_EPISODE_STEPS = args.max_steps
-    output_cfg = getattr(config, "OUTPUT", None)
-    if output_cfg is not None:
-        request_cfg = getattr(output_cfg, "REQUESTS", None)
-        replay_cfg = getattr(output_cfg, "REPLAY", None)
-        save_vlm_artifacts = getattr(args, "save_vlm_artifacts", None)
-        if request_cfg is not None and save_vlm_artifacts is not None:
-            request_cfg.SAVE_VLM_ARTIFACTS = bool(save_vlm_artifacts)
-        save_step_images = getattr(args, "save_step_images", None)
-        if replay_cfg is not None and save_step_images is not None:
-            replay_cfg.SAVE_STEP_IMAGES = bool(save_step_images)
-        save_gif = getattr(args, "save_gif", None)
-        if replay_cfg is not None and save_gif is not None:
-            replay_cfg.SAVE_GIF = bool(save_gif)
+    apply_output_policy_to_config(config, args)
     apply_runtime_derived_fields(config)
     output_logs = getattr(getattr(config, "OUTPUT", None), "LOGS", None)
     if output_logs is not None:
@@ -848,10 +856,7 @@ def _build_parallel_episode_spec(
         "max_subtask_steps": int(args.max_subtask_steps),
         "max_steps": args.max_steps,
         "initial_failure_max_attempts": _resolve_initial_failure_max_attempts(args),
-        "save_step_images": getattr(args, "save_step_images", None),
-        "save_gif": getattr(args, "save_gif", None),
-        "save_vlm_artifacts": getattr(args, "save_vlm_artifacts", None),
-        "no_report": bool(getattr(args, "no_report", False)),
+        **build_output_job_fields(args),
         "worker_index": int(worker_index),
         "worker_count": int(worker_count),
         "runtime_profile_name": profile.name,
@@ -873,10 +878,7 @@ def _run_parallel_episode_job(job_spec: Dict[str, Any]) -> Dict[str, Any]:
         initial_failure_max_attempts=int(job_spec.get("initial_failure_max_attempts", DEFAULT_INITIAL_FAILURE_MAX_ATTEMPTS)),
         skip_sr1=False,
         parallel_workers=1,
-        save_step_images=job_spec.get("save_step_images"),
-        save_gif=job_spec.get("save_gif"),
-        save_vlm_artifacts=job_spec.get("save_vlm_artifacts"),
-        no_report=bool(job_spec.get("no_report", False)),
+        **build_output_namespace_kwargs(job_spec),
         worker_index=int(job_spec["worker_index"]),
         worker_count=int(job_spec["worker_count"]),
         suppress_runtime_prints=True,

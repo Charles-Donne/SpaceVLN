@@ -4,6 +4,7 @@ Base Navigation Controller
 """
 import os
 import re
+import time
 import numpy as np
 import cv2
 import torch
@@ -62,6 +63,21 @@ class _NoOpSegmentModule:
 
 class BaseNavigationController:
     """封装底层环境交互与感知建图能力的基础导航控制器。"""
+
+    def _record_local_timing(self, section: str, duration_s: float) -> None:
+        tracker = getattr(self, "timing_tracker", None)
+        recorder = getattr(tracker, "record_local_section", None)
+        if callable(recorder):
+            recorder(section, duration_s)
+
+    @staticmethod
+    def _timing_section_for_phase(phase: str, *, prefix: str) -> str:
+        phase_text = str(phase or "").strip().lower()
+        if phase_text == "initial" or phase_text.startswith("verify"):
+            return f"{prefix}_thinking"
+        if phase_text.startswith("action"):
+            return f"{prefix}_action"
+        return prefix
 
     def _should_initialize_segment_module(self) -> bool:
         disabled = str(os.getenv("SPACEVLN_DISABLE_GROUNDED_SAM", "") or "").strip().lower()
@@ -529,6 +545,12 @@ class BaseNavigationController:
         if callable(before_step_hook):
             before_step_hook(actions=actions, context=context)
 
+        context_text = str(context or "").strip().lower()
+        if "lookaround" in context_text or "scan" in context_text:
+            timing_section = "env_step_lookaround"
+        else:
+            timing_section = "env_step_action"
+        step_started = time.perf_counter()
         try:
             outputs = self.envs.step(actions)
         except AssertionError as exc:
@@ -539,6 +561,8 @@ class BaseNavigationController:
             self.latest_info['done'] = True
             print(f"[WARN] Episode already done during {context}: {exc}")
             return None
+        finally:
+            self._record_local_timing(timing_section, time.perf_counter() - step_started)
 
         obs, rewards, dones, infos = [list(x) for x in zip(*outputs)]
         self._cache_env_step_outcome(obs, dones, infos)
@@ -575,35 +599,42 @@ class BaseNavigationController:
         if self.visualizer is None:
             return {}, [], None
 
-        paths, detected_landmarks_step, last_waypoint_angle = self.visualizer.save_step_visualization(
-            step=self.current_step if step is None else int(step),
-            episode_id=self.current_episode_id,
-            rgb=rgb_bgr,
-            full_map=map_state['full_map'],
-            trajectory_points=map_state.get('subtask_trajectory_points', []),
-            detected_classes=list(self.detected_classes),
-            current_pose=map_state['full_pose'],
-            floor=map_state['floor'],
-            hfov=self.space_sensor_config.HFOV_DEG,
-            detections=detections,
-            labels=labels,
-            masks=masks,
-            landmark_classes=list(landmark_classes if landmark_classes is not None else getattr(self, 'landmark_classes', [])),
-            mapping_classes=self.mapping_classes,
-            landmark_config={
-                'min_total_pixels': self.landmark_min_total_pixels,
-                'min_area_threshold': self.landmark_min_area_threshold
-            },
-            waypoint_positions=map_state.get('waypoint_positions', []),
-            waypoint_ids=map_state.get('waypoint_ids', []),
-            space_area_layer=map_state.get('space_area_layer'),
-            space_area_records=map_state.get('space_area_records', []),
-            phase=phase,
-            global_trajectory_points=map_state.get('global_trajectory_points', []),
-            crop_offset=map_state.get('crop_offset'),
-            controller=self,
-            render_policy=render_policy,
-        )
+        render_started = time.perf_counter()
+        try:
+            paths, detected_landmarks_step, last_waypoint_angle = self.visualizer.save_step_visualization(
+                step=self.current_step if step is None else int(step),
+                episode_id=self.current_episode_id,
+                rgb=rgb_bgr,
+                full_map=map_state['full_map'],
+                trajectory_points=map_state.get('subtask_trajectory_points', []),
+                detected_classes=list(self.detected_classes),
+                current_pose=map_state['full_pose'],
+                floor=map_state['floor'],
+                hfov=self.space_sensor_config.HFOV_DEG,
+                detections=detections,
+                labels=labels,
+                masks=masks,
+                landmark_classes=list(landmark_classes if landmark_classes is not None else getattr(self, 'landmark_classes', [])),
+                mapping_classes=self.mapping_classes,
+                landmark_config={
+                    'min_total_pixels': self.landmark_min_total_pixels,
+                    'min_area_threshold': self.landmark_min_area_threshold
+                },
+                waypoint_positions=map_state.get('waypoint_positions', []),
+                waypoint_ids=map_state.get('waypoint_ids', []),
+                space_area_layer=map_state.get('space_area_layer'),
+                space_area_records=map_state.get('space_area_records', []),
+                phase=phase,
+                global_trajectory_points=map_state.get('global_trajectory_points', []),
+                crop_offset=map_state.get('crop_offset'),
+                controller=self,
+                render_policy=render_policy,
+            )
+        finally:
+            self._record_local_timing(
+                self._timing_section_for_phase(phase, prefix="render_snapshot"),
+                time.perf_counter() - render_started,
+            )
         self._store_latest_map_paths(paths)
         return paths, detected_landmarks_step, last_waypoint_angle
 
@@ -795,13 +826,23 @@ class BaseNavigationController:
                 print(f"[WARN] Episode ended at lookaround step {look_index}/12")
                 return None
 
+            preprocess_started = time.perf_counter()
             batch_obs = self._batch_obs(obs, save_object_detection=enable_landmark_detection)
             poses = torch.from_numpy(np.array([item['sensor_pose'] for item in obs])).float().to(self.device)
+            self._record_local_timing(
+                "preprocess_lookaround",
+                time.perf_counter() - preprocess_started,
+            )
 
+            map_started = time.perf_counter()
             map_state = self.mapper.update_map(
                 batch_obs, poses, look_step,
                 list(self.detected_classes), self.current_episode_id,
                 observations=obs,
+            )
+            self._record_local_timing(
+                "map_update_lookaround",
+                time.perf_counter() - map_started,
             )
             final_map_state = map_state
 
@@ -809,9 +850,14 @@ class BaseNavigationController:
             lookaround_images.append(rgb_bgr.copy())
             lookaround_depths.append(self._depth_to_meters(obs[0]['depth']))
             if prepare_thinking_detection and getattr(self, 'landmark_classes', None):
+                detection_started = time.perf_counter()
                 detections, labels, masks = self._detect_landmarks_for_visualization(
                     rgb_bgr,
                     list(self.landmark_classes),
+                )
+                self._record_local_timing(
+                    "landmark_detection_lookaround",
+                    time.perf_counter() - detection_started,
                 )
                 lookaround_detection_payloads.append((detections, list(labels or []), masks))
             else:
@@ -831,13 +877,20 @@ class BaseNavigationController:
 
             # Always expose every real lookaround env step to the navigation visualizer,
             # even when debug map/rgb render dumps are disabled.
-            self._on_lookaround_step(
-                phase=phase,
-                look_index=look_index,
-                look_step=look_step,
-                obs=obs[0],
-                info=infos[0] if infos and len(infos) > 0 else {},
-            )
+            nav_replay_started = time.perf_counter()
+            try:
+                self._on_lookaround_step(
+                    phase=phase,
+                    look_index=look_index,
+                    look_step=look_step,
+                    obs=obs[0],
+                    info=infos[0] if infos and len(infos) > 0 else {},
+                )
+            finally:
+                self._record_local_timing(
+                    "nav_replay_lookaround",
+                    time.perf_counter() - nav_replay_started,
+                )
 
         self.latest_obs = obs[0]
         self._update_obstacle_distances_12_directions(lookaround_depths)
@@ -910,15 +963,25 @@ class BaseNavigationController:
             }
         
         prev_class_count = len(self.detected_classes)
+        preprocess_started = time.perf_counter()
         batch_obs = self._batch_obs(obs, save_object_detection=enable_landmark_detection)
         poses = torch.from_numpy(
             np.array([item['sensor_pose'] for item in obs])
         ).float().to(self.device)
+        self._record_local_timing(
+            "preprocess_action",
+            time.perf_counter() - preprocess_started,
+        )
         
+        map_started = time.perf_counter()
         map_state = self.mapper.update_map(
             batch_obs, poses, self.current_step,
             list(self.detected_classes), self.current_episode_id,
             observations=obs,
+        )
+        self._record_local_timing(
+            "map_update_action",
+            time.perf_counter() - map_started,
         )
         
         # print(f"[Controller.step] 从mapper接收轨迹: 全局={len(map_state.get('global_trajectory_points', []))}, 子任务={len(map_state.get('subtask_trajectory_points', []))}")
@@ -1037,8 +1100,18 @@ class BaseNavigationController:
                 if self.landmark_memory.has_step(self.current_step, current_landmark_queries):
                     return True
 
+        preprocess_started = time.perf_counter()
         self._batch_obs([self.latest_obs], save_object_detection=enable_landmark_detection)
+        self._record_local_timing(
+            self._timing_section_for_phase(phase, prefix="preprocess_snapshot"),
+            time.perf_counter() - preprocess_started,
+        )
+        map_state_started = time.perf_counter()
         map_state = self.mapper.get_map_state()
+        self._record_local_timing(
+            self._timing_section_for_phase(phase, prefix="get_map_state"),
+            time.perf_counter() - map_state_started,
+        )
 
         rgb_bgr = cv2.cvtColor(self.latest_obs['rgb'], cv2.COLOR_RGB2BGR)
         landmark_classes = list(self.landmark_classes) if enable_landmark_detection else []
@@ -1100,47 +1173,55 @@ class BaseNavigationController:
 
     def _update_obstacle_distances_12_directions(self, lookaround_depths: Optional[List[np.ndarray]] = None):
         """Update 12-view obstacle distances from current-heading map rays, guarded by nearer depth hits."""
+        timing_started = time.perf_counter()
         depth_views = list(lookaround_depths or [])
-        map_fallback = {}
         try:
-            if self.mapper is not None and self.visualizer is not None:
-                map_state = self.mapper.get_map_state()
-                map_fallback = self.visualizer.calculate_obstacle_distances_12_directions_from_full_map(
-                    map_state.get('full_map'),
-                )
-        except Exception:
             map_fallback = {}
-        distances = {}
-        for config in DIRECTION_CONFIG:
-            step_idx = int(config["step"])
-            angle = int(config["angle"])
-            # Keep 12-view obstacle text aligned with the exact rendered IMAGE:
-            # IMAGE 1 (Front 0deg) uses the step-12 depth frame, IMAGE 2 uses step-1, etc.
-            depth_meters = depth_views[step_idx - 1] if step_idx - 1 < len(depth_views) else None
             try:
-                distance_m = sample_depth_distance_from_region(
-                    depth_meters,
-                    center_x_ratio=0.5,
-                    width_ratio=0.26,
-                    row_start_ratio=0.38,
-                    row_end_ratio=0.92,
-                    max_distance_m=5.0,
-                    sensor_min_depth_m=float(self.config.TASK_CONFIG.SIMULATOR.DEPTH_SENSOR.MIN_DEPTH),
-                    sample_count=96,
-                    sample_percentile=20.0,
-                )
+                if self.mapper is not None and self.visualizer is not None:
+                    map_state = self.mapper.get_map_state()
+                    map_fallback = self.visualizer.calculate_obstacle_distances_12_directions_from_full_map(
+                        map_state.get('full_map'),
+                    )
             except Exception:
-                distance_m = None
-            dist_key = f'angle_{angle}'
-            distances[dist_key] = merge_obstacle_distance_text(
-                map_fallback.get(dist_key),
-                distance_m,
-                default_distance="Unknown",
+                map_fallback = {}
+            distances = {}
+            for config in DIRECTION_CONFIG:
+                step_idx = int(config["step"])
+                angle = int(config["angle"])
+                # Keep 12-view obstacle text aligned with the exact rendered IMAGE:
+                # IMAGE 1 (Front 0deg) uses the step-12 depth frame, IMAGE 2 uses step-1, etc.
+                depth_meters = depth_views[step_idx - 1] if step_idx - 1 < len(depth_views) else None
+                try:
+                    distance_m = sample_depth_distance_from_region(
+                        depth_meters,
+                        center_x_ratio=0.5,
+                        width_ratio=0.26,
+                        row_start_ratio=0.38,
+                        row_end_ratio=0.92,
+                        max_distance_m=5.0,
+                        sensor_min_depth_m=float(self.config.TASK_CONFIG.SIMULATOR.DEPTH_SENSOR.MIN_DEPTH),
+                        sample_count=96,
+                        sample_percentile=20.0,
+                    )
+                except Exception:
+                    distance_m = None
+                dist_key = f'angle_{angle}'
+                distances[dist_key] = merge_obstacle_distance_text(
+                    map_fallback.get(dist_key),
+                    distance_m,
+                    default_distance="Unknown",
+                )
+            self.latest_obstacle_distances_12 = distances
+        finally:
+            self._record_local_timing(
+                "obstacle_distance_lookaround",
+                time.perf_counter() - timing_started,
             )
-        self.latest_obstacle_distances_12 = distances
 
     def _update_obstacle_distances(self):
         """Update action-view obstacle distances from current-heading map rays, guarded by nearer depth hits."""
+        timing_started = time.perf_counter()
         try:
             map_distances = {}
             if self.mapper is not None and self.visualizer is not None:
@@ -1161,6 +1242,11 @@ class BaseNavigationController:
                 'left_30': 'Unknown',
                 'right_30': 'Unknown',
             }
+        finally:
+            self._record_local_timing(
+                "obstacle_distance_action",
+                time.perf_counter() - timing_started,
+            )
 
     @property
     def current_episode_dir(self) -> str:
