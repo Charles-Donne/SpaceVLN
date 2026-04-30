@@ -23,6 +23,71 @@ from navigation_system.runtime.vlnce.profiles import (
 from navigation_system.runtime.results_report import generate_results_report
 
 
+_POOL_BROKEN_PENDING_PREFIX = "parallel worker pool broken, skipped pending episode:"
+
+
+def _format_episode_id_ranges(episode_ids: List[int]) -> str:
+    if not episode_ids:
+        return ""
+    sorted_ids = sorted(set(int(item) for item in episode_ids))
+    ranges = []
+    start = prev = sorted_ids[0]
+    for episode_id in sorted_ids[1:]:
+        if episode_id == prev + 1:
+            prev = episode_id
+            continue
+        ranges.append(f"{start}" if start == prev else f"{start}-{prev}")
+        start = prev = episode_id
+    ranges.append(f"{start}" if start == prev else f"{start}-{prev}")
+    return ", ".join(ranges)
+
+
+def _print_failed_results(failed_results: List[dict]) -> None:
+    if not failed_results:
+        return
+
+    pool_skipped = []
+    normal_failed = []
+    for item in failed_results:
+        error = str(item.get("error") or "").strip()
+        if error.startswith(_POOL_BROKEN_PENDING_PREFIX):
+            pool_skipped.append(item)
+        else:
+            normal_failed.append(item)
+
+    print("\n⚠️ The following episodes failed:", flush=True)
+    for item in normal_failed:
+        episode_id = item.get("episode_id", "?")
+        error = str(item.get("error") or "").strip()
+        reason = str(item.get("reason") or "").strip()
+        parts = [f"Episode {episode_id}"]
+        if reason and not should_suppress_normal_failure_reason(
+            status="FAIL",
+            reason=reason,
+            error=error,
+        ):
+            parts.append(f"reason={reason}")
+        if error:
+            parts.append(f"error={error}")
+        print("   " + " | ".join(parts), flush=True)
+
+    if pool_skipped:
+        skipped_ids = [
+            int(item.get("episode_id"))
+            for item in pool_skipped
+            if str(item.get("episode_id", "")).strip().isdigit()
+        ]
+        first_error = str(pool_skipped[0].get("error") or "").strip()
+        root_error = first_error.split(_POOL_BROKEN_PENDING_PREFIX, 1)[1].strip()
+        print(
+            "   "
+            f"Episodes {_format_episode_id_ranges(skipped_ids)} | "
+            f"error=parallel worker pool broken; {len(pool_skipped)} pending episodes skipped. "
+            f"Root: {root_error}",
+            flush=True,
+        )
+
+
 def build_arg_parser(
     profile: NavigationRuntimeProfile = STANDARD_RUNTIME_PROFILE,
 ) -> argparse.ArgumentParser:
@@ -212,21 +277,7 @@ def run_navigation_from_args(
 
     failed_results = [item for item in results_summary if not bool(item.get("success", False))]
     if failed_results:
-        print("\n⚠️ The following episodes failed:", flush=True)
-        for item in failed_results:
-            episode_id = item.get("episode_id", "?")
-            error = str(item.get("error") or "").strip()
-            reason = str(item.get("reason") or "").strip()
-            parts = [f"Episode {episode_id}"]
-            if reason and not should_suppress_normal_failure_reason(
-                status="FAIL",
-                reason=reason,
-                error=error,
-            ):
-                parts.append(f"reason={reason}")
-            if error:
-                parts.append(f"error={error}")
-            print("   " + " | ".join(parts), flush=True)
+        _print_failed_results(failed_results)
 
     del results_summary
     maybe_generate_report(args, config, verbose=True)

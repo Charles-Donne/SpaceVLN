@@ -626,6 +626,8 @@ def run_parallel_episodes(
                         pending_future.cancel()
                     raise
                 except Exception as exc:
+                    if isinstance(exc, concurrent.futures.process.BrokenProcessPool):
+                        pool_broken_error = str(exc)
                     results_summary.append(
                         _build_parallel_failure(
                             int(job_spec["episode_id"]),

@@ -18,6 +18,25 @@ from navigation_system.render.image_resize import resize_image_to_width
 class AblationNavigationAgentController(NavigationAgentController):
     """Drop-in controller that only changes final prompt/image exposure."""
 
+    def _uses_landmark_perception(self) -> bool:
+        spec = getattr(self, "ablation_spec", None)
+        if spec is None:
+            return True
+        return any(
+            (
+                bool(spec.thinking_prompt.include_detected_landmarks),
+                bool(spec.thinking_prompt.include_previous_subtask_landmark_summary),
+                bool(spec.thinking_image.include_detection_boxes),
+                bool(spec.thinking_image.include_landmark_strip),
+                bool(spec.action_prompt.include_detected_landmarks),
+                bool(spec.action_prompt.include_landmark_map_info),
+                bool(spec.action_image.use_detection_overlay),
+            )
+        )
+
+    def _should_initialize_segment_module(self) -> bool:
+        return self._uses_landmark_perception() and super()._should_initialize_segment_module()
+
     def __init__(
         self,
         config,
@@ -40,6 +59,34 @@ class AblationNavigationAgentController(NavigationAgentController):
             ablation_spec=self.ablation_spec,
         )
         print(f"  AblationController: {self.ablation_spec.slug}")
+        if not self._uses_landmark_perception():
+            print("  AblationController: landmark perception disabled; GroundedSAM is not loaded")
+
+    def _capture_lookaround_scan(self, *args, **kwargs):
+        if not self._uses_landmark_perception():
+            kwargs["enable_landmark_detection"] = False
+            kwargs["prepare_thinking_detection"] = False
+        return super()._capture_lookaround_scan(*args, **kwargs)
+
+    def _detect_landmarks_for_visualization(self, rgb, landmark_queries=None):
+        if not self._uses_landmark_perception():
+            return None, [], None
+        return super()._detect_landmarks_for_visualization(rgb, landmark_queries)
+
+    def _run_pre_action_detection_snapshot(self, action_phase: str) -> bool:
+        if not self._uses_landmark_perception():
+            return False
+        return super()._run_pre_action_detection_snapshot(action_phase)
+
+    def _refresh_post_action_landmark_detection_state(self, action_phase: str) -> bool:
+        if not self._uses_landmark_perception():
+            return False
+        return super()._refresh_post_action_landmark_detection_state(action_phase)
+
+    def _check_post_action_landmark_autocomplete(self, action_phase: str):
+        if not self._uses_landmark_perception():
+            return None
+        return super()._check_post_action_landmark_autocomplete(action_phase)
 
     def _build_action_detection_image_input(self, last_step: int) -> Optional[Dict[str, Any]]:
         if self.ablation_spec.action_image.use_detection_overlay:

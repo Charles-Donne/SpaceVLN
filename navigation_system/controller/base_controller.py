@@ -19,7 +19,6 @@ try:
 except ImportError:
     from typing import Any as Observations
 
-from navigation_system.detection import GroundedSAM
 from navigation_system.space import SemanticMapper, SemanticProcessor
 from navigation_system.space.landmarks import LandmarkMemory
 from navigation_system.space.map.semantic_mapping import Semantic_Mapping
@@ -38,8 +37,35 @@ from navigation_system.controller.state import DetectedClassRegistry
 from navigation_system.runtime.device import get_device
 
 
+class _NoOpSegmentModule:
+    """Empty detector used when a runtime profile disables landmark perception."""
+
+    def __init__(self, reason: str = "disabled"):
+        self.reason = str(reason or "disabled")
+        self._warned = False
+
+    def segment(self, image: np.ndarray, **kwargs):
+        height, width = image.shape[:2]
+        masks = np.zeros((0, height, width), dtype=np.float32)
+        detections = SimpleNamespace(
+            xyxy=np.zeros((0, 4), dtype=np.float32),
+            confidence=np.zeros((0,), dtype=np.float32),
+            class_id=np.zeros((0,), dtype=np.int32),
+            tracker_id=None,
+            mask=masks,
+        )
+        if not self._warned:
+            self._warned = True
+            print(f"[Init] GroundedSAM disabled: {self.reason}")
+        return masks, [], image.copy(), detections
+
+
 class BaseNavigationController:
     """封装底层环境交互与感知建图能力的基础导航控制器。"""
+
+    def _should_initialize_segment_module(self) -> bool:
+        disabled = str(os.getenv("SPACEVLN_DISABLE_GROUNDED_SAM", "") or "").strip().lower()
+        return disabled not in {"1", "true", "yes", "on"}
     
     def __init__(self, config: Config, envs=None):
         # print("[Init] 配置MAP参数...")
@@ -68,7 +94,12 @@ class BaseNavigationController:
         # print(f"[Init] 环境初始化完成，episodes: {self.envs.number_of_episodes}")
         
         # print("[Init] 初始化GroundedSAM...")
-        self.segment_module = GroundedSAM(self.config, self.device)
+        if self._should_initialize_segment_module():
+            from navigation_system.detection import GroundedSAM
+
+            self.segment_module = GroundedSAM(self.config, self.device)
+        else:
+            self.segment_module = _NoOpSegmentModule("runtime disabled")
         
         # print("[Init] 初始化Semantic Mapping...")
         mapping_module = Semantic_Mapping(self.config.MAP).to(self.device)
