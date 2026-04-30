@@ -12,7 +12,7 @@ source "$SCRIPT_DIR/ablation_common.sh"
 spacevln_navigation_print_usage() {
     cat <<'EOF'
 Usage:
-  bash run_navigation/vlnce.sh [--runtime standard|context_cache] [--ablation PRESET_OR_YAML] [episode_args...]
+  bash run_navigation/r2rce.sh [--runtime standard|context_cache] [--ablation PRESET_OR_YAML] [episode_args...]
 
 Runtime:
   --runtime standard        Standard runtime (default)
@@ -72,12 +72,12 @@ Episode-arg examples:
   random 20 260 all 4
 
 Examples:
-  bash run_navigation/vlnce.sh 1 10 260 4
-  bash run_navigation/vlnce.sh --runtime context_cache 1 10 260 4
-  bash run_navigation/vlnce.sh --ablation landmark 1 100 260 4
-  bash run_navigation/vlnce.sh --ablation thinking_reasoning 1 100 260 4
-  bash run_navigation/vlnce.sh --ablation planning_reasoning_no_progress 1 100 260 4
-  bash run_navigation/vlnce.sh --runtime context_cache --ablation space_structure 1 100 260 4
+  bash run_navigation/r2rce.sh 1 10 260 4
+  bash run_navigation/r2rce.sh --runtime context_cache 1 10 260 4
+  bash run_navigation/r2rce.sh --ablation landmark 1 100 260 4
+  bash run_navigation/r2rce.sh --ablation thinking_reasoning 1 100 260 4
+  bash run_navigation/r2rce.sh --ablation planning_reasoning_no_progress 1 100 260 4
+  bash run_navigation/r2rce.sh --runtime context_cache --ablation space_structure 1 100 260 4
 EOF
 }
 

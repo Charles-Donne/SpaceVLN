@@ -221,7 +221,7 @@ spacevln_default_results_root() {
         cd "$project_root" || exit 1
         PYTHONPATH="$project_root:${PYTHONPATH:-}" "$python_bin" - <<PY
 from navigation_system.vlm.api.api_client import build_default_results_family_root
-print(build_default_results_family_root("vlnce"))
+print(build_default_results_family_root("r2rce"))
 PY
     )
 }
@@ -390,11 +390,11 @@ spacevln_dispatch_r2r_cli() {
     if ! [[ "$first_arg" =~ ^[0-9]+$ ]]; then
         echo "❌ Unsupported first positional argument: $first_arg"
         echo "   Supported examples:"
-        echo "   bash run_navigation/vlnce.sh 832"
-        echo "   bash run_navigation/vlnce.sh 832 300"
-        echo "   bash run_navigation/vlnce.sh 1 600 260 5"
-        echo "   bash run_navigation/vlnce.sh random 20 260 all 4"
-        echo "   bash run_navigation/vlnce.sh --episode-id 832 --num-episodes 1"
+        echo "   bash run_navigation/r2rce.sh 832"
+        echo "   bash run_navigation/r2rce.sh 832 300"
+        echo "   bash run_navigation/r2rce.sh 1 600 260 5"
+        echo "   bash run_navigation/r2rce.sh random 20 260 all 4"
+        echo "   bash run_navigation/r2rce.sh --episode-id 832 --num-episodes 1"
         exit 1
     fi
 

@@ -10,7 +10,7 @@ import yaml
 
 
 DEFAULT_RESULTS_ROOT_RELATIVE = "result"
-DEFAULT_RESULTS_FAMILY = "vlnce"
+DEFAULT_RESULTS_FAMILY = "r2rce"
 DEFAULT_CONTEXT_CACHE_API_CONFIG = os.path.join(
     "navigation_system",
     "config",

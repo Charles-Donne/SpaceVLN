@@ -5,6 +5,7 @@ import os
 from typing import List
 
 from navigation_system.runtime.episode_io import (
+    is_abnormal_episode_failure,
     should_suppress_normal_failure_reason,
 )
 from navigation_system.runtime.vlnce.r2r.episode_selection import (
@@ -299,7 +300,7 @@ def run_navigation_from_args(
                 )
             )
 
-    failed_results = [item for item in results_summary if not bool(item.get("success", False))]
+    failed_results = [item for item in results_summary if is_abnormal_episode_failure(item)]
     if failed_results:
         _print_failed_results(failed_results)
 

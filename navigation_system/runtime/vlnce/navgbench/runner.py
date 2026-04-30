@@ -34,10 +34,12 @@ from navigation_system.env.vlnce.navgbench import (
 )
 from navigation_system.runtime.episode_io import (
     get_episode_records_log_path,
+    is_abnormal_episode_failure,
     load_json_if_exists,
     redirect_process_output_to_file,
     redirect_process_output_to_null,
     save_episode_stdout_log_enabled,
+    should_suppress_normal_failure_reason,
 )
 from navigation_system.runtime.output_policy import (
     add_output_artifact_args,
@@ -724,7 +726,11 @@ def _format_navgbench_finish_line(
     ]
     reason_text = str(reason or "").strip()
     error_text = str(error or "").strip()
-    if reason_text and not success:
+    if reason_text and not success and not should_suppress_normal_failure_reason(
+        status="FAIL",
+        reason=reason_text,
+        error=error_text,
+    ):
         parts.append(f"reason={reason_text}")
     if error_text:
         parts.append(f"error={error_text}")
@@ -1324,7 +1330,7 @@ def run_navigation_from_args(args: argparse.Namespace) -> int:
                 )
             )
 
-    failed = [item for item in results if item.get("error") or not item.get("success")]
+    failed = [item for item in results if is_abnormal_episode_failure(item)]
     if failed:
         reason_counts: Dict[str, int] = {}
         for item in failed:

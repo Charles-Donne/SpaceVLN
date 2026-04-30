@@ -25,6 +25,10 @@ from navigation_system.runtime.vlnce.r2r.episode_selection import (
     filter_episode_ids,
     resolve_episode_ids,
 )
+from navigation_system.runtime.episode_io import (
+    is_abnormal_episode_failure,
+    should_suppress_normal_failure_reason,
+)
 from navigation_system.runtime.output_policy import (
     add_output_artifact_args,
     add_output_profile_arg,
@@ -52,13 +56,13 @@ def build_arg_parser(
         "--results-root",
         type=str,
         default=None,
-        help="结果总根目录；运行时自动追加 vlnce/ablation/消融项/模型名",
+        help="结果总根目录；运行时自动追加 r2rce/ablation/消融项/模型名",
     )
     parser.add_argument(
         "--results-dir",
         type=str,
         default=None,
-        help="最终结果目录（高级覆盖项；指定后不会再自动追加 vlnce/ablation/消融项/模型名）",
+        help="最终结果目录（高级覆盖项；指定后不会再自动追加 r2rce/ablation/消融项/模型名）",
     )
 
     parser.add_argument(
@@ -242,7 +246,7 @@ def run_navigation_from_args(
         profile=profile,
     )
 
-    failed_results = [item for item in results_summary if not bool(item.get("success", False))]
+    failed_results = [item for item in results_summary if is_abnormal_episode_failure(item)]
     if failed_results:
         print("\n⚠️ 以下 episodes 运行失败:", flush=True)
         for item in failed_results:
@@ -250,7 +254,11 @@ def run_navigation_from_args(
             error = str(item.get("error") or "").strip()
             reason = str(item.get("reason") or "").strip()
             parts = [f"Episode {episode_id}"]
-            if reason:
+            if reason and not should_suppress_normal_failure_reason(
+                status="FAIL",
+                reason=reason,
+                error=error,
+            ):
                 parts.append(f"reason={reason}")
             if error:
                 parts.append(f"error={error}")

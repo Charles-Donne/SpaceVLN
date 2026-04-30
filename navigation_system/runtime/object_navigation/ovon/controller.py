@@ -970,7 +970,15 @@ class OVONObjectNavigationController(NavigationAgentController):
         )
         return matches[0]
 
-    def _save_navigation_result(self, total_steps: int, env_metrics: Dict = None) -> str:
+    def _save_navigation_result(
+        self,
+        total_steps: int,
+        env_metrics: Dict = None,
+        *,
+        failure_reason: str = "",
+        gif_path: Optional[str] = None,
+        topdown_path: Optional[str] = None,
+    ) -> str:
         """Save OVON results without VLNCE-only metrics such as OSR/nDTW."""
 
         def check_inf_nan(value):
@@ -1004,8 +1012,13 @@ class OVONObjectNavigationController(NavigationAgentController):
                 "local_timing_summary",
                 {},
             ),
+            "gif_path": str(gif_path or ""),
+            "topdown_path": str(topdown_path or ""),
             "timestamp": datetime.now().isoformat(),
         }
+        reason_text = str(failure_reason or "").strip()
+        if reason_text:
+            result["reason"] = reason_text
         result["sr"] = result["success"]
         result["ne"] = result["distance_to_goal"]
         if getattr(self, "ovon_sample_index", None) is not None:

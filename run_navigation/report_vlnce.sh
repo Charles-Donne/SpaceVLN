@@ -1,5 +1,5 @@
 #!/bin/bash
-# Generate a partial SpaceVLN report from existing log files only.
+# Generate a partial R2R-CE report from existing log files only.
 
 set -euo pipefail
 
@@ -44,20 +44,20 @@ REPORT_SUMMARY_ONLY=0
 
 usage() {
     echo "Usage:"
-    echo "  bash run_navigation/report_vlnce.sh [start_episode_id|all] [end_episode_id|all] [results_selector]"
-    echo "  bash run_navigation/report_vlnce.sh [start_episode_id|all] [results_selector]"
-    echo "  bash run_navigation/report_vlnce.sh [results_selector]"
-    echo "  bash run_navigation/report_vlnce.sh --start-id ID|all --end-id ID|all --results DIR|NAME|all"
-    echo "  bash run_navigation/report_vlnce.sh --fast --start-id all --end-id all --results DIR|NAME"
+    echo "  bash run_navigation/report_r2rce.sh [start_episode_id|all] [end_episode_id|all] [results_selector]"
+    echo "  bash run_navigation/report_r2rce.sh [start_episode_id|all] [results_selector]"
+    echo "  bash run_navigation/report_r2rce.sh [results_selector]"
+    echo "  bash run_navigation/report_r2rce.sh --start-id ID|all --end-id ID|all --results DIR|NAME|all"
+    echo "  bash run_navigation/report_r2rce.sh --fast --start-id all --end-id all --results DIR|NAME"
     echo ""
     echo "Examples:"
-    echo "  bash run_navigation/report_vlnce.sh 1500 1799"
-    echo "  bash run_navigation/report_vlnce.sh 1 50 qwen3.5-plus__qwen3.5-flash_cache"
-    echo "  bash run_navigation/report_vlnce.sh 1500 1799 /abs/path/to/result/vlnce/qwen3.5-plus__qwen3.5-flash"
-    echo "  bash run_navigation/report_vlnce.sh all all"
-    echo "  bash run_navigation/report_vlnce.sh --start-id 1600 --end-id all --results all"
-    echo "  bash run_navigation/report_vlnce.sh --results qwen3.5-plus__qwen3.5-flash,gemini2.5pro__gemini2.5flash"
-    echo "  bash run_navigation/report_vlnce.sh --fast all all ablation/no-space-structure/qwen3.5-plus__qwen3.5-flash_cache"
+    echo "  bash run_navigation/report_r2rce.sh 1500 1799"
+    echo "  bash run_navigation/report_r2rce.sh 1 50 qwen3.5-plus__qwen3.5-flash_cache"
+    echo "  bash run_navigation/report_r2rce.sh 1500 1799 /abs/path/to/result/r2rce/qwen3.5-plus__qwen3.5-flash"
+    echo "  bash run_navigation/report_r2rce.sh all all"
+    echo "  bash run_navigation/report_r2rce.sh --start-id 1600 --end-id all --results all"
+    echo "  bash run_navigation/report_r2rce.sh --results qwen3.5-plus__qwen3.5-flash,gemini2.5pro__gemini2.5flash"
+    echo "  bash run_navigation/report_r2rce.sh --fast all all ablation/no-space-structure/qwen3.5-plus__qwen3.5-flash_cache"
     echo ""
     echo "Notes:"
     echo "  Reads existing logs only and regenerates reports without rerunning episodes."
@@ -69,7 +69,7 @@ usage() {
     echo "  results_selector supports:"
     echo "    - absolute paths"
     echo "    - existing relative paths"
-    echo "    - experiment names under the default result/vlnce root"
+    echo "    - experiment names under the default result/r2rce root"
     echo "    - all (scan every experiment directory containing logs)"
     echo "    - comma-separated directory names or paths"
 }

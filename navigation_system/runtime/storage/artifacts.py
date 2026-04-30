@@ -403,6 +403,10 @@ class SaveManager:
             log_result['reason'] = str(result.get('reason', '') or '')
         if 'error' in result:
             log_result['error'] = str(result.get('error', '') or '')
+        if 'gif_path' in result:
+            log_result['gif_path'] = str(result.get('gif_path', '') or '')
+        if 'topdown_path' in result:
+            log_result['topdown_path'] = str(result.get('topdown_path', '') or '')
 
         existing_best_log = self._load_json_if_exists(log_path)
         compare_baseline = existing_best_log if self.is_complete_result(existing_best_log) else None

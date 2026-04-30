@@ -127,8 +127,25 @@ def should_suppress_normal_failure_reason(
     return bool(
         status == "FAIL"
         and not str(error or "").strip()
-        and str(reason or "").strip() in _NORMAL_FAILURE_REASONS
+        and str(reason or "").strip().lower() in _NORMAL_FAILURE_REASONS
     )
+
+
+def is_normal_evaluation_failure(result: Dict[str, Any]) -> bool:
+    """A completed evaluation episode can fail SR without being a runtime error."""
+    if bool((result or {}).get("success", False)):
+        return False
+    if str((result or {}).get("error") or "").strip():
+        return False
+    reason = str((result or {}).get("reason") or "").strip().lower()
+    return reason in _NORMAL_FAILURE_REASONS
+
+
+def is_abnormal_episode_failure(result: Dict[str, Any]) -> bool:
+    """Return True only for failures that should make the batch look broken."""
+    if bool((result or {}).get("success", False)):
+        return False
+    return not is_normal_evaluation_failure(result or {})
 
 
 def extract_episode_metrics(result: Dict[str, Any]) -> Dict[str, Any]:
