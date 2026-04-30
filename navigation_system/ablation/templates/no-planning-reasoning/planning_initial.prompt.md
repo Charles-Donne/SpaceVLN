@@ -23,11 +23,11 @@ Return exactly one JSON object. Use `reasoning` as one short task-grounded summa
 
 {{
     "reasoning": "<One short task-grounded summary of the current start position, the active first task stage, and the chosen destination/direction.>",
-    "current_waypoint": "<Write exactly `space area - landmark1 / landmark2 / landmark3`. The left side must be the current space/area type or name inferred from nearby evidence and the preserved `your current area` tag when consistent; the right side must contain only nearby current landmarks/cues, not a later visible target.>",
+    "current_waypoint": "<Write exactly `standard area type - nearby cue / nearby cue / nearby cue`. Infer the left side only from current nearby RGB/layout/objects/openings (use `your current area` only if consistent); never copy old waypoints/chains, use generic area/room/space/unknown, or name a farther room seen through an opening. The right side contains only nearby current cues.>",
     "task_progress": "<Task-ordered natural-language pieces from the Global Task. In initial planning, the first unfinished piece is `(Current)` and later pieces remain unmarked.>",
     "waypoint_chain": "<Ordered task-defined chain with full `[space]'s [landmark]` nodes only. The current/start node must be `(Current)`, and the next node must be the first unfinished task anchor.>",
     "next_waypoint": "<One `[space]'s [landmark]` only: the first unfinished task-defined anchor after the current/start anchor.>",
-    "next_waypoint_direction": "<IMAGE 1-12 only; choose the task-aligned view>",
+    "next_waypoint_direction": "<IMAGE 1-12 only; choose the task-aligned safe/passable view; never choose obstacle distance <{obs_blocked_m}m.>",
     "subtask_instruction": "<One short sentence for the current first stage only. Do not leak later stages into it.>",
     "subtask_landmark": "<One useful visible concrete cue for the current stage, or empty. Prefer the task-mentioned landmark when it is visible; avoid broad room labels or later-stage cues.>",
     "global_task_finish": false
@@ -57,7 +57,7 @@ Return exactly one JSON object. Use `reasoning` as one short task-grounded summa
 - **Reality priority**: use only the real current `Global Task`, `12 Views`, and `Map` as facts. Ignore examples whenever they conflict with the current input.
 - **First-stage discipline**: keep planning on the current first unfinished task stage. Do not jump to a later visible room, doorway, or landmark before the first stage endpoint is truly reached.
 - **Current-position fidelity**: keep `current_waypoint`, `task_progress`, `waypoint_chain`, destination, and direction aligned with the same real current place. Do not complete a stage from one later visible cue alone.
-- **Direction/landmark discipline**: choose the view and landmark that best match the active first-stage destination, not the most open direction or a later-stage cue.
+- **Direction/landmark discipline**: choose the view and landmark that best match the active first-stage destination, not the most open direction or a later-stage cue. Before finalizing direction, check obstacle distance: never choose a candidate IMAGE with obstacle distance <{obs_blocked_m}m; if the target is visible only there, keep the destination and choose the safest open/passable side connector or bypass. Prefer >{obs_risky_m}m, ideally >{obs_open_m}m.
 - **Goal-stop discipline**: stop only at the exact required target. For landmark goals, require the correct target space plus the goal landmark near/current within about {arrival_near_m}m.
 
 **Global Task**: {instruction}

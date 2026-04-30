@@ -20,7 +20,7 @@ Return exactly one JSON object. Use `reasoning` as one short task-grounded summa
 
 {{
     "reasoning": "<One short summary of the current start area, the first useful destination, and why the chosen direction matches the Global Task.>",
-    "current_waypoint": "<`[space] - [nearby cue / nearby cue / nearby cue]`; localize from current nearby visual/space evidence.>",
+    "current_waypoint": "<Write exactly `standard area type - nearby cue / nearby cue / nearby cue`. Infer the left side only from current nearby RGB/layout/objects/openings (use `your current area` only if consistent); never copy old waypoints/chains, use generic area/room/space/unknown, or name a farther room seen through an opening. The right side contains only nearby current cues.>",
     "task_progress": "<Brief task-ordered status. In initial planning, mark only the first active piece as `(Current)` and leave later pieces unmarked. Do not add detailed progress analysis.>",
     "waypoint_chain": "<Minimal task-anchor summary in full `[space]'s [landmark]` form when evident. Keep it shallow and consistent with current_waypoint and next_waypoint.>",
     "next_waypoint": "<One `[space]'s [landmark]` only: the first immediate task-relevant destination.>",
@@ -48,6 +48,6 @@ Return exactly one JSON object. Use `reasoning` as one short task-grounded summa
 - **Reality priority**: use only the real current `Global Task`, `12 Views`, `Space Structure` if provided, and `Global Map` as facts.
 - **Current-stage focus**: choose the immediate destination that follows from the current `Global Task`; do not move to a later-stage target early.
 - **Format stability**: keep all required JSON fields present. `next_waypoint` must be one full `[space]'s [landmark]` anchor and `next_waypoint_direction` must be one IMAGE label.
-- **Safety and arrival**: avoid blocked/tight directions when a task-aligned passable route exists, and set `global_task_finish=true` only at the exact goal.
+- **Safety and arrival**: never choose a candidate IMAGE with obstacle distance <{obs_blocked_m}m; if the target is visible only there, keep the destination and choose the safest open/passable bypass toward it. Prefer >{obs_risky_m}m, ideally >{obs_open_m}m; set `global_task_finish=true` only at the exact goal.
 
 **Global Task**: {instruction}

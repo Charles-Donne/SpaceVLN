@@ -21,7 +21,7 @@ Return exactly one JSON object. Use `reasoning` as one short task-grounded summa
 
 {{
     "reasoning": "<One short summary of the current area, whether the previous/current subtask seems reached, and the chosen next destination/direction.>",
-    "current_waypoint": "<`[space] - [nearby cue / nearby cue / nearby cue]`; localize from current nearby visual/space evidence.>",
+    "current_waypoint": "<Write exactly `standard area type - nearby cue / nearby cue / nearby cue`. Infer the left side only from current nearby RGB/layout/objects/openings (use `your current area` only if consistent); never copy old waypoints/chains, use generic area/room/space/unknown, or name a farther room seen through an opening. The right side contains only nearby current cues.>",
     "task_progress": "<Brief task-ordered status with one `(Current)` piece unless the goal is reached. Do not add detailed progress analysis.>",
     "waypoint_chain": "<Minimal task-anchor summary in full `[space]'s [landmark]` form when evident. Keep it shallow and consistent with current_waypoint and next_waypoint.>",
     "next_waypoint": "<One `[space]'s [landmark]` only: the immediate active destination.>",
@@ -50,7 +50,7 @@ Return exactly one JSON object. Use `reasoning` as one short task-grounded summa
 - **Previous Subtask is context**: keep it visible and useful, but do not let it replace current visual/space evidence.
 - **Current-stage focus**: choose the immediate task destination; do not skip to a later target unless the current destination is clearly reached.
 - **Format stability**: keep all required JSON fields present. `next_waypoint` must be one full `[space]'s [landmark]` anchor and `next_waypoint_direction` must be one provided IMAGE label.
-- **Safety and arrival**: avoid blocked/tight directions when a task-aligned passable route exists, and set `global_task_finish=true` only at the exact goal.
+- **Safety and arrival**: never choose a candidate IMAGE with obstacle distance <{obs_blocked_m}m; if the target is visible only there, keep the destination and choose the safest open/passable bypass toward it. Prefer >{obs_risky_m}m, ideally >{obs_open_m}m; set `global_task_finish=true` only at the exact goal.
 
 {verify_replan_prompt_notice_block}
 
