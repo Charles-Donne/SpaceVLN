@@ -11,7 +11,7 @@ from navigation_system.config.core.params.api import (
     ACTION_IMAGE_COMPRESSION_QUALITY,
 )
 from navigation_system.vlm.api.api_client import APIConfig, BaseAPIClient
-from navigation_system.vlm.prompts.vlnce.builders import get_action_execution_prompt
+from navigation_system.vlm.prompts.vlnce.builders import build_action_prompt_bundle
 
 
 class ActionExecutor(BaseAPIClient):
@@ -328,8 +328,8 @@ class ActionExecutor(BaseAPIClient):
                 'right_30': 'Unknown',
             }
         
-        # 构建prompt（精简版）
-        prompt = get_action_execution_prompt(
+        # 构建 system/user prompt bundle（standard 与 context-cache 共享同一提示结构）
+        prompt = build_action_prompt_bundle(
             next_waypoint=next_waypoint,
             subtask_instruction=subtask_instruction,
             subtask_landmark=subtask_landmark,
@@ -387,7 +387,7 @@ class ActionExecutor(BaseAPIClient):
             )
             response["_forbidden_action_name"] = action_name
             response["_allowed_action_names"] = sorted(normalized_allowed_actions)
-            return None, action_name, response, 0, 0.0, prompt
+            return None, action_name, response, 0, 0.0, prompt.full_prompt
 
         if action_name not in action_mapping:
             print(f"✗ Invalid action: {action_name}")
@@ -416,12 +416,12 @@ class ActionExecutor(BaseAPIClient):
             info = action_name
         print(f"  Action: {info} | {response.get('reasoning', '')[:60]}")
 
-        return action_id, action_name, response, degrees, meters, prompt
+        return action_id, action_name, response, degrees, meters, prompt.full_prompt
 
     def _decide_action_from_prompt(
         self,
         *,
-        prompt: str,
+        prompt: Any,
         first_person_image: Any,
         detection_image: Any,
         action_mapping: Dict[str, int],
@@ -470,7 +470,7 @@ class ActionExecutor(BaseAPIClient):
             )
             response["_forbidden_action_name"] = action_name
             response["_allowed_action_names"] = sorted(normalized_allowed_actions)
-            return None, action_name, response, 0, 0.0, prompt
+            return None, action_name, response, 0, 0.0, getattr(prompt, "full_prompt", prompt)
 
         if action_name not in action_mapping:
             print(f"✗ Invalid action: {action_name}")
@@ -498,4 +498,4 @@ class ActionExecutor(BaseAPIClient):
             info = action_name
         print(f"  Action: {info} | {response.get('reasoning', '')[:60]}")
 
-        return action_id, action_name, response, degrees, meters, prompt
+        return action_id, action_name, response, degrees, meters, getattr(prompt, "full_prompt", prompt)

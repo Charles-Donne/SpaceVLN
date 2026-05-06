@@ -3,7 +3,7 @@
 from typing import Any, Dict, Optional, Sequence, Tuple
 
 from navigation_system.vlm.prompts.object_navigation.builders import (
-    get_ovon_action_execution_prompt,
+    build_ovon_action_prompt_bundle,
 )
 from navigation_system.vlm.execution.vlnce.executor import ActionExecutor
 
@@ -34,11 +34,12 @@ class OVONActionExecutor(ActionExecutor):
                 "right_30": "Unknown",
             }
 
-        prompt = get_ovon_action_execution_prompt(
+        prompt = build_ovon_action_prompt_bundle(
             next_waypoint=next_waypoint,
             subtask_instruction=subtask_instruction,
             subtask_landmark=subtask_landmark,
             progress_summary=progress_summary,
+            waypoint_summary=waypoint_summary,
             detected_landmarks=detected_landmarks,
             obstacle_distances=obstacle_distances,
             landmark_map_info=landmark_map_info,

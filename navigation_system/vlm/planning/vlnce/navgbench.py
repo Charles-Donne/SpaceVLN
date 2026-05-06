@@ -8,12 +8,8 @@ from navigation_system.vlm.contracts.schema import get_next_waypoint
 from navigation_system.vlm.planning.vlnce.planner import LLMPlanner
 from navigation_system.vlm.planning.vlnce.planner_context_cache import ContextCachePlanner
 from navigation_system.vlm.prompts.vlnce.navgbench.builders import (
-    get_navgbench_initial_planning_prompt,
-    get_navgbench_verification_replanning_prompt,
-)
-from navigation_system.vlm.prompts.vlnce.navgbench.cache_builders import (
-    build_navgbench_initial_planner_cache_prompt_bundle,
-    build_navgbench_verify_planner_cache_prompt_bundle,
+    build_navgbench_initial_planner_prompt_bundle,
+    build_navgbench_verify_planner_prompt_bundle,
 )
 
 
@@ -45,9 +41,9 @@ class NavGBenchPlanner(LLMPlanner):
             print("✗ Error: global_map_image is required")
             return None, ""
 
-        prompt = get_navgbench_initial_planning_prompt(
-            instruction,
-            self.action_space,
+        prompt = build_navgbench_initial_planner_prompt_bundle(
+            instruction=instruction,
+            action_space=self.action_space,
             instruction_mode=self.instruction_mode,
         )
         images = list(observation_images or [])
@@ -86,11 +82,11 @@ class NavGBenchPlanner(LLMPlanner):
 
         subtask_destination = get_next_waypoint(current_subtask) or "not set"
         subtask_instruction = str((current_subtask or {}).get("subtask_instruction", "") or "not set")
-        prompt = get_navgbench_verification_replanning_prompt(
-            instruction,
-            subtask_destination,
-            subtask_instruction,
-            self.action_space,
+        prompt = build_navgbench_verify_planner_prompt_bundle(
+            instruction=instruction,
+            subtask_destination=subtask_destination,
+            subtask_instruction=subtask_instruction,
+            action_space=self.action_space,
             detected_landmarks=None,
             waypoint_summary=waypoint_summary,
             previous_subtask_landmark_summary=previous_subtask_landmark_summary,
@@ -140,7 +136,7 @@ class NavGBenchContextCachePlanner(ContextCachePlanner):
             print("✗ Error: global_map_image is required")
             return None, ""
 
-        prompt_bundle = build_navgbench_initial_planner_cache_prompt_bundle(
+        prompt_bundle = build_navgbench_initial_planner_prompt_bundle(
             instruction=instruction,
             action_space=self.action_space,
             instruction_mode=self.instruction_mode,
@@ -180,7 +176,7 @@ class NavGBenchContextCachePlanner(ContextCachePlanner):
 
         subtask_destination = get_next_waypoint(current_subtask) or "not set"
         subtask_instruction = str((current_subtask or {}).get("subtask_instruction", "") or "not set")
-        prompt_bundle = build_navgbench_verify_planner_cache_prompt_bundle(
+        prompt_bundle = build_navgbench_verify_planner_prompt_bundle(
             instruction=instruction,
             subtask_destination=subtask_destination,
             subtask_instruction=subtask_instruction,

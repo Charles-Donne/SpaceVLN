@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
 
-from navigation_system.vlm.prompts.object_navigation.cache_builders import (
-    build_ovon_initial_planner_cache_prompt_bundle,
-    build_ovon_verify_planner_cache_prompt_bundle,
+from navigation_system.vlm.prompts.object_navigation.builders import (
+    build_ovon_initial_planner_prompt_bundle,
+    build_ovon_verify_planner_prompt_bundle,
 )
 from navigation_system.vlm.api.qwen_context_cache_client import QwenContextCacheMixin
 from navigation_system.vlm.contracts.schema import (
@@ -14,7 +14,7 @@ from navigation_system.vlm.contracts.schema import (
     normalize_objectnav_subtask_payload,
 )
 from navigation_system.vlm.planning.vlnce.planner import LLMPlanner
-from navigation_system.vlm.prompts.common import ExplicitCachePromptBundle
+from navigation_system.vlm.prompts.common import PromptBundle
 
 
 class OVONContextCachePlanner(QwenContextCacheMixin, LLMPlanner):
@@ -50,7 +50,7 @@ class OVONContextCachePlanner(QwenContextCacheMixin, LLMPlanner):
 
     def call_api(
         self,
-        prompt_bundle: ExplicitCachePromptBundle,
+        prompt_bundle: PromptBundle,
         image_paths: List[Any],
         save_dir: str = None,
         no_compress_indices: set = None,
@@ -78,7 +78,7 @@ class OVONContextCachePlanner(QwenContextCacheMixin, LLMPlanner):
             print("✗ Error: global_map_image is required")
             return None, ""
 
-        prompt_bundle = build_ovon_initial_planner_cache_prompt_bundle(
+        prompt_bundle = build_ovon_initial_planner_prompt_bundle(
             instruction=instruction,
             action_space=self.action_space,
         )
@@ -116,7 +116,7 @@ class OVONContextCachePlanner(QwenContextCacheMixin, LLMPlanner):
             print("✗ Error: global_map_image is required")
             return None, ""
 
-        prompt_bundle = build_ovon_verify_planner_cache_prompt_bundle(
+        prompt_bundle = build_ovon_verify_planner_prompt_bundle(
             instruction=instruction,
             subtask_destination=get_next_waypoint(current_subtask) or "not set",
             subtask_instruction=str(

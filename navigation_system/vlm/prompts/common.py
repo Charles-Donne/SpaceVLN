@@ -1,4 +1,4 @@
-"""Shared prompt-template loading and explicit-cache bundle helpers."""
+"""Shared prompt-template loading and system/user prompt bundle helpers."""
 
 from dataclasses import dataclass
 from functools import lru_cache
@@ -18,20 +18,20 @@ def load_prompt_template(template_name: str) -> str:
 
 
 @dataclass(frozen=True)
-class ExplicitCachePromptBundle:
-    """Exact prompt split for runtimes that cache a stable system prompt."""
+class PromptBundle:
+    """Exact prompt split sent as separate system and user messages."""
 
     system_prompt: str
     user_prompt: str
     full_prompt: str
 
 
-PromptLike = Union[str, ExplicitCachePromptBundle]
+PromptLike = Union[str, PromptBundle]
 
 
 def extract_prompt_debug_text(prompt: PromptLike) -> str:
     """Return the full prompt text that should be saved for debugging."""
-    if isinstance(prompt, ExplicitCachePromptBundle):
+    if isinstance(prompt, PromptBundle):
         return str(prompt.full_prompt or "")
     if isinstance(prompt, bytes):
         return prompt.decode("utf-8")
@@ -45,12 +45,12 @@ def join_prompt_blocks(blocks) -> str:
 
 
 def compose_full_prompt(system_prompt: str, user_prompt: str) -> str:
-    """Combine the cache system/user text for prompt artifact debugging."""
+    """Combine the system/user text for legacy debug summaries."""
     return join_prompt_blocks([system_prompt, user_prompt])
 
 
 __all__ = [
-    "ExplicitCachePromptBundle",
+    "PromptBundle",
     "PromptLike",
     "compose_full_prompt",
     "extract_prompt_debug_text",

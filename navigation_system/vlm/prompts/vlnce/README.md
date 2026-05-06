@@ -5,13 +5,9 @@ This directory contains the prompt definitions and renderers for the main VLNCE 
 ## Structure
 
 - `builders.py`
-  - Renders the standard non-cache prompts from the combined markdown templates in `templates/`.
-- `cache_builders.py`
-  - Renders the explicit-cache prompt bundles used by runtimes that send stable `system` text plus dynamic `user` text separately.
+  - Renders the shared `system` + `user` prompt bundles used by both standard and context-cache runtimes.
 - `templates/`
-  - Stores the prompt markdown files used by the standard renderer.
-- `templates/cache/`
-  - Stores the explicit-cache prompt split for the same task family.
+  - Stores the single source of truth for prompt markdown files.
 - `navgbench/`
   - Adds NavGBench-specific planner prompt overlays. Complex/grounded
     NavGBench instructions get an extra route-compression policy; R2R prompts
@@ -19,15 +15,19 @@ This directory contains the prompt definitions and renderers for the main VLNCE 
 
 ## Prompt Files
 
-- `templates/planning_initial.prompt.md`
-  - Combined initial-planning prompt for non-cache calls.
-- `templates/planning_verify.prompt.md`
-  - Combined verify / replanning prompt for non-cache calls.
-- `templates/action_execution.prompt.md`
-  - Combined action-execution prompt for non-cache calls.
+- `templates/planning_initial.system.prompt.md`
+  - Stable initial-planning system instructions.
+- `templates/planning_initial.user.prompt.md`
+  - Dynamic initial-planning user content.
+- `templates/planning_verify.system.prompt.md`
+  - Stable verify / replanning system instructions.
+- `templates/planning_verify.user.prompt.md`
+  - Dynamic verify / replanning user content.
+- `templates/action.system.prompt.md`
+  - Stable action-execution system instructions.
+- `templates/action.user.prompt.md`
+  - Dynamic action-execution user content.
 
-## Cache Split
+## Runtime Behavior
 
-The explicit-cache version keeps stable long-form instructions in `templates/cache/*.system.prompt.md` and per-call dynamic text in `templates/cache/*.user.prompt.md`.
-
-See `templates/cache/README.md` for the exact split and message structure.
+Standard and context-cache runtimes now use the same prompt builders and the same markdown files. The context-cache runtime only changes transport/cache behavior; it does not use a separate prompt version.

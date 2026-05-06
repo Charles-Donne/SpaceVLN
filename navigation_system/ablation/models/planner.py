@@ -5,9 +5,9 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
 from navigation_system.ablation.config import AblationSpec, load_ablation_spec
-from navigation_system.ablation.prompts.standard import (
-    get_initial_planning_prompt,
-    get_verification_replanning_prompt,
+from navigation_system.ablation.prompts.builders import (
+    build_initial_planner_prompt_bundle,
+    build_verify_planner_prompt_bundle,
 )
 from navigation_system.vlm.contracts.schema import get_next_waypoint
 from navigation_system.vlm.planning.vlnce.planner import LLMPlanner
@@ -42,7 +42,7 @@ class AblationLLMPlanner(LLMPlanner):
             print("✗ Error: global_map_image is required")
             return None, ""
 
-        prompt = get_initial_planning_prompt(
+        prompt = build_initial_planner_prompt_bundle(
             instruction=instruction,
             action_space=self.action_space,
             spec=self.ablation_spec,
@@ -84,7 +84,7 @@ class AblationLLMPlanner(LLMPlanner):
 
         subtask_destination = get_next_waypoint(current_subtask) or "Unknown"
         subtask_instruction = str((current_subtask or {}).get("subtask_instruction", "") or "Unknown")
-        prompt = get_verification_replanning_prompt(
+        prompt = build_verify_planner_prompt_bundle(
             instruction=instruction,
             subtask_destination=subtask_destination,
             subtask_instruction=subtask_instruction,

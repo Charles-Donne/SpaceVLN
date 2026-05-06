@@ -5,12 +5,12 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, Optional, Sequence, Tuple
 
-from navigation_system.vlm.prompts.object_navigation.cache_builders import (
-    build_ovon_action_cache_prompt_bundle,
+from navigation_system.vlm.prompts.object_navigation.builders import (
+    build_ovon_action_prompt_bundle,
 )
 from navigation_system.vlm.api.qwen_context_cache_client import QwenContextCacheMixin
 from navigation_system.vlm.execution.vlnce.executor import ActionExecutor
-from navigation_system.vlm.prompts.common import ExplicitCachePromptBundle
+from navigation_system.vlm.prompts.common import PromptBundle
 
 
 class OVONContextCacheActionExecutor(QwenContextCacheMixin, ActionExecutor):
@@ -32,7 +32,7 @@ class OVONContextCacheActionExecutor(QwenContextCacheMixin, ActionExecutor):
 
     def call_api(
         self,
-        prompt_bundle: ExplicitCachePromptBundle,
+        prompt_bundle: PromptBundle,
         image_paths,
         save_dir: str = None,
         no_compress_indices: set = None,
@@ -67,7 +67,7 @@ class OVONContextCacheActionExecutor(QwenContextCacheMixin, ActionExecutor):
                 "right_30": "Unknown",
             }
 
-        prompt_bundle = build_ovon_action_cache_prompt_bundle(
+        prompt_bundle = build_ovon_action_prompt_bundle(
             next_waypoint=next_waypoint,
             subtask_instruction=subtask_instruction,
             subtask_landmark=subtask_landmark,

@@ -469,8 +469,8 @@ class MapVisualizer:
     def get_map_artifact_filename(self, step: int, phase: str) -> str:
         return build_step_artifact_filename(step, phase, suffix=".png")
 
-    def get_map_artifact_dir(self, episode_id: int, map_kind: str) -> str:
-        episode_dir = self._create_episode_directories(int(episode_id))
+    def get_map_artifact_dir(self, episode_id: int, map_kind: str, create: bool = True) -> str:
+        episode_dir = self._create_episode_directories(int(episode_id), create=create)
         if str(map_kind).strip().lower() == "global":
             dir_name = "global_map"
         elif str(map_kind).strip().lower() == "local":
@@ -478,7 +478,8 @@ class MapVisualizer:
         else:
             raise ValueError(f"Unsupported map artifact kind: {map_kind}")
         save_dir = os.path.join(episode_dir, dir_name)
-        os.makedirs(save_dir, exist_ok=True)
+        if create:
+            os.makedirs(save_dir, exist_ok=True)
         return save_dir
 
     def get_map_artifact_path(
@@ -487,14 +488,20 @@ class MapVisualizer:
         episode_id: int,
         phase: str,
         map_kind: str,
+        create: bool = True,
     ) -> str:
         return os.path.join(
-            self.get_map_artifact_dir(episode_id, map_kind),
+            self.get_map_artifact_dir(episode_id, map_kind, create=create),
             self.get_map_artifact_filename(step, phase),
         )
 
-    def get_model_input_map_artifact_dir(self, episode_id: int, map_kind: str) -> str:
-        return self.get_map_artifact_dir(episode_id, map_kind)
+    def get_model_input_map_artifact_dir(
+        self,
+        episode_id: int,
+        map_kind: str,
+        create: bool = False,
+    ) -> str:
+        return self.get_map_artifact_dir(episode_id, map_kind, create=create)
 
     def get_model_input_map_artifact_filename(
         self,
@@ -513,9 +520,10 @@ class MapVisualizer:
         episode_id: int,
         phase: str,
         map_kind: str,
+        create: bool = False,
     ) -> str:
         return os.path.join(
-            self.get_model_input_map_artifact_dir(episode_id, map_kind),
+            self.get_model_input_map_artifact_dir(episode_id, map_kind, create=create),
             self.get_model_input_map_artifact_filename(step, phase, map_kind),
         )
 
@@ -634,8 +642,8 @@ class MapVisualizer:
         dy = forward_m * np.sin(theta) - right_m * np.cos(theta)
         return curr_x_m + dx, curr_y_m + dy
 
-    def _create_episode_directories(self, episode_id: int):
-        """为特定episode创建保存目录"""
+    def _create_episode_directories(self, episode_id: int, create: bool = True):
+        """Return the episode detail directory, optionally creating it."""
         storage_entry_id = (
             int(self.storage_entry_id)
             if self.storage_entry_id is not None
@@ -646,7 +654,8 @@ class MapVisualizer:
             storage_entry_id,
             entry_kind=str(self.entry_kind or "episode"),
         )
-        os.makedirs(episode_dir, exist_ok=True)
+        if create:
+            os.makedirs(episode_dir, exist_ok=True)
         return episode_dir
 
     def calculate_obstacle_distances_from_rotated_map(

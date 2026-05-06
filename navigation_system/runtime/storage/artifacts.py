@@ -106,6 +106,31 @@ def iter_all_episode_log_paths(dump_dir: str) -> List[str]:
 class SaveManager:
     """Lightweight episode output helper."""
 
+    DETAIL_RESULT_FIELDS = (
+        "episode_id",
+        "instruction",
+        "total_steps",
+        "subtask_count",
+        "episode_duration_s",
+        "success",
+        "spl",
+        "soft_spl",
+        "distance_to_goal",
+        "ndtw",
+        "path_length",
+        "oracle_success",
+        "oracle_navigation_error",
+        "oracle_spl",
+        "sample_index",
+        "sr",
+        "osr",
+        "ne",
+        "reason",
+        "error",
+        "gif_path",
+        "topdown_path",
+        "timestamp",
+    )
     REQUIRED_RESULT_FIELDS = (
         "episode_id",
         "instruction",
@@ -341,6 +366,15 @@ class SaveManager:
         save_path = os.path.join(self.records_dir, "waypoint_memory.json")
         with open(save_path, 'w', encoding='utf-8') as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
+
+    @classmethod
+    def _build_detail_result(cls, result: Dict) -> Dict:
+        """Keep records/result.json compact and close to the historical schema."""
+        payload = {}
+        for key in cls.DETAIL_RESULT_FIELDS:
+            if key in result:
+                payload[key] = result.get(key)
+        return payload
     
     def save_result(self, result: Dict):
         """
@@ -350,7 +384,7 @@ class SaveManager:
         """
         result_path = os.path.join(self.records_dir, "result.json")
         with open(result_path, 'w', encoding='utf-8') as f:
-            json.dump(result, f, indent=2, ensure_ascii=False)
+            json.dump(self._build_detail_result(result), f, indent=2, ensure_ascii=False)
 
         log_dir = os.path.dirname(
             get_episode_log_path(

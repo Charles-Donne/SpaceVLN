@@ -6,7 +6,7 @@ import os
 from typing import Any, Dict, Optional, Sequence, Tuple
 
 from navigation_system.ablation.config import AblationSpec, load_ablation_spec
-from navigation_system.ablation.prompts.standard import get_action_execution_prompt
+from navigation_system.ablation.prompts.builders import build_action_prompt_bundle
 from navigation_system.vlm.execution.vlnce.executor import ActionExecutor
 
 
@@ -51,7 +51,7 @@ class AblationActionExecutor(ActionExecutor):
                 "right_30": "Unknown",
             }
 
-        prompt = get_action_execution_prompt(
+        prompt = build_action_prompt_bundle(
             next_waypoint=next_waypoint,
             subtask_instruction=subtask_instruction,
             progress_summary=progress_summary,
@@ -106,7 +106,7 @@ class AblationActionExecutor(ActionExecutor):
             )
             response["_forbidden_action_name"] = action_name
             response["_allowed_action_names"] = sorted(normalized_allowed_actions)
-            return None, action_name, response, 0, 0.0, prompt
+            return None, action_name, response, 0, 0.0, prompt.full_prompt
 
         if action_name not in action_mapping:
             print(f"✗ Invalid action: {action_name}")
@@ -132,7 +132,7 @@ class AblationActionExecutor(ActionExecutor):
         else:
             info = action_name
         print(f"  Action: {info} | {response.get('reasoning', '')[:60]}")
-        return action_id, action_name, response, degrees, meters, prompt
+        return action_id, action_name, response, degrees, meters, prompt.full_prompt
 
 
 __all__ = [

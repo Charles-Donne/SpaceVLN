@@ -3,8 +3,8 @@
 from typing import Any, Dict, List, Optional, Tuple
 
 from navigation_system.vlm.prompts.object_navigation.builders import (
-    get_ovon_initial_planning_prompt,
-    get_ovon_verification_replanning_prompt,
+    build_ovon_initial_planner_prompt_bundle,
+    build_ovon_verify_planner_prompt_bundle,
 )
 from navigation_system.vlm.contracts.schema import normalize_objectnav_subtask_payload
 from navigation_system.vlm.planning.vlnce.planner import LLMPlanner
@@ -46,7 +46,10 @@ class OVONPlanner(LLMPlanner):
             print("✗ Error: global_map_image is required")
             return None, ""
 
-        prompt = get_ovon_initial_planning_prompt(instruction, self.action_space)
+        prompt = build_ovon_initial_planner_prompt_bundle(
+            instruction=instruction,
+            action_space=self.action_space,
+        )
         images = observation_images.copy()
         images.append(global_map_image)
         no_compress = {len(observation_images)}
@@ -80,14 +83,16 @@ class OVONPlanner(LLMPlanner):
             print("✗ Error: global_map_image is required")
             return None, ""
 
-        prompt = get_ovon_verification_replanning_prompt(
+        prompt = build_ovon_verify_planner_prompt_bundle(
             instruction=instruction,
             subtask_destination=str(current_subtask.get("next_waypoint", "") or ""),
             subtask_instruction=str(current_subtask.get("subtask_instruction", "") or ""),
             action_space=self.action_space,
+            detected_landmarks=detected_landmarks,
             waypoint_summary=waypoint_summary,
             previous_subtask_landmark_summary=previous_subtask_landmark_summary,
             verify_replan_prompt_notice=verify_replan_prompt_notice,
+            direction_names=direction_names,
         )
 
         images = observation_images.copy()

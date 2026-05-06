@@ -19,6 +19,7 @@ from navigation_system.config.core.params.api import (
     DEFAULT_IMAGE_COMPRESSION_QUALITY,
 )
 from navigation_system.vlm.api.config import APIConfig
+from navigation_system.vlm.prompts.common import PromptBundle
 
 
 class BaseAPIClient(ABC):
@@ -84,7 +85,17 @@ class BaseAPIClient(ABC):
                 'effort': reasoning_effort or 'none',
             }
 
+        if provider == 'mimo' or 'xiaomimimo.com' in base_url:
+            thinking_type = 'enabled' if reasoning_effort in {'enabled', 'auto'} else 'disabled'
+            payload['thinking'] = {'type': thinking_type}
+
         return payload
+
+    def _uses_max_completion_tokens(self) -> bool:
+        """Whether ChatCompletions expects max_completion_tokens instead of max_tokens."""
+        base_url = str(getattr(self.config, 'base_url', '') or '').lower()
+        provider = str(getattr(self.config, 'provider', '') or '').lower()
+        return provider == 'mimo' or 'xiaomimimo.com' in base_url
 
     def _supports_json_object_response_format(self) -> bool:
         """Whether the current provider likely supports OpenAI-compatible JSON mode."""
@@ -100,7 +111,8 @@ class BaseAPIClient(ABC):
             return False
         return (
             'dashscope' in base_url
-            or provider in {'dashscope', 'openai'}
+            or provider in {'dashscope', 'openai', 'mimo'}
+            or 'xiaomimimo.com' in base_url
         )
 
     def _build_response_format(self) -> Optional[Dict[str, Any]]:
@@ -132,6 +144,13 @@ class BaseAPIClient(ABC):
         os.makedirs(save_dir, exist_ok=True)
         with open(os.path.join(save_dir, filename), "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
+
+    def _save_text_artifact(self, save_dir: Optional[str], filename: str, text: str) -> None:
+        if not (save_dir and self.save_request_artifacts and filename):
+            return
+        os.makedirs(save_dir, exist_ok=True)
+        with open(os.path.join(save_dir, filename), "w", encoding="utf-8") as f:
+            f.write(str(text or ""))
 
     @staticmethod
     def _safe_int(value: Any, default: int = 0) -> int:
@@ -546,7 +565,7 @@ class BaseAPIClient(ABC):
         image_paths: List[Any],
         save_dir: str = None,
         no_compress_indices: set = None,
-        prompt_artifact_filename: Optional[str] = "prompt.md",
+        prompt_artifact_filename: Optional[str] = "user_prompt.md",
         artifact_records: Optional[List[Dict[str, Any]]] = None,
     ) -> List[Dict]:
         """构建消息内容，可选保存压缩后的图片（即模型实际看到的版本）
@@ -644,7 +663,7 @@ class BaseAPIClient(ABC):
         image_paths: List[Any],
         save_dir: str = None,
         no_compress_indices: set = None,
-        prompt_artifact_filename: Optional[str] = "prompt.md",
+        prompt_artifact_filename: Optional[str] = "user_prompt.md",
         artifact_records: Optional[List[Dict[str, Any]]] = None,
     ) -> List[Dict]:
         """Build Responses API content blocks with optional request artifact saving."""
@@ -773,6 +792,14 @@ class BaseAPIClient(ABC):
                     texts.append(text)
 
         return "\n".join(texts).strip()
+
+    @staticmethod
+    def _normalize_prompt_for_request(prompt: Any) -> Tuple[Optional[str], str]:
+        if isinstance(prompt, PromptBundle):
+            return str(prompt.system_prompt or ""), str(prompt.user_prompt or "")
+        if isinstance(prompt, bytes):
+            return None, prompt.decode("utf-8")
+        return None, str(prompt or "")
     
     def call_api(self, prompt: Any, image_paths: List[Any], save_dir: str = None,
                  no_compress_indices: set = None) -> Optional[Dict]:
@@ -791,42 +818,61 @@ class BaseAPIClient(ABC):
         self._set_last_call_timing(request_latency_s=0.0, total_call_duration_s=0.0)
         self._set_last_response_artifacts(response_text="", parsed_payload=None)
         try:
-            # 确保 prompt 是 UTF-8 编码的字符串
-            if isinstance(prompt, bytes):
-                prompt = prompt.decode('utf-8')
+            system_prompt, user_prompt = self._normalize_prompt_for_request(prompt)
             
             wire_api = str(getattr(self.config, 'wire_api', '') or 'chat_completions').lower()
             is_responses_api = wire_api == 'responses'
             is_openrouter = 'openrouter' in self.config.base_url.lower()
 
             if is_responses_api:
+                if system_prompt is not None:
+                    self._save_text_artifact(save_dir, "system_prompt.md", system_prompt)
                 payload = {
                     "model": self.config.model,
                     "input": [{
                         "role": "user",
                         "content": self.build_responses_input_content(
-                            prompt,
+                            user_prompt,
                             image_paths,
                             save_dir=save_dir,
                             no_compress_indices=no_compress_indices,
+                            prompt_artifact_filename="user_prompt.md",
                         ),
                     }],
                     "max_output_tokens": self.config.max_tokens,
                 }
+                if system_prompt:
+                    payload["instructions"] = system_prompt
                 if self._supports_json_object_response_format():
                     payload["text"] = {"format": {"type": "json_object"}}
                 endpoint_suffix = "/responses"
             else:
+                messages = []
+                if system_prompt is not None:
+                    self._save_text_artifact(save_dir, "system_prompt.md", system_prompt)
+                    messages.append({
+                        "role": "system",
+                        "content": [{"type": "text", "text": system_prompt}],
+                    })
+                messages.append({
+                    "role": "user",
+                    "content": self.build_message_content(
+                        user_prompt,
+                        image_paths,
+                        save_dir=save_dir,
+                        no_compress_indices=no_compress_indices,
+                        prompt_artifact_filename="user_prompt.md",
+                    ),
+                })
                 payload = {
                     "model": self.config.model,
-                    "messages": [{
-                        "role": "user",
-                        "content": self.build_message_content(prompt, image_paths, save_dir=save_dir,
-                                                              no_compress_indices=no_compress_indices)
-                    }],
+                    "messages": messages,
                     "temperature": self.config.temperature,
-                    "max_tokens": self.config.max_tokens
                 }
+                if self._uses_max_completion_tokens():
+                    payload["max_completion_tokens"] = self.config.max_tokens
+                else:
+                    payload["max_tokens"] = self.config.max_tokens
                 response_format = self._build_response_format()
                 if response_format is not None:
                     payload["response_format"] = response_format

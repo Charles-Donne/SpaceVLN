@@ -12,12 +12,19 @@ from navigation_system.config.core.params.thresholds import (
     OBS_OPEN_M,
     OBS_RISKY_M,
 )
-from navigation_system.vlm.prompts.common import load_prompt_template
+from navigation_system.vlm.prompts.common import (
+    PromptBundle,
+    compose_full_prompt,
+    load_prompt_template,
+)
 
 
-INITIAL_PLANNING_PROMPT = load_prompt_template("planning_initial.prompt.md")
-VERIFICATION_REPLANNING_PROMPT = load_prompt_template("planning_verify.prompt.md")
-ACTION_EXECUTION_PROMPT = load_prompt_template("action_execution.prompt.md")
+INITIAL_PLANNING_SYSTEM_PROMPT = load_prompt_template("planning_initial.system.prompt.md")
+INITIAL_PLANNING_USER_PROMPT = load_prompt_template("planning_initial.user.prompt.md")
+VERIFY_PLANNING_SYSTEM_PROMPT = load_prompt_template("planning_verify.system.prompt.md")
+VERIFY_PLANNING_USER_PROMPT = load_prompt_template("planning_verify.user.prompt.md")
+ACTION_SYSTEM_PROMPT = load_prompt_template("action.system.prompt.md")
+ACTION_USER_PROMPT = load_prompt_template("action.user.prompt.md")
 DEFAULT_ALLOWED_ACTION_NAMES = ("MOVE_FORWARD", "TURN_LEFT", "TURN_RIGHT", "STOP")
 
 
@@ -60,16 +67,37 @@ def _build_previous_subtask_landmark_block(previous_subtask_landmark_summary: st
     )
 
 
-def get_initial_planning_prompt(instruction: str, action_space: str) -> str:
-    """Render the initial planning prompt."""
-    return _normalize_anchor_notation_text(INITIAL_PLANNING_PROMPT.format(
-        instruction=instruction,
-        action_space=action_space,
+def _render_initial_planning_system_prompt() -> str:
+    return _normalize_anchor_notation_text(INITIAL_PLANNING_SYSTEM_PROMPT.format(
         obs_blocked_m=_fmt_threshold_m(OBS_BLOCKED_M),
         obs_risky_m=_fmt_threshold_m(OBS_RISKY_M),
         obs_open_m=_fmt_threshold_m(OBS_OPEN_M),
         arrival_near_m=_fmt_threshold_m(ARRIVAL_NEAR_M),
     ))
+
+
+def build_initial_planner_prompt_bundle(
+    *,
+    instruction: str,
+    action_space: str,
+) -> PromptBundle:
+    """Render the initial-planning system/user prompt bundle."""
+    del action_space
+    system_prompt = _render_initial_planning_system_prompt()
+    user_prompt = INITIAL_PLANNING_USER_PROMPT.format(instruction=instruction)
+    return PromptBundle(
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        full_prompt=compose_full_prompt(system_prompt, user_prompt),
+    )
+
+
+def get_initial_planning_prompt(instruction: str, action_space: str) -> str:
+    """Compatibility helper returning the combined initial-planning prompt."""
+    return build_initial_planner_prompt_bundle(
+        instruction=instruction,
+        action_space=action_space,
+    ).full_prompt
 
 
 def _get_verify_view_count(direction_names=None):
@@ -80,6 +108,56 @@ def _get_verify_view_count(direction_names=None):
     ]
     view_count = len(provided_direction_names)
     return view_count if 0 < view_count < 12 else 12
+
+
+def _render_verify_planning_system_prompt() -> str:
+    return _normalize_anchor_notation_text(VERIFY_PLANNING_SYSTEM_PROMPT.format(
+        obs_blocked_m=_fmt_threshold_m(OBS_BLOCKED_M),
+        obs_risky_m=_fmt_threshold_m(OBS_RISKY_M),
+        obs_open_m=_fmt_threshold_m(OBS_OPEN_M),
+        arrival_near_m=_fmt_threshold_m(ARRIVAL_NEAR_M),
+    ))
+
+
+def build_verify_planner_prompt_bundle(
+    *,
+    instruction: str,
+    subtask_destination: str,
+    subtask_instruction: str,
+    action_space: str,
+    detected_landmarks: str = None,
+    waypoint_summary: str = None,
+    previous_subtask_landmark_summary: str = None,
+    verify_replan_prompt_notice: str = None,
+    direction_names: list = None,
+) -> PromptBundle:
+    """Render the verification/replanning system/user prompt bundle."""
+    del action_space
+    del detected_landmarks
+    del direction_names
+    if not waypoint_summary:
+        waypoint_summary = "Unavailable"
+
+    previous_subtask_landmark_summary = str(previous_subtask_landmark_summary or "").strip()
+    previous_subtask_landmark_block = _build_previous_subtask_landmark_block(
+        previous_subtask_landmark_summary
+    )
+    verify_notice_block = str(verify_replan_prompt_notice or "").strip()
+
+    system_prompt = _render_verify_planning_system_prompt()
+    user_prompt = VERIFY_PLANNING_USER_PROMPT.format(
+        verify_replan_prompt_notice_block=verify_notice_block,
+        instruction=instruction,
+        subtask_destination=subtask_destination,
+        subtask_instruction=subtask_instruction,
+        waypoint_summary=waypoint_summary,
+        previous_subtask_landmark_block=previous_subtask_landmark_block,
+    )
+    return PromptBundle(
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        full_prompt=compose_full_prompt(system_prompt, user_prompt),
+    )
 
 
 def get_verification_replanning_prompt(
@@ -93,18 +171,8 @@ def get_verification_replanning_prompt(
     verify_replan_prompt_notice: str = None,
     direction_names: list = None,
 ) -> str:
-    """Render the verification/replanning prompt."""
-    if not waypoint_summary:
-        waypoint_summary = "Unavailable"
-
-    previous_subtask_landmark_summary = str(previous_subtask_landmark_summary or "").strip()
-    previous_subtask_landmark_block = _build_previous_subtask_landmark_block(
-        previous_subtask_landmark_summary
-    )
-    verify_notice_block = str(verify_replan_prompt_notice or "").strip()
-    verify_view_count = _get_verify_view_count(direction_names)
-
-    return _normalize_anchor_notation_text(VERIFICATION_REPLANNING_PROMPT.format(
+    """Compatibility helper returning the combined verification/replanning prompt."""
+    return build_verify_planner_prompt_bundle(
         instruction=instruction,
         subtask_destination=subtask_destination,
         subtask_instruction=subtask_instruction,
@@ -112,14 +180,9 @@ def get_verification_replanning_prompt(
         detected_landmarks=detected_landmarks,
         waypoint_summary=waypoint_summary,
         previous_subtask_landmark_summary=previous_subtask_landmark_summary,
-        previous_subtask_landmark_block=previous_subtask_landmark_block,
-        verify_replan_prompt_notice_block=verify_notice_block,
-        verify_view_count=verify_view_count,
-        obs_blocked_m=_fmt_threshold_m(OBS_BLOCKED_M),
-        obs_risky_m=_fmt_threshold_m(OBS_RISKY_M),
-        obs_open_m=_fmt_threshold_m(OBS_OPEN_M),
-        arrival_near_m=_fmt_threshold_m(ARRIVAL_NEAR_M),
-    ))
+        verify_replan_prompt_notice=verify_replan_prompt_notice,
+        direction_names=direction_names,
+    ).full_prompt
 
 
 def _parse_distance_m(distance_text) -> float:
@@ -347,7 +410,22 @@ def _normalize_action_prompt_text(prompt: str) -> str:
     return normalized
 
 
-def get_action_execution_prompt(
+def _render_action_system_prompt() -> str:
+    return ACTION_SYSTEM_PROMPT.format(
+        obs_blocked_m=_fmt_threshold_m(OBS_BLOCKED_M),
+        obs_risky_m=_fmt_threshold_m(OBS_RISKY_M),
+        obs_open_m=_fmt_threshold_m(OBS_OPEN_M),
+        solid_autocomplete_m=_fmt_threshold_m(
+            ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M
+        ),
+        open_autocomplete_m=_fmt_threshold_m(
+            ACTION_SUBTASK_AUTOCOMPLETE_OPEN_DISTANCE_M
+        ),
+    )
+
+
+def build_action_prompt_bundle(
+    *,
     next_waypoint: str,
     subtask_instruction: str,
     subtask_landmark: str = "",
@@ -359,13 +437,16 @@ def get_action_execution_prompt(
     allowed_action_names=None,
     move_distance: float = 0.25,
     turn_angle: int = 30,
-) -> str:
-    """Render the action-execution prompt."""
+) -> PromptBundle:
+    """Render the action-execution system/user prompt bundle."""
     del waypoint_summary
+    del move_distance
+    del turn_angle
     if not progress_summary:
         progress_summary = "Just started"
 
-    return _normalize_action_prompt_text(ACTION_EXECUTION_PROMPT.format(
+    system_prompt = _normalize_action_prompt_text(_render_action_system_prompt())
+    user_prompt = _normalize_action_prompt_text(ACTION_USER_PROMPT.format(
         subtask_destination=next_waypoint,
         subtask_landmark=str(subtask_landmark or "").strip() or "none",
         subtask_instruction=subtask_instruction,
@@ -379,21 +460,51 @@ def get_action_execution_prompt(
         allowed_action_output=_build_allowed_action_output(allowed_action_names),
         allowed_action_bullets=_build_allowed_action_bullets(allowed_action_names),
         action_space_constraint_notice=_build_action_space_constraint_notice(allowed_action_names),
-        obs_blocked_m=_fmt_threshold_m(OBS_BLOCKED_M),
-        obs_risky_m=_fmt_threshold_m(OBS_RISKY_M),
-        obs_open_m=_fmt_threshold_m(OBS_OPEN_M),
-        open_autocomplete_m=_fmt_threshold_m(ACTION_SUBTASK_AUTOCOMPLETE_OPEN_DISTANCE_M),
-        solid_autocomplete_m=_fmt_threshold_m(ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M),
+    ))
+    return PromptBundle(
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        full_prompt=compose_full_prompt(system_prompt, user_prompt),
+    )
+
+
+def get_action_execution_prompt(
+    next_waypoint: str,
+    subtask_instruction: str,
+    subtask_landmark: str = "",
+    progress_summary: str = "",
+    waypoint_summary: str = "",
+    detected_landmarks: str = None,
+    obstacle_distances=None,
+    landmark_map_info: str = None,
+    allowed_action_names=None,
+    move_distance: float = 0.25,
+    turn_angle: int = 30,
+) -> str:
+    """Compatibility helper returning the combined action-execution prompt."""
+    return build_action_prompt_bundle(
+        next_waypoint=next_waypoint,
+        subtask_instruction=subtask_instruction,
+        subtask_landmark=subtask_landmark,
+        progress_summary=progress_summary,
+        waypoint_summary=waypoint_summary,
+        detected_landmarks=detected_landmarks,
+        obstacle_distances=obstacle_distances,
+        landmark_map_info=landmark_map_info,
+        allowed_action_names=allowed_action_names,
         move_distance=move_distance,
         turn_angle=turn_angle,
-    ))
+    ).full_prompt
 
 
 __all__ = [
-    "ACTION_EXECUTION_PROMPT",
+    "ACTION_SYSTEM_PROMPT",
+    "ACTION_USER_PROMPT",
     "DEFAULT_ALLOWED_ACTION_NAMES",
-    "INITIAL_PLANNING_PROMPT",
-    "VERIFICATION_REPLANNING_PROMPT",
+    "INITIAL_PLANNING_SYSTEM_PROMPT",
+    "INITIAL_PLANNING_USER_PROMPT",
+    "VERIFY_PLANNING_SYSTEM_PROMPT",
+    "VERIFY_PLANNING_USER_PROMPT",
     "_build_allowed_action_bullets",
     "_build_allowed_action_output",
     "_build_action_space_constraint_notice",
@@ -402,6 +513,9 @@ __all__ = [
     "_build_obstacle_perception_summary",
     "_fmt_threshold_m",
     "_get_verify_view_count",
+    "build_action_prompt_bundle",
+    "build_initial_planner_prompt_bundle",
+    "build_verify_planner_prompt_bundle",
     "get_action_execution_prompt",
     "get_initial_planning_prompt",
     "get_verification_replanning_prompt",

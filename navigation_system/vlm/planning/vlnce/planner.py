@@ -10,13 +10,11 @@ from typing import Any, Dict, List, Tuple, Optional
 from navigation_system.config.core.params.api import THINKING_IMAGE_COMPRESSION_MAX_SIZE
 from navigation_system.vlm.api.api_client import APIConfig, BaseAPIClient
 from navigation_system.vlm.prompts.vlnce.builders import (
-    get_initial_planning_prompt,
-    get_verification_replanning_prompt
+    build_initial_planner_prompt_bundle,
+    build_verify_planner_prompt_bundle,
 )
 from navigation_system.vlm.prompts.common import (
-    ExplicitCachePromptBundle,
     PromptLike,
-    compose_full_prompt,
     extract_prompt_debug_text,
 )
 from navigation_system.vlm.contracts.schema import (
@@ -388,9 +386,9 @@ class LLMPlanner(BaseAPIClient):
                 'right_90': 'Unknown'
             }
         
-        prompt = get_initial_planning_prompt(
-            instruction, 
-            self.action_space
+        prompt = build_initial_planner_prompt_bundle(
+            instruction=instruction,
+            action_space=self.action_space,
         )
         
         # 组合图像：12方向观察 + 全局地图
@@ -457,11 +455,11 @@ class LLMPlanner(BaseAPIClient):
                 'right_90': 'Unknown'
             }
         
-        prompt = get_verification_replanning_prompt(
-            instruction,
-            subtask_destination,
-            subtask_instruction,
-            self.action_space,
+        prompt = build_verify_planner_prompt_bundle(
+            instruction=instruction,
+            subtask_destination=subtask_destination,
+            subtask_instruction=subtask_instruction,
+            action_space=self.action_space,
             detected_landmarks=None,
             waypoint_summary=waypoint_summary,
             previous_subtask_landmark_summary=previous_subtask_landmark_summary,

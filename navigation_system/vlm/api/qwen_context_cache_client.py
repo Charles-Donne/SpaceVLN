@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 import requests
 import yaml
 
-from navigation_system.vlm.prompts.common import ExplicitCachePromptBundle
+from navigation_system.vlm.prompts.common import PromptBundle
 from navigation_system.vlm.api.config import (
     build_default_results_dir_from_api_config,
     resolve_api_config_path,
@@ -364,7 +364,7 @@ class QwenContextCacheMixin:
     def call_api_with_explicit_context_cache(
         self,
         *,
-        prompt_bundle: Optional[ExplicitCachePromptBundle] = None,
+        prompt_bundle: Optional[PromptBundle] = None,
         system_prompt: Optional[str] = None,
         user_prompt: Optional[str] = None,
         full_prompt: Optional[str] = None,

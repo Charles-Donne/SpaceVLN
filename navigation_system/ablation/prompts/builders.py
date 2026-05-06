@@ -1,58 +1,64 @@
-"""Explicit-cache prompt builders using static ablation template copies."""
+"""System/user prompt builders using ablation-specific template copies."""
 
 from __future__ import annotations
 
 from typing import Dict, Optional, Sequence
 
 from navigation_system.ablation.config import AblationSpec, load_ablation_spec
-from navigation_system.ablation.prompts.standard import _hidden_obstacle_distances
 from navigation_system.ablation.prompts.templates import load_ablation_template
-from navigation_system.vlm.prompts.vlnce import cache_builders as standard_cache_builders
 from navigation_system.vlm.prompts.common import (
-    ExplicitCachePromptBundle,
+    PromptBundle,
     compose_full_prompt,
 )
+from navigation_system.vlm.prompts.vlnce import builders as standard_builders
 
 
 def _active_spec(spec: Optional[AblationSpec] = None) -> AblationSpec:
     return spec or load_ablation_spec()
 
 
-def build_initial_planner_cache_prompt_bundle(
+def _hidden_obstacle_distances() -> Dict[str, str]:
+    return {
+        "front": "Unknown",
+        "left_30": "Unknown",
+        "right_30": "Unknown",
+        "left_90": "Unknown",
+        "right_90": "Unknown",
+    }
+
+
+def build_initial_planner_prompt_bundle(
     *,
     instruction: str,
     action_space: str,
     spec: Optional[AblationSpec] = None,
-) -> ExplicitCachePromptBundle:
+) -> PromptBundle:
     del action_space
 
     resolved_spec = _active_spec(spec)
     system_template = load_ablation_template(
         resolved_spec,
-        "cache/planning_initial.system.prompt.md",
+        "planning_initial.system.prompt.md",
     )
     user_template = load_ablation_template(
         resolved_spec,
-        "cache/planning_initial.user.prompt.md",
+        "planning_initial.user.prompt.md",
     )
-    system_prompt = standard_cache_builders._normalize_anchor_notation_text(system_template.format(
-        obs_blocked_m=standard_cache_builders._fmt_threshold_m(standard_cache_builders.OBS_BLOCKED_M),
-        obs_risky_m=standard_cache_builders._fmt_threshold_m(standard_cache_builders.OBS_RISKY_M),
-        obs_open_m=standard_cache_builders._fmt_threshold_m(standard_cache_builders.OBS_OPEN_M),
-        arrival_near_m=standard_cache_builders._fmt_threshold_m(standard_cache_builders.ARRIVAL_NEAR_M),
+    system_prompt = standard_builders._normalize_anchor_notation_text(system_template.format(
+        obs_blocked_m=standard_builders._fmt_threshold_m(standard_builders.OBS_BLOCKED_M),
+        obs_risky_m=standard_builders._fmt_threshold_m(standard_builders.OBS_RISKY_M),
+        obs_open_m=standard_builders._fmt_threshold_m(standard_builders.OBS_OPEN_M),
+        arrival_near_m=standard_builders._fmt_threshold_m(standard_builders.ARRIVAL_NEAR_M),
     ))
-    user_prompt = user_template.format(
-        instruction=instruction,
-    )
-    full_prompt = compose_full_prompt(system_prompt, user_prompt)
-    return ExplicitCachePromptBundle(
+    user_prompt = user_template.format(instruction=instruction)
+    return PromptBundle(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
-        full_prompt=full_prompt,
+        full_prompt=compose_full_prompt(system_prompt, user_prompt),
     )
 
 
-def build_verify_planner_cache_prompt_bundle(
+def build_verify_planner_prompt_bundle(
     *,
     instruction: str,
     subtask_destination: str,
@@ -64,15 +70,15 @@ def build_verify_planner_cache_prompt_bundle(
     verify_replan_prompt_notice: Optional[str],
     direction_names,
     spec: Optional[AblationSpec] = None,
-) -> ExplicitCachePromptBundle:
+) -> PromptBundle:
     resolved_spec = _active_spec(spec)
     system_template = load_ablation_template(
         resolved_spec,
-        "cache/planning_verify.system.prompt.md",
+        "planning_verify.system.prompt.md",
     )
     user_template = load_ablation_template(
         resolved_spec,
-        "cache/planning_verify.user.prompt.md",
+        "planning_verify.user.prompt.md",
     )
 
     prompt_detected_landmarks = (
@@ -108,7 +114,7 @@ def build_verify_planner_cache_prompt_bundle(
         notice_text = str(prompt_verify_replan_prompt_notice).strip()
         notice_block_for_user = f"**Stuck Notice**: {notice_text}"
 
-    system_prompt = standard_cache_builders._normalize_anchor_notation_text(system_template.format(
+    system_prompt = standard_builders._normalize_anchor_notation_text(system_template.format(
         instruction=instruction,
         subtask_destination=subtask_destination,
         subtask_instruction=subtask_instruction,
@@ -117,10 +123,10 @@ def build_verify_planner_cache_prompt_bundle(
         waypoint_summary=waypoint_text,
         previous_subtask_landmark_summary=previous_subtask_text,
         verify_replan_prompt_notice=prompt_verify_replan_prompt_notice,
-        obs_blocked_m=standard_cache_builders._fmt_threshold_m(standard_cache_builders.OBS_BLOCKED_M),
-        obs_risky_m=standard_cache_builders._fmt_threshold_m(standard_cache_builders.OBS_RISKY_M),
-        obs_open_m=standard_cache_builders._fmt_threshold_m(standard_cache_builders.OBS_OPEN_M),
-        arrival_near_m=standard_cache_builders._fmt_threshold_m(standard_cache_builders.ARRIVAL_NEAR_M),
+        obs_blocked_m=standard_builders._fmt_threshold_m(standard_builders.OBS_BLOCKED_M),
+        obs_risky_m=standard_builders._fmt_threshold_m(standard_builders.OBS_RISKY_M),
+        obs_open_m=standard_builders._fmt_threshold_m(standard_builders.OBS_OPEN_M),
+        arrival_near_m=standard_builders._fmt_threshold_m(standard_builders.ARRIVAL_NEAR_M),
     ))
     user_prompt = user_template.format(
         verify_replan_prompt_notice_block=notice_block_for_user,
@@ -130,15 +136,14 @@ def build_verify_planner_cache_prompt_bundle(
         previous_subtask_landmark_block=previous_subtask_landmark_block,
         waypoint_summary=waypoint_text,
     )
-    full_prompt = compose_full_prompt(system_prompt, user_prompt)
-    return ExplicitCachePromptBundle(
+    return PromptBundle(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
-        full_prompt=full_prompt,
+        full_prompt=compose_full_prompt(system_prompt, user_prompt),
     )
 
 
-def build_action_cache_prompt_bundle(
+def build_action_prompt_bundle(
     *,
     next_waypoint: str,
     subtask_instruction: str,
@@ -152,7 +157,7 @@ def build_action_cache_prompt_bundle(
     move_distance: float = 0.25,
     turn_angle: int = 30,
     spec: Optional[AblationSpec] = None,
-) -> ExplicitCachePromptBundle:
+) -> PromptBundle:
     del waypoint_summary
     del move_distance
     del turn_angle
@@ -160,11 +165,11 @@ def build_action_cache_prompt_bundle(
     resolved_spec = _active_spec(spec)
     system_template = load_ablation_template(
         resolved_spec,
-        "cache/action.system.prompt.md",
+        "action.system.prompt.md",
     )
     user_template = load_ablation_template(
         resolved_spec,
-        "cache/action.user.prompt.md",
+        "action.user.prompt.md",
     )
 
     prompt_progress_summary = (
@@ -190,32 +195,32 @@ def build_action_cache_prompt_bundle(
 
     progress_text = str(prompt_progress_summary or "").strip() or "Just started"
     detected_landmark_text = str(prompt_detected_landmarks or "").strip() or "none"
-    obstacle_summary = standard_cache_builders._build_obstacle_perception_summary(
+    obstacle_summary = standard_builders._build_obstacle_perception_summary(
         prompt_obstacle_distances
     )
-    landmark_summary = standard_cache_builders._build_landmark_perception_summary(
+    landmark_summary = standard_builders._build_landmark_perception_summary(
         detected_landmarks=prompt_detected_landmarks,
         landmark_map_info=prompt_landmark_map_info,
     )
-    allowed_action_bullets = standard_cache_builders._build_allowed_action_bullets(
+    allowed_action_bullets = standard_builders._build_allowed_action_bullets(
         allowed_action_names
     )
-    action_space_constraint_notice = standard_cache_builders._build_action_space_constraint_notice(
+    action_space_constraint_notice = standard_builders._build_action_space_constraint_notice(
         allowed_action_names
     )
 
-    system_prompt = standard_cache_builders._normalize_action_prompt_text(system_template.format(
-        obs_blocked_m=standard_cache_builders._fmt_threshold_m(standard_cache_builders.OBS_BLOCKED_M),
-        obs_risky_m=standard_cache_builders._fmt_threshold_m(standard_cache_builders.OBS_RISKY_M),
-        obs_open_m=standard_cache_builders._fmt_threshold_m(standard_cache_builders.OBS_OPEN_M),
-        solid_autocomplete_m=standard_cache_builders._fmt_threshold_m(
-            standard_cache_builders.ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M
+    system_prompt = standard_builders._normalize_action_prompt_text(system_template.format(
+        obs_blocked_m=standard_builders._fmt_threshold_m(standard_builders.OBS_BLOCKED_M),
+        obs_risky_m=standard_builders._fmt_threshold_m(standard_builders.OBS_RISKY_M),
+        obs_open_m=standard_builders._fmt_threshold_m(standard_builders.OBS_OPEN_M),
+        solid_autocomplete_m=standard_builders._fmt_threshold_m(
+            standard_builders.ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M
         ),
-        open_autocomplete_m=standard_cache_builders._fmt_threshold_m(
-            standard_cache_builders.ACTION_SUBTASK_AUTOCOMPLETE_OPEN_DISTANCE_M
+        open_autocomplete_m=standard_builders._fmt_threshold_m(
+            standard_builders.ACTION_SUBTASK_AUTOCOMPLETE_OPEN_DISTANCE_M
         ),
     ))
-    user_prompt = standard_cache_builders._normalize_action_prompt_text(user_template.format(
+    user_prompt = standard_builders._normalize_action_prompt_text(user_template.format(
         subtask_destination=next_waypoint,
         subtask_instruction=subtask_instruction,
         subtask_landmark=str(subtask_landmark or "").strip() or "none",
@@ -226,16 +231,15 @@ def build_action_cache_prompt_bundle(
         allowed_action_bullets=allowed_action_bullets,
         action_space_constraint_notice=action_space_constraint_notice,
     ))
-    full_prompt = compose_full_prompt(system_prompt, user_prompt)
-    return ExplicitCachePromptBundle(
+    return PromptBundle(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
-        full_prompt=full_prompt,
+        full_prompt=compose_full_prompt(system_prompt, user_prompt),
     )
 
 
 __all__ = [
-    "build_action_cache_prompt_bundle",
-    "build_initial_planner_cache_prompt_bundle",
-    "build_verify_planner_cache_prompt_bundle",
+    "build_action_prompt_bundle",
+    "build_initial_planner_prompt_bundle",
+    "build_verify_planner_prompt_bundle",
 ]

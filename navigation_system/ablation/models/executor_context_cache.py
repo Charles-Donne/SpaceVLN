@@ -5,11 +5,11 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, Optional, Sequence, Tuple
 
-from navigation_system.ablation.prompts.cache import build_action_cache_prompt_bundle
+from navigation_system.ablation.prompts.builders import build_action_prompt_bundle
 from navigation_system.ablation.config import AblationSpec, load_ablation_spec
 from navigation_system.vlm.api.qwen_context_cache_client import QwenContextCacheMixin
 from navigation_system.vlm.execution.vlnce.executor import ActionExecutor
-from navigation_system.vlm.prompts.common import ExplicitCachePromptBundle
+from navigation_system.vlm.prompts.common import PromptBundle
 
 
 class AblationContextCacheActionExecutor(QwenContextCacheMixin, ActionExecutor):
@@ -35,7 +35,7 @@ class AblationContextCacheActionExecutor(QwenContextCacheMixin, ActionExecutor):
 
     def call_api(
         self,
-        prompt_bundle: ExplicitCachePromptBundle,
+        prompt_bundle: PromptBundle,
         image_paths,
         save_dir: str = None,
         no_compress_indices: set = None,
@@ -70,7 +70,7 @@ class AblationContextCacheActionExecutor(QwenContextCacheMixin, ActionExecutor):
                 "right_30": "Unknown",
             }
 
-        prompt_bundle = build_action_cache_prompt_bundle(
+        prompt_bundle = build_action_prompt_bundle(
             next_waypoint=next_waypoint,
             subtask_instruction=subtask_instruction,
             progress_summary=progress_summary,
