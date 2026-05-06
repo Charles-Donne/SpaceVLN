@@ -45,6 +45,9 @@ from navigation_system.runtime.storage.artifacts import (
     get_episode_detail_path_candidates,
     get_episode_log_path_candidates,
 )
+from navigation_system.vlm.api.qwen_context_cache_client import (
+    validate_qwen_context_cache_api_config,
+)
 
 
 RUNTIME_CHOICES = ("standard", "context_cache")
@@ -1587,6 +1590,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args.vlm_api_config = resolve_api_config_path(
         str(args.vlm_api_config or _default_api_config(args.runtime))
     )
+    if str(args.runtime or "").strip().lower() == "context_cache":
+        validate_qwen_context_cache_api_config(args.vlm_api_config)
     results_root = (
         resolve_results_root_path(args.results_root)
         if str(args.results_root or "").strip()

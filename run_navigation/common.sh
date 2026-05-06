@@ -322,9 +322,54 @@ spacevln_dispatch_r2r_cli() {
     local third_arg="${cli_args[2]:-}"
     local fourth_arg="${cli_args[3]:-}"
     local fifth_arg="${cli_args[4]:-}"
+    local sixth_arg="${cli_args[5]:-}"
     local mode="all"
     local parallel_workers="1"
     local mode_arg=""
+
+    if [[ "$first_arg" == "ordered" || "$first_arg" == "sequential" ]]; then
+        local start_index="1"
+        local num_episodes=""
+        local max_steps=""
+        local ordered_mode="all"
+        local ordered_workers="1"
+
+        if [[ -n "$sixth_arg" ]]; then
+            start_index="${second_arg:-1}"
+            num_episodes="${third_arg:-1}"
+            max_steps="${fourth_arg:-}"
+            ordered_mode="${fifth_arg:-all}"
+            ordered_workers="$sixth_arg"
+        else
+            num_episodes="${second_arg:-1}"
+            max_steps="${third_arg:-}"
+            if [[ -n "$fourth_arg" && "$fourth_arg" =~ ^[0-9]+$ ]]; then
+                ordered_workers="$fourth_arg"
+            elif [[ -n "$fourth_arg" ]]; then
+                ordered_mode="$fourth_arg"
+            fi
+            if [[ -n "$fifth_arg" ]]; then
+                ordered_workers="$fifth_arg"
+            fi
+        fi
+
+        spacevln_validate_parallel_workers "$ordered_workers"
+        mode_arg="$(spacevln_mode_arg "$ordered_mode")"
+        local args=(
+            --ordered
+            --start-index "$start_index"
+            --num-episodes "$num_episodes"
+            --parallel-workers "$ordered_workers"
+            --max-subtask-steps 5
+        )
+        if [[ -n "$max_steps" ]]; then
+            args+=(--max-steps "$max_steps")
+        fi
+        if [[ -n "$mode_arg" ]]; then
+            args+=("$mode_arg")
+        fi
+        spacevln_run_python_entry "${args[@]}"
+    fi
 
     if [[ -n "$fourth_arg" && "$fourth_arg" =~ ^[0-9]+$ ]]; then
         parallel_workers="$fourth_arg"
@@ -352,10 +397,10 @@ spacevln_dispatch_r2r_cli() {
         local num_episodes="${second_arg:-1}"
         local max_steps="${third_arg:-}"
         local args=(
-            --random
             --num-episodes "$num_episodes"
             --parallel-workers "$parallel_workers"
             --max-subtask-steps 5
+            --random
         )
         if [[ -n "$max_steps" ]]; then
             args+=(--max-steps "$max_steps")
@@ -393,6 +438,7 @@ spacevln_dispatch_r2r_cli() {
         echo "   bash run_navigation/r2rce.sh 832"
         echo "   bash run_navigation/r2rce.sh 832 300"
         echo "   bash run_navigation/r2rce.sh 1 600 260 5"
+        echo "   bash run_navigation/r2rce.sh ordered 1 600 260 skip-sr1 5"
         echo "   bash run_navigation/r2rce.sh random 20 260 all 4"
         echo "   bash run_navigation/r2rce.sh --episode-id 832 --num-episodes 1"
         exit 1

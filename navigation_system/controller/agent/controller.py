@@ -211,7 +211,14 @@ class NavigationAgentController(BaseNavigationController):
         self.last_action_effective_name = ""
         self.last_action_semantic_variant = ""
         self.last_action_progress_hint = ""
+        self._pending_post_episode_futures = []
         self.timing_tracker.reset()
+
+    def pop_pending_post_episode_futures(self) -> List[Any]:
+        """Return background post-processing jobs that must finish before moving artifacts."""
+        futures = list(getattr(self, "_pending_post_episode_futures", []) or [])
+        self._pending_post_episode_futures = []
+        return futures
 
     def _invalidate_action_landmark_summary_cache(self) -> None:
         self._latest_action_landmark_entries_cache_key = None
@@ -3735,6 +3742,9 @@ class NavigationAgentController(BaseNavigationController):
                 action_name=action_name,
             )
 
+            if action_id is None and self.action_executor.is_last_call_non_retryable():
+                break
+
             if (
                 self.action_force_forward_after_turns_pending and
                 (not self.action_stagnation_retry_pending) and
@@ -4148,6 +4158,16 @@ class NavigationAgentController(BaseNavigationController):
                     print('[WARN] Episode already done while preparing the next action')
                     return 'complete'
 
+                if (
+                    self.action_executor is not None
+                    and self.action_executor.is_last_call_non_retryable()
+                ):
+                    print(
+                        "[ERR] VLM Action stopped after non-retryable API error: "
+                        f"{getattr(self.action_executor, 'last_call_error', '')}"
+                    )
+                    break
+
                 if retry < max_retries - 1:
                     wait = (retry + 1) * 2
                     print(f"  [WARN] VLM Action failed, retry in {wait}s ({retry + 1}/{max_retries - 1})...")
@@ -4483,6 +4503,8 @@ class NavigationAgentController(BaseNavigationController):
             gif_future = self.nav_visualizer.save_gif_async(
                 fps=self.runtime_options.navigation_gif_fps,
             )
+            if gif_future is not None:
+                self._pending_post_episode_futures.append(gif_future)
             gif_path = (
                 os.path.join(self.nav_visualizer.visualization_dir, "navigation.gif")
                 if gif_future is not None and self.nav_visualizer.visualization_dir
@@ -4728,6 +4750,7 @@ class NavigationAgentController(BaseNavigationController):
         
         # Extract and validate core metrics.
         result = {
+            '_benchmark': str(getattr(self, 'result_benchmark', 'r2rce') or 'r2rce'),
             'episode_id': self.current_episode_id,
             'instruction': self.current_instruction,
             'total_steps': total_steps,
@@ -4764,6 +4787,11 @@ class NavigationAgentController(BaseNavigationController):
         result['sr'] = result['success']
         result['osr'] = result['oracle_success']
         result['ne'] = result['distance_to_goal']
+        result_metadata = getattr(self, 'result_metadata', None)
+        if isinstance(result_metadata, dict):
+            for key, value in result_metadata.items():
+                if value is not None:
+                    result[key] = value
         return self.save_manager.save_result(result)
     
     def _print_subtask_info(self, response: Dict, is_initial: bool = False):

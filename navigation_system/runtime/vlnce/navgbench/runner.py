@@ -67,6 +67,9 @@ from navigation_system.vlm.vlnce.navgbench_runtime_factory import (
     build_navgbench_context_cache_navigation_model_stack,
     build_navgbench_navigation_model_stack,
 )
+from navigation_system.vlm.api.qwen_context_cache_client import (
+    validate_qwen_context_cache_api_config,
+)
 
 
 RUNTIME_CHOICES = ("standard", "context_cache")
@@ -895,6 +898,11 @@ def _run_one_episode(
                 envs=adapter,
             )
             controller.reset_episode(episode_id=storage_episode_id)
+            controller.result_benchmark = "navgbench"
+            controller.result_metadata = {
+                "sample_index": storage_episode_id,
+                "navgbench_id": stable_id,
+            }
             result = controller.run_navigation(max_subtask_steps=args.max_subtask_steps)
             metrics = dict(env.get_metrics() or {})
             navgbench_log = _save_navgbench_metrics(space_config.PATHS.RESULTS_DIR, episode, metrics)
@@ -1211,6 +1219,8 @@ def run_navigation_from_args(args: argparse.Namespace) -> int:
         raise FileNotFoundError(f"NavGBench root does not exist: {navgbench_root}")
 
     args.vlm_api_config = resolve_api_config_path(args.vlm_api_config)
+    if str(args.runtime or "").strip().lower() == "context_cache":
+        validate_qwen_context_cache_api_config(args.vlm_api_config)
     if bool(args.use_raw_instruction):
         args.instruction_mode = "simple"
     args.instruction_mode = normalize_navgbench_instruction_mode(args.instruction_mode)

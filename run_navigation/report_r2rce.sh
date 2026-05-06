@@ -1,8 +1,147 @@
 #!/bin/bash
-# Preferred R2R-CE report entrypoint. Kept separate from the legacy name so
-# existing commands can still call report_vlnce.sh during the transition.
+# Generate a compact R2R-CE Markdown report from existing logs.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec bash "$SCRIPT_DIR/report_vlnce.sh" "$@"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/common.sh"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/report_common.sh"
+
+usage() {
+    cat <<'EOF'
+Usage:
+  bash run_navigation/report_r2rce.sh [all|start end|start-end] [model] [ablation]
+
+Examples:
+  bash run_navigation/report_r2rce.sh all
+  bash run_navigation/report_r2rce.sh 1000 1300
+  bash run_navigation/report_r2rce.sh 1000-1300 qwen3.5-plus__qwen3.5-flash_cache
+  bash run_navigation/report_r2rce.sh all qwen3.5-plus__qwen3.5-flash_cache no-landmark
+  bash run_navigation/report_r2rce.sh 1000 1300 --model qwen3.5-plus__qwen3.5-flash_cache --ablation no-landmark
+
+Output:
+  all:       result/r2rce/<model>/episode_results.md
+  range:     result/r2rce/<model>/reports/<start-end>/episode_results.md
+  ablation:  result/r2rce/ablation/<ablation>/<model>/...
+EOF
+}
+
+PROJECT_ROOT="$(spacevln_project_root)"
+PYTHON_BIN="$(spacevln_select_python)"
+spacevln_setup_runtime_env "$PYTHON_BIN"
+
+API_CONFIG="${VLM_API_CONFIG:-navigation_system/config/vlm/vlm_api_config.yaml}"
+EXP_CONFIG="${EXP_CONFIG:-navigation_system/config/experiments/vlnce/r2r_eval.yaml}"
+WORKERS="${SPACEVLN_REPORT_WORKERS:-$(spacevln_report_default_workers)}"
+MODEL=""
+ABLATION=""
+RESULTS_DIR_OVERRIDE=""
+POSITIONAL_ARGS=()
+
+while (( $# > 0 )); do
+    case "$1" in
+        -h|--help|help)
+            usage
+            exit 0
+            ;;
+        --model)
+            MODEL="${2:-}"
+            shift 2
+            ;;
+        --model=*)
+            MODEL="${1#*=}"
+            shift
+            ;;
+        --ablation)
+            ABLATION="${2:-}"
+            shift 2
+            ;;
+        --ablation=*)
+            ABLATION="${1#*=}"
+            shift
+            ;;
+        --results-dir)
+            RESULTS_DIR_OVERRIDE="${2:-}"
+            shift 2
+            ;;
+        --results-dir=*)
+            RESULTS_DIR_OVERRIDE="${1#*=}"
+            shift
+            ;;
+        --workers|--load-workers)
+            WORKERS="${2:-}"
+            shift 2
+            ;;
+        --workers=*|--load-workers=*)
+            WORKERS="${1#*=}"
+            shift
+            ;;
+        *)
+            POSITIONAL_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+if ! [[ "$WORKERS" =~ ^[0-9]+$ ]] || [ "$WORKERS" -lt 1 ]; then
+    echo "workers must be a positive integer: $WORKERS" >&2
+    exit 1
+fi
+
+spacevln_report_parse_range "${POSITIONAL_ARGS[@]}"
+REMAINING=("${REPORT_REMAINING_ARGS[@]}")
+if [ "${#REMAINING[@]}" -gt 0 ] && [ -z "$MODEL" ]; then
+    MODEL="${REMAINING[0]}"
+fi
+if [ "${#REMAINING[@]}" -gt 1 ] && [ -z "$ABLATION" ]; then
+    ABLATION="${REMAINING[1]}"
+fi
+if [ "${#REMAINING[@]}" -gt 2 ]; then
+    echo "Too many arguments after range. Use: [model] [ablation]." >&2
+    exit 1
+fi
+
+if [ -z "$MODEL" ]; then
+    MODEL="$(spacevln_report_model_dir_name "$PYTHON_BIN" "$API_CONFIG")"
+fi
+ABLATION="${ABLATION#ablation/}"
+ABLATION="${ABLATION%/}"
+
+R2RCE_ROOT="$(spacevln_report_family_root "$PYTHON_BIN" "r2rce")"
+if [ -n "$RESULTS_DIR_OVERRIDE" ]; then
+    RESULTS_DIR="$(spacevln_report_resolve_results_dir "$RESULTS_DIR_OVERRIDE" "$R2RCE_ROOT" "$R2RCE_ROOT/$MODEL")"
+elif [ -n "$ABLATION" ]; then
+    RESULTS_DIR="$R2RCE_ROOT/ablation/$ABLATION/$MODEL"
+else
+    RESULTS_DIR="$R2RCE_ROOT/$MODEL"
+fi
+
+if [ ! -d "$RESULTS_DIR/log" ]; then
+    echo "Missing log directory: $RESULTS_DIR/log" >&2
+    exit 1
+fi
+
+echo "R2R-CE report"
+echo "  Range: ${REPORT_RANGE_LABEL}"
+echo "  Model: $MODEL"
+if [ -n "$ABLATION" ]; then
+    echo "  Ablation: $ABLATION"
+fi
+echo "  Source: $RESULTS_DIR"
+if [ "$REPORT_RANGE_LABEL" = "all" ]; then
+    echo "  Output: $RESULTS_DIR/episode_results.md"
+else
+    echo "  Output: $RESULTS_DIR/reports/$REPORT_RANGE_LABEL/episode_results.md"
+fi
+echo "  Workers: $WORKERS"
+
+spacevln_report_run_results_report_md \
+    "$PYTHON_BIN" \
+    "$PROJECT_ROOT" \
+    "$RESULTS_DIR" \
+    "$EXP_CONFIG" \
+    "$WORKERS" \
+    "$REPORT_START" \
+    "$REPORT_END"

@@ -106,30 +106,138 @@ def iter_all_episode_log_paths(dump_dir: str) -> List[str]:
 class SaveManager:
     """Lightweight episode output helper."""
 
-    DETAIL_RESULT_FIELDS = (
+    COMMON_DETAIL_RESULT_FIELDS = (
         "episode_id",
         "instruction",
         "total_steps",
         "subtask_count",
         "episode_duration_s",
+        "local_non_api_duration_s",
+        "failed_api_total_duration_s",
+        "failed_retry_wait_duration_s",
+        "failed_wasted_duration_s",
         "success",
         "spl",
-        "soft_spl",
+        "distance_to_goal",
+        "path_length",
+    )
+    COMMON_DETAIL_RESULT_TAIL_FIELDS = (
+        "thinking_api_summary",
+        "action_api_summary",
+        "timestamp",
+        "sr",
+        "ne",
+    )
+    R2RCE_DETAIL_RESULT_FIELDS = (
+        "episode_id",
+        "instruction",
+        "total_steps",
+        "subtask_count",
+        "episode_duration_s",
+        "local_non_api_duration_s",
+        "failed_api_total_duration_s",
+        "failed_retry_wait_duration_s",
+        "failed_wasted_duration_s",
+        "success",
+        "spl",
         "distance_to_goal",
         "ndtw",
         "path_length",
         "oracle_success",
         "oracle_navigation_error",
         "oracle_spl",
-        "sample_index",
+        "thinking_api_summary",
+        "action_api_summary",
+        "timestamp",
         "sr",
         "osr",
         "ne",
+    )
+    NAVGBENCH_DETAIL_RESULT_FIELDS = (
+        "episode_id",
+        "sample_index",
+        "navgbench_id",
+        "instruction",
+        "total_steps",
+        "subtask_count",
+        "episode_duration_s",
+        "local_non_api_duration_s",
+        "failed_api_total_duration_s",
+        "failed_retry_wait_duration_s",
+        "failed_wasted_duration_s",
+        "success",
+        "spl",
+        "distance_to_goal",
+        "path_length",
+        "oracle_success",
+        *COMMON_DETAIL_RESULT_TAIL_FIELDS,
+        "osr",
+    )
+    OVON_DETAIL_RESULT_FIELDS = (
+        "episode_id",
+        "sample_index",
+        "instruction",
+        "total_steps",
+        "subtask_count",
+        "episode_duration_s",
+        "local_non_api_duration_s",
+        "failed_api_total_duration_s",
+        "failed_retry_wait_duration_s",
+        "failed_wasted_duration_s",
+        "success",
+        "spl",
+        "soft_spl",
+        "distance_to_goal",
+        "path_length",
+        *COMMON_DETAIL_RESULT_TAIL_FIELDS,
+    )
+    DETAIL_RESULT_FIELD_SETS = {
+        "r2rce": R2RCE_DETAIL_RESULT_FIELDS,
+        "navgbench": NAVGBENCH_DETAIL_RESULT_FIELDS,
+        "ovon": OVON_DETAIL_RESULT_FIELDS,
+    }
+    LOG_DEFAULT_FIELDS = (
+        ("episode_id", None),
+        ("instruction", ""),
+        ("total_steps", 0),
+        ("subtask_count", 0),
+        ("episode_duration_s", 0.0),
+        ("local_non_api_duration_s", 0.0),
+        ("failed_api_total_duration_s", 0.0),
+        ("failed_retry_wait_duration_s", 0.0),
+        ("failed_wasted_duration_s", 0.0),
+        ("ne", -1),
+        ("sr", 0),
+        ("spl", 0.0),
+        ("thinking_api_summary", {}),
+        ("action_api_summary", {}),
+        ("path_length", 0.0),
+        ("timestamp", None),
+    )
+    LOG_OPTIONAL_FIELD_SETS = {
+        "r2rce": (
+            "osr",
+            "ndtw",
+            "oracle_success",
+            "oracle_navigation_error",
+            "oracle_spl",
+        ),
+        "navgbench": (
+            "sample_index",
+            "navgbench_id",
+            "osr",
+            "oracle_success",
+        ),
+        "ovon": (
+            "sample_index",
+            "soft_spl",
+        ),
+    }
+    LOG_COMMON_OPTIONAL_FIELDS = (
         "reason",
         "error",
         "gif_path",
         "topdown_path",
-        "timestamp",
     )
     REQUIRED_RESULT_FIELDS = (
         "episode_id",
@@ -368,13 +476,69 @@ class SaveManager:
             json.dump(payload, f, ensure_ascii=False, indent=2)
 
     @classmethod
-    def _build_detail_result(cls, result: Dict) -> Dict:
-        """Keep records/result.json compact and close to the historical schema."""
+    def _result_benchmark(cls, result: Dict) -> str:
+        marker = str(
+            (result or {}).get("_benchmark")
+            or (result or {}).get("benchmark")
+            or ""
+        ).strip().lower()
+        marker_aliases = {
+            "r2r": "r2rce",
+            "r2r-ce": "r2rce",
+            "r2rce": "r2rce",
+            "vlnce": "r2rce",
+            "vln-ce": "r2rce",
+            "navgbench": "navgbench",
+            "gnbench": "navgbench",
+            "ovon": "ovon",
+            "objectnav": "ovon",
+            "object_navigation": "ovon",
+        }
+        if marker in marker_aliases:
+            return marker_aliases[marker]
+        if (result or {}).get("navgbench_id") is not None:
+            return "navgbench"
+        if "soft_spl" in (result or {}):
+            return "ovon"
+        return "r2rce"
+
+    @staticmethod
+    def _copy_present_fields(result: Dict, fields) -> Dict:
         payload = {}
-        for key in cls.DETAIL_RESULT_FIELDS:
+        for key in tuple(fields):
             if key in result:
                 payload[key] = result.get(key)
         return payload
+
+    @classmethod
+    def _build_detail_result(cls, result: Dict) -> Dict:
+        """Keep records/result.json compact and benchmark-specific."""
+        benchmark = cls._result_benchmark(result)
+        fields = cls.DETAIL_RESULT_FIELD_SETS.get(
+            benchmark,
+            cls.R2RCE_DETAIL_RESULT_FIELDS,
+        )
+        return cls._copy_present_fields(result, fields)
+
+    @classmethod
+    def _build_log_result(cls, result: Dict) -> Dict:
+        """Build the per-entry best summary used by reports and skip-sr1."""
+        log_result = {}
+        for key, default in cls.LOG_DEFAULT_FIELDS:
+            if key == "timestamp":
+                default = datetime.now().isoformat()
+            if key == "failed_wasted_duration_s":
+                default = result.get("failed_api_total_duration_s", 0.0)
+            log_result[key] = result.get(key, default)
+
+        benchmark = cls._result_benchmark(result)
+        for key in cls.LOG_OPTIONAL_FIELD_SETS.get(benchmark, ()):
+            if key in result:
+                log_result[key] = result.get(key)
+        for key in cls.LOG_COMMON_OPTIONAL_FIELDS:
+            if key in result:
+                log_result[key] = str(result.get(key, "") or "")
+        return log_result
     
     def save_result(self, result: Dict):
         """
@@ -400,47 +564,7 @@ class SaveManager:
             entry_kind=self.entry_kind,
         )
 
-        log_result = {
-            'episode_id': result['episode_id'],
-            'instruction': result.get('instruction', ''),
-            'total_steps': result.get('total_steps', 0),
-            'subtask_count': result.get('subtask_count', 0),
-            'episode_duration_s': result.get('episode_duration_s', 0.0),
-            'local_non_api_duration_s': result.get('local_non_api_duration_s', 0.0),
-            'failed_api_total_duration_s': result.get('failed_api_total_duration_s', 0.0),
-            'failed_retry_wait_duration_s': result.get('failed_retry_wait_duration_s', 0.0),
-            'failed_wasted_duration_s': result.get('failed_wasted_duration_s', result.get('failed_api_total_duration_s', 0.0)),
-            'ne': result.get('ne', -1),
-            'sr': result.get('sr', 0),
-            'spl': result.get('spl', 0.0),
-            'thinking_api_summary': result.get('thinking_api_summary', {}),
-            'action_api_summary': result.get('action_api_summary', {}),
-            'path_length': result.get('path_length', 0.0),
-            'timestamp': result.get('timestamp', datetime.now().isoformat()),
-        }
-        if 'soft_spl' in result:
-            log_result['soft_spl'] = result.get('soft_spl', 0.0)
-        if 'sample_index' in result:
-            log_result['sample_index'] = result.get('sample_index')
-        if 'osr' in result:
-            log_result['osr'] = result.get('osr', 0)
-        if 'ndtw' in result:
-            log_result['ndtw'] = result.get('ndtw', 0.0)
-        if 'oracle_navigation_error' in result:
-            log_result['oracle_navigation_error'] = result.get(
-                'oracle_navigation_error',
-                float('inf'),
-            )
-        if 'oracle_spl' in result:
-            log_result['oracle_spl'] = result.get('oracle_spl', 0.0)
-        if 'reason' in result:
-            log_result['reason'] = str(result.get('reason', '') or '')
-        if 'error' in result:
-            log_result['error'] = str(result.get('error', '') or '')
-        if 'gif_path' in result:
-            log_result['gif_path'] = str(result.get('gif_path', '') or '')
-        if 'topdown_path' in result:
-            log_result['topdown_path'] = str(result.get('topdown_path', '') or '')
+        log_result = self._build_log_result(result)
 
         existing_best_log = self._load_json_if_exists(log_path)
         compare_baseline = existing_best_log if self.is_complete_result(existing_best_log) else None

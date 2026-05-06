@@ -43,17 +43,31 @@ def _maybe_generate_context_cache_report(args, config) -> None:
         print(f"⚠️  Failed to save cache report artifacts: {exc}")
 
 
+def _results_family() -> str:
+    import os
+
+    return str(os.getenv("SPACEVLN_RESULTS_FAMILY", "r2rce") or "r2rce").strip()
+
+
 STANDARD_RUNTIME_PROFILE = NavigationRuntimeProfile(
     name="standard",
     default_api_config_path=DEFAULT_API_CONFIG,
-    default_results_dir_builder=build_default_results_dir_from_api_config,
+    default_results_dir_builder=lambda config_path, **kwargs: build_default_results_dir_from_api_config(
+        config_path,
+        family=_results_family(),
+        **kwargs,
+    ),
     model_stack_builder=build_default_navigation_model_stack,
 )
 
 CONTEXT_CACHE_RUNTIME_PROFILE = NavigationRuntimeProfile(
     name="context_cache",
     default_api_config_path=DEFAULT_CONTEXT_CACHE_API_CONFIG,
-    default_results_dir_builder=build_default_context_cache_results_dir,
+    default_results_dir_builder=lambda config_path, **kwargs: build_default_context_cache_results_dir(
+        config_path,
+        family=_results_family(),
+        **kwargs,
+    ),
     model_stack_builder=build_context_cache_navigation_model_stack,
     post_run_hook=_maybe_generate_context_cache_report,
 )

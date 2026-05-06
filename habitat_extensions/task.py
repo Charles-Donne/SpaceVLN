@@ -227,12 +227,11 @@ class RxRVLNCEDatasetV1(Dataset):
             ]
 
         if config.EPISODES_ALLOWED is not None:
-            ep_ids_before = {ep.episode_id for ep in self.episodes}
-            ep_ids_to_purge = ep_ids_before - set(config.EPISODES_ALLOWED)
+            allowed_episode_ids = {int(id) for id in config.EPISODES_ALLOWED}
             self.episodes = [
                 episode
                 for episode in self.episodes
-                if episode.episode_id not in ep_ids_to_purge
+                if int(episode.episode_id) in allowed_episode_ids
             ]
 
     def from_json(

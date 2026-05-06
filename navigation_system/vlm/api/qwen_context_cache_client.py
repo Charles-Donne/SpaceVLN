@@ -11,6 +11,7 @@ import yaml
 
 from navigation_system.vlm.prompts.common import PromptBundle
 from navigation_system.vlm.api.config import (
+    APIConfig,
     build_default_results_dir_from_api_config,
     resolve_api_config_path,
 )
@@ -26,6 +27,41 @@ SUPPORTED_QWEN_CONTEXT_CACHE_PREFIXES = (
 def supports_qwen_explicit_context_cache(model_name: str) -> bool:
     normalized = str(model_name or "").strip().lower()
     return any(normalized.startswith(prefix) for prefix in SUPPORTED_QWEN_CONTEXT_CACHE_PREFIXES)
+
+
+def validate_qwen_context_cache_api_config(config_path: str) -> None:
+    """Fail fast when the explicit-cache runtime is used with a non-Qwen provider."""
+    settings = QwenContextCacheSettings.from_config_path(config_path)
+    if not settings.enabled:
+        raise ValueError(
+            "context_cache runtime is selected, but qwen_context_cache.enabled=false. "
+            "Use --runtime standard, or enable qwen_context_cache for DashScope Qwen models."
+        )
+
+    errors = []
+    for role in ("llm", "vlm"):
+        cfg = APIConfig(config_path, role=role)
+        provider = str(getattr(cfg, "provider", "") or "").lower()
+        base_url = str(getattr(cfg, "base_url", "") or "").lower()
+        model_name = str(getattr(cfg, "model", "") or "")
+        if provider != "dashscope" and "dashscope" not in base_url:
+            errors.append(
+                f"{role}: provider={provider or '<empty>'}, model={model_name or '<empty>'}"
+            )
+            continue
+        if not supports_qwen_explicit_context_cache(model_name):
+            errors.append(
+                f"{role}: model={model_name or '<empty>'} does not support explicit context cache"
+            )
+
+    if errors:
+        raise ValueError(
+            "context_cache runtime is DashScope/Qwen-only. "
+            "Current API config is not compatible: "
+            + "; ".join(errors)
+            + ". For Xiaomi MiMo/OpenAI/OpenRouter, run with --runtime standard; "
+            "for Qwen cache runs, set provider: dashscope with qwen3.5-plus/qwen3.5-flash."
+        )
 
 
 @dataclass(frozen=True)
@@ -80,11 +116,13 @@ def build_default_context_cache_results_dir(
     config_path: str,
     repo_root: Optional[str] = None,
     results_root: Optional[str] = None,
+    family: str = "r2rce",
 ) -> str:
     base_dir = build_default_results_dir_from_api_config(
         config_path,
         repo_root=repo_root,
         results_root=results_root,
+        family=family,
     )
     settings = QwenContextCacheSettings.from_config_path(config_path)
     suffix = str(settings.results_dir_suffix or "").strip()
@@ -379,6 +417,7 @@ class QwenContextCacheMixin:
         request_start = None
         response = None
         self._set_last_call_outcome("pending")
+        self._set_last_http_status(0)
         self._set_last_call_timing(request_latency_s=0.0, total_call_duration_s=0.0)
         self._set_last_response_artifacts(response_text="", parsed_payload=None)
         try:
@@ -444,6 +483,7 @@ class QwenContextCacheMixin:
                 json=payload,
                 timeout=self.config.timeout,
             )
+            self._set_last_http_status(response.status_code)
 
             structured_hint_rejected = (
                 response.status_code in {400, 422}
@@ -459,6 +499,7 @@ class QwenContextCacheMixin:
                     json=payload,
                     timeout=self.config.timeout,
                 )
+                self._set_last_http_status(response.status_code)
 
             response_time = time.time()
             latency_s = response_time - float(request_start or t_start)
@@ -468,10 +509,22 @@ class QwenContextCacheMixin:
             )
             if response.status_code != 200:
                 print(f"✗ API error: {response.status_code} ({latency_s:.1f}s)")
+                error_payload: Any = ""
                 try:
-                    print(f"✗ Error detail: {response.json()}")
+                    error_payload = response.json()
+                    print(f"✗ Error detail: {error_payload}")
                 except Exception:
-                    print(f"✗ Response: {response.text[:500]}")
+                    error_payload = response.text[:500]
+                    print(f"✗ Response: {error_payload}")
+                self._set_last_call_outcome(
+                    "http_error",
+                    f"status={response.status_code}; {str(error_payload)[:300]}",
+                )
+                extra_payload = self._build_cache_vlm_info_extra(
+                    summary=None,
+                    provider_reported_explicit_cache_counters=False,
+                )
+                extra_payload["error_detail"] = error_payload
                 self._save_vlm_info_artifact(
                     save_dir,
                     self._build_vlm_info_payload(
@@ -480,13 +533,9 @@ class QwenContextCacheMixin:
                         success=False,
                         attempt_count=1,
                         failed_attempt_count=1,
-                        extra=self._build_cache_vlm_info_extra(
-                            summary=None,
-                            provider_reported_explicit_cache_counters=False,
-                        ),
+                        extra=extra_payload,
                     ),
                 )
-                self._set_last_call_outcome("http_error", f"status={response.status_code}")
                 self._set_last_response_artifacts(
                     response_text=response.text,
                     parsed_payload=None,

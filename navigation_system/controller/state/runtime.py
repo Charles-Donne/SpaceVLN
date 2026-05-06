@@ -302,7 +302,7 @@ class EpisodeTimingTracker:
         return {
             "episode_duration_s": self.round_duration_s(episode_duration_s),
             "local_non_api_duration_s": self.round_duration_s(
-                episode_duration_s - api_total_duration_s
+                max(0.0, episode_duration_s - api_total_duration_s)
             ),
             "failed_api_total_duration_s": self.round_duration_s(failed_api_total_duration_s),
             "failed_retry_wait_duration_s": failed_retry_wait_duration_s,

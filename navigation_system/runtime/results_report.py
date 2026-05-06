@@ -329,6 +329,8 @@ def compute_metrics(results: List[Dict[str, Any]]) -> Dict[str, Any]:
 def print_summary(metrics: Dict[str, Any]) -> None:
     n = metrics["total_episodes"]
     timing = metrics["timing"]
+    api_avg_s = timing["api_total_duration_s"] / n if n > 0 else 0.0
+    fail_waste_avg_s = timing["failed_wasted_duration_s_total"] / n if n > 0 else 0.0
     print("\n" + "=" * 80)
     print("📊 SpaceVLN evaluation summary")
     print("=" * 80)
@@ -342,25 +344,15 @@ def print_summary(metrics: Dict[str, Any]) -> None:
     print(
         "  Thinking API: "
         f"avg={timing['thinking_api_avg_duration_s']:.2f}s "
-        f"| total={timing['thinking_api_total_duration_s']:.2f}s "
         f"| ok={timing['thinking_api_count']} fail={timing['thinking_api_failed_count']}"
     )
     print(
         "  Action API:   "
         f"avg={timing['action_api_avg_duration_s']:.2f}s "
-        f"| total={timing['action_api_total_duration_s']:.2f}s "
         f"| ok={timing['action_api_count']} fail={timing['action_api_failed_count']}"
     )
-    print(
-        "  API total:      "
-        f"ok={timing['api_total_duration_s']:.2f}s "
-        f"| fail={timing['api_failed_total_duration_s']:.2f}s"
-    )
-    print(
-        "  Failure waste:  "
-        f"retry_wait={timing['failed_retry_wait_duration_s_total']:.2f}s "
-        f"| total={timing['failed_wasted_duration_s_total']:.2f}s"
-    )
+    print(f"  API avg:        {api_avg_s:.2f}s")
+    print(f"  Failure avg:    {fail_waste_avg_s:.2f}s")
     print(f"  Episode avg:    {timing['episode_duration_s_avg']:.2f}s")
     print(f"\n{'=' * 80}")
 
@@ -424,6 +416,8 @@ def print_debug_info(metrics: Dict[str, Any], success_distance_m: float) -> None
 def save_summary(metrics: Dict[str, Any], output_path: str) -> str:
     n = metrics["total_episodes"]
     timing = metrics["timing"]
+    api_avg_s = timing["api_total_duration_s"] / n if n > 0 else 0.0
+    fail_waste_avg_s = timing["failed_wasted_duration_s_total"] / n if n > 0 else 0.0
     content = f"""
 ================================================================================
 📊 SpaceVLN evaluation summary
@@ -437,10 +431,10 @@ def save_summary(metrics: Dict[str, Any], output_path: str) -> str:
   nDTW:  {metrics['avg_ndtw']:.3f}
 
 ⏱️  Timing:
-  Thinking API: avg={timing['thinking_api_avg_duration_s']:.2f}s | total={timing['thinking_api_total_duration_s']:.2f}s | ok={timing['thinking_api_count']} fail={timing['thinking_api_failed_count']}
-  Action API:   avg={timing['action_api_avg_duration_s']:.2f}s | total={timing['action_api_total_duration_s']:.2f}s | ok={timing['action_api_count']} fail={timing['action_api_failed_count']}
-  API total:      ok={timing['api_total_duration_s']:.2f}s | fail={timing['api_failed_total_duration_s']:.2f}s
-  Failure waste:  retry_wait={timing['failed_retry_wait_duration_s_total']:.2f}s | total={timing['failed_wasted_duration_s_total']:.2f}s
+  Thinking API: avg={timing['thinking_api_avg_duration_s']:.2f}s | ok={timing['thinking_api_count']} fail={timing['thinking_api_failed_count']}
+  Action API:   avg={timing['action_api_avg_duration_s']:.2f}s | ok={timing['action_api_count']} fail={timing['action_api_failed_count']}
+  API avg:        {api_avg_s:.2f}s
+  Failure avg:    {fail_waste_avg_s:.2f}s
   Episode avg:    {timing['episode_duration_s_avg']:.2f}s
 
 ================================================================================
@@ -501,6 +495,9 @@ def save_episode_tables(
     results: List[Dict[str, Any]],
     metrics: Dict[str, Any],
     results_dir: str,
+    *,
+    save_csv: bool = True,
+    summary_only_md: bool = False,
 ) -> Dict[str, str]:
     csv_path = os.path.join(results_dir, "episode_results.csv")
     md_path = os.path.join(results_dir, "episode_results.md")
@@ -523,64 +520,69 @@ def save_episode_tables(
         "Episode(s)",
     ]
 
-    with open(csv_path, "w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=headers)
-        writer.writeheader()
-        for item in sorted_results:
-            writer.writerow(_build_episode_row(item))
-        writer.writerow(
-            {
-                "episode_id": "SUMMARY",
-                "NE": _format_metric_value(metrics["avg_ne"], 3),
-                "OSR": _format_metric_value(metrics["avg_osr"], 4),
-                "SR": _format_metric_value(metrics["avg_sr"], 4),
-                "SPL": _format_metric_value(metrics["avg_spl"], 4),
-                "nDTW": _format_metric_value(metrics["avg_ndtw"], 4),
-                "ThinkAvg(s)": _format_metric_value(timing["thinking_api_avg_duration_s"], 3),
-                "ThinkTot(s)": _format_metric_value(timing["thinking_api_total_duration_s"], 3),
-                "ActAvg(s)": _format_metric_value(timing["action_api_avg_duration_s"], 3),
-                "ActTot(s)": _format_metric_value(timing["action_api_total_duration_s"], 3),
-                "API(s)": _format_metric_value(timing["api_total_duration_s"], 3),
-                "Local(s)": _format_metric_value(timing["local_non_api_duration_s_avg"], 3),
-                "FailWaste(s)": _format_metric_value(timing["failed_wasted_duration_s_total"], 3),
-                "Episode(s)": _format_metric_value(timing["episode_duration_s_avg"], 3),
-            }
-        )
-
-    md_lines = [
-        "# Episode Results",
-        "",
-        "| Episode | NE(m) | OSR | SR | SPL | nDTW | ThinkAvg(s) | ThinkTot(s) | ActAvg(s) | ActTot(s) | API(s) | Local(s) | FailWaste(s) | Episode(s) |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-    ]
-    for item in sorted_results:
-        row = _build_episode_row(item)
-        md_lines.append(
-            "| {episode} | {ne} | {osr} | {sr} | {spl} | {ndtw} | {think_avg} | {think_total} | {act_avg} | {act_total} | {api_total} | {local_s} | {fail_waste} | {episode_s} |".format(
-                episode=row["episode_id"],
-                ne=row["NE"],
-                osr=row["OSR"],
-                sr=row["SR"],
-                spl=row["SPL"],
-                ndtw=row["nDTW"],
-                think_avg=row["ThinkAvg(s)"],
-                think_total=row["ThinkTot(s)"],
-                act_avg=row["ActAvg(s)"],
-                act_total=row["ActTot(s)"],
-                api_total=row["API(s)"],
-                local_s=row["Local(s)"],
-                fail_waste=row["FailWaste(s)"],
-                episode_s=row["Episode(s)"],
+    saved_paths: Dict[str, str] = {}
+    if save_csv:
+        with open(csv_path, "w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=headers)
+            writer.writeheader()
+            for item in sorted_results:
+                writer.writerow(_build_episode_row(item))
+            writer.writerow(
+                {
+                    "episode_id": "SUMMARY",
+                    "NE": _format_metric_value(metrics["avg_ne"], 3),
+                    "OSR": _format_metric_value(metrics["avg_osr"], 4),
+                    "SR": _format_metric_value(metrics["avg_sr"], 4),
+                    "SPL": _format_metric_value(metrics["avg_spl"], 4),
+                    "nDTW": _format_metric_value(metrics["avg_ndtw"], 4),
+                    "ThinkAvg(s)": _format_metric_value(timing["thinking_api_avg_duration_s"], 3),
+                    "ThinkTot(s)": _format_metric_value(timing["thinking_api_total_duration_s"], 3),
+                    "ActAvg(s)": _format_metric_value(timing["action_api_avg_duration_s"], 3),
+                    "ActTot(s)": _format_metric_value(timing["action_api_total_duration_s"], 3),
+                    "API(s)": _format_metric_value(timing["api_total_duration_s"], 3),
+                    "Local(s)": _format_metric_value(timing["local_non_api_duration_s_avg"], 3),
+                    "FailWaste(s)": _format_metric_value(timing["failed_wasted_duration_s_total"], 3),
+                    "Episode(s)": _format_metric_value(timing["episode_duration_s_avg"], 3),
+                }
             )
-        )
+        saved_paths["csv"] = csv_path
+
+    if summary_only_md:
+        md_lines = ["# Summary", ""]
+    else:
+        md_lines = [
+            "# Episode Results",
+            "",
+            "| Episode | NE(m) | OSR | SR | SPL | nDTW | ThinkAvg(s) | ThinkTot(s) | ActAvg(s) | ActTot(s) | API(s) | Local(s) | FailWaste(s) | Episode(s) |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        ]
+        for item in sorted_results:
+            row = _build_episode_row(item)
+            md_lines.append(
+                "| {episode} | {ne} | {osr} | {sr} | {spl} | {ndtw} | {think_avg} | {think_total} | {act_avg} | {act_total} | {api_total} | {local_s} | {fail_waste} | {episode_s} |".format(
+                    episode=row["episode_id"],
+                    ne=row["NE"],
+                    osr=row["OSR"],
+                    sr=row["SR"],
+                    spl=row["SPL"],
+                    ndtw=row["nDTW"],
+                    think_avg=row["ThinkAvg(s)"],
+                    think_total=row["ThinkTot(s)"],
+                    act_avg=row["ActAvg(s)"],
+                    act_total=row["ActTot(s)"],
+                    api_total=row["API(s)"],
+                    local_s=row["Local(s)"],
+                    fail_waste=row["FailWaste(s)"],
+                    episode_s=row["Episode(s)"],
+                )
+            )
+        md_lines.extend(["", "## Summary", ""])
+
     md_lines.extend(
         [
-            "",
-            "## Summary",
-            "",
-            "| Episodes | NE(m) | OSR | SR | SPL | nDTW | ThinkAvg(s) | ThinkTot(s) | ActAvg(s) | ActTot(s) | API(s) | LocalAvg(s) | FailWaste(s) | Episode(s) |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-            "| {total} | {avg_ne} | {avg_osr} | {avg_sr} | {avg_spl} | {avg_ndtw} | {think_avg} | {think_total} | {action_avg} | {action_total} | {api_total} | {local_avg} | {fail_waste} | {episode_avg} |".format(
+            "| Episodes | NE(m) | OSR | SR | SPL | nDTW | ThinkAvg(s) | ActAvg(s) | APIAvg(s) | LocalAvg(s) | FailWasteAvg(s) | EpisodeAvg(s) |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| {total} | {avg_ne} | {avg_osr} | {avg_sr} | {avg_spl} | {avg_ndtw} | {think_avg} | {action_avg} | {api_avg} | {local_avg} | {fail_waste_avg} | {episode_avg} |".format(
                 total=metrics["total_episodes"],
                 avg_ne=_format_metric_value(metrics["avg_ne"], 3),
                 avg_osr=_format_metric_value(metrics["avg_osr"], 4),
@@ -588,24 +590,36 @@ def save_episode_tables(
                 avg_spl=_format_metric_value(metrics["avg_spl"], 4),
                 avg_ndtw=_format_metric_value(metrics["avg_ndtw"], 4),
                 think_avg=_format_metric_value(timing["thinking_api_avg_duration_s"], 3),
-                think_total=_format_metric_value(timing["thinking_api_total_duration_s"], 3),
                 action_avg=_format_metric_value(timing["action_api_avg_duration_s"], 3),
-                action_total=_format_metric_value(timing["action_api_total_duration_s"], 3),
-                api_total=_format_metric_value(timing["api_total_duration_s"], 3),
+                api_avg=_format_metric_value(
+                    timing["api_total_duration_s"] / metrics["total_episodes"]
+                    if metrics["total_episodes"] > 0
+                    else 0.0,
+                    3,
+                ),
                 local_avg=_format_metric_value(timing["local_non_api_duration_s_avg"], 3),
-                fail_waste=_format_metric_value(timing["failed_wasted_duration_s_total"], 3),
+                fail_waste_avg=_format_metric_value(
+                    timing["failed_wasted_duration_s_total"] / metrics["total_episodes"]
+                    if metrics["total_episodes"] > 0
+                    else 0.0,
+                    3,
+                ),
                 episode_avg=_format_metric_value(timing["episode_duration_s_avg"], 3),
             ),
-            "",
-            "> `ThinkTot/ActTot/API(s)/FailWaste(s)` in Summary are batch totals; `ThinkAvg/ActAvg/LocalAvg/Episode(s)` are batch averages.",
-            "",
-            "> Repeated evaluation of the same episode keeps only the better result in `log/<range>/episode_XXX.json`.",
         ]
     )
+    if not summary_only_md:
+        md_lines.extend(
+            [
+                "",
+                "> Repeated evaluation of the same episode keeps only the better result in `log/<range>/episode_XXX.json`.",
+            ]
+        )
     with open(md_path, "w", encoding="utf-8") as f:
         f.write("\n".join(md_lines) + "\n")
 
-    return {"csv": csv_path, "md": md_path}
+    saved_paths["md"] = md_path
+    return saved_paths
 
 
 def generate_results_report(
@@ -613,6 +627,7 @@ def generate_results_report(
     *,
     save: bool = True,
     summary_only: bool = False,
+    md_only: bool = False,
     debug: bool = False,
     verbose: bool = True,
     start_episode_id: Optional[int] = None,
@@ -688,20 +703,34 @@ def generate_results_report(
 
     if save:
         os.makedirs(report_output_dir, exist_ok=True)
-        summary_path = os.path.join(report_output_dir, "summary.txt")
-        save_summary(metrics, summary_path)
-        saved_paths["summary"] = summary_path
-        metrics_json_path = os.path.join(report_output_dir, "metrics.json")
-        save_metrics_json(metrics, metrics_json_path)
-        saved_paths["metrics_json"] = metrics_json_path
-        if not summary_only:
-            saved_paths.update(save_episode_tables(results, metrics, report_output_dir))
-        if verbose:
-            print(f"📋 Saved summary report: {summary_path}")
-            print(f"📋 Saved metrics JSON: {metrics_json_path}")
+        if md_only:
+            saved_paths.update(
+                save_episode_tables(
+                    results,
+                    metrics,
+                    report_output_dir,
+                    save_csv=False,
+                    summary_only_md=True,
+                )
+            )
+        else:
+            summary_path = os.path.join(report_output_dir, "summary.txt")
+            save_summary(metrics, summary_path)
+            saved_paths["summary"] = summary_path
+            metrics_json_path = os.path.join(report_output_dir, "metrics.json")
+            save_metrics_json(metrics, metrics_json_path)
+            saved_paths["metrics_json"] = metrics_json_path
             if not summary_only:
-                print(f"📋 Saved episode CSV: {saved_paths['csv']}")
+                saved_paths.update(save_episode_tables(results, metrics, report_output_dir))
+        if verbose:
+            if md_only:
                 print(f"📋 Saved episode Markdown: {saved_paths['md']}")
+            else:
+                print(f"📋 Saved summary report: {summary_path}")
+                print(f"📋 Saved metrics JSON: {metrics_json_path}")
+                if not summary_only:
+                    print(f"📋 Saved episode CSV: {saved_paths['csv']}")
+                    print(f"📋 Saved episode Markdown: {saved_paths['md']}")
 
     return {
         "results": results,
@@ -725,6 +754,11 @@ def build_results_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Fast mode: save only `summary` + `metrics.json`, skip episode CSV/Markdown",
     )
+    parser.add_argument(
+        "--md-only",
+        action="store_true",
+        help="Save only episode_results.md; skip summary.txt, metrics.json, and CSV",
+    )
     parser.add_argument("--debug", action="store_true", help="Print per-episode debug information")
     parser.add_argument("--start-id", type=int, default=None, help="Only include episodes from this id")
     parser.add_argument("--end-id", type=int, default=None, help="Only include episodes up to this id")
@@ -747,6 +781,7 @@ def run_results_report_from_args(args: argparse.Namespace) -> int:
             args.path,
             save=bool(args.save),
             summary_only=bool(args.summary_only),
+            md_only=bool(args.md_only),
             debug=bool(args.debug),
             verbose=True,
             start_episode_id=args.start_id,

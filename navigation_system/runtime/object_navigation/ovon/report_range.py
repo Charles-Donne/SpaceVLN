@@ -10,7 +10,9 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence
 
-from navigation_system.runtime.object_navigation.ovon.thresholds import OVON_SUCCESS_DISTANCE_M
+from navigation_system.runtime.storage.artifacts import get_episode_log_path
+
+OVON_SUCCESS_DISTANCE_M = 0.5
 
 
 def _format_ovon_metric(value: float, digits: int = 4) -> str:
@@ -32,8 +34,18 @@ def _build_aggregate(all_results: Sequence[dict]) -> dict:
             "avg_distance_to_goal": 0.0,
             "avg_spl": 0.0,
             "avg_soft_spl": 0.0,
+            "thinking_api_total_duration_s": 0.0,
+            "action_api_total_duration_s": 0.0,
+            "api_total_duration_s": 0.0,
+            "local_non_api_duration_s_avg": 0.0,
+            "episode_duration_s_avg": 0.0,
         }
 
+    thinking_total = sum(float(item.get("thinking_api_total_duration_s", 0.0) or 0.0) for item in rows)
+    thinking_count = sum(int(item.get("thinking_api_count", 0) or 0) for item in rows)
+    action_total = sum(float(item.get("action_api_total_duration_s", 0.0) or 0.0) for item in rows)
+    action_count = sum(int(item.get("action_api_count", 0) or 0) for item in rows)
+    api_total = thinking_total + action_total
     return {
         "episodes": count,
         "successes": sum(1 for item in rows if bool(item.get("success", False))),
@@ -44,6 +56,17 @@ def _build_aggregate(all_results: Sequence[dict]) -> dict:
         ),
         "avg_spl": sum(float(item.get("spl", 0.0) or 0.0) for item in rows) / count,
         "avg_soft_spl": sum(float(item.get("soft_spl", 0.0) or 0.0) for item in rows) / count,
+        "thinking_api_avg_duration_s": thinking_total / thinking_count if thinking_count > 0 else 0.0,
+        "thinking_api_total_duration_s": thinking_total,
+        "action_api_avg_duration_s": action_total / action_count if action_count > 0 else 0.0,
+        "action_api_total_duration_s": action_total,
+        "api_total_duration_s": api_total,
+        "local_non_api_duration_s_avg": (
+            sum(float(item.get("local_non_api_duration_s", 0.0) or 0.0) for item in rows) / count
+        ),
+        "episode_duration_s_avg": (
+            sum(float(item.get("episode_duration_s", 0.0) or 0.0) for item in rows) / count
+        ),
     }
 
 
@@ -82,6 +105,20 @@ def _safe_float(value, default: float = 0.0) -> float:
         return default
 
 
+def _summary_float(payload: Dict, prefix: str, key: str, default: float = 0.0) -> float:
+    summary = payload.get(f"{prefix}_api_summary")
+    if not isinstance(summary, dict):
+        return default
+    return _safe_float(summary.get(key, default), default)
+
+
+def _summary_int(payload: Dict, prefix: str, key: str, default: int = 0) -> int:
+    summary = payload.get(f"{prefix}_api_summary")
+    if not isinstance(summary, dict):
+        return default
+    return _safe_int(summary.get(key, default), default)
+
+
 def _default_load_workers() -> int:
     raw_value = str(os.environ.get("SPACEVLN_REPORT_WORKERS", "") or "").strip()
     if raw_value:
@@ -115,6 +152,15 @@ def _read_sample_row(log_path: Path) -> Optional[Dict]:
     if sample_index <= 0:
         return None
 
+    thinking_total = _summary_float(payload, "thinking", "total_duration_s", 0.0)
+    action_total = _summary_float(payload, "action", "total_duration_s", 0.0)
+    api_total = thinking_total + action_total
+    episode_duration_s = _safe_float(payload.get("episode_duration_s", 0.0), 0.0)
+    local_non_api_duration_s = _safe_float(
+        payload.get("local_non_api_duration_s"),
+        max(0.0, episode_duration_s - api_total),
+    )
+
     return {
         "sample_index": sample_index,
         "episode_id": _safe_int(payload.get("episode_id"), -1),
@@ -131,6 +177,16 @@ def _read_sample_row(log_path: Path) -> Optional[Dict]:
         ),
         "reason": str(payload.get("reason", "") or ""),
         "error": str(payload.get("error", "") or ""),
+        "thinking_api_count": _summary_int(payload, "thinking", "count", 0),
+        "thinking_api_avg_duration_s": _summary_float(payload, "thinking", "avg_duration_s", 0.0),
+        "thinking_api_total_duration_s": thinking_total,
+        "action_api_count": _summary_int(payload, "action", "count", 0),
+        "action_api_avg_duration_s": _summary_float(payload, "action", "avg_duration_s", 0.0),
+        "action_api_total_duration_s": action_total,
+        "api_total_duration_s": api_total,
+        "local_non_api_duration_s": local_non_api_duration_s,
+        "episode_duration_s": episode_duration_s,
+        "failed_wasted_duration_s": _safe_float(payload.get("failed_wasted_duration_s", 0.0), 0.0),
     }
 
 
@@ -143,14 +199,26 @@ def _load_sample_rows(
     verbose: bool,
 ) -> List[Dict]:
     candidate_paths = []
-    for log_path in _iter_sample_log_paths(results_dir):
-        sample_index = _sample_index_from_path(log_path)
-        if sample_index > 0:
-            if start_index is not None and sample_index < start_index:
-                continue
-            if end_index is not None and sample_index > end_index:
-                continue
-        candidate_paths.append(log_path)
+    if start_index is not None and end_index is not None:
+        for sample_index in range(int(start_index), int(end_index) + 1):
+            log_path = Path(
+                get_episode_log_path(
+                    str(results_dir),
+                    sample_index,
+                    entry_kind="sample",
+                )
+            )
+            if log_path.is_file():
+                candidate_paths.append(log_path)
+    else:
+        for log_path in _iter_sample_log_paths(results_dir):
+            sample_index = _sample_index_from_path(log_path)
+            if sample_index > 0:
+                if start_index is not None and sample_index < start_index:
+                    continue
+                if end_index is not None and sample_index > end_index:
+                    continue
+            candidate_paths.append(log_path)
 
     worker_count = _bounded_load_workers(load_workers, len(candidate_paths))
     if verbose:
@@ -196,6 +264,7 @@ def _write_ovon_range_reports(
     success_distance_m: float,
     summary_meta: Dict,
     summary_only: bool,
+    md_only: bool,
 ) -> Dict[str, str]:
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -219,20 +288,22 @@ def _write_ovon_range_reports(
         f"Selection:     {summary_meta.get('selection_mode', 'sample_index_range_from_existing_logs')}\n"
         "========================================\n"
     )
-    summary_txt_path.write_text(summary_text, encoding="utf-8")
+    saved_paths = {}
+    if not md_only:
+        summary_txt_path.write_text(summary_text, encoding="utf-8")
 
-    metrics_payload = {"meta": dict(summary_meta), "aggregate": dict(aggregate)}
-    metrics_json_path.write_text(
-        json.dumps(metrics_payload, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+        metrics_payload = {"meta": dict(summary_meta), "aggregate": dict(aggregate)}
+        metrics_json_path.write_text(
+            json.dumps(metrics_payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
-    saved_paths = {
-        "summary": str(summary_txt_path),
-        "metrics_json": str(metrics_json_path),
-    }
-    if summary_only:
-        return saved_paths
+        saved_paths = {
+            "summary": str(summary_txt_path),
+            "metrics_json": str(metrics_json_path),
+        }
+        if summary_only:
+            return saved_paths
 
     headers = [
         "episode_id",
@@ -245,63 +316,85 @@ def _write_ovon_range_reports(
         "reason",
         "error",
     ]
-    with csv_path.open("w", encoding="utf-8", newline="") as csv_file:
-        writer = csv.DictWriter(csv_file, fieldnames=headers)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(
-                {
-                    "episode_id": int(row.get("episode_id", -1) or -1),
-                    "sample_index": int(row.get("sample_index", -1) or -1),
-                    "sr": int(bool(row.get("success", False))),
-                    "distance_to_goal": _format_ovon_metric(float(row.get("distance_to_goal", -1.0) or -1.0), 4),
-                    "spl": _format_ovon_metric(float(row.get("spl", 0.0) or 0.0), 4),
-                    "soft_spl": _format_ovon_metric(float(row.get("soft_spl", 0.0) or 0.0), 4),
-                    "steps": int(row.get("steps", 0) or 0),
-                    "reason": str(row.get("reason", "") or ""),
-                    "error": str(row.get("error", "") or ""),
-                }
-            )
+    if not md_only:
+        with csv_path.open("w", encoding="utf-8", newline="") as csv_file:
+            writer = csv.DictWriter(csv_file, fieldnames=headers)
+            writer.writeheader()
+            for row in rows:
+                writer.writerow(
+                    {
+                        "episode_id": int(row.get("episode_id", -1) or -1),
+                        "sample_index": int(row.get("sample_index", -1) or -1),
+                        "sr": int(bool(row.get("success", False))),
+                        "distance_to_goal": _format_ovon_metric(float(row.get("distance_to_goal", -1.0) or -1.0), 4),
+                        "spl": _format_ovon_metric(float(row.get("spl", 0.0) or 0.0), 4),
+                        "soft_spl": _format_ovon_metric(float(row.get("soft_spl", 0.0) or 0.0), 4),
+                        "steps": int(row.get("steps", 0) or 0),
+                        "reason": str(row.get("reason", "") or ""),
+                        "error": str(row.get("error", "") or ""),
+                    }
+                )
 
-    md_lines = [
-        "# OVON Episode Results",
-        "",
-        "| Episode | Sample | SR | DTG(m) | SPL | SoftSPL | Steps |",
-        "| --- | --- | --- | --- | --- | --- | --- |",
-    ]
-    for row in rows:
-        md_lines.append(
-            "| {episode} | {sample} | {sr} | {dtg} | {spl} | {soft_spl} | {steps} |".format(
-                episode=int(row.get("episode_id", -1) or -1),
-                sample=int(row.get("sample_index", -1) or -1),
-                sr=int(bool(row.get("success", False))),
-                dtg=_format_ovon_metric(float(row.get("distance_to_goal", -1.0) or -1.0), 4),
-                spl=_format_ovon_metric(float(row.get("spl", 0.0) or 0.0), 4),
-                soft_spl=_format_ovon_metric(float(row.get("soft_spl", 0.0) or 0.0), 4),
-                steps=int(row.get("steps", 0) or 0),
+    if md_only:
+        md_lines = ["# Summary", ""]
+    else:
+        md_lines = [
+            "# OVON Episode Results",
+            "",
+            "| Episode | Sample | SR | DTG(m) | SPL | SoftSPL | Steps | ThinkAvg(s) | ThinkTot(s) | ActAvg(s) | ActTot(s) | API(s) | Local(s) | Episode(s) |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        ]
+        for row in rows:
+            md_lines.append(
+                "| {episode} | {sample} | {sr} | {dtg} | {spl} | {soft_spl} | {steps} | {think_avg} | {think_total} | {act_avg} | {act_total} | {api_total} | {local_s} | {episode_s} |".format(
+                    episode=int(row.get("episode_id", -1) or -1),
+                    sample=int(row.get("sample_index", -1) or -1),
+                    sr=int(bool(row.get("success", False))),
+                    dtg=_format_ovon_metric(float(row.get("distance_to_goal", -1.0) or -1.0), 4),
+                    spl=_format_ovon_metric(float(row.get("spl", 0.0) or 0.0), 4),
+                    soft_spl=_format_ovon_metric(float(row.get("soft_spl", 0.0) or 0.0), 4),
+                    steps=int(row.get("steps", 0) or 0),
+                    think_avg=_format_ovon_metric(float(row.get("thinking_api_avg_duration_s", 0.0) or 0.0), 3),
+                    think_total=_format_ovon_metric(float(row.get("thinking_api_total_duration_s", 0.0) or 0.0), 3),
+                    act_avg=_format_ovon_metric(float(row.get("action_api_avg_duration_s", 0.0) or 0.0), 3),
+                    act_total=_format_ovon_metric(float(row.get("action_api_total_duration_s", 0.0) or 0.0), 3),
+                    api_total=_format_ovon_metric(float(row.get("api_total_duration_s", 0.0) or 0.0), 3),
+                    local_s=_format_ovon_metric(float(row.get("local_non_api_duration_s", 0.0) or 0.0), 3),
+                    episode_s=_format_ovon_metric(float(row.get("episode_duration_s", 0.0) or 0.0), 3),
+                )
             )
-        )
+        md_lines.extend(["", "## Summary", ""])
+
     md_lines.extend(
         [
-            "",
-            "## Summary",
-            "",
-            "| Episodes | SR | SPL | SoftSPL | Avg DTG(m) | Avg Steps |",
-            "| --- | --- | --- | --- | --- | --- |",
-            "| {episodes} | {sr} | {spl} | {soft_spl} | {dtg} | {steps} |".format(
+            "| Episodes | SR | SPL | SoftSPL | Avg DTG(m) | Avg Steps | ThinkAvg(s) | ActAvg(s) | APIAvg(s) | LocalAvg(s) | EpisodeAvg(s) |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| {episodes} | {sr} | {spl} | {soft_spl} | {dtg} | {steps} | {think_avg} | {act_avg} | {api_avg} | {local_avg} | {episode_avg} |".format(
                 episodes=int(aggregate.get("episodes", 0) or 0),
                 sr=_format_ovon_metric(float(aggregate.get("success_rate", 0.0) or 0.0), 4),
                 spl=_format_ovon_metric(float(aggregate.get("avg_spl", 0.0) or 0.0), 4),
                 soft_spl=_format_ovon_metric(float(aggregate.get("avg_soft_spl", 0.0) or 0.0), 4),
                 dtg=_format_ovon_metric(float(aggregate.get("avg_distance_to_goal", 0.0) or 0.0), 4),
                 steps=_format_ovon_metric(float(aggregate.get("avg_steps", 0.0) or 0.0), 2),
+                think_avg=_format_ovon_metric(float(aggregate.get("thinking_api_avg_duration_s", 0.0) or 0.0), 3),
+                act_avg=_format_ovon_metric(float(aggregate.get("action_api_avg_duration_s", 0.0) or 0.0), 3),
+                api_avg=_format_ovon_metric(
+                    (
+                        float(aggregate.get("api_total_duration_s", 0.0) or 0.0)
+                        / int(aggregate.get("episodes", 0) or 1)
+                    ),
+                    3,
+                ),
+                local_avg=_format_ovon_metric(float(aggregate.get("local_non_api_duration_s_avg", 0.0) or 0.0), 3),
+                episode_avg=_format_ovon_metric(float(aggregate.get("episode_duration_s_avg", 0.0) or 0.0), 3),
             ),
         ]
     )
     md_path.write_text("\n".join(md_lines) + "\n", encoding="utf-8")
 
-    saved_paths["csv"] = str(csv_path)
     saved_paths["markdown"] = str(md_path)
+    if not md_only:
+        saved_paths["csv"] = str(csv_path)
     return saved_paths
 
 
@@ -316,6 +409,7 @@ def generate_ovon_range_report(
     start_index: Optional[int],
     end_index: Optional[int],
     summary_only: bool = False,
+    md_only: bool = False,
     load_workers: int = 1,
     verbose: bool = True,
 ) -> Dict[str, str]:
@@ -348,6 +442,7 @@ def generate_ovon_range_report(
         "data_path": str(data_path),
         "load_workers": int(_bounded_load_workers(load_workers, len(rows))),
         "summary_only": bool(summary_only),
+        "md_only": bool(md_only),
         "success_distance_m": success_distance_m,
     }
     saved_paths = _write_ovon_range_reports(
@@ -357,13 +452,17 @@ def generate_ovon_range_report(
         success_distance_m=success_distance_m,
         summary_meta=summary_meta,
         summary_only=summary_only,
+        md_only=md_only,
     )
     if verbose:
-        print(f"📋 Saved summary report: {saved_paths['summary']}")
-        print(f"📋 Saved metrics JSON: {saved_paths['metrics_json']}")
-        if not summary_only:
-            print(f"📋 Saved episode CSV: {saved_paths['csv']}")
+        if md_only:
             print(f"📋 Saved episode Markdown: {saved_paths['markdown']}")
+        else:
+            print(f"📋 Saved summary report: {saved_paths['summary']}")
+            print(f"📋 Saved metrics JSON: {saved_paths['metrics_json']}")
+            if not summary_only:
+                print(f"📋 Saved episode CSV: {saved_paths['csv']}")
+                print(f"📋 Saved episode Markdown: {saved_paths['markdown']}")
     return saved_paths
 
 
@@ -392,6 +491,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Fast mode: save only summary + metrics.json, skip episode CSV/Markdown",
     )
     parser.add_argument(
+        "--md-only",
+        action="store_true",
+        help="Save only episode_results.md; skip summary.txt, metrics.json, and CSV",
+    )
+    parser.add_argument(
         "--load-workers",
         type=int,
         default=_default_load_workers(),
@@ -412,6 +516,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         start_index=args.start_index,
         end_index=args.end_index,
         summary_only=bool(args.summary_only),
+        md_only=bool(args.md_only),
         load_workers=int(args.load_workers),
         verbose=True,
     )

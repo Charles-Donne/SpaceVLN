@@ -304,6 +304,13 @@ class LLMPlanner(BaseAPIClient):
                 self._finalize_vlm_info_retry_summary(save_dir)
                 return normalized_response, prompt_debug_text
 
+            if self.is_last_call_non_retryable():
+                print(
+                    f"  [ERR] {failure_label} stopped after non-retryable API error: "
+                    f"{getattr(self, 'last_call_error', '')}"
+                )
+                break
+
             if retry < max_retries - 1:
                 wait = (retry + 1) * 2
                 self.last_call_timing_info["failed_retry_wait_duration_s"] += float(wait)
@@ -313,7 +320,8 @@ class LLMPlanner(BaseAPIClient):
                 )
                 time.sleep(wait)
 
-        print(f"  [ERR] {failure_label} failed after {max_retries} attempts")
+        attempted = len(self.last_call_timing_info.get("records", []) or [])
+        print(f"  [ERR] {failure_label} failed after {attempted} attempt(s)")
         self.last_call_timing_info["final_failure_reason"] = self._summarize_final_failure_reason()
         self._finalize_vlm_info_retry_summary(save_dir)
         return None, prompt_debug_text

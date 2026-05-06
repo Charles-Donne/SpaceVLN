@@ -23,8 +23,7 @@ def build_planner(
     try:
         planner = planner_cls(config_path=config_path, action_space=action_space)
     except Exception as exc:
-        print(f"[WARN] {label} init failed: {exc}")
-        return None
+        raise RuntimeError(f"{label} init failed: {exc}") from exc
     return configure_component(
         planner,
         save_request_artifacts=save_request_artifacts,
@@ -47,8 +46,7 @@ def build_action_executor(
             move_distance=move_distance,
         )
     except Exception as exc:
-        print(f"[WARN] {label} init failed: {exc}")
-        return None
+        raise RuntimeError(f"{label} init failed: {exc}") from exc
     return configure_component(
         executor,
         save_request_artifacts=save_request_artifacts,

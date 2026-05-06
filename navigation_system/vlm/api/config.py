@@ -69,11 +69,19 @@ class APIConfig:
             or ""
         ).strip().lower()
 
-        missing = [field for field in ("api_key", "base_url") if not provider_config.get(field)]
+        missing = []
+        if not provider_config.get("api_key") or not self._api_key:
+            missing.append("api_key")
+        if not provider_config.get("base_url") or not self._base_url:
+            missing.append("base_url")
         if not self._model:
             missing.append(f"{role_name}_model")
         if missing:
-            raise ValueError(f"[{provider}] 配置块缺少必要字段: {', '.join(missing)}")
+            env_hint = ""
+            raw_api_key = str(provider_config.get("api_key", "") or "").strip()
+            if raw_api_key.startswith("env:") and not self._api_key:
+                env_hint = f"；请先 export {raw_api_key[4:].strip()}=..."
+            raise ValueError(f"[{provider}] 配置块缺少必要字段或解析为空: {', '.join(missing)}{env_hint}")
 
     @staticmethod
     def _resolve_config_string(value: Any) -> str:

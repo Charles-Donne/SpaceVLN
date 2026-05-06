@@ -38,10 +38,28 @@ class BaseAPIClient(ABC):
         self.last_parsed_response_payload = None
         self.last_request_latency_s = 0.0
         self.last_total_call_duration_s = 0.0
+        self.last_http_status = 0
 
     def _set_last_call_outcome(self, status: str, error: str = "") -> None:
         self.last_call_status = str(status or "unknown").strip() or "unknown"
         self.last_call_error = str(error or "").strip()
+
+    def _set_last_http_status(self, status_code: int = 0) -> None:
+        try:
+            self.last_http_status = int(status_code or 0)
+        except (TypeError, ValueError):
+            self.last_http_status = 0
+
+    def is_last_call_non_retryable(self) -> bool:
+        """Return true for auth/quota/request errors where retrying wastes time."""
+        if str(getattr(self, "last_call_status", "") or "") != "http_error":
+            return False
+        status_code = int(getattr(self, "last_http_status", 0) or 0)
+        if status_code <= 0:
+            match = re.search(r"status=(\d+)", str(getattr(self, "last_call_error", "") or ""))
+            if match:
+                status_code = int(match.group(1))
+        return status_code in {400, 401, 402, 403, 404, 422}
 
     def _set_last_call_timing(
         self,
@@ -228,6 +246,15 @@ class BaseAPIClient(ABC):
             "output_tokens": output_tokens,
             "total_tokens": total_tokens,
         }
+        status = str(getattr(self, "last_call_status", "") or "").strip()
+        error = str(getattr(self, "last_call_error", "") or "").strip()
+        http_status = int(getattr(self, "last_http_status", 0) or 0)
+        if status and status not in {"ok", "uninitialized"}:
+            payload["status"] = status
+        if error:
+            payload["error"] = error
+        if http_status:
+            payload["http_status"] = http_status
         if extra:
             payload.update(dict(extra))
         return payload
@@ -815,6 +842,7 @@ class BaseAPIClient(ABC):
         request_start = None
         response = None
         self._set_last_call_outcome("pending")
+        self._set_last_http_status(0)
         self._set_last_call_timing(request_latency_s=0.0, total_call_duration_s=0.0)
         self._set_last_response_artifacts(response_text="", parsed_payload=None)
         try:
@@ -897,6 +925,7 @@ class BaseAPIClient(ABC):
                 headers=headers,
                 payload=payload,
             )
+            self._set_last_http_status(response.status_code)
 
             structured_hint_rejected = (
                 response.status_code in {400, 422}
@@ -915,6 +944,7 @@ class BaseAPIClient(ABC):
                     headers=headers,
                     payload=payload,
                 )
+                self._set_last_http_status(response.status_code)
             
             t_response = time.time()
             latency = t_response - float(request_start or t_start)
@@ -926,11 +956,14 @@ class BaseAPIClient(ABC):
             if response.status_code != 200:
                 print(f"✗ API error: {response.status_code} ({latency:.1f}s)")
                 # 诊断信息：记录请求参数和响应
+                error_payload: Any = ""
                 try:
                     error_detail = response.json()
+                    error_payload = error_detail
                     print(f"✗ Error detail: {error_detail}")
                 except:
-                    print(f"✗ Response: {response.text[:500]}")
+                    error_payload = response.text[:500]
+                    print(f"✗ Response: {error_payload}")
                 
                 # 调试：记录payload大小和内容样本
                 payload_size = len(json.dumps(payload))
@@ -949,6 +982,10 @@ class BaseAPIClient(ABC):
                         print(f"  [DEBUG] First item is image_url")
                     elif first_item.get('type') == 'input_image':
                         print(f"  [DEBUG] First item is input_image")
+                self._set_last_call_outcome(
+                    "http_error",
+                    f"status={response.status_code}; {str(error_payload)[:300]}",
+                )
                 self._save_vlm_info_artifact(
                     save_dir,
                     self._build_vlm_info_payload(
@@ -957,9 +994,11 @@ class BaseAPIClient(ABC):
                         success=False,
                         attempt_count=1,
                         failed_attempt_count=1,
+                        extra={
+                            "error_detail": error_payload,
+                        },
                     ),
                 )
-                self._set_last_call_outcome("http_error", f"status={response.status_code}")
                 return None
             
             result = response.json()

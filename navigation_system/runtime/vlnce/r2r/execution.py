@@ -40,6 +40,9 @@ from navigation_system.runtime.vlnce.profiles import (
     STANDARD_RUNTIME_PROFILE,
     resolve_runtime_profile,
 )
+from navigation_system.vlm.api.qwen_context_cache_client import (
+    validate_qwen_context_cache_api_config,
+)
 from navigation_system.vlm.api.api_client import (
     resolve_api_config_path,
     resolve_results_dir_path,
@@ -219,6 +222,9 @@ def load_runtime_config(
     args: argparse.Namespace,
     profile: NavigationRuntimeProfile = STANDARD_RUNTIME_PROFILE,
 ):
+    if str(getattr(profile, "name", "") or "") == "context_cache":
+        validate_qwen_context_cache_api_config(args.vlm_api_config)
+
     config = get_config(args.exp_config, [])
     paths_config = config.PATHS
     resolved_results_dir = resolve_results_dir_path(
@@ -433,8 +439,13 @@ def _transfer_episode_staging_outputs(
     final_results_dir: str,
     episode_id: int,
     save_stdout_log: bool,
+    postprocess_futures: Optional[List[concurrent.futures.Future]] = None,
 ) -> None:
     try:
+        _wait_for_episode_postprocess_futures(
+            postprocess_futures,
+            episode_id=episode_id,
+        )
         _sync_episode_staging_outputs(
             staging_results_dir=staging_results_dir,
             final_results_dir=final_results_dir,
@@ -484,6 +495,7 @@ def _submit_episode_staging_sync(
     final_results_dir: str,
     episode_id: int,
     save_stdout_log: bool,
+    postprocess_futures: Optional[List[concurrent.futures.Future]] = None,
 ) -> None:
     if not staging_results_dir:
         return
@@ -493,6 +505,7 @@ def _submit_episode_staging_sync(
             final_results_dir=final_results_dir,
             episode_id=episode_id,
             save_stdout_log=save_stdout_log,
+            postprocess_futures=postprocess_futures,
         )
         return
     future = _get_episode_transfer_executor().submit(
@@ -501,6 +514,7 @@ def _submit_episode_staging_sync(
         final_results_dir=final_results_dir,
         episode_id=episode_id,
         save_stdout_log=save_stdout_log,
+        postprocess_futures=postprocess_futures,
     )
     with _EPISODE_TRANSFER_LOCK:
         _EPISODE_TRANSFER_FUTURES.append(future)
@@ -511,6 +525,24 @@ def _discard_episode_staging(staging_results_dir: str) -> None:
     if staging_results_dir:
         shutil.rmtree(staging_results_dir, ignore_errors=True)
         _remove_empty_parent_dirs(staging_results_dir, max_levels=2)
+
+
+def _wait_for_episode_postprocess_futures(
+    futures: Optional[List[concurrent.futures.Future]],
+    *,
+    episode_id: int,
+) -> None:
+    """Wait for GIF/topdown post-processing before moving or deleting staging dirs."""
+    for future in list(futures or []):
+        if future is None:
+            continue
+        try:
+            future.result()
+        except BaseException as exc:
+            print(
+                f"⚠️  Episode {int(episode_id)} post-processing failed before artifact sync: "
+                f"{_format_exception_message(exc)}"
+            )
 
 
 def wait_for_pending_episode_transfers() -> None:
@@ -680,6 +712,12 @@ def _run_single_episode_attempt(
                 controller.envs.close()
             except Exception as cleanup_error:
                 print(f"⚠️  Failed to clean up the environment: {cleanup_error}")
+            try:
+                postprocess_futures = controller.pop_pending_post_episode_futures()
+                if postprocess_futures:
+                    console_result["_postprocess_futures"] = postprocess_futures
+            except Exception:
+                pass
 
     if staging_results_dir:
         console_result["_staging_results_dir"] = staging_results_dir
@@ -756,6 +794,7 @@ def run_single_episode(
             stdout_log_mode=stdout_log_mode,
         )
         staging_results_dir = str(console_result.get("_staging_results_dir") or "")
+        postprocess_futures = console_result.pop("_postprocess_futures", None)
         staging_final_results_dir = str(
             console_result.get("_staging_final_results_dir") or results_dir
         )
@@ -787,6 +826,10 @@ def run_single_episode(
             )
             if should_suppress_record:
                 _mark_result_unrecorded(console_result)
+            _wait_for_episode_postprocess_futures(
+                postprocess_futures,
+                episode_id=episode_id,
+            )
             _discard_episode_staging(staging_results_dir)
         elif staging_results_dir:
             _submit_episode_staging_sync(
@@ -796,6 +839,7 @@ def run_single_episode(
                 save_stdout_log=bool(
                     console_result.get("_staging_save_stdout_log", save_stdout_log)
                 ),
+                postprocess_futures=postprocess_futures,
             )
         if not should_retry:
             break

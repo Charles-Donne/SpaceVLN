@@ -154,7 +154,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     command = "r2r"
     if args and args[0].strip().lower() in COMMANDS:
         command = args.pop(0).strip().lower()
-    return COMMANDS[command](args)
+    try:
+        return COMMANDS[command](args)
+    except (FileNotFoundError, ValueError, RuntimeError) as exc:
+        print(f"❌ {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

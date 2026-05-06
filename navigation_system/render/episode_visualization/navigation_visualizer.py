@@ -16,7 +16,7 @@ except ImportError:
 from navigation_system.runtime.storage.naming import build_subtask_name_from_token
 
 try:
-    import imageio
+    import imageio.v2 as imageio
     HAS_IMAGEIO = True
 except ImportError:
     HAS_IMAGEIO = False
@@ -34,7 +34,16 @@ def _encode_gif(output_path: str, frames_rgb: List[np.ndarray], fps: int) -> Opt
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
     duration = 1.0 / max(1, int(fps or 1))
-    imageio.mimsave(output_path, frames_rgb, duration=duration, loop=0)
+    normalized_frames = []
+    for frame in frames_rgb:
+        if frame is None or frame.size == 0:
+            continue
+        if frame.dtype != np.uint8:
+            frame = frame.astype(np.uint8)
+        normalized_frames.append(np.ascontiguousarray(frame))
+    if not normalized_frames:
+        return None
+    imageio.mimsave(output_path, normalized_frames, duration=duration, loop=0)
     if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
         return output_path
     return None
@@ -334,7 +343,7 @@ class NavigationVisualizer:
             if _encode_gif(output_path, self._copy_gif_frames(), fps):
                 return output_path
             else:
-                print("✗ GIF file creation failed")
+                print(f"✗ GIF file creation failed: {output_path}")
                 return None
                 
         except Exception as e:
@@ -357,7 +366,7 @@ class NavigationVisualizer:
         def _report_result(done_future: Future) -> None:
             try:
                 if done_future.result() is None:
-                    print("✗ GIF file creation failed")
+                    print(f"✗ GIF file creation failed: {output_path}")
             except Exception as exc:
                 print(f"✗ Error saving GIF: {exc}")
 

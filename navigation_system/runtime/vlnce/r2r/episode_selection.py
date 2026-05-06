@@ -5,7 +5,7 @@ import json
 import os
 import random
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Set
 
 from navigation_system.runtime.storage.artifacts import (
     SaveManager,
@@ -45,35 +45,75 @@ def _resolve_dataset_path(data_path: str) -> str:
     return deduped[0] if deduped else ""
 
 
+def _dataset_roles(config) -> List[str]:
+    roles = list(getattr(config.TASK_CONFIG.DATASET, "ROLES", []) or [])
+    if not roles or "*" in roles:
+        return ["guide", "follower"]
+    return [str(role) for role in roles]
+
+
+def _dataset_languages(config) -> List[str]:
+    languages = list(getattr(config.TASK_CONFIG.DATASET, "LANGUAGES", []) or [])
+    return [str(language) for language in languages]
+
+
+def _iter_dataset_paths(data_path: str, split: str, roles: List[str]) -> List[str]:
+    paths: List[str] = []
+    if "{role}" in data_path:
+        for role in roles:
+            paths.append(data_path.format(split=split, role=role))
+    else:
+        paths.append(data_path.format(split=split))
+    return paths
+
+
 def _load_dataset_episode_ids(config) -> List[int]:
     data_path = str(getattr(config.TASK_CONFIG.DATASET, "DATA_PATH", "") or "").strip()
-    resolved_path = _resolve_dataset_path(data_path)
-    if not resolved_path:
+    split = str(getattr(config.TASK_CONFIG.DATASET, "SPLIT", "") or "").strip()
+    roles = _dataset_roles(config)
+    languages = _dataset_languages(config)
+    language_filter_enabled = bool(languages) and "*" not in languages
+    allowed_languages = set(languages)
+    raw_paths = _iter_dataset_paths(data_path, split, roles)
+    resolved_paths = [_resolve_dataset_path(path) for path in raw_paths]
+    resolved_paths = [path for path in resolved_paths if path]
+    cache_key = "|".join(resolved_paths)
+    if not cache_key:
         return []
-    if resolved_path in _DATASET_EPISODE_ID_CACHE:
-        return list(_DATASET_EPISODE_ID_CACHE[resolved_path])
+    if cache_key in _DATASET_EPISODE_ID_CACHE:
+        return list(_DATASET_EPISODE_ID_CACHE[cache_key])
 
-    episode_ids: List[int] = []
-    try:
-        opener = gzip.open if resolved_path.endswith(".gz") else open
-        with opener(resolved_path, "rt", encoding="utf-8") as f:
-            payload = json.load(f)
-        episodes = payload.get("episodes", []) if isinstance(payload, dict) else payload
-        if not isinstance(episodes, list):
-            episodes = []
-        for item in episodes:
-            if not isinstance(item, dict):
-                continue
-            try:
-                episode_ids.append(int(item.get("episode_id")))
-            except Exception:
-                continue
-    except Exception:
-        episode_ids = []
+    episode_ids: Set[int] = set()
+    for resolved_path in resolved_paths:
+        if not os.path.exists(resolved_path):
+            continue
+        try:
+            opener = gzip.open if resolved_path.endswith(".gz") else open
+            with opener(resolved_path, "rt", encoding="utf-8") as f:
+                payload = json.load(f)
+            episodes = payload.get("episodes", []) if isinstance(payload, dict) else payload
+            if not isinstance(episodes, list):
+                episodes = []
+            for item in episodes:
+                if not isinstance(item, dict):
+                    continue
+                if language_filter_enabled:
+                    instruction = item.get("instruction")
+                    episode_language = ""
+                    if isinstance(instruction, dict):
+                        episode_language = str(instruction.get("language") or "")
+                    if episode_language not in allowed_languages:
+                        continue
+                try:
+                    episode_ids.add(int(item.get("episode_id")))
+                except Exception:
+                    continue
+        except Exception:
+            continue
 
-    episode_ids = sorted(set(episode_ids))
-    _DATASET_EPISODE_ID_CACHE[resolved_path] = list(episode_ids)
-    return episode_ids
+    sorted_episode_ids = sorted(episode_ids)
+    _DATASET_EPISODE_ID_CACHE[cache_key] = list(sorted_episode_ids)
+    return sorted_episode_ids
 
 
 def get_available_episode_ids(config) -> List[int]:
@@ -99,6 +139,21 @@ def resolve_episode_ids(args, config) -> List[int]:
             )
             return []
         return episode_ids
+
+    if getattr(args, "ordered", False):
+        start_index = max(1, int(getattr(args, "start_index", 1) or 1))
+        start_offset = start_index - 1
+        if start_offset >= len(available_episode_ids):
+            print(
+                f"\n❌ Error: ordered start index {start_index} exceeds "
+                f"the available dataset count {len(available_episode_ids)}"
+            )
+            return []
+        num_to_select = min(args.num_episodes, len(available_episode_ids) - start_offset)
+        if num_to_select == 0:
+            print("\n❌ Error: requested episode count is zero")
+            return []
+        return list(available_episode_ids[start_offset : start_offset + num_to_select])
 
     if args.random:
         random_seed = int(time.time() * 1000) % (2 ** 32)

@@ -989,6 +989,7 @@ class OVONObjectNavigationController(NavigationAgentController):
         metrics_source = dict(env_metrics if env_metrics else (self.latest_info if self.latest_info else {}))
         episode_timing_summary = self._build_episode_timing_summary()
         result = {
+            "_benchmark": "ovon",
             "episode_id": self.current_episode_id,
             "instruction": self.current_instruction,
             "total_steps": total_steps,

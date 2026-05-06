@@ -183,11 +183,12 @@ def build_default_results_dir_from_api_config(
     config_path: str,
     repo_root: str = None,
     results_root: str = None,
+    family: str = DEFAULT_RESULTS_FAMILY,
 ) -> str:
     return os.path.abspath(
         os.path.join(
             build_default_results_family_root(
-                DEFAULT_RESULTS_FAMILY,
+                family,
                 repo_root=repo_root,
                 results_root=results_root,
             ),
@@ -200,11 +201,13 @@ def build_default_context_cache_results_dir(
     config_path: str,
     repo_root: str = None,
     results_root: str = None,
+    family: str = DEFAULT_RESULTS_FAMILY,
 ) -> str:
     base_dir = build_default_results_dir_from_api_config(
         config_path,
         repo_root=repo_root,
         results_root=results_root,
+        family=family,
     )
     suffix = "_cache"
     resolved_path = resolve_api_config_path(config_path)

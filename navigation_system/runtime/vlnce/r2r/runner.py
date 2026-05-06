@@ -119,6 +119,17 @@ def build_arg_parser(
         help="Sample random episodes instead of a contiguous range",
     )
     parser.add_argument(
+        "--ordered",
+        action="store_true",
+        help="Run the first N available dataset episodes in dataset order",
+    )
+    parser.add_argument(
+        "--start-index",
+        type=int,
+        default=1,
+        help="1-based dataset-order start index used with --ordered",
+    )
+    parser.add_argument(
         "--results-root",
         type=str,
         default=None,
