@@ -226,13 +226,13 @@ The templates can read provider keys from environment variables such as:
 Standard runtime:
 
 ```bash
-bash run_navigation/vlnce.sh 1 10 260 4
+bash run_navigation/r2rce.sh 1 10 260 4
 ```
 
 Explicit-context-cache runtime:
 
 ```bash
-bash run_navigation/vlnce.sh --runtime context_cache 1 10 260 4
+bash run_navigation/r2rce.sh --runtime context_cache 1 10 260 4
 ```
 
 Common argument pattern:
@@ -244,10 +244,10 @@ start_episode num_episodes max_steps parallel_workers
 Examples:
 
 ```bash
-bash run_navigation/vlnce.sh 832
-bash run_navigation/vlnce.sh 832 300
-bash run_navigation/vlnce.sh random 20 260 all 4
-bash run_navigation/vlnce.sh --help
+bash run_navigation/r2rce.sh 832
+bash run_navigation/r2rce.sh 832 300
+bash run_navigation/r2rce.sh random 20 260 all 4
+bash run_navigation/r2rce.sh --help
 ```
 
 ### OVON / Object Navigation
@@ -297,12 +297,12 @@ controller into `gn_bench` and keep Habitat/habitat-sim out of that env.
 Ablation presets are isolated under `navigation_system/ablation/`.
 
 ```bash
-bash run_navigation/vlnce.sh --ablation landmark 1 100 260 4
-bash run_navigation/vlnce.sh --ablation space_structure 1 100 260 4
-bash run_navigation/vlnce.sh --ablation landmark_space_structure 1 100 260 4
-bash run_navigation/vlnce.sh --ablation planning_action_reasoning 1 100 260 4
-bash run_navigation/vlnce.sh --ablation planning_reasoning_no_progress 1 100 260 4
-bash run_navigation/vlnce.sh --runtime context_cache --ablation space_structure 1 100 260 4
+bash run_navigation/r2rce.sh --ablation landmark 1 100 260 4
+bash run_navigation/r2rce.sh --ablation space_structure 1 100 260 4
+bash run_navigation/r2rce.sh --ablation landmark_space_structure 1 100 260 4
+bash run_navigation/r2rce.sh --ablation planning_action_reasoning 1 100 260 4
+bash run_navigation/r2rce.sh --ablation planning_reasoning_no_progress 1 100 260 4
+bash run_navigation/r2rce.sh --runtime context_cache --ablation space_structure 1 100 260 4
 ```
 
 Supported preset names include:
@@ -321,9 +321,9 @@ See `navigation_system/ablation/configs/` and `navigation_system/ablation/templa
 ### Reporting Existing Results
 
 ```bash
-bash run_navigation/report_vlnce.sh 1 100 qwen3.5-plus__qwen3.5-flash_cache
-bash run_navigation/report_vlnce.sh all all qwen3.5-plus__qwen3.5-flash_cache
-bash run_navigation/report_vlnce.sh --start-id all --end-id all --results all
+bash run_navigation/report_r2rce.sh 1 100 qwen3.5-plus__qwen3.5-flash_cache
+bash run_navigation/report_r2rce.sh all all qwen3.5-plus__qwen3.5-flash_cache
+bash run_navigation/report_r2rce.sh --start-id all --end-id all --results all
 ```
 
 ## Result Layout

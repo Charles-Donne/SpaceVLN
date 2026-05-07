@@ -194,10 +194,21 @@ def resolve_episode_ids(args, config) -> List[int]:
     return episode_ids
 
 
-def _episode_has_existing_sr1(results_dir: str, episode_id: int) -> bool:
+def _episode_has_existing_sr1(
+    results_dir: str,
+    episode_id: int,
+    *,
+    entry_kind: str = "episode",
+) -> bool:
     candidate_paths = []
-    candidate_paths.extend(get_episode_log_path_candidates(results_dir, episode_id))
-    for detail_dir in get_episode_detail_path_candidates(results_dir, episode_id):
+    candidate_paths.extend(
+        get_episode_log_path_candidates(results_dir, episode_id, entry_kind=entry_kind)
+    )
+    for detail_dir in get_episode_detail_path_candidates(
+        results_dir,
+        episode_id,
+        entry_kind=entry_kind,
+    ):
         candidate_paths.append(os.path.join(detail_dir, "records", "result.json"))
 
     deduped_paths: List[str] = []
@@ -221,8 +232,16 @@ def filter_episode_ids(args, config, episode_ids: List[int]) -> List[int]:
         return episode_ids
 
     kept_episode_ids: List[int] = []
-    for episode_id in episode_ids:
-        if not _episode_has_existing_sr1(results_dir, episode_id):
+    ordered = bool(getattr(args, "ordered", False))
+    start_index = max(1, int(getattr(args, "start_index", 1) or 1))
+    for offset, episode_id in enumerate(episode_ids):
+        storage_entry_id = start_index + offset if ordered else int(episode_id)
+        entry_kind = "sample" if ordered else "episode"
+        if not _episode_has_existing_sr1(
+            results_dir,
+            storage_entry_id,
+            entry_kind=entry_kind,
+        ):
             kept_episode_ids.append(int(episode_id))
     return kept_episode_ids
 

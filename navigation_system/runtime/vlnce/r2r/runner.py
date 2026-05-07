@@ -1,6 +1,7 @@
 """Thin runtime orchestrator for R2R-CE Navigation Agent evaluation."""
 
 import argparse
+import csv
 import os
 from typing import List
 
@@ -255,6 +256,68 @@ def maybe_generate_report(args: argparse.Namespace, config, verbose: bool = True
             print(f"📄 Episode table: {csv_path}")
 
 
+def _build_ordered_sample_index_map(args: argparse.Namespace, episode_ids: List[int]) -> dict:
+    if not bool(getattr(args, "ordered", False)):
+        return {}
+    start_index = max(1, int(getattr(args, "start_index", 1) or 1))
+    return {
+        int(episode_id): int(start_index + offset)
+        for offset, episode_id in enumerate(episode_ids)
+    }
+
+
+def _save_ordered_episode_manifest(
+    args: argparse.Namespace,
+    config,
+    episode_ids: List[int],
+) -> None:
+    if not bool(getattr(args, "ordered", False)):
+        return
+    results_dir = str(getattr(args, "results_dir", "") or getattr(config.PATHS, "RESULTS_DIR", "") or "").strip()
+    if not results_dir:
+        return
+    sample_index_by_episode = dict(getattr(args, "_sample_index_by_episode", {}) or {})
+    if not sample_index_by_episode:
+        return
+    os.makedirs(results_dir, exist_ok=True)
+    manifest_path = os.path.join(results_dir, "ordered_episode_manifest.csv")
+    existing_rows = {}
+    if os.path.exists(manifest_path):
+        try:
+            with open(manifest_path, "r", encoding="utf-8", newline="") as f:
+                for row in csv.DictReader(f):
+                    try:
+                        existing_rows[int(row.get("sample_index", 0))] = row
+                    except Exception:
+                        continue
+        except Exception:
+            existing_rows = {}
+    for run_index, episode_id in enumerate(episode_ids, 1):
+        sample_index = int(sample_index_by_episode[int(episode_id)])
+        existing_rows[sample_index] = {
+            "sample_index": str(sample_index),
+            "episode_id": str(int(episode_id)),
+            "run_index": str(int(run_index)),
+            "entry_kind": "sample",
+            "log_path": os.path.join(
+                "log",
+                f"{((sample_index - 1) // 100) * 100 + 1}-{((sample_index - 1) // 100) * 100 + 100}",
+                f"sample_{sample_index}.json",
+            ),
+            "detail_path": os.path.join(
+                "detail",
+                f"{((sample_index - 1) // 100) * 100 + 1}-{((sample_index - 1) // 100) * 100 + 100}",
+                f"sample_{sample_index}",
+            ),
+        }
+    with open(manifest_path, "w", encoding="utf-8", newline="") as f:
+        fieldnames = ("sample_index", "episode_id", "run_index", "entry_kind", "log_path", "detail_path")
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for sample_index in sorted(existing_rows):
+            writer.writerow(existing_rows[sample_index])
+
+
 def run_navigation_from_args(
     args: argparse.Namespace,
     profile: NavigationRuntimeProfile = STANDARD_RUNTIME_PROFILE,
@@ -276,7 +339,17 @@ def run_navigation_from_args(
             print("   Re-run with --results-dir pointing to a writable directory if needed.")
             return 1
     episode_ids = resolve_episode_ids(args, config)
+    args._sample_index_by_episode = _build_ordered_sample_index_map(args, episode_ids)
     episode_ids = filter_episode_ids(args, config, episode_ids)
+    if bool(getattr(args, "ordered", False)):
+        # Keep the original dataset-order sample ids after skip-sr1 filtering.
+        original_map = dict(getattr(args, "_sample_index_by_episode", {}) or {})
+        args._sample_index_by_episode = {
+            int(episode_id): int(original_map[int(episode_id)])
+            for episode_id in episode_ids
+            if int(episode_id) in original_map
+        }
+    _save_ordered_episode_manifest(args, config, episode_ids)
 
     if not episode_ids:
         if args.skip_sr1:
@@ -300,10 +373,15 @@ def run_navigation_from_args(
         )
     else:
         for idx, episode_id in enumerate(episode_ids, 1):
+            sample_index = dict(getattr(args, "_sample_index_by_episode", {}) or {}).get(int(episode_id))
+            run_args = argparse.Namespace(**vars(args))
+            run_args.sample_index = int(sample_index) if sample_index is not None else None
+            run_args.storage_entry_id = int(sample_index) if sample_index is not None else int(episode_id)
+            run_args.entry_kind = "sample" if sample_index is not None else "episode"
             results_summary.append(
                 run_single_episode(
                     config,
-                    args,
+                    run_args,
                     episode_id=episode_id,
                     index=idx,
                     total=len(episode_ids),
