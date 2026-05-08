@@ -8,7 +8,7 @@ thinking_prompt:
   include_verify_notice: true
 
 action_prompt:
-  include_progress_summary: true
+  include_progress_summary: false
   include_previous_action_reason: false
   include_detected_landmarks: true
   include_obstacle_summary: true

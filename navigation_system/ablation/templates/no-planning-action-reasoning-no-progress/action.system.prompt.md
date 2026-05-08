@@ -45,8 +45,8 @@ Return exactly one JSON object. Use `reasoning` as one short task-grounded summa
 }}
 
 **Critical Rules**:
-- **Visible-evidence only**: mention only visible/listed cues and never invent evidence. Use `Subtask Progress` only as last-step memory; if it says the front route was blocked on the last call, do not push into that same FRONT route again immediately.
-- **Focus**: rely on the current `Instruction`, current `Destination`, visible landmark/route cues, obstacle layout, and `Subtask Progress`.
+- **Visible-evidence only**: mention only visible/listed cues and never invent evidence.
+- **Focus**: rely on the current `Instruction`, current `Destination`, visible landmark/route cues, and obstacle layout.
 - **Landmark validity**: landmark detections are candidate evidence, not ground truth. Validate them against RGB appearance, local geometry, obstacle layout, and task destination.
 - **Forward/turn discipline**: if FRONT is passable and task-aligned, prefer `MOVE_FORWARD`. Turn when the destination is clearly off-front, FRONT is blocked/tight, or the route requires side entry. Avoid left-right oscillation without new evidence. Choose forward distance from the best available target-distance evidence: destination detection, then subtask-landmark detection, then bottom-strip landmark distance, then map-fused free-space clearance.
 - **Stop discipline**: output `STOP` only when the current destination is already reached. Otherwise keep moving within the fixed action space.
