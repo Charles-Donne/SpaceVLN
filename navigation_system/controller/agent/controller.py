@@ -2197,16 +2197,41 @@ class NavigationAgentController(BaseNavigationController):
         self.pose_before_action = self._get_agent_pose()
         return retreated_m, episode_done
 
-    def reset_episode(self, episode_id: int = None):
+    def reset_episode(
+        self,
+        episode_id: int = None,
+        sample_index: int = None,
+        storage_entry_id: int = None,
+        entry_kind: str = "episode",
+    ):
         """Reset the episode state, including VLM-specific runtime state."""
+        self.sample_index = int(sample_index) if sample_index is not None else None
+        self.storage_entry_id = (
+            int(storage_entry_id)
+            if storage_entry_id is not None
+            else (int(self.sample_index) if self.sample_index is not None else None)
+        )
+        self.storage_entry_kind = str(entry_kind or "episode").strip() or "episode"
         # Clean output directories from the previous episode.
         if episode_id is not None:
             import shutil
-            for old_episode_dir in get_episode_detail_path_candidates(self.config.PATHS.RESULTS_DIR, episode_id):
+            cleanup_entry_id = (
+                int(self.storage_entry_id)
+                if self.storage_entry_id is not None
+                else int(episode_id)
+            )
+            for old_episode_dir in get_episode_detail_path_candidates(
+                self.config.PATHS.RESULTS_DIR,
+                cleanup_entry_id,
+                entry_kind=self.storage_entry_kind,
+            ):
                 if os.path.exists(old_episode_dir):
                     print(f"[Reset] Removed previous episode data: {old_episode_dir}")
                     try:
-                        shutil.rmtree(old_episode_dir)
+                        if os.path.islink(old_episode_dir) or os.path.isfile(old_episode_dir):
+                            os.unlink(old_episode_dir)
+                        else:
+                            shutil.rmtree(old_episode_dir)
                     except PermissionError as exc:
                         raise PermissionError(
                             "Cannot remove stale episode outputs before reset: "
@@ -2222,6 +2247,8 @@ class NavigationAgentController(BaseNavigationController):
         self.save_manager = SaveManager(
             self.config.PATHS.RESULTS_DIR,
             self.current_episode_id,
+            storage_entry_id=self.storage_entry_id,
+            entry_kind=self.storage_entry_kind,
             save_waypoint_memory=self.runtime_options.save_waypoint_memory,
         )
         
@@ -2243,7 +2270,17 @@ class NavigationAgentController(BaseNavigationController):
     @property
     def episode_dir(self) -> str:
         """Return the current episode output directory."""
-        return get_episode_detail_dir(self.config.PATHS.RESULTS_DIR, self.current_episode_id)
+        entry_id = (
+            int(self.storage_entry_id)
+            if getattr(self, "storage_entry_id", None) is not None
+            else int(self.current_episode_id)
+        )
+        entry_kind = str(getattr(self, "storage_entry_kind", "episode") or "episode")
+        return get_episode_detail_dir(
+            self.config.PATHS.RESULTS_DIR,
+            entry_id,
+            entry_kind=entry_kind,
+        )
 
     @classmethod
     def _normalize_landmark_text(cls, text: Optional[str]) -> Optional[str]:
@@ -4780,6 +4817,8 @@ class NavigationAgentController(BaseNavigationController):
             'topdown_path': str(topdown_path or ""),
             'timestamp': datetime.now().isoformat()
         }
+        if getattr(self, "sample_index", None) is not None:
+            result["sample_index"] = int(self.sample_index)
         reason_text = str(failure_reason or "").strip()
         if reason_text:
             result['reason'] = reason_text

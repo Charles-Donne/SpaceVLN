@@ -20,15 +20,28 @@ spacevln_report_default_workers() {
 spacevln_report_model_dir_name() {
     local python_bin="$1"
     local api_config="$2"
+    local runtime_mode="${3:-standard}"
     local project_root
     project_root="$(spacevln_project_root)"
     (
         cd "$project_root" || exit 1
-        PYTHONPATH="$project_root:${PYTHONPATH:-}" "$python_bin" - "$api_config" <<'PY'
+        PYTHONPATH="$project_root:${PYTHONPATH:-}" "$python_bin" - "$api_config" "$runtime_mode" <<'PY'
 import sys
-from navigation_system.runtime.storage.results_layout import build_model_results_dir_name
+from navigation_system.runtime.storage.results_layout import (
+    build_default_context_cache_results_dir,
+    build_default_results_family_root,
+    build_model_results_dir_name,
+)
 
-print(build_model_results_dir_name(sys.argv[1]))
+api_config = sys.argv[1]
+runtime_mode = sys.argv[2]
+if runtime_mode == "context_cache":
+    family_root = build_default_results_family_root("placeholder")
+    results_dir = build_default_context_cache_results_dir(api_config, family="placeholder")
+    prefix = family_root + "/"
+    print(results_dir[len(prefix):] if results_dir.startswith(prefix) else results_dir)
+else:
+    print(build_model_results_dir_name(api_config))
 PY
     )
 }
@@ -135,6 +148,7 @@ spacevln_report_run_results_report_md() {
     local workers="$5"
     local start_id="$6"
     local end_id="$7"
+    local range_key="${8:-episode_id}"
 
     local cmd=(
         "$python_bin" -m navigation_system.runtime.results_report
@@ -143,6 +157,7 @@ spacevln_report_run_results_report_md() {
         --save
         --md-only
         --load-workers "$workers"
+        --range-key "$range_key"
     )
     if [ -n "$start_id" ]; then
         cmd+=(--start-id "$start_id")

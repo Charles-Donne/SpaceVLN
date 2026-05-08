@@ -1,5 +1,5 @@
 #!/bin/bash
-# Generate a compact R2R-CE Markdown report from existing logs.
+# Generate a compact R2R-CE/RxR-CE Markdown report from existing logs.
 
 set -euo pipefail
 
@@ -22,9 +22,9 @@ Examples:
   bash run_navigation/report_r2rce.sh 1000 1300 --model qwen3.5-plus__qwen3.5-flash_cache --ablation no-landmark
 
 Output:
-  all:       result/r2rce/<model>/episode_results.md
-  range:     result/r2rce/<model>/reports/<start-end>/episode_results.md
-  ablation:  result/r2rce/ablation/<ablation>/<model>/...
+  all:       result/<family>/<model>/episode_results.md
+  range:     result/<family>/<model>/reports/<start-end>/episode_results.md
+  ablation:  result/<family>/ablation/<ablation>/<model>/...
 EOF
 }
 
@@ -34,7 +34,11 @@ spacevln_setup_runtime_env "$PYTHON_BIN"
 
 API_CONFIG="${VLM_API_CONFIG:-navigation_system/config/vlm/vlm_api_config.yaml}"
 EXP_CONFIG="${EXP_CONFIG:-navigation_system/config/experiments/vlnce/r2r_eval.yaml}"
+REPORT_FAMILY="${SPACEVLN_REPORT_FAMILY:-r2rce}"
+REPORT_TITLE="${SPACEVLN_REPORT_TITLE:-R2R-CE report}"
+REPORT_RANGE_KEY="${SPACEVLN_REPORT_RANGE_KEY:-episode_id}"
 WORKERS="${SPACEVLN_REPORT_WORKERS:-$(spacevln_report_default_workers)}"
+RUNTIME_MODE="${SPACEVLN_REPORT_RUNTIME:-standard}"
 MODEL=""
 ABLATION=""
 RESULTS_DIR_OVERRIDE=""
@@ -70,6 +74,14 @@ while (( $# > 0 )); do
             RESULTS_DIR_OVERRIDE="${1#*=}"
             shift
             ;;
+        --runtime)
+            RUNTIME_MODE="${2:-}"
+            shift 2
+            ;;
+        --runtime=*)
+            RUNTIME_MODE="${1#*=}"
+            shift
+            ;;
         --workers|--load-workers)
             WORKERS="${2:-}"
             shift 2
@@ -89,6 +101,14 @@ if ! [[ "$WORKERS" =~ ^[0-9]+$ ]] || [ "$WORKERS" -lt 1 ]; then
     echo "workers must be a positive integer: $WORKERS" >&2
     exit 1
 fi
+case "$RUNTIME_MODE" in
+    standard|context_cache)
+        ;;
+    *)
+        echo "runtime must be standard or context_cache: $RUNTIME_MODE" >&2
+        exit 1
+        ;;
+esac
 
 spacevln_report_parse_range "${POSITIONAL_ARGS[@]}"
 REMAINING=("${REPORT_REMAINING_ARGS[@]}")
@@ -104,12 +124,12 @@ if [ "${#REMAINING[@]}" -gt 2 ]; then
 fi
 
 if [ -z "$MODEL" ]; then
-    MODEL="$(spacevln_report_model_dir_name "$PYTHON_BIN" "$API_CONFIG")"
+    MODEL="$(spacevln_report_model_dir_name "$PYTHON_BIN" "$API_CONFIG" "$RUNTIME_MODE")"
 fi
 ABLATION="${ABLATION#ablation/}"
 ABLATION="${ABLATION%/}"
 
-R2RCE_ROOT="$(spacevln_report_family_root "$PYTHON_BIN" "r2rce")"
+R2RCE_ROOT="$(spacevln_report_family_root "$PYTHON_BIN" "$REPORT_FAMILY")"
 if [ -n "$RESULTS_DIR_OVERRIDE" ]; then
     RESULTS_DIR="$(spacevln_report_resolve_results_dir "$RESULTS_DIR_OVERRIDE" "$R2RCE_ROOT" "$R2RCE_ROOT/$MODEL")"
 elif [ -n "$ABLATION" ]; then
@@ -123,8 +143,10 @@ if [ ! -d "$RESULTS_DIR/log" ]; then
     exit 1
 fi
 
-echo "R2R-CE report"
+echo "$REPORT_TITLE"
 echo "  Range: ${REPORT_RANGE_LABEL}"
+echo "  Range key: $REPORT_RANGE_KEY"
+echo "  Runtime: $RUNTIME_MODE"
 echo "  Model: $MODEL"
 if [ -n "$ABLATION" ]; then
     echo "  Ablation: $ABLATION"
@@ -133,7 +155,11 @@ echo "  Source: $RESULTS_DIR"
 if [ "$REPORT_RANGE_LABEL" = "all" ]; then
     echo "  Output: $RESULTS_DIR/episode_results.md"
 else
-    echo "  Output: $RESULTS_DIR/reports/$REPORT_RANGE_LABEL/episode_results.md"
+    REPORT_OUTPUT_LABEL="$REPORT_RANGE_LABEL"
+    if [ "$REPORT_RANGE_KEY" != "episode_id" ]; then
+        REPORT_OUTPUT_LABEL="${REPORT_RANGE_KEY}_${REPORT_RANGE_LABEL}"
+    fi
+    echo "  Output: $RESULTS_DIR/reports/$REPORT_OUTPUT_LABEL/episode_results.md"
 fi
 echo "  Workers: $WORKERS"
 
@@ -144,4 +170,5 @@ spacevln_report_run_results_report_md \
     "$EXP_CONFIG" \
     "$WORKERS" \
     "$REPORT_START" \
-    "$REPORT_END"
+    "$REPORT_END" \
+    "$REPORT_RANGE_KEY"

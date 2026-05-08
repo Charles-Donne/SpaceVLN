@@ -130,6 +130,7 @@ class SaveManager:
     )
     R2RCE_DETAIL_RESULT_FIELDS = (
         "episode_id",
+        "sample_index",
         "instruction",
         "total_steps",
         "subtask_count",
@@ -216,6 +217,7 @@ class SaveManager:
     )
     LOG_OPTIONAL_FIELD_SETS = {
         "r2rce": (
+            "sample_index",
             "osr",
             "ndtw",
             "oracle_success",

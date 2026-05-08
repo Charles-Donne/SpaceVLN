@@ -380,9 +380,14 @@ def _copy_file(src: str, dst: str) -> None:
     shutil.copy2(src, dst)
 
 
-def _get_episode_result_path_no_create(results_dir: str, episode_id: int) -> str:
+def _get_episode_result_path_no_create(
+    results_dir: str,
+    episode_id: int,
+    *,
+    entry_kind: str = "episode",
+) -> str:
     return os.path.join(
-        get_episode_detail_dir(results_dir, episode_id),
+        get_episode_detail_dir(results_dir, episode_id, entry_kind=entry_kind),
         "records",
         "result.json",
     )
@@ -405,21 +410,46 @@ def _sync_episode_staging_outputs(
     staging_results_dir: str,
     final_results_dir: str,
     episode_id: int,
+    storage_entry_id: Optional[int] = None,
+    entry_kind: str = "episode",
     save_stdout_log: bool,
 ) -> None:
     """Move one episode's fast local artifacts back to the final results directory."""
     if not staging_results_dir or not final_results_dir:
         return
-    staging_detail_dir = get_episode_detail_dir(staging_results_dir, episode_id)
-    final_detail_dir = get_episode_detail_dir(final_results_dir, episode_id)
+    entry_id = int(storage_entry_id) if storage_entry_id is not None else int(episode_id)
+    entry_kind = str(entry_kind or "episode").strip() or "episode"
+    staging_detail_dir = get_episode_detail_dir(
+        staging_results_dir,
+        entry_id,
+        entry_kind=entry_kind,
+    )
+    final_detail_dir = get_episode_detail_dir(
+        final_results_dir,
+        entry_id,
+        entry_kind=entry_kind,
+    )
     _copytree_replace(staging_detail_dir, final_detail_dir)
 
-    staging_log_path = get_episode_log_path(staging_results_dir, episode_id)
-    final_log_path = get_episode_log_path(final_results_dir, episode_id)
+    staging_log_path = get_episode_log_path(
+        staging_results_dir,
+        entry_id,
+        entry_kind=entry_kind,
+    )
+    final_log_path = get_episode_log_path(
+        final_results_dir,
+        entry_id,
+        entry_kind=entry_kind,
+    )
     staging_log = SaveManager._load_json_if_exists(staging_log_path)
     if staging_log is not None:
         final_log = SaveManager._load_json_if_exists(final_log_path)
-        manager = SaveManager(final_results_dir, episode_id)
+        manager = SaveManager(
+            final_results_dir,
+            episode_id,
+            storage_entry_id=entry_id,
+            entry_kind=entry_kind,
+        )
         final_baseline = final_log if manager.is_complete_result(final_log) else None
         if manager.is_complete_result(staging_log) and (
             final_baseline is None or manager._is_better_result(staging_log, final_baseline)
@@ -428,8 +458,16 @@ def _sync_episode_staging_outputs(
 
     if save_stdout_log:
         _copy_file(
-            get_episode_records_log_path(staging_results_dir, episode_id),
-            get_episode_records_log_path(final_results_dir, episode_id),
+            get_episode_records_log_path(
+                staging_results_dir,
+                entry_id,
+                entry_kind=entry_kind,
+            ),
+            get_episode_records_log_path(
+                final_results_dir,
+                entry_id,
+                entry_kind=entry_kind,
+            ),
         )
 
 
@@ -438,6 +476,8 @@ def _transfer_episode_staging_outputs(
     staging_results_dir: str,
     final_results_dir: str,
     episode_id: int,
+    storage_entry_id: Optional[int] = None,
+    entry_kind: str = "episode",
     save_stdout_log: bool,
     postprocess_futures: Optional[List[concurrent.futures.Future]] = None,
 ) -> None:
@@ -450,6 +490,8 @@ def _transfer_episode_staging_outputs(
             staging_results_dir=staging_results_dir,
             final_results_dir=final_results_dir,
             episode_id=episode_id,
+            storage_entry_id=storage_entry_id,
+            entry_kind=entry_kind,
             save_stdout_log=save_stdout_log,
         )
     finally:
@@ -494,6 +536,8 @@ def _submit_episode_staging_sync(
     staging_results_dir: str,
     final_results_dir: str,
     episode_id: int,
+    storage_entry_id: Optional[int] = None,
+    entry_kind: str = "episode",
     save_stdout_log: bool,
     postprocess_futures: Optional[List[concurrent.futures.Future]] = None,
 ) -> None:
@@ -504,6 +548,8 @@ def _submit_episode_staging_sync(
             staging_results_dir=staging_results_dir,
             final_results_dir=final_results_dir,
             episode_id=episode_id,
+            storage_entry_id=storage_entry_id,
+            entry_kind=entry_kind,
             save_stdout_log=save_stdout_log,
             postprocess_futures=postprocess_futures,
         )
@@ -513,6 +559,8 @@ def _submit_episode_staging_sync(
         staging_results_dir=staging_results_dir,
         final_results_dir=final_results_dir,
         episode_id=episode_id,
+        storage_entry_id=storage_entry_id,
+        entry_kind=entry_kind,
         save_stdout_log=save_stdout_log,
         postprocess_futures=postprocess_futures,
     )
@@ -586,6 +634,13 @@ def _run_single_episode_attempt(
 ) -> Dict[str, Any]:
     controller = None
     episode_initialized = False
+    sample_index = getattr(args, "sample_index", None)
+    storage_entry_id = getattr(args, "storage_entry_id", None)
+    entry_kind = str(getattr(args, "entry_kind", "episode") or "episode")
+    if storage_entry_id is not None:
+        storage_entry_id = int(storage_entry_id)
+    if sample_index is not None:
+        sample_index = int(sample_index)
     final_results_dir = os.path.abspath(str(base_config.PATHS.RESULTS_DIR or os.getcwd()))
     final_episode_log_path = episode_log_path
     final_result_path = result_path
@@ -607,11 +662,19 @@ def _run_single_episode_attempt(
         run_args = copy.copy(args)
         run_args.results_dir = staging_results_dir
         run_episode_log_path = (
-            get_episode_records_log_path(staging_results_dir, episode_id)
+            get_episode_records_log_path(
+                staging_results_dir,
+                int(storage_entry_id) if storage_entry_id is not None else int(episode_id),
+                entry_kind=entry_kind,
+            )
             if save_stdout_log
             else ""
         )
-        run_result_path = get_episode_result_path(staging_results_dir, episode_id)
+        run_result_path = get_episode_result_path(
+            staging_results_dir,
+            int(storage_entry_id) if storage_entry_id is not None else int(episode_id),
+            entry_kind=entry_kind,
+        )
 
     console_result: Dict[str, Any] = {
         "episode_id": int(episode_id),
@@ -636,7 +699,12 @@ def _run_single_episode_attempt(
                 run_args,
                 profile=profile,
             )
-            controller.reset_episode(episode_id=episode_id)
+            controller.reset_episode(
+                episode_id=episode_id,
+                sample_index=sample_index,
+                storage_entry_id=storage_entry_id,
+                entry_kind=entry_kind,
+            )
             episode_initialized = True
 
             result = controller.run_navigation(max_subtask_steps=args.max_subtask_steps)
@@ -644,6 +712,7 @@ def _run_single_episode_attempt(
 
             console_result = {
                 "episode_id": episode_id,
+                "sample_index": sample_index,
                 "success": result["success"],
                 "steps": total_steps,
                 "episode_duration_s": result.get("episode_duration_s", 0.0),
@@ -654,7 +723,11 @@ def _run_single_episode_attempt(
                 "failed_wasted_duration_s": result.get("failed_wasted_duration_s", 0.0),
                 "error": None,
                 "reason": result.get("reason", ""),
-                "result_file": get_episode_log_path(final_results_dir, episode_id),
+                "result_file": get_episode_log_path(
+                    final_results_dir,
+                    int(storage_entry_id) if storage_entry_id is not None else int(episode_id),
+                    entry_kind=entry_kind,
+                ),
                 "result_detail_file": final_result_path,
                 "episode_log_path": final_episode_log_path,
             }
@@ -693,6 +766,7 @@ def _run_single_episode_attempt(
             traceback.print_exc()
         console_result = {
             "episode_id": episode_id,
+            "sample_index": sample_index,
             "success": finalized_success,
             "steps": finalized_steps,
             "episode_duration_s": timing_summary.get("episode_duration_s", 0.0),
@@ -725,11 +799,13 @@ def _run_single_episode_attempt(
         console_result["_staging_save_stdout_log"] = bool(save_stdout_log)
         console_result["_staging_result_file"] = get_episode_log_path(
             staging_results_dir,
-            episode_id,
+            int(storage_entry_id) if storage_entry_id is not None else int(episode_id),
+            entry_kind=entry_kind,
         )
         console_result["_staging_result_detail_file"] = get_episode_result_path(
             staging_results_dir,
-            episode_id,
+            int(storage_entry_id) if storage_entry_id is not None else int(episode_id),
+            entry_kind=entry_kind,
         )
 
     return console_result
@@ -752,15 +828,36 @@ def run_single_episode(
         "failed_wasted_duration_s": 0.0,
         "error": None,
     }
+    sample_index = getattr(args, "sample_index", None)
+    sample_index = int(sample_index) if sample_index is not None else None
+    storage_entry_id = getattr(args, "storage_entry_id", None)
+    storage_entry_id = (
+        int(storage_entry_id)
+        if storage_entry_id is not None
+        else (int(sample_index) if sample_index is not None else int(episode_id))
+    )
+    entry_kind = str(getattr(args, "entry_kind", "episode") or "episode")
     results_dir = os.path.abspath(str(base_config.PATHS.RESULTS_DIR or os.getcwd()))
     save_stdout_log = save_episode_stdout_log_enabled(base_config)
     episode_log_path = (
-        get_episode_records_log_path(results_dir, episode_id)
+        get_episode_records_log_path(
+            results_dir,
+            storage_entry_id,
+            entry_kind=entry_kind,
+        )
         if save_stdout_log
         else ""
     )
-    result_path = _get_episode_result_path_no_create(results_dir, episode_id)
-    best_log_path = get_episode_log_path(results_dir, episode_id)
+    result_path = _get_episode_result_path_no_create(
+        results_dir,
+        storage_entry_id,
+        entry_kind=entry_kind,
+    )
+    best_log_path = get_episode_log_path(
+        results_dir,
+        storage_entry_id,
+        entry_kind=entry_kind,
+    )
     print(
         build_episode_start_summary(
             episode_id=episode_id,
@@ -768,6 +865,7 @@ def run_single_episode(
             total=total,
             worker_index=int(getattr(args, "worker_index", 0) or 0),
             worker_count=int(getattr(args, "worker_count", 0) or 0),
+            sample_index=sample_index,
         ),
         flush=True,
     )
@@ -783,9 +881,13 @@ def run_single_episode(
         )
         stdout_log_mode = "w"
 
+        run_args = copy.copy(args)
+        run_args.sample_index = sample_index
+        run_args.storage_entry_id = storage_entry_id
+        run_args.entry_kind = entry_kind
         console_result = _run_single_episode_attempt(
             base_config,
-            args,
+            run_args,
             episode_id,
             profile=profile,
             episode_log_path=episode_log_path,
@@ -836,6 +938,8 @@ def run_single_episode(
                 staging_results_dir=staging_results_dir,
                 final_results_dir=staging_final_results_dir,
                 episode_id=episode_id,
+                storage_entry_id=storage_entry_id,
+                entry_kind=entry_kind,
                 save_stdout_log=bool(
                     console_result.get("_staging_save_stdout_log", save_stdout_log)
                 ),
@@ -873,6 +977,7 @@ def run_single_episode(
             metrics=metrics,
             worker_index=int(getattr(args, "worker_index", 0) or 0),
             worker_count=int(getattr(args, "worker_count", 0) or 0),
+            sample_index=sample_index,
         ),
         flush=True,
     )
@@ -889,9 +994,16 @@ def _build_parallel_episode_spec(
     worker_count: int,
     profile: NavigationRuntimeProfile,
 ) -> Dict[str, Any]:
+    sample_index_by_episode = dict(getattr(args, "_sample_index_by_episode", {}) or {})
+    sample_index = sample_index_by_episode.get(int(episode_id))
+    entry_kind = "sample" if sample_index is not None else "episode"
+    storage_entry_id = int(sample_index) if sample_index is not None else int(episode_id)
     return {
         "exp_config": args.exp_config,
         "episode_id": int(episode_id),
+        "sample_index": int(sample_index) if sample_index is not None else None,
+        "storage_entry_id": int(storage_entry_id),
+        "entry_kind": entry_kind,
         "index": int(index),
         "total": int(total),
         "results_dir": args.results_dir,
@@ -911,6 +1023,9 @@ def _run_parallel_episode_job(job_spec: Dict[str, Any]) -> Dict[str, Any]:
     args = argparse.Namespace(
         exp_config=job_spec["exp_config"],
         episode_id=int(job_spec["episode_id"]),
+        sample_index=job_spec.get("sample_index"),
+        storage_entry_id=int(job_spec.get("storage_entry_id", job_spec["episode_id"])),
+        entry_kind=str(job_spec.get("entry_kind", "episode") or "episode"),
         episode_ids=None,
         num_episodes=1,
         random=False,

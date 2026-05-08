@@ -252,9 +252,9 @@ def load_results_in_episode_range(
     ]
 
 
-def _episode_id_as_int(item: Dict[str, Any]) -> Optional[int]:
+def _range_value_as_int(item: Dict[str, Any], range_key: str = "episode_id") -> Optional[int]:
     try:
-        return int(item.get("episode_id"))
+        return int(item.get(range_key))
     except (TypeError, ValueError):
         return None
 
@@ -264,18 +264,19 @@ def filter_results_by_episode_range(
     *,
     start_episode_id: Optional[int] = None,
     end_episode_id: Optional[int] = None,
+    range_key: str = "episode_id",
 ) -> List[Dict[str, Any]]:
     if start_episode_id is None and end_episode_id is None:
         return list(results)
 
     filtered: List[Dict[str, Any]] = []
     for item in results:
-        episode_id = _episode_id_as_int(item)
-        if episode_id is None:
+        range_value = _range_value_as_int(item, range_key=range_key)
+        if range_value is None:
             continue
-        if start_episode_id is not None and episode_id < int(start_episode_id):
+        if start_episode_id is not None and range_value < int(start_episode_id):
             continue
-        if end_episode_id is not None and episode_id > int(end_episode_id):
+        if end_episode_id is not None and range_value > int(end_episode_id):
             continue
         filtered.append(item)
     return filtered
@@ -286,6 +287,7 @@ def _resolve_report_output_dir(
     *,
     start_episode_id: Optional[int] = None,
     end_episode_id: Optional[int] = None,
+    range_key: str = "episode_id",
     output_dir: Optional[str] = None,
 ) -> str:
     if output_dir:
@@ -295,7 +297,10 @@ def _resolve_report_output_dir(
 
     start_label = "start" if start_episode_id is None else str(int(start_episode_id))
     end_label = "end" if end_episode_id is None else str(int(end_episode_id))
-    return os.path.join(results_dir, "reports", f"{start_label}-{end_label}")
+    label = f"{start_label}-{end_label}"
+    if range_key != "episode_id":
+        label = f"{range_key}_{label}"
+    return os.path.join(results_dir, "reports", label)
 
 
 def compute_metrics(results: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -474,6 +479,7 @@ def _build_episode_row(item: Dict[str, Any]) -> Dict[str, str]:
     action_total = _summary_value(item, "action", "total_duration_s", 0.0)
     api_total = think_total + action_total
     return {
+        "sample_index": str(item.get("sample_index", "")),
         "episode_id": str(item.get("episode_id", "")),
         "NE": _format_metric_value(_as_float(item.get("ne", -1.0), -1.0), 3),
         "OSR": str(_as_int(item.get("osr", 0), 0)),
@@ -501,9 +507,20 @@ def save_episode_tables(
 ) -> Dict[str, str]:
     csv_path = os.path.join(results_dir, "episode_results.csv")
     md_path = os.path.join(results_dir, "episode_results.md")
-    sorted_results = sorted(results, key=lambda item: int(item.get("episode_id", -1)))
+    sorted_results = sorted(
+        results,
+        key=lambda item: (
+            int(item.get("sample_index"))
+            if str(item.get("sample_index", "")).strip().isdigit()
+            else int(item.get("episode_id", -1))
+        ),
+    )
     timing = metrics["timing"]
-    headers = [
+    include_sample_index = any(str(item.get("sample_index", "")).strip() for item in sorted_results)
+    headers = []
+    if include_sample_index:
+        headers.append("sample_index")
+    headers.extend([
         "episode_id",
         "NE",
         "OSR",
@@ -518,7 +535,7 @@ def save_episode_tables(
         "Local(s)",
         "FailWaste(s)",
         "Episode(s)",
-    ]
+    ])
 
     saved_paths: Dict[str, str] = {}
     if save_csv:
@@ -526,9 +543,13 @@ def save_episode_tables(
             writer = csv.DictWriter(f, fieldnames=headers)
             writer.writeheader()
             for item in sorted_results:
-                writer.writerow(_build_episode_row(item))
+                row = _build_episode_row(item)
+                if not include_sample_index:
+                    row.pop("sample_index", None)
+                writer.writerow(row)
             writer.writerow(
                 {
+                    **({"sample_index": "SUMMARY"} if include_sample_index else {}),
                     "episode_id": "SUMMARY",
                     "NE": _format_metric_value(metrics["avg_ne"], 3),
                     "OSR": _format_metric_value(metrics["avg_osr"], 4),
@@ -550,16 +571,46 @@ def save_episode_tables(
     if summary_only_md:
         md_lines = ["# Summary", ""]
     else:
-        md_lines = [
-            "# Episode Results",
-            "",
-            "| Episode | NE(m) | OSR | SR | SPL | nDTW | ThinkAvg(s) | ThinkTot(s) | ActAvg(s) | ActTot(s) | API(s) | Local(s) | FailWaste(s) | Episode(s) |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-        ]
+        md_lines = ["# Episode Results", ""]
+        if include_sample_index:
+            md_lines.extend(
+                [
+                    "| Sample | Episode | NE(m) | OSR | SR | SPL | nDTW | ThinkAvg(s) | ThinkTot(s) | ActAvg(s) | ActTot(s) | API(s) | Local(s) | FailWaste(s) | Episode(s) |",
+                    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+                ]
+            )
+        else:
+            md_lines.extend(
+                [
+                    "| Episode | NE(m) | OSR | SR | SPL | nDTW | ThinkAvg(s) | ThinkTot(s) | ActAvg(s) | ActTot(s) | API(s) | Local(s) | FailWaste(s) | Episode(s) |",
+                    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+                ]
+            )
         for item in sorted_results:
             row = _build_episode_row(item)
-            md_lines.append(
-                "| {episode} | {ne} | {osr} | {sr} | {spl} | {ndtw} | {think_avg} | {think_total} | {act_avg} | {act_total} | {api_total} | {local_s} | {fail_waste} | {episode_s} |".format(
+            if include_sample_index:
+                md_lines.append(
+                    "| {sample} | {episode} | {ne} | {osr} | {sr} | {spl} | {ndtw} | {think_avg} | {think_total} | {act_avg} | {act_total} | {api_total} | {local_s} | {fail_waste} | {episode_s} |".format(
+                        sample=row["sample_index"],
+                        episode=row["episode_id"],
+                        ne=row["NE"],
+                        osr=row["OSR"],
+                        sr=row["SR"],
+                        spl=row["SPL"],
+                        ndtw=row["nDTW"],
+                        think_avg=row["ThinkAvg(s)"],
+                        think_total=row["ThinkTot(s)"],
+                        act_avg=row["ActAvg(s)"],
+                        act_total=row["ActTot(s)"],
+                        api_total=row["API(s)"],
+                        local_s=row["Local(s)"],
+                        fail_waste=row["FailWaste(s)"],
+                        episode_s=row["Episode(s)"],
+                    )
+                )
+            else:
+                md_lines.append(
+                    "| {episode} | {ne} | {osr} | {sr} | {spl} | {ndtw} | {think_avg} | {think_total} | {act_avg} | {act_total} | {api_total} | {local_s} | {fail_waste} | {episode_s} |".format(
                     episode=row["episode_id"],
                     ne=row["NE"],
                     osr=row["OSR"],
@@ -575,7 +626,7 @@ def save_episode_tables(
                     fail_waste=row["FailWaste(s)"],
                     episode_s=row["Episode(s)"],
                 )
-            )
+                )
         md_lines.extend(["", "## Summary", ""])
 
     md_lines.extend(
@@ -632,6 +683,7 @@ def generate_results_report(
     verbose: bool = True,
     start_episode_id: Optional[int] = None,
     end_episode_id: Optional[int] = None,
+    range_key: str = "episode_id",
     output_dir: Optional[str] = None,
     exp_config: Optional[str] = None,
     load_workers: int = 1,
@@ -644,7 +696,15 @@ def generate_results_report(
         if int(load_workers) > 1:
             print(f"⚙️  Parallel JSON workers: {int(load_workers)}")
 
-    use_direct_range_load = start_episode_id is not None and end_episode_id is not None
+    range_key = str(range_key or "episode_id").strip() or "episode_id"
+    if range_key not in {"episode_id", "sample_index"}:
+        raise ValueError(f"Unsupported range key: {range_key}")
+
+    use_direct_range_load = (
+        range_key == "episode_id"
+        and start_episode_id is not None
+        and end_episode_id is not None
+    )
     if use_direct_range_load:
         results = load_results_in_episode_range(
             results_dir,
@@ -658,6 +718,7 @@ def generate_results_report(
             all_results,
             start_episode_id=start_episode_id,
             end_episode_id=end_episode_id,
+            range_key=range_key,
         )
 
     if not results:
@@ -671,6 +732,7 @@ def generate_results_report(
             results,
             start_episode_id=start_episode_id,
             end_episode_id=end_episode_id,
+            range_key=range_key,
         )
         if not filtered_results:
             raise FileNotFoundError(
@@ -682,12 +744,13 @@ def generate_results_report(
         results_dir,
         start_episode_id=start_episode_id,
         end_episode_id=end_episode_id,
+        range_key=range_key,
         output_dir=output_dir,
     )
 
     if verbose:
         if start_episode_id is not None or end_episode_id is not None:
-            print(f"✅ Loaded {len(results)} episodes ([{start_episode_id}, {end_episode_id}])")
+            print(f"✅ Loaded {len(results)} episodes ({range_key}=[{start_episode_id}, {end_episode_id}])")
             print(f"📁 Partial report directory: {report_output_dir}")
         else:
             print(f"✅ Loaded {len(results)} episodes")
@@ -762,6 +825,12 @@ def build_results_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--debug", action="store_true", help="Print per-episode debug information")
     parser.add_argument("--start-id", type=int, default=None, help="Only include episodes from this id")
     parser.add_argument("--end-id", type=int, default=None, help="Only include episodes up to this id")
+    parser.add_argument(
+        "--range-key",
+        choices=("episode_id", "sample_index"),
+        default="episode_id",
+        help="Field used by --start-id/--end-id filtering",
+    )
     parser.add_argument("--output-dir", type=str, default=None, help="Report output directory")
     parser.add_argument(
         "--load-workers",
@@ -786,6 +855,7 @@ def run_results_report_from_args(args: argparse.Namespace) -> int:
             verbose=True,
             start_episode_id=args.start_id,
             end_episode_id=args.end_id,
+            range_key=args.range_key,
             output_dir=args.output_dir,
             exp_config=args.exp_config,
             load_workers=args.load_workers,
