@@ -443,7 +443,6 @@ def _sync_episode_staging_outputs(
         entry_id,
         entry_kind=entry_kind,
     )
-    _copytree_replace(staging_detail_dir, final_detail_dir)
 
     staging_log_path = get_episode_log_path(
         staging_results_dir,
@@ -456,21 +455,19 @@ def _sync_episode_staging_outputs(
         entry_kind=entry_kind,
     )
     staging_log = SaveManager._load_json_if_exists(staging_log_path)
+    accepted = False
     if staging_log is not None:
         final_log = SaveManager._load_json_if_exists(final_log_path)
-        manager = SaveManager(
-            final_results_dir,
-            episode_id,
-            storage_entry_id=entry_id,
-            entry_kind=entry_kind,
-        )
-        final_baseline = final_log if manager.is_complete_result(final_log) else None
-        if manager.is_complete_result(staging_log) and (
-            final_baseline is None or manager._is_better_result(staging_log, final_baseline)
+        final_baseline = final_log if SaveManager.is_complete_result(final_log) else None
+        if SaveManager.is_complete_result(staging_log) and (
+            final_baseline is None
+            or SaveManager.result_rank_key(staging_log) > SaveManager.result_rank_key(final_baseline)
         ):
+            _copytree_replace(staging_detail_dir, final_detail_dir)
             _copy_file(staging_log_path, final_log_path)
+            accepted = True
 
-    if save_stdout_log:
+    if accepted and save_stdout_log:
         _copy_file(
             get_episode_records_log_path(
                 staging_results_dir,

@@ -85,6 +85,8 @@ spacevln_setup_runtime_env "$PYTHON_BIN"
 
 CONFIG_FILE="${EXP_CONFIG:-navigation_system/config/experiments/vlnce/rxr_eval.yaml}"
 export SPACEVLN_RESULTS_FAMILY="${SPACEVLN_RESULTS_FAMILY:-rxrce}"
+export SPACEVLN_FORCE_SAMPLE_STORAGE="${SPACEVLN_FORCE_SAMPLE_STORAGE:-1}"
+export SPACEVLN_EPISODE_WORKDIR="${SPACEVLN_EPISODE_WORKDIR:-../.spacevln_episode_cache}"
 RUNTIME_MODE="standard"
 ABLATION_RAW=""
 RESULT_PATH_ARGS=()

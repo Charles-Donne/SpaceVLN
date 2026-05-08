@@ -152,6 +152,11 @@ if [ -n "$ABLATION" ]; then
     echo "  Ablation: $ABLATION"
 fi
 echo "  Source: $RESULTS_DIR"
+REPORT_MARKDOWN_TITLE="$REPORT_TITLE"
+if [ -n "$ABLATION" ]; then
+    REPORT_MARKDOWN_TITLE="$REPORT_MARKDOWN_TITLE | ablation: $ABLATION"
+fi
+REPORT_MARKDOWN_TITLE="$REPORT_MARKDOWN_TITLE | model: $MODEL | range: $REPORT_RANGE_LABEL"
 if [ "$REPORT_RANGE_LABEL" = "all" ]; then
     echo "  Output: $RESULTS_DIR/episode_results.md"
 else
@@ -171,4 +176,5 @@ spacevln_report_run_results_report_md \
     "$WORKERS" \
     "$REPORT_START" \
     "$REPORT_END" \
-    "$REPORT_RANGE_KEY"
+    "$REPORT_RANGE_KEY" \
+    "$REPORT_MARKDOWN_TITLE"

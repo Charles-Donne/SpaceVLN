@@ -381,7 +381,8 @@ class SaveManager:
         except Exception:
             return False
 
-    def _result_rank_key(self, result: Optional[Dict]) -> tuple:
+    @classmethod
+    def result_rank_key(cls, result: Optional[Dict]) -> tuple:
         if not result:
             return (
                 -1,
@@ -395,25 +396,25 @@ class SaveManager:
                 float("-inf"),
             )
 
-        success = self._safe_int(result.get('sr', 0), 0)
-        spl = self._safe_float(result.get('spl', 0.0), 0.0)
-        episode_duration_s = self._safe_float(
+        success = cls._safe_int(result.get('sr', 0), 0)
+        spl = cls._safe_float(result.get('spl', 0.0), 0.0)
+        episode_duration_s = cls._safe_float(
             result.get('episode_duration_s', float('inf')),
             float('inf'),
         )
         if episode_duration_s < 0:
             episode_duration_s = float('inf')
-        ndtw = self._safe_float(result.get('ndtw', 0.0), 0.0)
-        oracle_success = self._safe_int(result.get('osr', 0), 0)
-        oracle_spl = self._safe_float(result.get('oracle_spl', 0.0), 0.0)
+        ndtw = cls._safe_float(result.get('ndtw', 0.0), 0.0)
+        oracle_success = cls._safe_int(result.get('osr', 0), 0)
+        oracle_spl = cls._safe_float(result.get('oracle_spl', 0.0), 0.0)
 
-        dtg = self._safe_float(result.get('ne', float('inf')), float('inf'))
+        dtg = cls._safe_float(result.get('ne', float('inf')), float('inf'))
         if dtg < 0:
             dtg = float('inf')
-        path_length = self._safe_float(result.get('path_length', float('inf')), float('inf'))
+        path_length = cls._safe_float(result.get('path_length', float('inf')), float('inf'))
         if path_length < 0:
             path_length = float('inf')
-        total_steps = self._safe_float(result.get('total_steps', float('inf')), float('inf'))
+        total_steps = cls._safe_float(result.get('total_steps', float('inf')), float('inf'))
         if total_steps < 0:
             total_steps = float('inf')
 
@@ -435,7 +436,7 @@ class SaveManager:
     def _is_better_result(self, new_result: Dict, old_result: Optional[Dict]) -> bool:
         if not old_result:
             return True
-        return self._result_rank_key(new_result) > self._result_rank_key(old_result)
+        return self.result_rank_key(new_result) > self.result_rank_key(old_result)
     
     def thinking_subtask_dir(self, subtask_count: int, create: bool = False) -> str:
         path = os.path.join(self.episode_dir, "thinking", build_subtask_name(subtask_count))

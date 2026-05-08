@@ -149,6 +149,7 @@ spacevln_report_run_results_report_md() {
     local start_id="$6"
     local end_id="$7"
     local range_key="${8:-episode_id}"
+    local report_title="${9:-Episode Results}"
 
     local cmd=(
         "$python_bin" -m navigation_system.runtime.results_report
@@ -158,6 +159,7 @@ spacevln_report_run_results_report_md() {
         --md-only
         --load-workers "$workers"
         --range-key "$range_key"
+        --report-title "$report_title"
     )
     if [ -n "$start_id" ]; then
         cmd+=(--start-id "$start_id")

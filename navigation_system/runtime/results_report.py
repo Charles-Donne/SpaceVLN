@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from navigation_system.runtime.storage.artifacts import (
+    SaveManager,
     get_episode_log_path,
     iter_all_episode_log_paths,
 )
@@ -215,17 +216,30 @@ def load_results(results_dir: str, *, load_workers: int = 1) -> List[Dict[str, A
     ):
         filename = os.path.basename(filepath)
         episode_key = str(payload.get("episode_id", filename))
+        previous = results_by_episode.get(episode_key)
         previous_mtime = result_mtime_by_episode.get(episode_key, float("-inf"))
-        if episode_key not in results_by_episode or current_mtime >= previous_mtime:
+        if (
+            previous is None
+            or SaveManager.result_rank_key(payload) > SaveManager.result_rank_key(previous)
+            or (
+                SaveManager.result_rank_key(payload) == SaveManager.result_rank_key(previous)
+                and current_mtime >= previous_mtime
+            )
+        ):
             results_by_episode[episode_key] = payload
             result_mtime_by_episode[episode_key] = current_mtime
 
     def _episode_sort_key(item: Dict[str, Any]) -> Any:
+        sample_index = item.get("sample_index", "")
+        try:
+            return (0, int(sample_index))
+        except (TypeError, ValueError):
+            pass
         episode_id = item.get("episode_id", "")
         try:
-            return (0, int(episode_id))
+            return (1, int(episode_id))
         except (TypeError, ValueError):
-            return (1, str(episode_id))
+            return (2, str(episode_id))
 
     return sorted(results_by_episode.values(), key=_episode_sort_key)
 
@@ -313,6 +327,7 @@ def compute_metrics(results: List[Dict[str, Any]]) -> Dict[str, Any]:
     sr_list = [_as_int(item.get("sr", 0), 0) for item in results]
     spl_list = [_as_float(item.get("spl", 0.0), 0.0) for item in results]
     ndtw_list = [_as_float(item.get("ndtw", 0.0), 0.0) for item in results]
+    steps_list = [_as_float(item.get("total_steps", 0.0), 0.0) for item in results]
 
     valid_ne = [value for value in ne_list if value >= 0]
     sr_count = sum(sr_list)
@@ -326,6 +341,7 @@ def compute_metrics(results: List[Dict[str, Any]]) -> Dict[str, Any]:
         "avg_sr": sr_count / n if n > 0 else 0.0,
         "avg_spl": sum(spl_list) / n if n > 0 else 0.0,
         "avg_ndtw": sum(ndtw_list) / n if n > 0 else 0.0,
+        "avg_steps": sum(steps_list) / n if n > 0 else 0.0,
         "timing": _compute_timing_metrics(results),
         "detailed_results": results,
     }
@@ -345,6 +361,7 @@ def print_summary(metrics: Dict[str, Any]) -> None:
     print(f"  SR:    {metrics['sr_count']}/{n} ({metrics['avg_sr']:.3f})")
     print(f"  SPL:   {metrics['avg_spl']:.3f}")
     print(f"  nDTW:  {metrics['avg_ndtw']:.3f}")
+    print(f"  Steps: {metrics['avg_steps']:.2f}/episode")
     print(f"\n⏱️  Timing:")
     print(
         "  Thinking API: "
@@ -423,9 +440,10 @@ def save_summary(metrics: Dict[str, Any], output_path: str) -> str:
     timing = metrics["timing"]
     api_avg_s = timing["api_total_duration_s"] / n if n > 0 else 0.0
     fail_waste_avg_s = timing["failed_wasted_duration_s_total"] / n if n > 0 else 0.0
+    title = str(metrics.get("report_title") or "SpaceVLN evaluation summary")
     content = f"""
 ================================================================================
-📊 SpaceVLN evaluation summary
+📊 {title}
 ================================================================================
 
 🎯 Unified metrics:
@@ -434,6 +452,7 @@ def save_summary(metrics: Dict[str, Any], output_path: str) -> str:
   SR:    {metrics['sr_count']}/{n} ({metrics['avg_sr']:.3f})
   SPL:   {metrics['avg_spl']:.3f}
   nDTW:  {metrics['avg_ndtw']:.3f}
+  Steps: {metrics['avg_steps']:.2f}/episode
 
 ⏱️  Timing:
   Thinking API: avg={timing['thinking_api_avg_duration_s']:.2f}s | ok={timing['thinking_api_count']} fail={timing['thinking_api_failed_count']}
@@ -457,6 +476,7 @@ def save_metrics_json(metrics: Dict[str, Any], output_path: str) -> str:
         "avg_sr": _as_float(metrics.get("avg_sr", 0.0), 0.0),
         "avg_spl": _as_float(metrics.get("avg_spl", 0.0), 0.0),
         "avg_ndtw": _as_float(metrics.get("avg_ndtw", 0.0), 0.0),
+        "avg_steps": _as_float(metrics.get("avg_steps", 0.0), 0.0),
         "timing": dict(metrics.get("timing") or {}),
     }
     with open(output_path, "w", encoding="utf-8") as f:
@@ -481,6 +501,7 @@ def _build_episode_row(item: Dict[str, Any]) -> Dict[str, str]:
     return {
         "sample_index": str(item.get("sample_index", "")),
         "episode_id": str(item.get("episode_id", "")),
+        "Steps": _format_metric_value(_as_float(item.get("total_steps", 0.0), 0.0), 0),
         "NE": _format_metric_value(_as_float(item.get("ne", -1.0), -1.0), 3),
         "OSR": str(_as_int(item.get("osr", 0), 0)),
         "SR": str(_as_int(item.get("sr", 0), 0)),
@@ -504,6 +525,7 @@ def save_episode_tables(
     *,
     save_csv: bool = True,
     summary_only_md: bool = False,
+    report_title: str = "Episode Results",
 ) -> Dict[str, str]:
     csv_path = os.path.join(results_dir, "episode_results.csv")
     md_path = os.path.join(results_dir, "episode_results.md")
@@ -522,6 +544,7 @@ def save_episode_tables(
         headers.append("sample_index")
     headers.extend([
         "episode_id",
+        "Steps",
         "NE",
         "OSR",
         "SR",
@@ -551,6 +574,7 @@ def save_episode_tables(
                 {
                     **({"sample_index": "SUMMARY"} if include_sample_index else {}),
                     "episode_id": "SUMMARY",
+                    "Steps": _format_metric_value(metrics["avg_steps"], 2),
                     "NE": _format_metric_value(metrics["avg_ne"], 3),
                     "OSR": _format_metric_value(metrics["avg_osr"], 4),
                     "SR": _format_metric_value(metrics["avg_sr"], 4),
@@ -569,30 +593,31 @@ def save_episode_tables(
         saved_paths["csv"] = csv_path
 
     if summary_only_md:
-        md_lines = ["# Summary", ""]
+        md_lines = [f"# {report_title}", "", "## Summary", ""]
     else:
-        md_lines = ["# Episode Results", ""]
+        md_lines = [f"# {report_title}", ""]
         if include_sample_index:
             md_lines.extend(
                 [
-                    "| Sample | Episode | NE(m) | OSR | SR | SPL | nDTW | ThinkAvg(s) | ThinkTot(s) | ActAvg(s) | ActTot(s) | API(s) | Local(s) | FailWaste(s) | Episode(s) |",
-                    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+                    "| Sample | Episode | Steps | NE(m) | OSR | SR | SPL | nDTW | ThinkAvg(s) | ThinkTot(s) | ActAvg(s) | ActTot(s) | API(s) | Local(s) | FailWaste(s) | Episode(s) |",
+                    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
                 ]
             )
         else:
             md_lines.extend(
                 [
-                    "| Episode | NE(m) | OSR | SR | SPL | nDTW | ThinkAvg(s) | ThinkTot(s) | ActAvg(s) | ActTot(s) | API(s) | Local(s) | FailWaste(s) | Episode(s) |",
-                    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+                    "| Episode | Steps | NE(m) | OSR | SR | SPL | nDTW | ThinkAvg(s) | ThinkTot(s) | ActAvg(s) | ActTot(s) | API(s) | Local(s) | FailWaste(s) | Episode(s) |",
+                    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
                 ]
             )
         for item in sorted_results:
             row = _build_episode_row(item)
             if include_sample_index:
                 md_lines.append(
-                    "| {sample} | {episode} | {ne} | {osr} | {sr} | {spl} | {ndtw} | {think_avg} | {think_total} | {act_avg} | {act_total} | {api_total} | {local_s} | {fail_waste} | {episode_s} |".format(
+                    "| {sample} | {episode} | {steps} | {ne} | {osr} | {sr} | {spl} | {ndtw} | {think_avg} | {think_total} | {act_avg} | {act_total} | {api_total} | {local_s} | {fail_waste} | {episode_s} |".format(
                         sample=row["sample_index"],
                         episode=row["episode_id"],
+                        steps=row["Steps"],
                         ne=row["NE"],
                         osr=row["OSR"],
                         sr=row["SR"],
@@ -610,8 +635,9 @@ def save_episode_tables(
                 )
             else:
                 md_lines.append(
-                    "| {episode} | {ne} | {osr} | {sr} | {spl} | {ndtw} | {think_avg} | {think_total} | {act_avg} | {act_total} | {api_total} | {local_s} | {fail_waste} | {episode_s} |".format(
+                    "| {episode} | {steps} | {ne} | {osr} | {sr} | {spl} | {ndtw} | {think_avg} | {think_total} | {act_avg} | {act_total} | {api_total} | {local_s} | {fail_waste} | {episode_s} |".format(
                     episode=row["episode_id"],
+                    steps=row["Steps"],
                     ne=row["NE"],
                     osr=row["OSR"],
                     sr=row["SR"],
@@ -631,15 +657,16 @@ def save_episode_tables(
 
     md_lines.extend(
         [
-            "| Episodes | NE(m) | OSR | SR | SPL | nDTW | ThinkAvg(s) | ActAvg(s) | APIAvg(s) | LocalAvg(s) | FailWasteAvg(s) | EpisodeAvg(s) |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-            "| {total} | {avg_ne} | {avg_osr} | {avg_sr} | {avg_spl} | {avg_ndtw} | {think_avg} | {action_avg} | {api_avg} | {local_avg} | {fail_waste_avg} | {episode_avg} |".format(
+            "| Episodes | NE(m) | OSR | SR | SPL | nDTW | StepsAvg | ThinkAvg(s) | ActAvg(s) | APIAvg(s) | LocalAvg(s) | FailWasteAvg(s) | EpisodeAvg(s) |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| {total} | {avg_ne} | {avg_osr} | {avg_sr} | {avg_spl} | {avg_ndtw} | {avg_steps} | {think_avg} | {action_avg} | {api_avg} | {local_avg} | {fail_waste_avg} | {episode_avg} |".format(
                 total=metrics["total_episodes"],
                 avg_ne=_format_metric_value(metrics["avg_ne"], 3),
                 avg_osr=_format_metric_value(metrics["avg_osr"], 4),
                 avg_sr=_format_metric_value(metrics["avg_sr"], 4),
                 avg_spl=_format_metric_value(metrics["avg_spl"], 4),
                 avg_ndtw=_format_metric_value(metrics["avg_ndtw"], 4),
+                avg_steps=_format_metric_value(metrics["avg_steps"], 2),
                 think_avg=_format_metric_value(timing["thinking_api_avg_duration_s"], 3),
                 action_avg=_format_metric_value(timing["action_api_avg_duration_s"], 3),
                 api_avg=_format_metric_value(
@@ -663,7 +690,7 @@ def save_episode_tables(
         md_lines.extend(
             [
                 "",
-                "> Repeated evaluation of the same episode keeps only the better result in `log/<range>/episode_XXX.json`.",
+                "> Repeated evaluation of the same entry keeps only the better result in `log/<range>/episode_XXX.json` or `log/<range>/sample_XXX.json`.",
             ]
         )
     with open(md_path, "w", encoding="utf-8") as f:
@@ -687,6 +714,7 @@ def generate_results_report(
     output_dir: Optional[str] = None,
     exp_config: Optional[str] = None,
     load_workers: int = 1,
+    report_title: str = "Episode Results",
 ) -> Dict[str, Any]:
     if not os.path.exists(results_dir):
         raise FileNotFoundError(f"Results directory does not exist: {results_dir}")
@@ -756,6 +784,7 @@ def generate_results_report(
             print(f"✅ Loaded {len(results)} episodes")
 
     metrics = compute_metrics(results)
+    metrics["report_title"] = str(report_title or "Episode Results")
     saved_paths: Dict[str, str] = {}
 
     if verbose:
@@ -774,6 +803,7 @@ def generate_results_report(
                     report_output_dir,
                     save_csv=False,
                     summary_only_md=True,
+                    report_title=metrics["report_title"],
                 )
             )
         else:
@@ -784,7 +814,14 @@ def generate_results_report(
             save_metrics_json(metrics, metrics_json_path)
             saved_paths["metrics_json"] = metrics_json_path
             if not summary_only:
-                saved_paths.update(save_episode_tables(results, metrics, report_output_dir))
+                saved_paths.update(
+                    save_episode_tables(
+                        results,
+                        metrics,
+                        report_output_dir,
+                        report_title=metrics["report_title"],
+                    )
+                )
         if verbose:
             if md_only:
                 print(f"📋 Saved episode Markdown: {saved_paths['md']}")
@@ -838,6 +875,12 @@ def build_results_arg_parser() -> argparse.ArgumentParser:
         default=_default_load_workers(),
         help="Number of workers for loading episode JSON files in parallel",
     )
+    parser.add_argument(
+        "--report-title",
+        type=str,
+        default="Episode Results",
+        help="Title written at the top of saved Markdown/summary reports",
+    )
     return parser
 
 
@@ -859,6 +902,7 @@ def run_results_report_from_args(args: argparse.Namespace) -> int:
             output_dir=args.output_dir,
             exp_config=args.exp_config,
             load_workers=args.load_workers,
+            report_title=args.report_title,
         )
         return 0
     except FileNotFoundError as exc:

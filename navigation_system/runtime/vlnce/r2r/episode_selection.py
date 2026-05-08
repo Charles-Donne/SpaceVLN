@@ -233,10 +233,26 @@ def filter_episode_ids(args, config, episode_ids: List[int]) -> List[int]:
 
     kept_episode_ids: List[int] = []
     ordered = bool(getattr(args, "ordered", False))
+    force_sample_storage = str(
+        os.environ.get("SPACEVLN_FORCE_SAMPLE_STORAGE", "") or ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    sample_index_by_episode = {}
+    if force_sample_storage:
+        sample_index_by_episode = {
+            int(episode_id): int(index)
+            for index, episode_id in enumerate(get_available_episode_ids(config), 1)
+        }
     start_index = max(1, int(getattr(args, "start_index", 1) or 1))
     for offset, episode_id in enumerate(episode_ids):
-        storage_entry_id = start_index + offset if ordered else int(episode_id)
-        entry_kind = "sample" if ordered else "episode"
+        if ordered:
+            storage_entry_id = start_index + offset
+            entry_kind = "sample"
+        elif force_sample_storage and int(episode_id) in sample_index_by_episode:
+            storage_entry_id = int(sample_index_by_episode[int(episode_id)])
+            entry_kind = "sample"
+        else:
+            storage_entry_id = int(episode_id)
+            entry_kind = "episode"
         if not _episode_has_existing_sr1(
             results_dir,
             storage_entry_id,

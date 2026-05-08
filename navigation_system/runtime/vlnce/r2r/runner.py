@@ -11,6 +11,7 @@ from navigation_system.runtime.episode_io import (
 )
 from navigation_system.runtime.vlnce.r2r.episode_selection import (
     filter_episode_ids,
+    get_available_episode_ids,
     resolve_episode_ids,
 )
 from navigation_system.runtime.vlnce.r2r.execution import (
@@ -256,14 +257,31 @@ def maybe_generate_report(args: argparse.Namespace, config, verbose: bool = True
             print(f"📄 Episode table: {csv_path}")
 
 
-def _build_ordered_sample_index_map(args: argparse.Namespace, episode_ids: List[int]) -> dict:
-    if not bool(getattr(args, "ordered", False)):
-        return {}
-    start_index = max(1, int(getattr(args, "start_index", 1) or 1))
-    return {
-        int(episode_id): int(start_index + offset)
-        for offset, episode_id in enumerate(episode_ids)
+def _force_sample_storage_enabled() -> bool:
+    return str(os.environ.get("SPACEVLN_FORCE_SAMPLE_STORAGE", "") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
     }
+
+
+def _build_sample_index_map(args: argparse.Namespace, config, episode_ids: List[int]) -> dict:
+    if not bool(getattr(args, "ordered", False)) and not _force_sample_storage_enabled():
+        return {}
+    available_episode_ids = get_available_episode_ids(config)
+    if available_episode_ids:
+        global_map = {
+            int(episode_id): int(index)
+            for index, episode_id in enumerate(available_episode_ids, 1)
+        }
+        return {
+            int(episode_id): int(global_map[int(episode_id)])
+            for episode_id in episode_ids
+            if int(episode_id) in global_map
+        }
+    start_index = max(1, int(getattr(args, "start_index", 1) or 1))
+    return {int(episode_id): int(start_index + offset) for offset, episode_id in enumerate(episode_ids)}
 
 
 def _save_ordered_episode_manifest(
@@ -271,7 +289,7 @@ def _save_ordered_episode_manifest(
     config,
     episode_ids: List[int],
 ) -> None:
-    if not bool(getattr(args, "ordered", False)):
+    if not bool(getattr(args, "ordered", False)) and not _force_sample_storage_enabled():
         return
     results_dir = str(getattr(args, "results_dir", "") or getattr(config.PATHS, "RESULTS_DIR", "") or "").strip()
     if not results_dir:
@@ -339,7 +357,7 @@ def run_navigation_from_args(
             print("   Re-run with --results-dir pointing to a writable directory if needed.")
             return 1
     episode_ids = resolve_episode_ids(args, config)
-    args._sample_index_by_episode = _build_ordered_sample_index_map(args, episode_ids)
+    args._sample_index_by_episode = _build_sample_index_map(args, config, episode_ids)
     episode_ids = filter_episode_ids(args, config, episode_ids)
     if bool(getattr(args, "ordered", False)):
         # Keep the original dataset-order sample ids after skip-sr1 filtering.
