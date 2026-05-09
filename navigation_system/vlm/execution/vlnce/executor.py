@@ -339,6 +339,7 @@ class ActionExecutor(BaseAPIClient):
             obstacle_distances=obstacle_distances,
             landmark_map_info=landmark_map_info,
             allowed_action_names=allowed_action_names,
+            model_name=self.config.model,
         )
         
         # 只发Detection图（节省token，local map已移除）

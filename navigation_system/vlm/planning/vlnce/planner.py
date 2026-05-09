@@ -406,6 +406,7 @@ class LLMPlanner(BaseAPIClient):
         prompt = build_initial_planner_prompt_bundle(
             instruction=instruction,
             action_space=self.action_space,
+            model_name=self.config.model,
         )
         
         # 组合图像：12方向观察 + 全局地图
@@ -482,6 +483,7 @@ class LLMPlanner(BaseAPIClient):
             previous_subtask_landmark_summary=previous_subtask_landmark_summary,
             verify_replan_prompt_notice=verify_replan_prompt_notice,
             direction_names=direction_names,
+            model_name=self.config.model,
         )
         
         # 组合图像：当前位置12方向 + 全局地图

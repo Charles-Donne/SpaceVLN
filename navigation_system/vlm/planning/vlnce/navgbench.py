@@ -45,6 +45,7 @@ class NavGBenchPlanner(LLMPlanner):
             instruction=instruction,
             action_space=self.action_space,
             instruction_mode=self.instruction_mode,
+            model_name=self.config.model,
         )
         images = list(observation_images or [])
         images.append(global_map_image)
@@ -93,6 +94,7 @@ class NavGBenchPlanner(LLMPlanner):
             verify_replan_prompt_notice=verify_replan_prompt_notice,
             direction_names=direction_names,
             instruction_mode=self.instruction_mode,
+            model_name=self.config.model,
         )
         images = list(observation_images or [])
         images.append(global_map_image)
@@ -140,6 +142,7 @@ class NavGBenchContextCachePlanner(ContextCachePlanner):
             instruction=instruction,
             action_space=self.action_space,
             instruction_mode=self.instruction_mode,
+            model_name=self.config.model,
         )
         images = list(observation_images or [])
         images.append(global_map_image)
@@ -187,6 +190,7 @@ class NavGBenchContextCachePlanner(ContextCachePlanner):
             verify_replan_prompt_notice=verify_replan_prompt_notice,
             direction_names=direction_names,
             instruction_mode=self.instruction_mode,
+            model_name=self.config.model,
         )
         images = list(observation_images or [])
         images.append(global_map_image)

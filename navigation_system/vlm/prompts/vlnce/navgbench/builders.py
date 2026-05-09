@@ -41,11 +41,15 @@ def build_navgbench_initial_planner_prompt_bundle(
     instruction: str,
     action_space: str,
     instruction_mode: str = "complex",
+    model_name: str = None,
+    prompt_profile: str = None,
 ) -> PromptBundle:
     return _with_complex_policy(
         build_initial_planner_prompt_bundle(
             instruction=instruction,
             action_space=action_space,
+            model_name=model_name,
+            prompt_profile=prompt_profile,
         ),
         instruction_mode=instruction_mode,
     )
@@ -63,6 +67,8 @@ def build_navgbench_verify_planner_prompt_bundle(
     verify_replan_prompt_notice=None,
     direction_names=None,
     instruction_mode: str = "complex",
+    model_name: str = None,
+    prompt_profile: str = None,
 ) -> PromptBundle:
     return _with_complex_policy(
         build_verify_planner_prompt_bundle(
@@ -75,6 +81,8 @@ def build_navgbench_verify_planner_prompt_bundle(
             previous_subtask_landmark_summary=previous_subtask_landmark_summary,
             verify_replan_prompt_notice=verify_replan_prompt_notice,
             direction_names=direction_names,
+            model_name=model_name,
+            prompt_profile=prompt_profile,
         ),
         instruction_mode=instruction_mode,
     )
@@ -85,11 +93,15 @@ def get_navgbench_initial_planning_prompt(
     action_space: str,
     *,
     instruction_mode: str = "complex",
+    model_name: str = None,
+    prompt_profile: str = None,
 ) -> str:
     return build_navgbench_initial_planner_prompt_bundle(
         instruction=instruction,
         action_space=action_space,
         instruction_mode=instruction_mode,
+        model_name=model_name,
+        prompt_profile=prompt_profile,
     ).full_prompt
 
 
@@ -105,6 +117,8 @@ def get_navgbench_verification_replanning_prompt(
     direction_names: list = None,
     *,
     instruction_mode: str = "complex",
+    model_name: str = None,
+    prompt_profile: str = None,
 ) -> str:
     return build_navgbench_verify_planner_prompt_bundle(
         instruction=instruction,
@@ -117,6 +131,8 @@ def get_navgbench_verification_replanning_prompt(
         verify_replan_prompt_notice=verify_replan_prompt_notice,
         direction_names=direction_names,
         instruction_mode=instruction_mode,
+        model_name=model_name,
+        prompt_profile=prompt_profile,
     ).full_prompt
 
 

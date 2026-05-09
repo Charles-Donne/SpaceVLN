@@ -73,6 +73,7 @@ class ContextCacheActionExecutor(QwenContextCacheMixin, ActionExecutor):
             obstacle_distances=obstacle_distances,
             landmark_map_info=landmark_map_info,
             allowed_action_names=allowed_action_names,
+            model_name=self.config.model,
         )
 
         images = []

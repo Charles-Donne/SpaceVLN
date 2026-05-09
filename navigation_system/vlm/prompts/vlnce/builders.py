@@ -1,5 +1,6 @@
 """Prompt builders backed by external markdown templates."""
 
+import os
 import re
 
 from navigation_system.config.core.params.actions import (
@@ -25,7 +26,39 @@ VERIFY_PLANNING_SYSTEM_PROMPT = load_prompt_template("planning_verify.system.pro
 VERIFY_PLANNING_USER_PROMPT = load_prompt_template("planning_verify.user.prompt.md")
 ACTION_SYSTEM_PROMPT = load_prompt_template("action.system.prompt.md")
 ACTION_USER_PROMPT = load_prompt_template("action.user.prompt.md")
+FAST_INITIAL_PLANNING_SYSTEM_PROMPT = load_prompt_template(
+    "fast/planning_initial.system.prompt.md"
+)
+FAST_INITIAL_PLANNING_USER_PROMPT = load_prompt_template(
+    "fast/planning_initial.user.prompt.md"
+)
+FAST_VERIFY_PLANNING_SYSTEM_PROMPT = load_prompt_template(
+    "fast/planning_verify.system.prompt.md"
+)
+FAST_VERIFY_PLANNING_USER_PROMPT = load_prompt_template(
+    "fast/planning_verify.user.prompt.md"
+)
+FAST_ACTION_SYSTEM_PROMPT = load_prompt_template("fast/action.system.prompt.md")
+FAST_ACTION_USER_PROMPT = load_prompt_template("fast/action.user.prompt.md")
 DEFAULT_ALLOWED_ACTION_NAMES = ("MOVE_FORWARD", "TURN_LEFT", "TURN_RIGHT", "STOP")
+
+
+def _normalize_prompt_profile(value=None) -> str:
+    return str(value or "").strip().lower().replace("_", "-")
+
+
+def _use_fast_prompt_profile(model_name=None, prompt_profile=None) -> bool:
+    del model_name
+    profile = _normalize_prompt_profile(
+        prompt_profile or os.getenv("SPACEVLN_PROMPT_PROFILE", "")
+    )
+    return profile in {"fast", "compressed", "compact"}
+
+
+def _select_prompt_template(default_template: str, fast_template: str, *, model_name=None, prompt_profile=None) -> str:
+    if _use_fast_prompt_profile(model_name=model_name, prompt_profile=prompt_profile):
+        return fast_template
+    return default_template
 
 
 def _fmt_threshold_m(value: float) -> str:
@@ -67,8 +100,14 @@ def _build_previous_subtask_landmark_block(previous_subtask_landmark_summary: st
     )
 
 
-def _render_initial_planning_system_prompt() -> str:
-    return _normalize_anchor_notation_text(INITIAL_PLANNING_SYSTEM_PROMPT.format(
+def _render_initial_planning_system_prompt(*, model_name=None, prompt_profile=None) -> str:
+    template = _select_prompt_template(
+        INITIAL_PLANNING_SYSTEM_PROMPT,
+        FAST_INITIAL_PLANNING_SYSTEM_PROMPT,
+        model_name=model_name,
+        prompt_profile=prompt_profile,
+    )
+    return _normalize_anchor_notation_text(template.format(
         obs_blocked_m=_fmt_threshold_m(OBS_BLOCKED_M),
         obs_risky_m=_fmt_threshold_m(OBS_RISKY_M),
         obs_open_m=_fmt_threshold_m(OBS_OPEN_M),
@@ -80,11 +119,22 @@ def build_initial_planner_prompt_bundle(
     *,
     instruction: str,
     action_space: str,
+    model_name: str = None,
+    prompt_profile: str = None,
 ) -> PromptBundle:
     """Render the initial-planning system/user prompt bundle."""
     del action_space
-    system_prompt = _render_initial_planning_system_prompt()
-    user_prompt = INITIAL_PLANNING_USER_PROMPT.format(instruction=instruction)
+    system_prompt = _render_initial_planning_system_prompt(
+        model_name=model_name,
+        prompt_profile=prompt_profile,
+    )
+    user_template = _select_prompt_template(
+        INITIAL_PLANNING_USER_PROMPT,
+        FAST_INITIAL_PLANNING_USER_PROMPT,
+        model_name=model_name,
+        prompt_profile=prompt_profile,
+    )
+    user_prompt = user_template.format(instruction=instruction)
     return PromptBundle(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
@@ -92,11 +142,19 @@ def build_initial_planner_prompt_bundle(
     )
 
 
-def get_initial_planning_prompt(instruction: str, action_space: str) -> str:
+def get_initial_planning_prompt(
+    instruction: str,
+    action_space: str,
+    *,
+    model_name: str = None,
+    prompt_profile: str = None,
+) -> str:
     """Compatibility helper returning the combined initial-planning prompt."""
     return build_initial_planner_prompt_bundle(
         instruction=instruction,
         action_space=action_space,
+        model_name=model_name,
+        prompt_profile=prompt_profile,
     ).full_prompt
 
 
@@ -110,8 +168,14 @@ def _get_verify_view_count(direction_names=None):
     return view_count if 0 < view_count < 12 else 12
 
 
-def _render_verify_planning_system_prompt() -> str:
-    return _normalize_anchor_notation_text(VERIFY_PLANNING_SYSTEM_PROMPT.format(
+def _render_verify_planning_system_prompt(*, model_name=None, prompt_profile=None) -> str:
+    template = _select_prompt_template(
+        VERIFY_PLANNING_SYSTEM_PROMPT,
+        FAST_VERIFY_PLANNING_SYSTEM_PROMPT,
+        model_name=model_name,
+        prompt_profile=prompt_profile,
+    )
+    return _normalize_anchor_notation_text(template.format(
         obs_blocked_m=_fmt_threshold_m(OBS_BLOCKED_M),
         obs_risky_m=_fmt_threshold_m(OBS_RISKY_M),
         obs_open_m=_fmt_threshold_m(OBS_OPEN_M),
@@ -130,6 +194,8 @@ def build_verify_planner_prompt_bundle(
     previous_subtask_landmark_summary: str = None,
     verify_replan_prompt_notice: str = None,
     direction_names: list = None,
+    model_name: str = None,
+    prompt_profile: str = None,
 ) -> PromptBundle:
     """Render the verification/replanning system/user prompt bundle."""
     del action_space
@@ -144,8 +210,17 @@ def build_verify_planner_prompt_bundle(
     )
     verify_notice_block = str(verify_replan_prompt_notice or "").strip()
 
-    system_prompt = _render_verify_planning_system_prompt()
-    user_prompt = VERIFY_PLANNING_USER_PROMPT.format(
+    system_prompt = _render_verify_planning_system_prompt(
+        model_name=model_name,
+        prompt_profile=prompt_profile,
+    )
+    user_template = _select_prompt_template(
+        VERIFY_PLANNING_USER_PROMPT,
+        FAST_VERIFY_PLANNING_USER_PROMPT,
+        model_name=model_name,
+        prompt_profile=prompt_profile,
+    )
+    user_prompt = user_template.format(
         verify_replan_prompt_notice_block=verify_notice_block,
         instruction=instruction,
         subtask_destination=subtask_destination,
@@ -170,6 +245,8 @@ def get_verification_replanning_prompt(
     previous_subtask_landmark_summary: str = None,
     verify_replan_prompt_notice: str = None,
     direction_names: list = None,
+    model_name: str = None,
+    prompt_profile: str = None,
 ) -> str:
     """Compatibility helper returning the combined verification/replanning prompt."""
     return build_verify_planner_prompt_bundle(
@@ -182,6 +259,8 @@ def get_verification_replanning_prompt(
         previous_subtask_landmark_summary=previous_subtask_landmark_summary,
         verify_replan_prompt_notice=verify_replan_prompt_notice,
         direction_names=direction_names,
+        model_name=model_name,
+        prompt_profile=prompt_profile,
     ).full_prompt
 
 
@@ -410,8 +489,14 @@ def _normalize_action_prompt_text(prompt: str) -> str:
     return normalized
 
 
-def _render_action_system_prompt() -> str:
-    return ACTION_SYSTEM_PROMPT.format(
+def _render_action_system_prompt(*, model_name=None, prompt_profile=None) -> str:
+    template = _select_prompt_template(
+        ACTION_SYSTEM_PROMPT,
+        FAST_ACTION_SYSTEM_PROMPT,
+        model_name=model_name,
+        prompt_profile=prompt_profile,
+    )
+    return template.format(
         obs_blocked_m=_fmt_threshold_m(OBS_BLOCKED_M),
         obs_risky_m=_fmt_threshold_m(OBS_RISKY_M),
         obs_open_m=_fmt_threshold_m(OBS_OPEN_M),
@@ -437,6 +522,8 @@ def build_action_prompt_bundle(
     allowed_action_names=None,
     move_distance: float = 0.25,
     turn_angle: int = 30,
+    model_name: str = None,
+    prompt_profile: str = None,
 ) -> PromptBundle:
     """Render the action-execution system/user prompt bundle."""
     del waypoint_summary
@@ -445,8 +532,17 @@ def build_action_prompt_bundle(
     if not progress_summary:
         progress_summary = "Just started"
 
-    system_prompt = _normalize_action_prompt_text(_render_action_system_prompt())
-    user_prompt = _normalize_action_prompt_text(ACTION_USER_PROMPT.format(
+    system_prompt = _normalize_action_prompt_text(_render_action_system_prompt(
+        model_name=model_name,
+        prompt_profile=prompt_profile,
+    ))
+    user_template = _select_prompt_template(
+        ACTION_USER_PROMPT,
+        FAST_ACTION_USER_PROMPT,
+        model_name=model_name,
+        prompt_profile=prompt_profile,
+    )
+    user_prompt = _normalize_action_prompt_text(user_template.format(
         subtask_destination=next_waypoint,
         subtask_landmark=str(subtask_landmark or "").strip() or "none",
         subtask_instruction=subtask_instruction,
@@ -480,6 +576,8 @@ def get_action_execution_prompt(
     allowed_action_names=None,
     move_distance: float = 0.25,
     turn_angle: int = 30,
+    model_name: str = None,
+    prompt_profile: str = None,
 ) -> str:
     """Compatibility helper returning the combined action-execution prompt."""
     return build_action_prompt_bundle(
@@ -494,6 +592,8 @@ def get_action_execution_prompt(
         allowed_action_names=allowed_action_names,
         move_distance=move_distance,
         turn_angle=turn_angle,
+        model_name=model_name,
+        prompt_profile=prompt_profile,
     ).full_prompt
 
 

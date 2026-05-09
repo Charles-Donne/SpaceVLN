@@ -12,11 +12,16 @@ source "$SCRIPT_DIR/ablation_common.sh"
 spacevln_navigation_print_usage() {
     cat <<'EOF'
 Usage:
-  bash run_navigation/r2rce.sh [--runtime standard|context_cache] [--ablation PRESET_OR_YAML] [episode_args...]
+  bash run_navigation/r2rce.sh [--runtime standard|context_cache] [--prompt-profile fast|original] [--ablation PRESET_OR_YAML] [episode_args...]
 
 Runtime:
   --runtime standard        Standard runtime (default)
   --runtime context_cache   Explicit context-cache runtime
+
+Prompt profile:
+  --prompt-profile original  Use the original full prompt templates
+  --prompt-profile fast      Use the compressed fast prompt templates
+                             Default: original unless SPACEVLN_PROMPT_PROFILE=fast
 
 Results:
     --results-root DIR        Compatibility override for the results root
@@ -77,6 +82,8 @@ Episode-arg examples:
 Examples:
   bash run_navigation/r2rce.sh 1 10 260 4
   bash run_navigation/r2rce.sh --runtime context_cache 1 10 260 4
+  bash run_navigation/r2rce.sh --runtime context_cache --prompt-profile fast 1 10 260 4
+  bash run_navigation/r2rce.sh --runtime context_cache --prompt-profile original 1 10 260 4
   bash run_navigation/r2rce.sh --ablation landmark 1 100 260 4
   bash run_navigation/r2rce.sh --ablation thinking_reasoning 1 100 260 4
   bash run_navigation/r2rce.sh --ablation planning_reasoning_no_progress 1 100 260 4
@@ -90,6 +97,7 @@ spacevln_setup_runtime_env "$PYTHON_BIN"
 
 CONFIG_FILE="${EXP_CONFIG:-navigation_system/config/experiments/vlnce/r2r_eval.yaml}"
 RUNTIME_MODE="standard"
+PROMPT_PROFILE=""
 ABLATION_RAW=""
 RESULT_PATH_ARGS=()
 PASSTHROUGH_ARGS=()
@@ -111,6 +119,18 @@ while [[ $# -gt 0 ]]; do
             ;;
         --runtime=*)
             RUNTIME_MODE="${1#*=}"
+            shift
+            ;;
+        --prompt-profile)
+            if [[ $# -lt 2 ]]; then
+                echo "❌ --prompt-profile requires fast or original" >&2
+                exit 1
+            fi
+            PROMPT_PROFILE="$2"
+            shift 2
+            ;;
+        --prompt-profile=*)
+            PROMPT_PROFILE="${1#*=}"
             shift
             ;;
         --ablation|--preset|--ablation-preset|--ablation-config)
@@ -205,6 +225,22 @@ case "${RUNTIME_MODE}" in
         exit 1
         ;;
 esac
+
+if [[ -n "${PROMPT_PROFILE}" ]]; then
+    case "${PROMPT_PROFILE}" in
+        fast|compressed|compact)
+            export SPACEVLN_PROMPT_PROFILE="fast"
+            ;;
+        original|default|full|standard)
+            export SPACEVLN_PROMPT_PROFILE="original"
+            ;;
+        *)
+            echo "❌ Unsupported prompt profile: ${PROMPT_PROFILE}" >&2
+            echo "   Supported values: fast | original" >&2
+            exit 1
+            ;;
+    esac
+fi
 
 if [[ "${RUNTIME_MODE}" == "context_cache" ]]; then
     API_CONFIG="${VLM_API_CONFIG:-$(spacevln_default_context_cache_api_config)}"

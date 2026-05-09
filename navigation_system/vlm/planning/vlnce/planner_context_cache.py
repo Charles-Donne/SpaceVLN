@@ -55,6 +55,7 @@ class ContextCachePlanner(QwenContextCacheMixin, LLMPlanner):
         prompt_bundle = build_initial_planner_prompt_bundle(
             instruction=instruction,
             action_space=self.action_space,
+            model_name=self.config.model,
         )
 
         images = list(observation_images or [])
@@ -100,6 +101,7 @@ class ContextCachePlanner(QwenContextCacheMixin, LLMPlanner):
             previous_subtask_landmark_summary=previous_subtask_landmark_summary,
             verify_replan_prompt_notice=verify_replan_prompt_notice,
             direction_names=direction_names,
+            model_name=self.config.model,
         )
 
         images = list(observation_images or [])
