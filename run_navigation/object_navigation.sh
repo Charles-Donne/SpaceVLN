@@ -100,7 +100,7 @@ while [[ $# -gt 0 ]]; do
             RUN_CONFIG="${1#*=}"
             shift
             ;;
-        --exp-config|--vlm-api-config|--data-path|--split|--episode-id|--episode-ids|--num-episodes|--gpu-id|--max-steps|--max-subtask-steps|--results-root|--results-dir|--seed|--parallel-workers|--output-profile)
+        --exp-config|--vlm-api-config|--data-path|--split|--episode-id|--episode-ids|--num-episodes|--gpu-id|--max-steps|--max-subtask-steps|--results-root|--results-dir|--episode-workdir|--seed|--parallel-workers|--output-profile)
             if [[ $# -lt 2 ]]; then
                 echo "Missing value for $1" >&2
                 exit 1
@@ -108,7 +108,7 @@ while [[ $# -gt 0 ]]; do
             PASSTHROUGH_ARGS+=("$1" "$2")
             shift 2
             ;;
-        --exp-config=*|--vlm-api-config=*|--data-path=*|--split=*|--episode-id=*|--episode-ids=*|--num-episodes=*|--gpu-id=*|--max-steps=*|--max-subtask-steps=*|--results-root=*|--results-dir=*|--seed=*|--parallel-workers=*|--output-profile=*)
+        --exp-config=*|--vlm-api-config=*|--data-path=*|--split=*|--episode-id=*|--episode-ids=*|--num-episodes=*|--gpu-id=*|--max-steps=*|--max-subtask-steps=*|--results-root=*|--results-dir=*|--episode-workdir=*|--seed=*|--parallel-workers=*|--output-profile=*)
             PASSTHROUGH_ARGS+=("$1")
             shift
             ;;

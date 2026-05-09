@@ -25,6 +25,7 @@ from navigation_system.runtime.episode_io import (
     build_episode_console_summary,
     build_episode_start_summary,
     get_episode_records_log_path,
+    get_episode_result_path,
     redirect_process_output_to_file,
     redirect_process_output_to_null,
     save_episode_stdout_log_enabled,
@@ -47,6 +48,12 @@ from navigation_system.runtime.storage.artifacts import (
 )
 from navigation_system.vlm.api.qwen_context_cache_client import (
     validate_qwen_context_cache_api_config,
+)
+from navigation_system.runtime.vlnce.r2r.execution import (
+    _build_staging_results_dir,
+    _resolve_episode_workdir,
+    _submit_episode_staging_sync,
+    wait_for_pending_episode_transfers,
 )
 
 
@@ -105,6 +112,66 @@ def _shutdown_parallel_executor(
     except Exception:
         if not interrupted:
             raise
+
+
+def _resolve_episode_staging_dir(
+    args: argparse.Namespace,
+    *,
+    final_results_dir: str,
+    episode_id: int,
+    worker_index: int = 0,
+) -> str:
+    episode_workdir = _resolve_episode_workdir(args, final_results_dir=final_results_dir)
+    if not episode_workdir:
+        return ""
+    staging_dir = _build_staging_results_dir(
+        episode_workdir=episode_workdir,
+        final_results_dir=final_results_dir,
+        episode_id=int(episode_id),
+        worker_index=int(worker_index or 0),
+    )
+    if os.path.exists(staging_dir):
+        shutil.rmtree(staging_dir, ignore_errors=True)
+    os.makedirs(staging_dir, exist_ok=True)
+    return staging_dir
+
+
+def _submit_staged_episode_outputs(
+    *,
+    result: dict,
+    staging_results_dir: str,
+    final_results_dir: str,
+    episode_id: int,
+    storage_entry_id: int,
+    entry_kind: str,
+) -> dict:
+    if not staging_results_dir:
+        return result
+    updated = dict(result or {})
+    staging_prefix = os.path.abspath(staging_results_dir).rstrip(os.sep) + os.sep
+    final_prefix = os.path.abspath(final_results_dir).rstrip(os.sep) + os.sep
+    for key, value in list(updated.items()):
+        if not isinstance(value, str) or not value.strip():
+            continue
+        value_path = os.path.abspath(value)
+        if value_path.startswith(staging_prefix):
+            updated[key] = final_prefix + value_path[len(staging_prefix):]
+    if str(updated.get("result_file", "") or "").strip():
+        updated["result_file"] = get_episode_result_path(
+            final_results_dir,
+            int(storage_entry_id),
+            entry_kind=entry_kind,
+        )
+    _submit_episode_staging_sync(
+        staging_results_dir=staging_results_dir,
+        final_results_dir=final_results_dir,
+        episode_id=int(episode_id),
+        storage_entry_id=int(storage_entry_id),
+        entry_kind=entry_kind,
+        save_stdout_log=True,
+        postprocess_futures=None,
+    )
+    return updated
 
 
 def _nav_ws_root() -> Path:
@@ -954,6 +1021,7 @@ def _build_parallel_episode_spec(
         "max_steps": int(args.max_steps),
         "max_subtask_steps": int(args.max_subtask_steps),
         "results_dir": str(args.results_dir),
+        "episode_workdir": str(getattr(args, "episode_workdir", "") or ""),
         "vlm_api_config": str(args.vlm_api_config),
         "output_profile": str(getattr(args, "output_profile", "metric") or "metric"),
         "save_step_images": bool(args.save_step_images),
@@ -986,6 +1054,14 @@ def _run_parallel_episode_job(job_spec: dict) -> dict:
     total = int(job_spec["total"])
     worker_index = int(job_spec["worker_index"])
     worker_count = int(job_spec["worker_count"])
+    final_results_dir = str(job_spec["results_dir"])
+    staging_results_dir = _resolve_episode_staging_dir(
+        argparse.Namespace(episode_workdir=job_spec.get("episode_workdir", "")),
+        final_results_dir=final_results_dir,
+        episode_id=episode_id,
+        worker_index=worker_index,
+    )
+    run_results_dir = staging_results_dir or final_results_dir
 
     print(
         build_episode_start_summary(
@@ -1000,7 +1076,7 @@ def _run_parallel_episode_job(job_spec: dict) -> dict:
     )
 
     _cleanup_incomplete_existing_entry_artifacts(
-        results_dir=str(job_spec["results_dir"]),
+        results_dir=final_results_dir,
         storage_entry_id=storage_entry_id,
         entry_kind=entry_kind,
     )
@@ -1024,7 +1100,7 @@ def _run_parallel_episode_job(job_spec: dict) -> dict:
             ovon_config=ovon_config,
             api_config_path=str(job_spec["vlm_api_config"]),
             episode_id=episode_id,
-            results_dir=str(job_spec["results_dir"]),
+            results_dir=run_results_dir,
             max_subtask_steps=int(job_spec["max_subtask_steps"]),
             save_step_images=bool(job_spec["save_step_images"]),
             save_gif=bool(job_spec["save_gif"]),
@@ -1051,8 +1127,16 @@ def _run_parallel_episode_job(job_spec: dict) -> dict:
             "result_file": "",
         }
 
+    result = _submit_staged_episode_outputs(
+        result=result,
+        staging_results_dir=staging_results_dir,
+        final_results_dir=final_results_dir,
+        episode_id=episode_id,
+        storage_entry_id=storage_entry_id,
+        entry_kind=entry_kind,
+    )
     result = _cleanup_failed_artifacts(
-        results_dir=str(job_spec["results_dir"]),
+        results_dir=final_results_dir,
         storage_entry_id=storage_entry_id,
         entry_kind=entry_kind,
         result=result,
@@ -1553,6 +1637,12 @@ def build_arg_parser(run_defaults: dict | None = None) -> argparse.ArgumentParse
     parser.add_argument("--results-root", type=str, default=None)
     parser.add_argument("--results-dir", type=str, default=None)
     parser.add_argument(
+        "--episode-workdir",
+        type=str,
+        default="",
+        help="fast temporary episode artifact directory; defaults to the shared /dev/shm cache when staging is enabled",
+    )
+    parser.add_argument(
         "--skip-sr1",
         "--skip-existing-sr1",
         dest="skip_sr1",
@@ -1735,12 +1825,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                     ),
                     entry_kind=str(episode_spec.get("entry_kind", "episode") or "episode"),
                 )
+                storage_entry_id = int(episode_spec.get("storage_entry_id", episode_id))
+                entry_kind = str(episode_spec.get("entry_kind", "episode") or "episode")
+                staging_results_dir = _resolve_episode_staging_dir(
+                    args,
+                    final_results_dir=args.results_dir,
+                    episode_id=episode_id,
+                    worker_index=0,
+                )
+                run_results_dir = staging_results_dir or args.results_dir
                 try:
                     result = _run_one_episode(
                         ovon_config=ovon_config,
                         api_config_path=args.vlm_api_config,
                         episode_id=episode_id,
-                        results_dir=args.results_dir,
+                        results_dir=run_results_dir,
                         max_subtask_steps=args.max_subtask_steps,
                         save_step_images=bool(args.save_step_images),
                         save_gif=bool(args.save_gif),
@@ -1751,10 +1850,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                         sample_index=(
                             int(sample_index) if sample_index is not None else None
                         ),
-                        storage_entry_id=int(
-                            episode_spec.get("storage_entry_id", episode_id)
-                        ),
-                        entry_kind=str(episode_spec.get("entry_kind", "episode") or "episode"),
+                        storage_entry_id=storage_entry_id,
+                        entry_kind=entry_kind,
                     )
                 except KeyboardInterrupt:
                     _cleanup_interrupted_specs(
@@ -1762,12 +1859,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                         episode_specs=[episode_spec],
                     )
                     raise
+                result = _submit_staged_episode_outputs(
+                    result=result,
+                    staging_results_dir=staging_results_dir,
+                    final_results_dir=args.results_dir,
+                    episode_id=episode_id,
+                    storage_entry_id=storage_entry_id,
+                    entry_kind=entry_kind,
+                )
                 result = _cleanup_failed_artifacts(
                     results_dir=args.results_dir,
-                    storage_entry_id=int(
-                        episode_spec.get("storage_entry_id", episode_id)
-                    ),
-                    entry_kind=str(episode_spec.get("entry_kind", "episode") or "episode"),
+                    storage_entry_id=storage_entry_id,
+                    entry_kind=entry_kind,
                     result=result,
                 )
                 summary_row = _build_episode_summary_row(
@@ -1795,6 +1898,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             flush=True,
         )
         return 130
+
+    wait_for_pending_episode_transfers()
 
     aggregate = _build_aggregate(all_results)
     success_distance_m = _resolve_success_distance_from_ovon_config(ovon_config)

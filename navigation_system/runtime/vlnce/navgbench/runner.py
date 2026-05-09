@@ -11,6 +11,7 @@ import math
 import multiprocessing
 import os
 import random
+import shutil
 import signal
 import sys
 import traceback
@@ -34,6 +35,7 @@ from navigation_system.env.vlnce.navgbench import (
 )
 from navigation_system.runtime.episode_io import (
     get_episode_records_log_path,
+    get_episode_result_path,
     is_abnormal_episode_failure,
     load_json_if_exists,
     redirect_process_output_to_file,
@@ -62,6 +64,12 @@ from navigation_system.runtime.vlnce.profiles import (
     CONTEXT_CACHE_RUNTIME_PROFILE,
     STANDARD_RUNTIME_PROFILE,
     NavigationRuntimeProfile,
+)
+from navigation_system.runtime.vlnce.r2r.execution import (
+    _build_staging_results_dir,
+    _resolve_episode_workdir,
+    _submit_episode_staging_sync,
+    wait_for_pending_episode_transfers,
 )
 from navigation_system.vlm.vlnce.navgbench_runtime_factory import (
     build_navgbench_context_cache_navigation_model_stack,
@@ -133,6 +141,60 @@ def _shutdown_parallel_executor(
     except Exception:
         if not interrupted:
             raise
+
+
+def _resolve_episode_staging_dir(
+    args: argparse.Namespace,
+    *,
+    final_results_dir: str,
+    episode_id: int,
+    worker_index: int = 0,
+) -> str:
+    episode_workdir = _resolve_episode_workdir(args, final_results_dir=final_results_dir)
+    if not episode_workdir:
+        return ""
+    staging_dir = _build_staging_results_dir(
+        episode_workdir=episode_workdir,
+        final_results_dir=final_results_dir,
+        episode_id=int(episode_id),
+        worker_index=int(worker_index or 0),
+    )
+    if os.path.exists(staging_dir):
+        shutil.rmtree(staging_dir, ignore_errors=True)
+    os.makedirs(staging_dir, exist_ok=True)
+    return staging_dir
+
+
+def _submit_staged_episode_outputs(
+    *,
+    result: Dict[str, Any],
+    staging_results_dir: str,
+    final_results_dir: str,
+    episode_id: int,
+) -> Dict[str, Any]:
+    if not staging_results_dir:
+        return result
+    updated = dict(result or {})
+    staging_prefix = os.path.abspath(staging_results_dir).rstrip(os.sep) + os.sep
+    final_prefix = os.path.abspath(final_results_dir).rstrip(os.sep) + os.sep
+    for key, value in list(updated.items()):
+        if not isinstance(value, str) or not value.strip():
+            continue
+        value_path = os.path.abspath(value)
+        if value_path.startswith(staging_prefix):
+            updated[key] = final_prefix + value_path[len(staging_prefix):]
+    if str(updated.get("result_file", "") or "").strip():
+        updated["result_file"] = get_episode_result_path(final_results_dir, int(episode_id))
+    _submit_episode_staging_sync(
+        staging_results_dir=staging_results_dir,
+        final_results_dir=final_results_dir,
+        episode_id=int(episode_id),
+        storage_entry_id=int(episode_id),
+        entry_kind="episode",
+        save_stdout_log=True,
+        postprocess_futures=None,
+    )
+    return updated
 
 
 @contextlib.contextmanager
@@ -822,6 +884,7 @@ def _run_one_episode(
     profile: NavigationRuntimeProfile,
     worker_index: int = 0,
     worker_count: int = 0,
+    final_results_dir: str = "",
 ) -> Dict[str, Any]:
     stable_id = get_navgbench_episode_id(episode)
     storage_episode_id = _sample_index_for_episode(episode, index)
@@ -905,7 +968,11 @@ def _run_one_episode(
             }
             result = controller.run_navigation(max_subtask_steps=args.max_subtask_steps)
             metrics = dict(env.get_metrics() or {})
-            navgbench_log = _save_navgbench_metrics(space_config.PATHS.RESULTS_DIR, episode, metrics)
+            navgbench_log = _save_navgbench_metrics(
+                final_results_dir or space_config.PATHS.RESULTS_DIR,
+                episode,
+                metrics,
+            )
         success = int(metrics.get("success", 0) or 0) == 1
         steps = int(result.get("total_steps", result.get("steps", 0)) or 0)
         reason = str(result.get("reason", "") or "").strip()
@@ -974,10 +1041,18 @@ def _find_episode_by_stable_id(episodes: Sequence[Any], stable_id: str) -> Any:
 def _run_parallel_episode_job(job_spec: Dict[str, Any]) -> Dict[str, Any]:
     os.chdir(_project_root())
     args = argparse.Namespace(**dict(job_spec.get("args") or {}))
-    results_dir = str(job_spec.get("results_dir") or "")
+    final_results_dir = str(job_spec.get("results_dir") or "")
     episode_key = str(job_spec.get("episode_key") or "")
+    episode_id_for_storage = int(job_spec.get("storage_episode_id") or job_spec.get("index", 1))
+    staging_results_dir = _resolve_episode_staging_dir(
+        args,
+        final_results_dir=final_results_dir,
+        episode_id=episode_id_for_storage,
+        worker_index=int(job_spec.get("worker_index", 0) or 0),
+    )
+    run_results_dir = staging_results_dir or final_results_dir
 
-    space_config = _load_spacevln_config(args, results_dir=results_dir)
+    space_config = _load_spacevln_config(args, results_dir=run_results_dir)
     profile = _resolve_navgbench_runtime_profile(
         args.runtime,
         instruction_mode=args.instruction_mode,
@@ -999,7 +1074,7 @@ def _run_parallel_episode_job(job_spec: Dict[str, Any]) -> Dict[str, Any]:
             )
 
     episode = _find_episode_by_stable_id(dataset.episodes, episode_key)
-    return _run_one_episode(
+    result = _run_one_episode(
         index=int(job_spec.get("index", 1)),
         total=int(job_spec.get("total", 1)),
         episode=episode,
@@ -1010,6 +1085,13 @@ def _run_parallel_episode_job(job_spec: Dict[str, Any]) -> Dict[str, Any]:
         profile=profile,
         worker_index=int(job_spec.get("worker_index", 0) or 0),
         worker_count=int(job_spec.get("worker_count", 0) or 0),
+        final_results_dir=final_results_dir,
+    )
+    return _submit_staged_episode_outputs(
+        result=result,
+        staging_results_dir=staging_results_dir,
+        final_results_dir=final_results_dir,
+        episode_id=episode_id_for_storage,
     )
 
 
@@ -1051,6 +1133,7 @@ def _run_parallel_episodes(
                 "results_dir": results_dir,
                 "episode_key": get_navgbench_episode_id(episode),
                 "episode_id": getattr(episode, "episode_id", ""),
+                "storage_episode_id": _sample_index_for_episode(episode, index),
                 "index": index,
                 "total": len(episodes),
                 "worker_index": int(worker_index),
@@ -1181,6 +1264,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--results-root", default="")
     parser.add_argument("--results-dir", default="")
+    parser.add_argument(
+        "--episode-workdir",
+        default="",
+        help="fast temporary episode artifact directory; defaults to the shared /dev/shm cache when staging is enabled",
+    )
     add_output_profile_arg(parser)
     add_output_artifact_args(parser)
     parser.add_argument(
@@ -1327,18 +1415,39 @@ def run_navigation_from_args(args: argparse.Namespace) -> int:
     else:
         results = []
         for index, episode in enumerate(episodes, 1):
+            storage_episode_id = _sample_index_for_episode(episode, index)
+            staging_results_dir = _resolve_episode_staging_dir(
+                args,
+                final_results_dir=resolved_results_dir,
+                episode_id=storage_episode_id,
+                worker_index=0,
+            )
+            run_space_config = (
+                _load_spacevln_config(args, results_dir=staging_results_dir)
+                if staging_results_dir
+                else space_config
+            )
+            result = _run_one_episode(
+                index=index,
+                total=len(episodes),
+                episode=episode,
+                gn_config=gn_config,
+                base_dataset=dataset,
+                space_config=run_space_config,
+                args=args,
+                profile=profile,
+                final_results_dir=resolved_results_dir,
+            )
             results.append(
-                _run_one_episode(
-                    index=index,
-                    total=len(episodes),
-                    episode=episode,
-                    gn_config=gn_config,
-                    base_dataset=dataset,
-                    space_config=space_config,
-                    args=args,
-                    profile=profile,
+                _submit_staged_episode_outputs(
+                    result=result,
+                    staging_results_dir=staging_results_dir,
+                    final_results_dir=resolved_results_dir,
+                    episode_id=storage_episode_id,
                 )
             )
+
+    wait_for_pending_episode_transfers()
 
     failed = [item for item in results if is_abnormal_episode_failure(item)]
     if failed:

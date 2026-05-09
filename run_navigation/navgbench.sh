@@ -108,7 +108,7 @@ while [[ $# -gt 0 ]]; do
             PASSTHROUGH_ARGS+=("$1")
             shift
             ;;
-        --backend|--navgbench-python|--gnbench-root|--gnbench-exp-config|--start-sample|--start-idx|--end-idx|--num-episodes|--episode-id|--episode-ids|--seed|--max-steps|--max-subtask-steps|--parallel-workers|--instruction-mode|--results-root|--results-dir|--output-profile)
+        --backend|--navgbench-python|--gnbench-root|--gnbench-exp-config|--start-sample|--start-idx|--end-idx|--num-episodes|--episode-id|--episode-ids|--seed|--max-steps|--max-subtask-steps|--parallel-workers|--instruction-mode|--results-root|--results-dir|--episode-workdir|--output-profile)
             if [[ $# -lt 2 ]]; then
                 echo "Missing value for $1" >&2
                 exit 1
@@ -116,7 +116,7 @@ while [[ $# -gt 0 ]]; do
             PASSTHROUGH_ARGS+=("$1" "$2")
             shift 2
             ;;
-        --backend=*|--navgbench-python=*|--gnbench-root=*|--gnbench-exp-config=*|--start-sample=*|--start-idx=*|--end-idx=*|--num-episodes=*|--episode-id=*|--episode-ids=*|--seed=*|--max-steps=*|--max-subtask-steps=*|--parallel-workers=*|--instruction-mode=*|--results-root=*|--results-dir=*|--output-profile=*)
+        --backend=*|--navgbench-python=*|--gnbench-root=*|--gnbench-exp-config=*|--start-sample=*|--start-idx=*|--end-idx=*|--num-episodes=*|--episode-id=*|--episode-ids=*|--seed=*|--max-steps=*|--max-subtask-steps=*|--parallel-workers=*|--instruction-mode=*|--results-root=*|--results-dir=*|--episode-workdir=*|--output-profile=*)
             PASSTHROUGH_ARGS+=("$1")
             shift
             ;;
