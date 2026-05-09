@@ -118,10 +118,14 @@ class LLMPlanner(BaseAPIClient):
             for record in failed_records
             if str(record.get("failure_kind") or "").strip()
         ]
+        if any(bool(record.get("non_retryable_api_error", False)) for record in failed_records):
+            return "planner_non_retryable_api_error"
         if failure_kinds and all(kind == "timeout" for kind in failure_kinds):
             return "planner_timeout"
         if failure_kinds and all(kind in API_NO_RESPONSE_FAILURE_KINDS for kind in failure_kinds):
             return "planner_no_response"
+        if failure_kinds and all(kind == "http_error" for kind in failure_kinds):
+            return "planner_api_error"
         return "planner_failed"
 
     @staticmethod
@@ -284,6 +288,7 @@ class LLMPlanner(BaseAPIClient):
 
             attempt_success = bool(is_valid and direction_is_available)
             failure_kind = ""
+            non_retryable_api_error = False
             if not attempt_success:
                 failure_kind = self._classify_attempt_failure(
                     response=response,
@@ -292,19 +297,23 @@ class LLMPlanner(BaseAPIClient):
                     direction_is_available=direction_is_available,
                     api_status=str(getattr(self, "last_call_status", "") or ""),
                 )
+                non_retryable_api_error = bool(self.is_last_call_non_retryable())
             self.last_call_timing_info["records"].append({
                 "attempt": retry + 1,
                 "success": attempt_success,
                 "duration_s": max(0.0, float(request_duration_s)),
                 "total_call_duration_s": max(0.0, float(attempt_duration_s)),
                 "failure_kind": failure_kind,
+                "http_status": int(getattr(self, "last_http_status", 0) or 0),
+                "api_error": str(getattr(self, "last_call_error", "") or ""),
+                "non_retryable_api_error": non_retryable_api_error,
             })
             if attempt_success:
                 self.last_call_timing_info["final_failure_reason"] = ""
                 self._finalize_vlm_info_retry_summary(save_dir)
                 return normalized_response, prompt_debug_text
 
-            if self.is_last_call_non_retryable():
+            if non_retryable_api_error:
                 print(
                     f"  [ERR] {failure_label} stopped after non-retryable API error: "
                     f"{getattr(self, 'last_call_error', '')}"

@@ -266,14 +266,19 @@ class NavigationAgentController(BaseNavigationController):
     def _merge_planner_timing_infos(*timing_infos: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         merged_records: List[Dict[str, Any]] = []
         merged_wait_duration_s = 0.0
+        final_failure_reason = ""
         for info in timing_infos:
             if not info:
                 continue
             merged_records.extend(list(info.get("records", []) or []))
             merged_wait_duration_s += float(info.get("failed_retry_wait_duration_s", 0.0) or 0.0)
+            info_failure_reason = str(info.get("final_failure_reason", "") or "").strip()
+            if info_failure_reason:
+                final_failure_reason = info_failure_reason
         return {
             "records": merged_records,
             "failed_retry_wait_duration_s": merged_wait_duration_s,
+            "final_failure_reason": final_failure_reason,
         }
 
     def _is_in_initial_position_neighborhood(self, waypoint_summary: Optional[str] = None) -> bool:
@@ -4465,6 +4470,8 @@ class NavigationAgentController(BaseNavigationController):
                             failure_reason = 'initial_planner_timeout'
                         elif cycle_reason == 'planner_no_response':
                             failure_reason = 'initial_planner_no_response'
+                        elif cycle_reason in {'planner_api_error', 'planner_non_retryable_api_error'}:
+                            failure_reason = 'initial_planner_api_error'
                         else:
                             failure_reason = 'initial_subtask_failed'
                     else:
@@ -4474,6 +4481,8 @@ class NavigationAgentController(BaseNavigationController):
                             failure_reason = 'verify_replan_timeout'
                         elif cycle_reason == 'planner_no_response':
                             failure_reason = 'verify_replan_no_response'
+                        elif cycle_reason in {'planner_api_error', 'planner_non_retryable_api_error'}:
+                            failure_reason = 'verify_replan_api_error'
                         else:
                             failure_reason = 'verify_replan_failed'
                     print(f"[ERR] Thinking controller failed ({thinking_mode})")

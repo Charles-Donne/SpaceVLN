@@ -59,6 +59,22 @@ class BaseAPIClient(ABC):
             match = re.search(r"status=(\d+)", str(getattr(self, "last_call_error", "") or ""))
             if match:
                 status_code = int(match.group(1))
+        error_text = str(getattr(self, "last_call_error", "") or "").lower()
+        non_retryable_markers = {
+            "arrearage",
+            "insufficient_quota",
+            "insufficient balance",
+            "quota exceeded",
+            "billing",
+            "invalid api key",
+            "invalid_api_key",
+            "unauthorized",
+            "permission",
+            "forbidden",
+            "access denied",
+        }
+        if any(marker in error_text for marker in non_retryable_markers):
+            return True
         return status_code in {400, 401, 402, 403, 404, 422}
 
     def _set_last_call_timing(

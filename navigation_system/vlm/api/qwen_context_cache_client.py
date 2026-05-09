@@ -21,6 +21,8 @@ SUPPORTED_QWEN_CONTEXT_CACHE_PREFIXES = (
     "qwen3.5-plus",
     "qwen3.5-flash",
     "qwen3.6-plus",
+    "qwen3-vl-plus",
+    "qwen3-vl-flash",
 )
 
 
@@ -60,7 +62,8 @@ def validate_qwen_context_cache_api_config(config_path: str) -> None:
             "Current API config is not compatible: "
             + "; ".join(errors)
             + ". For Xiaomi MiMo/OpenAI/OpenRouter, run with --runtime standard; "
-            "for Qwen cache runs, set provider: dashscope with qwen3.5-plus/qwen3.5-flash."
+            "for Qwen cache runs, set provider: dashscope with qwen3.5-plus/qwen3.5-flash "
+            "or qwen3-vl-plus/qwen3-vl-flash."
         )
 
 
@@ -148,7 +151,8 @@ class QwenContextCacheMixin:
         if not supports_qwen_explicit_context_cache(model_name):
             raise ValueError(
                 f"Model does not support this cached runtime: {model_name}. "
-                "Use qwen3.5-plus / qwen3.5-flash (or newer supported Qwen cache models)."
+                "Use qwen3.5-plus / qwen3.5-flash, qwen3-vl-plus / qwen3-vl-flash, "
+                "or newer supported Qwen cache models."
             )
 
     @staticmethod
