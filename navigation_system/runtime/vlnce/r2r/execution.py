@@ -296,6 +296,20 @@ def _workspace_episode_cache_dir() -> str:
     workspace_root = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "../../../../..")
     )
+    fast_root = str(os.getenv("SPACEVLN_FAST_EPISODE_CACHE_ROOT", "") or "").strip()
+    if not fast_root and os.path.isdir("/dev/shm") and os.access("/dev/shm", os.W_OK):
+        fast_root = "/dev/shm"
+    if fast_root:
+        user_tag = str(os.getenv("USER", "") or os.getuid()).strip()
+        workspace_tag = hashlib.sha1(
+            os.path.realpath(workspace_root).encode("utf-8")
+        ).hexdigest()[:10]
+        return os.path.join(
+            os.path.abspath(os.path.expanduser(fast_root)),
+            "spacevln_episode_cache",
+            user_tag,
+            workspace_tag,
+        )
     return os.path.join(workspace_root, ".spacevln_episode_cache")
 
 
@@ -567,6 +581,53 @@ def _submit_episode_staging_sync(
     with _EPISODE_TRANSFER_LOCK:
         _EPISODE_TRANSFER_FUTURES.append(future)
     future.add_done_callback(_handle_episode_transfer_done)
+    _throttle_episode_transfer_backlog()
+
+
+def _episode_transfer_pool_limit() -> int:
+    raw_value = str(os.getenv("SPACEVLN_EPISODE_TRANSFER_POOL", "") or "").strip()
+    if raw_value:
+        return _positive_int(raw_value, 3)
+    legacy_value = str(os.getenv("SPACEVLN_EPISODE_TRANSFER_BACKLOG", "") or "").strip()
+    if legacy_value:
+        return _positive_int(legacy_value, 3)
+    return 3
+
+
+def _episode_transfer_batch_size(pool_limit: int) -> int:
+    default_batch = min(2, max(1, int(pool_limit)))
+    batch_size = _positive_int(
+        os.getenv("SPACEVLN_EPISODE_TRANSFER_BATCH", str(default_batch)),
+        default_batch,
+    )
+    return max(1, min(int(batch_size), int(pool_limit)))
+
+
+def _throttle_episode_transfer_backlog() -> None:
+    pool_limit = _episode_transfer_pool_limit()
+    transfer_batch = _episode_transfer_batch_size(pool_limit)
+    while True:
+        with _EPISODE_TRANSFER_LOCK:
+            pending_futures = list(_EPISODE_TRANSFER_FUTURES)
+        if len(pending_futures) < pool_limit:
+            return
+        target_pending = max(0, pool_limit - transfer_batch)
+        while len(pending_futures) > target_pending:
+            done, _ = concurrent.futures.wait(
+                pending_futures,
+                return_when=concurrent.futures.FIRST_COMPLETED,
+            )
+            if not done:
+                return
+            for future in done:
+                try:
+                    future.result()
+                except BaseException:
+                    pass
+                _forget_episode_transfer_future(future)
+            with _EPISODE_TRANSFER_LOCK:
+                pending_futures = list(_EPISODE_TRANSFER_FUTURES)
+        return
 
 
 def _discard_episode_staging(staging_results_dir: str) -> None:

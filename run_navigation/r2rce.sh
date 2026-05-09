@@ -42,8 +42,11 @@ Output speed switches:
     --episode-workdir DIR    Write current episode artifacts to fast local cache first,
                              then sync them back to the final results directory
                              in a background transfer thread. If final results
-                             resolve under /media, this is enabled automatically
-                             with nav_ws/.spacevln_episode_cache.
+                             resolve under /media or /mnt, this is enabled automatically
+                             with /dev/shm/spacevln_episode_cache when available,
+                             falling back to nav_ws/.spacevln_episode_cache, and cleaned after sync.
+                             Transfer pool defaults per worker: pool=3, batch=2.
+                             Tune with SPACEVLN_EPISODE_TRANSFER_POOL/BATCH.
     --no-gif                 Skip final navigation.gif generation for metric-only runs
     --no-vlm-artifacts       Skip prompt/image/debug artifact files for maximum speed
     --save-step-images       Save per-step replay PNGs only when you need detailed visual debugging

@@ -102,6 +102,22 @@ spacevln_prepend_colon_var() {
     export "$var_name=$value:$current_value"
 }
 
+spacevln_fast_tmp_dir() {
+    local root="${SPACEVLN_FAST_TMP_ROOT:-}"
+    local project_root
+    local workspace_tag
+    project_root="$(spacevln_project_root)"
+    workspace_tag="$(printf '%s' "$project_root" | sha1sum | awk '{print substr($1,1,10)}')"
+
+    if [[ -z "$root" && -d /dev/shm && -w /dev/shm ]]; then
+        root="/dev/shm"
+    fi
+    if [[ -z "$root" ]]; then
+        root="/tmp"
+    fi
+    printf '%s\n' "$root/spacevln_tmp/${USER:-user}/$workspace_tag"
+}
+
 spacevln_habitat_sim_ext_dir() {
     local python_bin="$1"
     "$python_bin" - <<'PY'
@@ -151,7 +167,13 @@ spacevln_setup_runtime_env() {
     export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-1}"
     export NUMEXPR_NUM_THREADS="${NUMEXPR_NUM_THREADS:-1}"
     export VECLIB_MAXIMUM_THREADS="${VECLIB_MAXIMUM_THREADS:-1}"
-    export MPLCONFIGDIR="${MPLCONFIGDIR:-/tmp/matplotlib-spacevln}"
+    local fast_tmp_dir
+    fast_tmp_dir="$(spacevln_fast_tmp_dir)"
+    export TMPDIR="${TMPDIR:-$fast_tmp_dir/tmp}"
+    export TEMP="${TEMP:-$TMPDIR}"
+    export TMP="${TMP:-$TMPDIR}"
+    export MPLCONFIGDIR="${MPLCONFIGDIR:-$fast_tmp_dir/matplotlib}"
+    mkdir -p "$TMPDIR"
     mkdir -p "$MPLCONFIGDIR"
 
     export __EGL_VENDOR_LIBRARY_FILENAMES="${__EGL_VENDOR_LIBRARY_FILENAMES:-/usr/share/glvnd/egl_vendor.d/10_nvidia.json}"
