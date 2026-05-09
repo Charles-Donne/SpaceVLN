@@ -57,6 +57,8 @@ INITIAL_FAILURE_RETRY_REASONS = {
 }
 
 UNRECORDED_INITIAL_FAILURE_REASONS = {
+    "initial_subtask_failed",
+    "initial_lookaround_failed",
     "initial_planner_no_response",
     "initial_planner_timeout",
 }
