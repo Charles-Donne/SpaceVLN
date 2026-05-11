@@ -139,6 +139,7 @@ echo "  Range: ${REPORT_RANGE_LABEL}"
 echo "  Mode: $MODE"
 echo "  Model: $MODEL"
 echo "  Source: $RESULTS_DIR"
+REPORT_MARKDOWN_TITLE="NavGBench report | mode: $MODE | model: $MODEL | range: $REPORT_RANGE_LABEL"
 if [ "$REPORT_RANGE_LABEL" = "all" ]; then
     echo "  Output: $RESULTS_DIR/episode_results.md"
 else
@@ -153,4 +154,6 @@ spacevln_report_run_results_report_md \
     "$EXP_CONFIG" \
     "$WORKERS" \
     "$REPORT_START" \
-    "$REPORT_END"
+    "$REPORT_END" \
+    "episode_id" \
+    "$REPORT_MARKDOWN_TITLE"
