@@ -91,6 +91,7 @@ def build_objectnav_runtime_config(
     save_request_artifacts: bool = True,
     save_step_images: bool = False,
     save_gif: bool = False,
+    save_map_artifacts: bool = False,
     gif_fps: int = 2,
     gif_max_width: int = 720,
 ) -> ConfigNode:
@@ -167,13 +168,13 @@ def build_objectnav_runtime_config(
                     "DEBUG_SAVE_RENDERINGS": bool(DEFAULT_DEBUG_SAVE_RENDERINGS),
                 }
             },
-                "OUTPUT": {
-                    "REQUESTS": {
-                        "SAVE_VLM_ARTIFACTS": bool(save_request_artifacts),
-                    },
-                    "MAPS": {
-                        "SAVE_STEP_ARTIFACTS": False,
-                    },
+            "OUTPUT": {
+                "REQUESTS": {
+                    "SAVE_VLM_ARTIFACTS": bool(save_request_artifacts),
+                },
+                "MAPS": {
+                    "SAVE_STEP_ARTIFACTS": bool(save_map_artifacts),
+                },
                 "REPLAY": {
                     "SAVE_STEP_IMAGES": bool(save_step_images),
                     "SAVE_GIF": bool(save_gif),

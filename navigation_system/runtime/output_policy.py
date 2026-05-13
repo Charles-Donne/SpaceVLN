@@ -21,6 +21,7 @@ class OutputPolicy:
     save_step_images: bool
     save_gif: bool
     save_vlm_artifacts: bool
+    save_map_artifacts: bool
 
 
 _PROFILE_DEFAULTS: Dict[str, Dict[str, bool]] = {
@@ -29,13 +30,15 @@ _PROFILE_DEFAULTS: Dict[str, Dict[str, bool]] = {
         "save_step_images": False,
         "save_gif": False,
         "save_vlm_artifacts": False,
+        "save_map_artifacts": False,
     },
-    # Debug keeps model-facing prompts/images and a replay GIF, but still avoids
-    # thousands of per-step PNGs unless explicitly requested.
+    # Debug keeps model-facing prompts/images, map artifacts, and a replay GIF,
+    # but still avoids replay-frame PNGs unless explicitly requested.
     "debug": {
         "save_step_images": False,
         "save_gif": True,
         "save_vlm_artifacts": True,
+        "save_map_artifacts": True,
     },
 }
 
@@ -70,7 +73,8 @@ def add_output_profile_arg(parser: argparse.ArgumentParser) -> None:
         default=_default_profile(),
         help=(
             "Output policy: metric saves only final evaluation artifacts; "
-            "debug saves VLM artifacts and GIF; config preserves YAML defaults."
+            "debug saves VLM artifacts, map artifacts, and GIF; "
+            "config preserves YAML defaults."
         ),
     )
 
@@ -86,6 +90,7 @@ def add_output_artifact_args(
         save_step_images=None,
         save_gif=None,
         save_vlm_artifacts=None,
+        save_map_artifacts=None,
     )
     parser.add_argument(
         "--save-step-images",
@@ -128,6 +133,20 @@ def add_output_artifact_args(
             action="store_false",
             help="Skip VLM prompt/image/debug artifacts for metric batch runs.",
         )
+    parser.add_argument(
+        "--save-map-artifacts",
+        "--save-local-map",
+        dest="save_map_artifacts",
+        action="store_true",
+        help="Save key global/local map PNG snapshots for thinking/detection debugging.",
+    )
+    parser.add_argument(
+        "--no-save-map-artifacts",
+        "--no-local-map",
+        dest="save_map_artifacts",
+        action="store_false",
+        help="Do not save global/local map PNG snapshots.",
+    )
 
 
 def resolve_output_policy(
@@ -136,6 +155,7 @@ def resolve_output_policy(
     config_save_step_images: bool = False,
     config_save_gif: bool = False,
     config_save_vlm_artifacts: bool = True,
+    config_save_map_artifacts: bool = False,
 ) -> OutputPolicy:
     profile = str(getattr(args, "output_profile", "") or _default_profile()).strip().lower()
     if profile not in OUTPUT_PROFILE_CHOICES:
@@ -155,6 +175,7 @@ def resolve_output_policy(
         save_step_images=resolve("save_step_images", config_save_step_images),
         save_gif=resolve("save_gif", config_save_gif),
         save_vlm_artifacts=resolve("save_vlm_artifacts", config_save_vlm_artifacts),
+        save_map_artifacts=resolve("save_map_artifacts", config_save_map_artifacts),
     )
 
 
@@ -162,15 +183,19 @@ def apply_output_policy_to_config(config: Any, args: argparse.Namespace) -> Outp
     """Apply the shared output policy to a mutable SpaceVLN config object."""
     output_cfg = getattr(config, "OUTPUT", None)
     request_cfg = getattr(output_cfg, "REQUESTS", None)
+    maps_cfg = getattr(output_cfg, "MAPS", None)
     replay_cfg = getattr(output_cfg, "REPLAY", None)
     policy = resolve_output_policy(
         args,
         config_save_step_images=bool(getattr(replay_cfg, "SAVE_STEP_IMAGES", False)),
         config_save_gif=bool(getattr(replay_cfg, "SAVE_GIF", False)),
         config_save_vlm_artifacts=bool(getattr(request_cfg, "SAVE_VLM_ARTIFACTS", True)),
+        config_save_map_artifacts=bool(getattr(maps_cfg, "SAVE_STEP_ARTIFACTS", False)),
     )
     if request_cfg is not None:
         request_cfg.SAVE_VLM_ARTIFACTS = bool(policy.save_vlm_artifacts)
+    if maps_cfg is not None:
+        maps_cfg.SAVE_STEP_ARTIFACTS = bool(policy.save_map_artifacts)
     if replay_cfg is not None:
         replay_cfg.SAVE_STEP_IMAGES = bool(policy.save_step_images)
         replay_cfg.SAVE_GIF = bool(policy.save_gif)
@@ -184,6 +209,7 @@ def build_output_job_fields(args: argparse.Namespace) -> Dict[str, Any]:
         "save_step_images": getattr(args, "save_step_images", None),
         "save_gif": getattr(args, "save_gif", None),
         "save_vlm_artifacts": getattr(args, "save_vlm_artifacts", None),
+        "save_map_artifacts": getattr(args, "save_map_artifacts", None),
         "no_report": bool(getattr(args, "no_report", False)),
     }
 
@@ -195,6 +221,6 @@ def build_output_namespace_kwargs(job_spec: Dict[str, Any]) -> Dict[str, Any]:
         "save_step_images": job_spec.get("save_step_images"),
         "save_gif": job_spec.get("save_gif"),
         "save_vlm_artifacts": job_spec.get("save_vlm_artifacts"),
+        "save_map_artifacts": job_spec.get("save_map_artifacts"),
         "no_report": bool(job_spec.get("no_report", False)),
     }
-

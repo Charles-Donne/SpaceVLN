@@ -2,6 +2,7 @@
 
 import argparse
 import atexit
+import contextlib
 import copy
 import concurrent.futures
 import hashlib
@@ -24,6 +25,11 @@ from navigation_system.runtime.episode_io import (
     redirect_process_output_to_file,
     redirect_process_output_to_null,
     save_episode_stdout_log_enabled,
+)
+from navigation_system.runtime.failure_policy import (
+    INITIAL_PLANNER_API_ERROR_REASON,
+    is_initial_planner_api_error_result,
+    resolve_max_initial_planner_api_errors,
 )
 from navigation_system.runtime.output_policy import (
     apply_output_policy_to_config,
@@ -61,6 +67,7 @@ UNRECORDED_INITIAL_FAILURE_REASONS = {
     "initial_lookaround_failed",
     "initial_planner_no_response",
     "initial_planner_timeout",
+    INITIAL_PLANNER_API_ERROR_REASON,
 }
 
 DEFAULT_INITIAL_FAILURE_MAX_ATTEMPTS = 3
@@ -430,7 +437,12 @@ def _sync_episode_staging_outputs(
     entry_kind: str = "episode",
     save_stdout_log: bool,
 ) -> None:
-    """Move one episode's fast local artifacts back to the final results directory."""
+    """Move one episode's fast local artifacts back to the final results directory.
+
+    Detail artifacts describe the latest completed run and are replaced whenever
+    a complete staged result exists. The compact log is the resumable/reportable
+    best result and is updated only when the staged result ranks better.
+    """
     if not staging_results_dir or not final_results_dir:
         return
     entry_id = int(storage_entry_id) if storage_entry_id is not None else int(episode_id)
@@ -456,8 +468,18 @@ def _sync_episode_staging_outputs(
         entry_id,
         entry_kind=entry_kind,
     )
+    staging_result_path = _get_episode_result_path_no_create(
+        staging_results_dir,
+        entry_id,
+        entry_kind=entry_kind,
+    )
+    staging_result = SaveManager._load_json_if_exists(staging_result_path)
+    detail_updated = False
+    if SaveManager.is_complete_result(staging_result):
+        _copytree_replace(staging_detail_dir, final_detail_dir)
+        detail_updated = True
+
     staging_log = SaveManager._load_json_if_exists(staging_log_path)
-    accepted = False
     if staging_log is not None:
         final_log = SaveManager._load_json_if_exists(final_log_path)
         final_baseline = final_log if SaveManager.is_complete_result(final_log) else None
@@ -465,11 +487,9 @@ def _sync_episode_staging_outputs(
             final_baseline is None
             or SaveManager.result_rank_key(staging_log) > SaveManager.result_rank_key(final_baseline)
         ):
-            _copytree_replace(staging_detail_dir, final_detail_dir)
             _copy_file(staging_log_path, final_log_path)
-            accepted = True
 
-    if accepted and save_stdout_log:
+    if detail_updated and save_stdout_log:
         _copy_file(
             get_episode_records_log_path(
                 staging_results_dir,
@@ -747,11 +767,17 @@ def _run_single_episode_attempt(
     }
 
     try:
-        redirect_context = (
-            redirect_process_output_to_file(run_episode_log_path, mode=stdout_log_mode)
-            if save_stdout_log and run_episode_log_path
-            else redirect_process_output_to_null()
-        )
+        episode_output_mode = str(
+            os.getenv("SPACEVLN_EPISODE_OUTPUT", "") or ""
+        ).strip().lower()
+        if episode_output_mode in {"console", "stdout", "passthrough"}:
+            redirect_context = contextlib.nullcontext()
+        else:
+            redirect_context = (
+                redirect_process_output_to_file(run_episode_log_path, mode=stdout_log_mode)
+                if save_stdout_log and run_episode_log_path
+                else redirect_process_output_to_null()
+            )
         with redirect_context:
             episode_config = build_episode_config(base_config, run_args, episode_id)
             controller, _config_desc = create_navigation_controller(
@@ -1135,6 +1161,12 @@ def run_parallel_episodes(
     results_summary: List[Dict[str, Any]] = []
     next_job_cursor = 0
     pool_broken_error = ""
+    initial_planner_api_error_count = 0
+    max_initial_planner_api_errors = resolve_max_initial_planner_api_errors(
+        getattr(args, "max_initial_planner_api_errors", None),
+        worker_count=worker_count,
+    )
+    abort_for_initial_api_errors = False
 
     def _build_parallel_failure(episode_id: int, error_text: str) -> Dict[str, Any]:
         return {
@@ -1159,6 +1191,8 @@ def run_parallel_episodes(
 
         def _submit_next_job(worker_index: int) -> bool:
             nonlocal next_job_cursor, pool_broken_error
+            if abort_for_initial_api_errors:
+                return False
             if next_job_cursor >= total:
                 return False
             job_spec = _build_parallel_episode_spec(
@@ -1205,7 +1239,8 @@ def run_parallel_episodes(
                 job_spec = future_to_job.pop(future)
                 try:
                     job_result = future.result()
-                    results_summary.append(job_result.get("result", {}))
+                    result_payload = job_result.get("result", {})
+                    results_summary.append(result_payload)
                 except (KeyboardInterrupt, SystemExit):
                     interrupted = True
                     future.cancel()
@@ -1221,6 +1256,25 @@ def run_parallel_episodes(
                             f"parallel worker failed: {_format_exception_message(exc)}",
                         )
                     )
+                    result_payload = results_summary[-1]
+                if is_initial_planner_api_error_result(result_payload):
+                    initial_planner_api_error_count += 1
+                    if (
+                        max_initial_planner_api_errors > 0
+                        and initial_planner_api_error_count >= max_initial_planner_api_errors
+                    ):
+                        abort_for_initial_api_errors = True
+                        interrupted = True
+                        print(
+                            "[Abort] Too many initial planner API errors "
+                            f"({initial_planner_api_error_count}/{max_initial_planner_api_errors}); "
+                            "stop submitting remaining episodes.",
+                            flush=True,
+                        )
+                        for pending_future in list(future_to_job.keys()):
+                            pending_future.cancel()
+                        future_to_job.clear()
+                        break
                 if not pool_broken_error:
                     _submit_next_job(int(job_spec["worker_index"]))
 

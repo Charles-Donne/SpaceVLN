@@ -44,7 +44,7 @@ Return exactly one JSON object. Keep all reasoning inside `"reasoning"`. No extr
 
 {{
     "reasoning": "The destination is near in front but not yet reached, so take a short forward step.",
-    "action": "MOVE_FORWARD 0.25m"
+    "action": "MOVE_FORWARD 0.5m"
 }}
 
 {{

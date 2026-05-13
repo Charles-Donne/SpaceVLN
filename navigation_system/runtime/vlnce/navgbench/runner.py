@@ -43,6 +43,10 @@ from navigation_system.runtime.episode_io import (
     save_episode_stdout_log_enabled,
     should_suppress_normal_failure_reason,
 )
+from navigation_system.runtime.failure_policy import (
+    is_initial_planner_api_error_result,
+    resolve_max_initial_planner_api_errors,
+)
 from navigation_system.runtime.output_policy import (
     add_output_artifact_args,
     add_output_profile_arg,
@@ -1121,9 +1125,17 @@ def _run_parallel_episodes(
     next_job_cursor = 0
     interrupted = False
     pool_broken_error = ""
+    initial_planner_api_error_count = 0
+    max_initial_planner_api_errors = resolve_max_initial_planner_api_errors(
+        getattr(args, "max_initial_planner_api_errors", None),
+        worker_count=worker_count,
+    )
+    abort_for_initial_api_errors = False
     try:
         def _submit_next(worker_index: int) -> bool:
             nonlocal next_job_cursor
+            if abort_for_initial_api_errors:
+                return False
             if next_job_cursor >= len(episodes):
                 return False
             episode = episodes[next_job_cursor]
@@ -1159,7 +1171,8 @@ def _run_parallel_episodes(
                 stable_id = job_spec.get("episode_key", "?")
                 order_index = int(job_spec.get("index", 1)) - 1
                 try:
-                    results_by_order[order_index] = future.result()
+                    result_payload = future.result()
+                    results_by_order[order_index] = result_payload
                 except BrokenProcessPool as exc:
                     pool_broken_error = _format_exception_message(exc)
                     print(f"NavGBench parallel worker pool broke: {pool_broken_error}")
@@ -1191,6 +1204,25 @@ def _run_parallel_episodes(
                         "reason": "parallel_worker_failed",
                         "error": f"parallel worker failed: {error_msg}",
                     }
+                    result_payload = results_by_order[order_index] or {}
+                if is_initial_planner_api_error_result(result_payload):
+                    initial_planner_api_error_count += 1
+                    if (
+                        max_initial_planner_api_errors > 0
+                        and initial_planner_api_error_count >= max_initial_planner_api_errors
+                    ):
+                        abort_for_initial_api_errors = True
+                        interrupted = True
+                        print(
+                            "[Abort] Too many initial planner API errors "
+                            f"({initial_planner_api_error_count}/{max_initial_planner_api_errors}); "
+                            "stop submitting remaining NavGBench episodes.",
+                            flush=True,
+                        )
+                        for pending_future in list(future_to_job.keys()):
+                            pending_future.cancel()
+                        future_to_job.clear()
+                        break
                 if not pool_broken_error:
                     _submit_next(int(job_spec.get("worker_index", 1) or 1))
     except KeyboardInterrupt:
@@ -1254,6 +1286,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=int,
         default=1,
         help="Number of parallel episode workers (1 means serial execution).",
+    )
+    parser.add_argument(
+        "--max-initial-planner-api-errors",
+        type=int,
+        default=None,
+        help=(
+            "Abort a batch after this many initial planner API failures "
+            "(default: max(10, 2 * parallel-workers); <=0 disables)."
+        ),
     )
     parser.add_argument(
         "--skip-sr1",
@@ -1414,6 +1455,11 @@ def run_navigation_from_args(args: argparse.Namespace) -> int:
         )
     else:
         results = []
+        initial_planner_api_error_count = 0
+        max_initial_planner_api_errors = resolve_max_initial_planner_api_errors(
+            getattr(args, "max_initial_planner_api_errors", None),
+            worker_count=1,
+        )
         for index, episode in enumerate(episodes, 1):
             storage_episode_id = _sample_index_for_episode(episode, index)
             staging_results_dir = _resolve_episode_staging_dir(
@@ -1446,6 +1492,19 @@ def run_navigation_from_args(args: argparse.Namespace) -> int:
                     episode_id=storage_episode_id,
                 )
             )
+            if is_initial_planner_api_error_result(results[-1]):
+                initial_planner_api_error_count += 1
+                if (
+                    max_initial_planner_api_errors > 0
+                    and initial_planner_api_error_count >= max_initial_planner_api_errors
+                ):
+                    print(
+                        "[Abort] Too many initial planner API errors "
+                        f"({initial_planner_api_error_count}/{max_initial_planner_api_errors}); "
+                        "stop remaining NavGBench episodes.",
+                        flush=True,
+                    )
+                    break
 
     wait_for_pending_episode_transfers()
 

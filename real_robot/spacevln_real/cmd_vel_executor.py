@@ -19,7 +19,8 @@ from spacevln_real.models import PoseFrame, TERMINAL_ACTION_STATES
 from spacevln_real.ros_common import normalize_angle_rad, parse_json_text, pose_from_odometry
 
 
-ALLOWED_ACTIONS = {"MOVE_FORWARD", "TURN_LEFT", "TURN_RIGHT", "STOP"}
+TURN_ACTIONS = {"TURN_LEFT", "TURN_RIGHT", "LOOK_AROUND_360"}
+ALLOWED_ACTIONS = {"MOVE_FORWARD", *TURN_ACTIONS, "STOP"}
 
 
 def clamp(value: float, lower: float, upper: float) -> float:
@@ -60,6 +61,8 @@ class ActiveCommand:
     started_at: float
     deadline: float
     start_pose: PoseFrame
+    last_yaw_rad: float
+    turn_progress_rad: float = 0.0
 
 
 class CmdVelActionExecutor(Node):
@@ -196,6 +199,9 @@ class CmdVelActionExecutor(Node):
         if angular_speed_deg_s <= 0.0:
             angular_speed_deg_s = float(self.config.default_angular_speed_deg_s)
 
+        if action == "LOOK_AROUND_360" and target_degrees <= 0.0:
+            target_degrees = 360.0
+
         command = ActiveCommand(
             session_id=session_id,
             command_id=command_id,
@@ -209,6 +215,7 @@ class CmdVelActionExecutor(Node):
             started_at=self.now_s(),
             deadline=self.now_s() + timeout_s,
             start_pose=self._latest_pose,
+            last_yaw_rad=float(self._latest_pose.yaw_rad),
         )
         self._active_command = command
 
@@ -261,7 +268,7 @@ class CmdVelActionExecutor(Node):
         if command.action == "MOVE_FORWARD":
             self.control_move_forward(command)
             return
-        if command.action in {"TURN_LEFT", "TURN_RIGHT"}:
+        if command.action in TURN_ACTIONS:
             self.control_turn(command)
             return
 
@@ -302,15 +309,11 @@ class CmdVelActionExecutor(Node):
         self.publish_twist(linear_x=max(linear_speed, 0.0), angular_z=angular_correction)
 
     def control_turn(self, command: ActiveCommand) -> None:
-        target_rad = math.radians(float(command.target_degrees))
-        if command.action == "TURN_RIGHT":
-            target_rad *= -1.0
-        yaw_delta = normalize_angle_rad(
-            float(self._latest_pose.yaw_rad) - float(command.start_pose.yaw_rad)
-        )
-        remaining_rad = normalize_angle_rad(target_rad - yaw_delta)
+        target_rad = math.radians(max(float(command.target_degrees), 0.0))
+        progress_rad = self.update_turn_progress(command)
+        remaining_rad = max(0.0, target_rad - progress_rad)
 
-        if abs(math.degrees(remaining_rad)) <= float(self.config.angle_tolerance_deg):
+        if math.degrees(remaining_rad) <= float(self.config.angle_tolerance_deg):
             self.finish_active_command(
                 state="done",
                 success=True,
@@ -324,8 +327,8 @@ class CmdVelActionExecutor(Node):
                 float(self.config.max_angular_speed_deg_s),
             )
         )
-        if abs(math.degrees(remaining_rad)) < float(self.config.slowdown_angle_deg):
-            scale = abs(math.degrees(remaining_rad)) / max(
+        if math.degrees(remaining_rad) < float(self.config.slowdown_angle_deg):
+            scale = math.degrees(remaining_rad) / max(
                 float(self.config.slowdown_angle_deg),
                 1e-6,
             )
@@ -336,8 +339,28 @@ class CmdVelActionExecutor(Node):
 
         self.publish_twist(
             linear_x=0.0,
-            angular_z=math.copysign(angular_speed_rad_s, remaining_rad),
+            angular_z=self.turn_direction(command) * angular_speed_rad_s,
         )
+
+    @staticmethod
+    def turn_direction(command: ActiveCommand) -> float:
+        return -1.0 if command.action == "TURN_RIGHT" else 1.0
+
+    def update_turn_progress(self, command: ActiveCommand) -> float:
+        if self._latest_pose is None:
+            return max(0.0, float(command.turn_progress_rad))
+        current_yaw = float(self._latest_pose.yaw_rad)
+        yaw_delta = normalize_angle_rad(current_yaw - float(command.last_yaw_rad))
+        signed_progress_delta = yaw_delta * self.turn_direction(command)
+        if signed_progress_delta > 0.0:
+            command.turn_progress_rad += signed_progress_delta
+        elif abs(math.degrees(signed_progress_delta)) > 1.0:
+            command.turn_progress_rad = max(
+                0.0,
+                float(command.turn_progress_rad) + signed_progress_delta,
+            )
+        command.last_yaw_rad = current_yaw
+        return max(0.0, float(command.turn_progress_rad))
 
     def measure_forward_progress(self, command: ActiveCommand) -> float:
         if self._latest_pose is None:
@@ -351,10 +374,13 @@ class CmdVelActionExecutor(Node):
     def measure_turn_progress_deg(self, command: ActiveCommand) -> float:
         if self._latest_pose is None:
             return 0.0
+        if command.action not in TURN_ACTIONS:
+            return 0.0
         yaw_delta = normalize_angle_rad(
-            float(self._latest_pose.yaw_rad) - float(command.start_pose.yaw_rad)
+            float(self._latest_pose.yaw_rad) - float(command.last_yaw_rad)
         )
-        return abs(math.degrees(yaw_delta))
+        pending_progress = max(0.0, yaw_delta * self.turn_direction(command))
+        return math.degrees(max(0.0, float(command.turn_progress_rad) + pending_progress))
 
     def finish_active_command(self, *, state: str, success: bool, message: str) -> None:
         command = self._active_command

@@ -37,6 +37,7 @@ class ActionExecutor(BaseAPIClient):
         
         self.turn_angle = turn_angle
         self.move_distance = move_distance
+        self.VALID_MOVE_VALUES = self._resolve_valid_move_values(move_distance)
         
         # 图片压缩配置（节省token）
         self.enable_compression = True
@@ -71,6 +72,16 @@ class ActionExecutor(BaseAPIClient):
             if abs(numeric - float(allowed)) <= tol:
                 return float(allowed)
         return None
+
+    @staticmethod
+    def _resolve_valid_move_values(move_distance: float):
+        try:
+            base_distance = float(move_distance)
+        except (TypeError, ValueError):
+            base_distance = 0.25
+        if base_distance >= 0.5:
+            return (0.5, 0.75, 1.0, 1.25, 1.5)
+        return VALID_MOVE_METERS
 
     @staticmethod
     def _extract_action_variant(action_raw: Any) -> str:
@@ -339,6 +350,8 @@ class ActionExecutor(BaseAPIClient):
             obstacle_distances=obstacle_distances,
             landmark_map_info=landmark_map_info,
             allowed_action_names=allowed_action_names,
+            move_distance=float(self.move_distance),
+            turn_angle=int(self.turn_angle),
             model_name=self.config.model,
         )
         

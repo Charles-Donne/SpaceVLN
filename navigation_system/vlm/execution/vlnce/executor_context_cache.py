@@ -73,6 +73,8 @@ class ContextCacheActionExecutor(QwenContextCacheMixin, ActionExecutor):
             obstacle_distances=obstacle_distances,
             landmark_map_info=landmark_map_info,
             allowed_action_names=allowed_action_names,
+            move_distance=float(self.move_distance),
+            turn_angle=int(self.turn_angle),
             model_name=self.config.model,
         )
 

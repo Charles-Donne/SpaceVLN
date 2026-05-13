@@ -1009,12 +1009,15 @@ class OVONObjectNavigationController(NavigationAgentController):
             "path_length": float(check_inf_nan(metrics_source.get("path_length", 0.0))),
             "thinking_api_summary": episode_timing_summary["thinking_api_summary"],
             "action_api_summary": episode_timing_summary["action_api_summary"],
+            "vlm_usage_summary": episode_timing_summary.get("vlm_usage_summary", {}),
             "local_timing_summary": episode_timing_summary.get(
                 "local_timing_summary",
                 {},
             ),
             "gif_path": str(gif_path or ""),
             "topdown_path": str(topdown_path or ""),
+            "global_map_path": str(getattr(self, "latest_global_map", None) or ""),
+            "local_map_path": str(getattr(self, "latest_local_map", None) or ""),
             "timestamp": datetime.now().isoformat(),
         }
         reason_text = str(failure_reason or "").strip()

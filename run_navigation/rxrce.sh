@@ -37,7 +37,7 @@ Console output:
 Output speed switches:
     --output-profile metric|debug|config
                              metric keeps only final evaluation artifacts;
-                             debug saves VLM artifacts and navigation.gif;
+                             debug saves VLM artifacts, key local/global map snapshots, and navigation.gif;
                              config preserves YAML defaults.
     --episode-workdir DIR    Write current episode artifacts to fast local cache first,
                              then sync them back to the final results directory
@@ -49,6 +49,7 @@ Output speed switches:
                              Tune with SPACEVLN_EPISODE_TRANSFER_POOL/BATCH.
     --no-gif                 Skip final navigation.gif generation for metric-only runs
     --no-vlm-artifacts       Skip prompt/image/debug artifact files for maximum speed
+    --save-local-map         Save key local/global map snapshots for thinking/detection debugging
     --save-step-images       Save per-step replay PNGs only when you need detailed visual debugging
 
 Retries:
@@ -56,6 +57,9 @@ Retries:
         Rerun an episode up to N times when initial planning cannot produce a usable subtask.
         Default: 3. Initial planner API retries default to 5 and can be overridden with
         SPACEVLN_INITIAL_PLANNER_MAX_RETRIES.
+    --max-initial-planner-api-errors N
+        Abort a batch after too many initial planner API failures.
+        Default: max(10, 2 * parallel-workers); use 0 to disable.
 
 Ablation:
   --ablation landmark
@@ -159,6 +163,18 @@ while [[ $# -gt 0 ]]; do
             PASSTHROUGH_ARGS+=(--initial-failure-max-attempts "${1#*=}")
             shift
             ;;
+        --max-initial-planner-api-errors)
+            if [[ $# -lt 2 ]]; then
+                echo "❌ --max-initial-planner-api-errors requires an integer" >&2
+                exit 1
+            fi
+            PASSTHROUGH_ARGS+=(--max-initial-planner-api-errors "$2")
+            shift 2
+            ;;
+        --max-initial-planner-api-errors=*)
+            PASSTHROUGH_ARGS+=(--max-initial-planner-api-errors "${1#*=}")
+            shift
+            ;;
         --episode-workdir)
             if [[ $# -lt 2 ]]; then
                 echo "❌ --episode-workdir requires a directory" >&2
@@ -183,7 +199,7 @@ while [[ $# -gt 0 ]]; do
             PASSTHROUGH_ARGS+=(--output-profile "${1#*=}")
             shift
             ;;
-        --no-gif|--no-save-gif|--save-gif|--no-vlm-artifacts|--save-vlm-artifacts|--save-step-images|--no-save-step-images|--no-report)
+        --no-gif|--no-save-gif|--save-gif|--no-vlm-artifacts|--save-vlm-artifacts|--save-map-artifacts|--no-save-map-artifacts|--save-local-map|--no-local-map|--save-step-images|--no-save-step-images|--no-report)
             PASSTHROUGH_ARGS+=("$1")
             shift
             ;;

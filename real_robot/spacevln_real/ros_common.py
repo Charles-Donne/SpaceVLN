@@ -143,31 +143,54 @@ def relative_pose_delta(prev_pose: PoseFrame, next_pose: PoseFrame) -> Tuple[flo
 def image_msg_to_numpy(msg: Any) -> np.ndarray:
     height = int(getattr(msg, "height", 0) or 0)
     width = int(getattr(msg, "width", 0) or 0)
+    step = int(getattr(msg, "step", 0) or 0)
+    is_bigendian = bool(getattr(msg, "is_bigendian", 0) or 0)
     encoding = str(getattr(msg, "encoding", "") or "").lower()
     raw = np.frombuffer(bytes(getattr(msg, "data", b"")), dtype=np.uint8)
     if not height or not width:
         raise ValueError("invalid image size")
 
+    def rows_for(min_row_bytes: int) -> np.ndarray:
+        row_bytes = int(step or min_row_bytes)
+        if row_bytes < min_row_bytes:
+            raise ValueError("image step is smaller than expected for %s" % encoding)
+        needed = int(height) * row_bytes
+        if raw.size < needed:
+            raise ValueError("image data is shorter than height * step")
+        return raw[:needed].reshape(height, row_bytes)
+
     if encoding in {"rgb8", "bgr8"}:
-        expected = height * width * 3
-        array = raw[:expected].reshape(height, width, 3)
+        row_bytes = width * 3
+        array = rows_for(row_bytes)[:, :row_bytes].reshape(height, width, 3)
         if encoding == "bgr8":
             array = array[:, :, ::-1]
         return array.copy()
 
     if encoding in {"mono8", "8uc1"}:
-        expected = height * width
-        return raw[:expected].reshape(height, width).copy()
+        row_bytes = width
+        return rows_for(row_bytes)[:, :row_bytes].reshape(height, width).copy()
 
     if encoding in {"mono16", "16uc1"}:
-        array_u16 = np.frombuffer(bytes(getattr(msg, "data", b"")), dtype=np.uint16)
-        expected = height * width
-        return array_u16[:expected].reshape(height, width).copy()
+        row_bytes = width * 2
+        dtype = np.dtype(">u2" if is_bigendian else "<u2")
+        return (
+            rows_for(row_bytes)[:, :row_bytes]
+            .copy()
+            .view(dtype)
+            .reshape(height, width)
+            .astype(np.uint16, copy=False)
+        )
 
     if encoding in {"32fc1"}:
-        array_f32 = np.frombuffer(bytes(getattr(msg, "data", b"")), dtype=np.float32)
-        expected = height * width
-        return array_f32[:expected].reshape(height, width).copy()
+        row_bytes = width * 4
+        dtype = np.dtype(">f4" if is_bigendian else "<f4")
+        return (
+            rows_for(row_bytes)[:, :row_bytes]
+            .copy()
+            .view(dtype)
+            .reshape(height, width)
+            .astype(np.float32, copy=False)
+        )
 
     raise ValueError("unsupported image encoding: %s" % encoding)
 

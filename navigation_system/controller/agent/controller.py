@@ -3245,6 +3245,7 @@ class NavigationAgentController(BaseNavigationController):
                 duration_s=float(timing_record.get("duration_s", 0.0) or 0.0),
                 success=is_success,
                 next_waypoint=self._get_next_waypoint_field(response) if is_success and response else "",
+                vlm_info=dict(timing_record.get("vlm_info") or {}),
             )
         if planner_timing_records:
             self.timing_tracker.add_failed_retry_wait(
@@ -3782,6 +3783,7 @@ class NavigationAgentController(BaseNavigationController):
                 duration_s=action_request_duration_s,
                 success=bool(action_id is not None),
                 action_name=action_name,
+                vlm_info=dict(getattr(self.action_executor, "last_vlm_info_payload", {}) or {}),
             )
 
             if action_id is None and self.action_executor.is_last_call_non_retryable():
@@ -3891,6 +3893,35 @@ class NavigationAgentController(BaseNavigationController):
         )
         return auto_completed_subtask
     
+    def _env_supports_continuous_action_targets(self) -> bool:
+        checker = getattr(self.envs, "supports_continuous_action_targets", None)
+        if callable(checker):
+            try:
+                return bool(checker())
+            except Exception:
+                return False
+        return bool(getattr(self.envs, "continuous_action_targets", False))
+
+    def _build_env_action_payload(
+        self,
+        action_id: int,
+        action_name: Optional[str],
+    ) -> Any:
+        if not self._env_supports_continuous_action_targets():
+            return action_id
+
+        action_name_upper = str(action_name or "").strip().upper()
+        payload: Dict[str, Any] = {"action": action_id}
+        if action_name_upper == "MOVE_FORWARD":
+            payload["target_meters"] = float(
+                self.last_planned_meters or self.move_distance
+            )
+        elif action_name_upper in ("TURN_LEFT", "TURN_RIGHT"):
+            payload["target_degrees"] = float(
+                self.last_planned_degrees or self.turn_angle
+            )
+        return payload
+
     def execute_action_with_vlm(self) -> Tuple[Optional[int], Optional[str], bool, int, Optional[Dict]]:
         """Query the VLM for the next action and execute it."""
         if not self.action_executor or not self.current_subtask:
@@ -4107,14 +4138,21 @@ class NavigationAgentController(BaseNavigationController):
             if degrees > 0:
                 repeat_count = max(1, round(degrees / self.action_executor.turn_angle))
         elif action_name == 'MOVE_FORWARD':
-            # Each forward step is 0.25 m.
+            # Simulator envs still need repeated primitive steps. Real-robot envs
+            # receive the VLM-selected distance as one continuous low-level target.
             if meters > 0:
                 repeat_count = max(1, round(meters / self.action_executor.move_distance))
+        if (
+            self._env_supports_continuous_action_targets()
+            and action_name in {"MOVE_FORWARD", "TURN_LEFT", "TURN_RIGHT"}
+        ):
+            repeat_count = 1
         
         return action_id, action_name, should_stop, repeat_count, response
     
     def step_with_vlm(self, action: int, action_name: str = "", save_vis: bool = True,
-                      enable_landmark_detection: bool = False) -> Dict[str, Any]:
+                      enable_landmark_detection: bool = False,
+                      env_action: Any = None) -> Dict[str, Any]:
         """
         Execute one VLM action, call the shared `step`, and cache observations.
 
@@ -4137,6 +4175,7 @@ class NavigationAgentController(BaseNavigationController):
             save_vis,
             phase,
             enable_landmark_detection=enable_landmark_detection,
+            env_action=env_action,
         )
         # Cache latest observations / info for the next VLM decision and visualization.
         self.latest_obs = result.get('obs', None)
@@ -4285,11 +4324,13 @@ class NavigationAgentController(BaseNavigationController):
                     return 'thinking'
 
                 pose_before_low_level = self._get_agent_pose()
+                env_action = self._build_env_action_payload(action_id, action_name)
                 result = self.step_with_vlm(
                     action_id,
                     action_name=action_name,
                     save_vis=True,
                     enable_landmark_detection=False,
+                    env_action=env_action,
                 )
                 pose_after_low_level = self._get_agent_pose()
                 low_level_actual_meters = float(np.hypot(
@@ -4614,9 +4655,12 @@ class NavigationAgentController(BaseNavigationController):
             'failed_wasted_duration_s': episode_timing_summary['failed_wasted_duration_s'],
             'thinking_api_summary': episode_timing_summary['thinking_api_summary'],
             'action_api_summary': episode_timing_summary['action_api_summary'],
+            'vlm_usage_summary': episode_timing_summary.get('vlm_usage_summary', {}),
             'local_timing_summary': episode_timing_summary.get('local_timing_summary', {}),
             'gif_path': gif_path,
             'topdown_path': topdown_path,
+            'global_map_path': getattr(self, 'latest_global_map', None),
+            'local_map_path': getattr(self, 'latest_local_map', None),
             'result_file': final_result,
             'reason': final_failure_reason,
         }
@@ -4792,6 +4836,7 @@ class NavigationAgentController(BaseNavigationController):
         failed_wasted_duration_s = episode_timing_summary['failed_wasted_duration_s']
         thinking_api_summary = episode_timing_summary['thinking_api_summary']
         action_api_summary = episode_timing_summary['action_api_summary']
+        vlm_usage_summary = episode_timing_summary.get("vlm_usage_summary", {})
         local_timing_summary = episode_timing_summary.get('local_timing_summary', {})
         
         # Extract and validate core metrics.
@@ -4821,9 +4866,12 @@ class NavigationAgentController(BaseNavigationController):
 
             'thinking_api_summary': thinking_api_summary,
             'action_api_summary': action_api_summary,
+            'vlm_usage_summary': vlm_usage_summary,
             'local_timing_summary': local_timing_summary,
             'gif_path': str(gif_path or ""),
             'topdown_path': str(topdown_path or ""),
+            'global_map_path': str(getattr(self, 'latest_global_map', None) or ""),
+            'local_map_path': str(getattr(self, 'latest_local_map', None) or ""),
             'timestamp': datetime.now().isoformat()
         }
         if getattr(self, "sample_index", None) is not None:

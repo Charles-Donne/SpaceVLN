@@ -47,6 +47,7 @@ vlnce_baselines/detection/models/*.pt
 
 # API Keys and Secrets (CRITICAL - DO NOT COMMIT)
 /navigation_system/config/vlm/*.yaml
+!/navigation_system/config/vlm/model_pricing.yaml
 !/navigation_system/config/vlm/*.yaml.template
 .env
 secrets.yaml

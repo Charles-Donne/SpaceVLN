@@ -6,6 +6,7 @@ import re
 from navigation_system.config.core.params.actions import (
     ACTION_SUBTASK_AUTOCOMPLETE_OPEN_DISTANCE_M,
     ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M,
+    VALID_MOVE_METERS,
 )
 from navigation_system.config.core.params.thresholds import (
     ARRIVAL_NEAR_M,
@@ -66,6 +67,35 @@ def _fmt_threshold_m(value: float) -> str:
     if text.endswith("00"):
         return f"{float(value):.1f}"
     return text.rstrip("0").rstrip(".")
+
+
+def _fmt_action_meters(value: float) -> str:
+    text = f"{float(value):g}"
+    return f"{text}m"
+
+
+def _resolve_move_values(move_distance: float = 0.25) -> tuple:
+    try:
+        base_distance = float(move_distance)
+    except (TypeError, ValueError):
+        base_distance = 0.25
+    if base_distance >= 0.5:
+        return (0.5, 0.75, 1.0, 1.25, 1.5)
+    return tuple(float(value) for value in VALID_MOVE_METERS)
+
+
+def _move_action_choices(move_distance: float = 0.25) -> list:
+    return [
+        f"MOVE_FORWARD {_fmt_action_meters(value)}"
+        for value in _resolve_move_values(move_distance)
+    ]
+
+
+def _move_action_set_text(move_distance: float = 0.25) -> str:
+    return ", ".join(
+        _fmt_action_meters(value)
+        for value in _resolve_move_values(move_distance)
+    )
 
 
 def _normalize_anchor_notation_text(prompt: str) -> str:
@@ -337,19 +367,11 @@ def _normalize_allowed_action_names(allowed_action_names=None):
     return ordered or list(DEFAULT_ALLOWED_ACTION_NAMES)
 
 
-def _build_allowed_action_output(allowed_action_names=None) -> str:
+def _build_allowed_action_output(allowed_action_names=None, move_distance: float = 0.25) -> str:
     ordered = _normalize_allowed_action_names(allowed_action_names)
     choices = []
     if "MOVE_FORWARD" in ordered:
-        choices.extend(
-            [
-                "MOVE_FORWARD 0.25m",
-                "MOVE_FORWARD 0.5m",
-                "MOVE_FORWARD 0.75m",
-                "MOVE_FORWARD 1.0m",
-                "MOVE_FORWARD 1.25m",
-            ]
-        )
+        choices.extend(_move_action_choices(move_distance))
     if "TURN_LEFT" in ordered:
         choices.extend(["TURN_LEFT_AVOID 30deg", "TURN_LEFT_ALIGN 30deg"])
     if "TURN_RIGHT" in ordered:
@@ -359,12 +381,12 @@ def _build_allowed_action_output(allowed_action_names=None) -> str:
     return " | ".join(choices)
 
 
-def _build_allowed_action_bullets(allowed_action_names=None) -> str:
+def _build_allowed_action_bullets(allowed_action_names=None, move_distance: float = 0.25) -> str:
     ordered = _normalize_allowed_action_names(allowed_action_names)
     lines = []
     if "MOVE_FORWARD" in ordered:
         lines.append(
-            "- `MOVE_FORWARD {0.25m, 0.5m, 0.75m, 1.0m, 1.25m}`: move forward by the selected distance"
+            f"- `MOVE_FORWARD {{{_move_action_set_text(move_distance)}}}`: move forward by the selected distance"
         )
     if "TURN_LEFT" in ordered:
         lines.append(
@@ -400,7 +422,7 @@ def _build_action_space_constraint_notice(allowed_action_names=None) -> str:
     )
 
 
-def _normalize_action_prompt_text(prompt: str) -> str:
+def _normalize_action_prompt_text(prompt: str, *, move_distance: float = 0.25) -> str:
     normalized = str(prompt or "")
     literal_replacements = (
         (
@@ -461,11 +483,11 @@ def _normalize_action_prompt_text(prompt: str) -> str:
         ),
         (
             "Output `action` only from the fixed action space: `TURN_LEFT 30deg` / `TURN_RIGHT 30deg` / `MOVE_FORWARD {{0.25m, 0.5m, 0.75m, 1.0m, 1.25m}}` / `STOP`.",
-            "Output `action` only from the fixed action space: `TURN_LEFT_AVOID 30deg` / `TURN_LEFT_ALIGN 30deg` / `TURN_RIGHT_AVOID 30deg` / `TURN_RIGHT_ALIGN 30deg` / `MOVE_FORWARD {{0.25m, 0.5m, 0.75m, 1.0m, 1.25m}}` / `STOP`.",
+            f"Output `action` only from the fixed action space: `TURN_LEFT_AVOID 30deg` / `TURN_LEFT_ALIGN 30deg` / `TURN_RIGHT_AVOID 30deg` / `TURN_RIGHT_ALIGN 30deg` / `MOVE_FORWARD {{{{{_move_action_set_text(move_distance)}}}}}` / `STOP`.",
         ),
         (
             "Output `action` only from the fixed action space: `TURN_LEFT 30deg` / `TURN_RIGHT 30deg` / `MOVE_FORWARD {0.25m, 0.5m, 0.75m, 1.0m, 1.25m}` / `STOP`.",
-            "Output `action` only from the fixed action space: `TURN_LEFT_AVOID 30deg` / `TURN_LEFT_ALIGN 30deg` / `TURN_RIGHT_AVOID 30deg` / `TURN_RIGHT_ALIGN 30deg` / `MOVE_FORWARD {0.25m, 0.5m, 0.75m, 1.0m, 1.25m}` / `STOP`.",
+            f"Output `action` only from the fixed action space: `TURN_LEFT_AVOID 30deg` / `TURN_LEFT_ALIGN 30deg` / `TURN_RIGHT_AVOID 30deg` / `TURN_RIGHT_ALIGN 30deg` / `MOVE_FORWARD {{{_move_action_set_text(move_distance)}}}` / `STOP`.",
         ),
         (
             "toward the current-stage destination",
@@ -527,7 +549,6 @@ def build_action_prompt_bundle(
 ) -> PromptBundle:
     """Render the action-execution system/user prompt bundle."""
     del waypoint_summary
-    del move_distance
     del turn_angle
     if not progress_summary:
         progress_summary = "Just started"
@@ -535,7 +556,7 @@ def build_action_prompt_bundle(
     system_prompt = _normalize_action_prompt_text(_render_action_system_prompt(
         model_name=model_name,
         prompt_profile=prompt_profile,
-    ))
+    ), move_distance=move_distance)
     user_template = _select_prompt_template(
         ACTION_USER_PROMPT,
         FAST_ACTION_USER_PROMPT,
@@ -553,10 +574,10 @@ def build_action_prompt_bundle(
             detected_landmarks=detected_landmarks,
             landmark_map_info=landmark_map_info,
         ),
-        allowed_action_output=_build_allowed_action_output(allowed_action_names),
-        allowed_action_bullets=_build_allowed_action_bullets(allowed_action_names),
+        allowed_action_output=_build_allowed_action_output(allowed_action_names, move_distance),
+        allowed_action_bullets=_build_allowed_action_bullets(allowed_action_names, move_distance),
         action_space_constraint_notice=_build_action_space_constraint_notice(allowed_action_names),
-    ))
+    ), move_distance=move_distance)
     return PromptBundle(
         system_prompt=system_prompt,
         user_prompt=user_prompt,

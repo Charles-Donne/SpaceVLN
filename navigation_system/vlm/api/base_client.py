@@ -20,6 +20,7 @@ from navigation_system.config.core.params.api import (
 )
 from navigation_system.vlm.api.config import APIConfig
 from navigation_system.vlm.prompts.common import PromptBundle
+from navigation_system.vlm.reporting.usage import DEFAULT_CURRENCY, estimate_vlm_usage_cost
 
 
 class BaseAPIClient(ABC):
@@ -39,6 +40,7 @@ class BaseAPIClient(ABC):
         self.last_request_latency_s = 0.0
         self.last_total_call_duration_s = 0.0
         self.last_http_status = 0
+        self.last_vlm_info_payload = {}
 
     def _set_last_call_outcome(self, status: str, error: str = "") -> None:
         self.last_call_status = str(status or "unknown").strip() or "unknown"
@@ -236,6 +238,35 @@ class BaseAPIClient(ABC):
             usage_dict.get("total_tokens", input_tokens + output_tokens),
             input_tokens + output_tokens,
         )
+        cache_payload: Dict[str, Any] = {}
+        cached_tokens = self._safe_int(details.get("cached_tokens", usage_dict.get("cached_tokens", 0)), 0)
+        cache_creation = details.get("cache_creation")
+        cache_creation_input_tokens = self._safe_int(
+            details.get("cache_creation_input_tokens", usage_dict.get("cache_creation_input_tokens", 0)),
+            0,
+        )
+        if isinstance(cache_creation, dict):
+            cache_creation_input_tokens = self._safe_int(
+                cache_creation.get("cache_creation_input_tokens")
+                or cache_creation.get("ephemeral_5m_input_tokens")
+                or cache_creation_input_tokens,
+                cache_creation_input_tokens,
+            )
+        if cached_tokens > 0 or cache_creation_input_tokens > 0:
+            cache_type = "implicit" if cache_creation_input_tokens <= 0 else "provider"
+            cache_enabled = True
+            uncached_tokens = max(
+                0,
+                input_tokens - max(0, cached_tokens) - max(0, cache_creation_input_tokens),
+            )
+            cache_payload = {
+                "enabled": cache_enabled,
+                "type": cache_type,
+                "reported": bool(cached_tokens > 0 or cache_creation_input_tokens > 0),
+                "cached_tokens": cached_tokens,
+                "write_tokens": cache_creation_input_tokens,
+                "uncached_tokens": uncached_tokens,
+            }
         payload: Dict[str, Any] = {
             "model": str(getattr(self.config, "model", "") or ""),
             "provider": str(getattr(self.config, "provider", "") or ""),
@@ -262,6 +293,34 @@ class BaseAPIClient(ABC):
             "output_tokens": output_tokens,
             "total_tokens": total_tokens,
         }
+        if cache_payload:
+            baseline_tokens = max(1, input_tokens)
+            cache_cfg = {
+                "enabled": bool(cache_payload.get("enabled", False)),
+                "type": str(cache_payload.get("type", "")),
+                "reported": bool(cache_payload.get("reported", False)),
+                "cached_tokens": int(cache_payload.get("cached_tokens", 0) or 0),
+                "write_tokens": int(cache_payload.get("write_tokens", 0) or 0),
+                "uncached_tokens": int(cache_payload.get("uncached_tokens", 0) or 0),
+            }
+            cache_cfg["hit_ratio"] = round(float(cache_cfg["cached_tokens"]) / float(baseline_tokens), 4)
+            if cache_cfg["type"] == "provider":
+                read_multiplier = 0.10
+                write_multiplier = 1.25
+            elif cache_cfg["type"] == "implicit":
+                read_multiplier = 0.20
+                write_multiplier = 1.00
+            else:
+                read_multiplier = 1.0
+                write_multiplier = 1.0
+            cache_cfg["cost_ratio"] = round(
+                float(cache_cfg["uncached_tokens"]) / float(baseline_tokens)
+                + float(cache_cfg["cached_tokens"]) * float(read_multiplier) / float(baseline_tokens)
+                + float(cache_cfg["write_tokens"]) * float(write_multiplier) / float(baseline_tokens),
+                4,
+            )
+            cache_cfg["savings_ratio"] = round(1.0 - float(cache_cfg["cost_ratio"]), 4)
+            payload["cache"] = cache_cfg
         status = str(getattr(self, "last_call_status", "") or "").strip()
         error = str(getattr(self, "last_call_error", "") or "").strip()
         http_status = int(getattr(self, "last_http_status", 0) or 0)
@@ -280,13 +339,29 @@ class BaseAPIClient(ABC):
         save_dir: Optional[str],
         payload: Dict[str, Any],
     ) -> None:
-        self._save_json_artifact(save_dir, "vlm_info.json", payload)
+        enriched_payload = dict(payload or {})
+        cost_payload = estimate_vlm_usage_cost(enriched_payload)
+        if bool(cost_payload.get("cost_available", False)):
+            enriched_payload["cost"] = {
+                "currency": str(cost_payload.get("currency") or DEFAULT_CURRENCY),
+                "input_cost": round(float(cost_payload.get("input_cost", 0.0) or 0.0), 8),
+                "output_cost": round(float(cost_payload.get("output_cost", 0.0) or 0.0), 8),
+                "total_cost": round(float(cost_payload.get("total_cost", 0.0) or 0.0), 8),
+                "billed_input_tokens": round(float(cost_payload.get("billed_input_tokens", 0.0) or 0.0), 4),
+                "input_price_per_1m": float(cost_payload.get("input_price_per_1m", 0.0) or 0.0),
+                "output_price_per_1m": float(cost_payload.get("output_price_per_1m", 0.0) or 0.0),
+            }
+        self.last_vlm_info_payload = enriched_payload
+        self._save_json_artifact(save_dir, "vlm_info.json", enriched_payload)
 
     def _update_vlm_info_artifact(
         self,
         save_dir: Optional[str],
         patch: Dict[str, Any],
     ) -> None:
+        current_payload = dict(getattr(self, "last_vlm_info_payload", {}) or {})
+        current_payload.update(dict(patch or {}))
+        self.last_vlm_info_payload = current_payload
         if not (save_dir and self.save_request_artifacts):
             return
         info_path = os.path.join(save_dir, "vlm_info.json")
@@ -861,6 +936,7 @@ class BaseAPIClient(ABC):
         self._set_last_http_status(0)
         self._set_last_call_timing(request_latency_s=0.0, total_call_duration_s=0.0)
         self._set_last_response_artifacts(response_text="", parsed_payload=None)
+        self.last_vlm_info_payload = {}
         try:
             system_prompt, user_prompt = self._normalize_prompt_for_request(prompt)
             

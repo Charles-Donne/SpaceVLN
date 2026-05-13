@@ -9,6 +9,7 @@ from navigation_system.runtime.storage.naming import (
     build_subtask_name,
     build_subtask_name_from_token,
 )
+from navigation_system.runtime.failure_policy import should_skip_best_log_for_failure
 
 
 DETAIL_DIR_NAME = "detail"
@@ -124,6 +125,9 @@ class SaveManager:
     COMMON_DETAIL_RESULT_TAIL_FIELDS = (
         "thinking_api_summary",
         "action_api_summary",
+        "global_map_path",
+        "local_map_path",
+        "vlm_usage_summary",
         "timestamp",
         "sr",
         "ne",
@@ -149,6 +153,8 @@ class SaveManager:
         "oracle_spl",
         "thinking_api_summary",
         "action_api_summary",
+        "global_map_path",
+        "local_map_path",
         "timestamp",
         "sr",
         "osr",
@@ -212,6 +218,7 @@ class SaveManager:
         ("spl", 0.0),
         ("thinking_api_summary", {}),
         ("action_api_summary", {}),
+        ("vlm_usage_summary", {}),
         ("path_length", 0.0),
         ("timestamp", None),
     )
@@ -240,6 +247,8 @@ class SaveManager:
         "error",
         "gif_path",
         "topdown_path",
+        "global_map_path",
+        "local_map_path",
     )
     REQUIRED_RESULT_FIELDS = (
         "episode_id",
@@ -262,6 +271,33 @@ class SaveManager:
         "avg_duration_s",
         "total_duration_s",
         "failed_total_duration_s",
+    )
+    LOG_USAGE_SECTION_FIELDS = (
+        "count",
+        "currency",
+        "cost_available_count",
+        "cost_unavailable_count",
+        "token_available_count",
+        "token_unavailable_count",
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "avg_total_tokens",
+        "cached_tokens",
+        "cache_write_tokens",
+        "uncached_tokens",
+        "cached_nonzero_tokens",
+        "cache_write_nonzero_tokens",
+        "uncached_nonzero_tokens",
+        "cache_reported_count",
+        "cache_nonzero_count",
+        "weighted_cache_hit_ratio",
+        "cache_cost_ratio",
+        "cache_savings_ratio",
+        "input_cost",
+        "output_cost",
+        "total_cost",
+        "avg_cost_per_call",
     )
     
     def __init__(
@@ -524,6 +560,30 @@ class SaveManager:
         return cls._copy_present_fields(result, fields)
 
     @classmethod
+    def _compact_api_summary_for_log(cls, summary: Optional[Dict]) -> Dict:
+        """Keep only timing fields required by completeness/ranking/reporting."""
+        if not isinstance(summary, dict):
+            return {}
+        return cls._copy_present_fields(summary, cls.API_SUMMARY_FIELDS)
+
+    @classmethod
+    def _compact_usage_section_for_log(cls, summary: Optional[Dict]) -> Dict:
+        if not isinstance(summary, dict):
+            return {}
+        return cls._copy_present_fields(summary, cls.LOG_USAGE_SECTION_FIELDS)
+
+    @classmethod
+    def _compact_usage_summary_for_log(cls, summary: Optional[Dict]) -> Dict:
+        if not isinstance(summary, dict):
+            return {}
+        payload = {}
+        for key in ("thinking", "action", "overall"):
+            compact = cls._compact_usage_section_for_log(summary.get(key))
+            if compact:
+                payload[key] = compact
+        return payload
+
+    @classmethod
     def _build_log_result(cls, result: Dict) -> Dict:
         """Build the per-entry best summary used by reports and skip-sr1."""
         log_result = {}
@@ -532,7 +592,12 @@ class SaveManager:
                 default = datetime.now().isoformat()
             if key == "failed_wasted_duration_s":
                 default = result.get("failed_api_total_duration_s", 0.0)
-            log_result[key] = result.get(key, default)
+            if key in {"thinking_api_summary", "action_api_summary"}:
+                log_result[key] = cls._compact_api_summary_for_log(result.get(key))
+            elif key == "vlm_usage_summary":
+                log_result[key] = cls._compact_usage_summary_for_log(result.get(key))
+            else:
+                log_result[key] = result.get(key, default)
 
         benchmark = cls._result_benchmark(result)
         for key in cls.LOG_OPTIONAL_FIELD_SETS.get(benchmark, ()):
@@ -571,7 +636,10 @@ class SaveManager:
 
         existing_best_log = self._load_json_if_exists(log_path)
         compare_baseline = existing_best_log if self.is_complete_result(existing_best_log) else None
-        new_best_candidate_is_complete = self.is_complete_result(log_result)
+        new_best_candidate_is_complete = (
+            self.is_complete_result(log_result)
+            and not should_skip_best_log_for_failure(log_result)
+        )
         should_update_best = (
             new_best_candidate_is_complete
             and (

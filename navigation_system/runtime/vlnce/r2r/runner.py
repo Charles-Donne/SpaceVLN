@@ -9,6 +9,10 @@ from navigation_system.runtime.episode_io import (
     is_abnormal_episode_failure,
     should_suppress_normal_failure_reason,
 )
+from navigation_system.runtime.failure_policy import (
+    is_initial_planner_api_error_result,
+    resolve_max_initial_planner_api_errors,
+)
 from navigation_system.runtime.vlnce.r2r.episode_selection import (
     filter_episode_ids,
     get_available_episode_ids,
@@ -179,6 +183,15 @@ def build_arg_parser(
         type=int,
         default=None,
         help="Episode rerun attempts for retryable initial failures (default: 3)",
+    )
+    parser.add_argument(
+        "--max-initial-planner-api-errors",
+        type=int,
+        default=None,
+        help=(
+            "Abort a batch after this many initial planner API failures "
+            "(default: max(10, 2 * parallel-workers); <=0 disables)"
+        ),
     )
     parser.add_argument(
         "--skip-sr1",
@@ -390,22 +403,39 @@ def run_navigation_from_args(
             profile=profile,
         )
     else:
+        initial_planner_api_error_count = 0
+        max_initial_planner_api_errors = resolve_max_initial_planner_api_errors(
+            getattr(args, "max_initial_planner_api_errors", None),
+            worker_count=1,
+        )
         for idx, episode_id in enumerate(episode_ids, 1):
             sample_index = dict(getattr(args, "_sample_index_by_episode", {}) or {}).get(int(episode_id))
             run_args = argparse.Namespace(**vars(args))
             run_args.sample_index = int(sample_index) if sample_index is not None else None
             run_args.storage_entry_id = int(sample_index) if sample_index is not None else int(episode_id)
             run_args.entry_kind = "sample" if sample_index is not None else "episode"
-            results_summary.append(
-                run_single_episode(
-                    config,
-                    run_args,
-                    episode_id=episode_id,
-                    index=idx,
-                    total=len(episode_ids),
-                    profile=profile,
-                )
+            result = run_single_episode(
+                config,
+                run_args,
+                episode_id=episode_id,
+                index=idx,
+                total=len(episode_ids),
+                profile=profile,
             )
+            results_summary.append(result)
+            if is_initial_planner_api_error_result(result):
+                initial_planner_api_error_count += 1
+                if (
+                    max_initial_planner_api_errors > 0
+                    and initial_planner_api_error_count >= max_initial_planner_api_errors
+                ):
+                    print(
+                        "[Abort] Too many initial planner API errors "
+                        f"({initial_planner_api_error_count}/{max_initial_planner_api_errors}); "
+                        "stop remaining R2R-CE episodes.",
+                        flush=True,
+                    )
+                    break
 
     failed_results = [item for item in results_summary if is_abnormal_episode_failure(item)]
     if failed_results:

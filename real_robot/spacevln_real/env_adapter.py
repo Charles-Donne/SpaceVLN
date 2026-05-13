@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import math
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -19,6 +20,18 @@ ACTION_ID_TO_NAME = {
     1: "MOVE_FORWARD",
     2: "TURN_LEFT",
     3: "TURN_RIGHT",
+}
+
+ACTION_NAME_ALIASES = {
+    "STOP": "STOP",
+    "MOVE_FORWARD": "MOVE_FORWARD",
+    "FORWARD": "MOVE_FORWARD",
+    "TURN_LEFT": "TURN_LEFT",
+    "LEFT": "TURN_LEFT",
+    "TURN_RIGHT": "TURN_RIGHT",
+    "RIGHT": "TURN_RIGHT",
+    "LOOK_AROUND_360": "LOOK_AROUND_360",
+    "SCAN_360": "LOOK_AROUND_360",
 }
 
 
@@ -70,9 +83,16 @@ class RealRobotVectorEnv:
         self._oracle_success = 0
         self._min_distance_to_goal = float("inf")
         self._goal_seen = False
+        self._final_navigation_success: Optional[bool] = None
 
     def current_episodes(self):
         return [self._current_episode]
+
+    def supports_continuous_action_targets(self) -> bool:
+        return True
+
+    def supports_continuous_lookaround_scan(self) -> bool:
+        return True
 
     def _normalize_action(self, raw_action: Any) -> str:
         action = raw_action
@@ -86,12 +106,47 @@ class RealRobotVectorEnv:
         if hasattr(action, "name"):
             action_name = str(getattr(action, "name", "") or "").strip().upper()
             if action_name:
-                return action_name
+                return ACTION_NAME_ALIASES.get(action_name, action_name)
+        if isinstance(action, str):
+            action_name = action.strip().upper().replace("-", "_")
+            if action_name in ACTION_NAME_ALIASES:
+                return ACTION_NAME_ALIASES[action_name]
         try:
             action_id = int(action)
         except Exception:
             action_id = -1
         return ACTION_ID_TO_NAME.get(action_id, "STOP")
+
+    @staticmethod
+    def _positive_float_or_none(value: Any) -> Optional[float]:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not np.isfinite(parsed) or parsed <= 0.0:
+            return None
+        return float(parsed)
+
+    def _extract_action_targets(
+        self,
+        raw_action: Any,
+        action_name: str,
+    ) -> Tuple[Optional[float], Optional[float]]:
+        if not isinstance(raw_action, dict):
+            return None, None
+
+        target = dict(raw_action.get("target", {}) or {})
+        target_meters = self._positive_float_or_none(
+            raw_action.get("target_meters", target.get("meters"))
+        )
+        target_degrees = self._positive_float_or_none(
+            raw_action.get("target_degrees", target.get("degrees"))
+        )
+        if action_name != "MOVE_FORWARD":
+            target_meters = None
+        if action_name not in {"TURN_LEFT", "TURN_RIGHT", "LOOK_AROUND_360"}:
+            target_degrees = None
+        return target_meters, target_degrees
 
     def _capture_if_needed(self, reason: str) -> None:
         if str(self.config.capture_mode or "stream").strip().lower() != "trigger":
@@ -137,6 +192,10 @@ class RealRobotVectorEnv:
         self._goal_seen = bool(self._goal_seen or goal_reached)
         self._oracle_success = max(self._oracle_success, int(goal_reached))
         success = int(bool(stop_called and goal_reached))
+        success_source = "goal_status" if success else ""
+        if stop_called and self._final_navigation_success is not None:
+            success = int(bool(self._final_navigation_success))
+            success_source = "model_global_task_finish" if success else "model_not_finished"
 
         oracle_navigation_error = (
             float(self._min_distance_to_goal)
@@ -161,6 +220,10 @@ class RealRobotVectorEnv:
             "blocked": bool(status.blocked) if status is not None else False,
             "message": str(status.message or "") if status is not None else "",
             "action_status": dict(status.raw_payload) if status is not None else {},
+            "model_task_finished": bool(self._final_navigation_success)
+            if self._final_navigation_success is not None
+            else False,
+            "success_source": success_source,
         }
 
     def reset(self):
@@ -169,6 +232,7 @@ class RealRobotVectorEnv:
         self._oracle_success = 0
         self._goal_seen = False
         self._min_distance_to_goal = float("inf")
+        self._final_navigation_success = None
         self._capture_if_needed("episode_reset")
         self._latest_snapshot = self.observation_hub.wait_for_snapshot(
             timeout_s=float(self.config.observation_timeout_s),
@@ -180,7 +244,13 @@ class RealRobotVectorEnv:
         )
         return [self._snapshot_to_obs(self._latest_snapshot, (0.0, 0.0, 0.0))]
 
-    def _build_command(self, action_name: str) -> ActionCommand:
+    def _build_command(
+        self,
+        action_name: str,
+        *,
+        target_meters: Optional[float] = None,
+        target_degrees: Optional[float] = None,
+    ) -> ActionCommand:
         command = ActionCommand(
             action=str(action_name),
             timeout_s=float(self.config.action_timeout_s),
@@ -190,18 +260,27 @@ class RealRobotVectorEnv:
             step_id=self._steps_taken + 1,
         )
         if action_name == "MOVE_FORWARD":
-            command.forward_m = float(self.config.forward_step_m)
+            command.forward_m = float(target_meters or self.config.forward_step_m)
         elif action_name == "TURN_LEFT":
-            command.turn_deg = float(abs(self.config.turn_angle_deg))
+            command.turn_deg = float(abs(target_degrees or self.config.turn_angle_deg))
         elif action_name == "TURN_RIGHT":
-            command.turn_deg = float(abs(self.config.turn_angle_deg))
+            command.turn_deg = float(abs(target_degrees or self.config.turn_angle_deg))
+        elif action_name == "LOOK_AROUND_360":
+            command.turn_deg = float(abs(target_degrees or 360.0))
         return command
 
-    def step(self, actions):
-        if not isinstance(actions, (list, tuple)) or not actions:
-            raise ValueError("real robot env expects one action in a list")
+    def run_lookaround_scan(
+        self,
+        *,
+        sample_count: int = 12,
+        angle_step_deg: Optional[float] = None,
+        timeout_s: Optional[float] = None,
+    ) -> List[Tuple[Dict[str, Any], float, bool, Dict[str, Any]]]:
+        sample_total = max(1, int(sample_count or 12))
+        step_deg = float(angle_step_deg or self.config.turn_angle_deg or 30.0)
+        target_degrees = float(step_deg * sample_total)
+        command_timeout = float(timeout_s or max(self.config.action_timeout_s, target_degrees / 30.0 + 5.0))
 
-        action_name = self._normalize_action(actions[0])
         before_snapshot = self._latest_snapshot
         if before_snapshot is None:
             self.reset()
@@ -209,7 +288,109 @@ class RealRobotVectorEnv:
         if before_snapshot is None:
             raise RuntimeError("real robot env has no initial observation")
 
-        command = self._build_command(action_name)
+        command = self._build_command(
+            "LOOK_AROUND_360",
+            target_degrees=target_degrees,
+        )
+        command.timeout_s = command_timeout
+        payload = self.command_bridge.publish_action_command(command)
+        command_id = str(payload["command_id"])
+
+        outputs: List[Tuple[Dict[str, Any], float, bool, Dict[str, Any]]] = []
+        previous_snapshot = before_snapshot
+        previous_yaw = float(before_snapshot.pose.yaw_rad)
+        accumulated_yaw = 0.0
+        next_target_yaw = math.radians(step_deg)
+        after_stamp = float(before_snapshot.stamp)
+        deadline = payload.get("stamp", 0.0) + command_timeout
+        scan_status: Optional[ActionStatus] = None
+
+        while len(outputs) < sample_total:
+            status = self.command_bridge.get_status(command_id)
+            if status is not None and status.is_terminal():
+                scan_status = status
+                if not status.success:
+                    break
+
+            remaining = float(deadline) - time.time()
+            if remaining <= 0.0:
+                break
+
+            snapshot = self.observation_hub.wait_for_snapshot(
+                after_stamp=after_stamp,
+                timeout_s=min(float(self.config.observation_timeout_s), max(remaining, 0.1)),
+            )
+            after_stamp = float(snapshot.stamp)
+            yaw_delta = float(snapshot.pose.yaw_rad) - previous_yaw
+            while yaw_delta > math.pi:
+                yaw_delta -= 2.0 * math.pi
+            while yaw_delta < -math.pi:
+                yaw_delta += 2.0 * math.pi
+            previous_yaw = float(snapshot.pose.yaw_rad)
+            if yaw_delta > 0.0:
+                accumulated_yaw += yaw_delta
+
+            if accumulated_yaw + math.radians(2.0) < next_target_yaw:
+                continue
+
+            sensor_pose = relative_pose_delta(previous_snapshot.pose, snapshot.pose)
+            self._path_length_m += float(math.hypot(sensor_pose[0], sensor_pose[1]))
+            self._steps_taken += 1
+            self._latest_snapshot = snapshot
+            obs = self._snapshot_to_obs(snapshot, sensor_pose)
+            metrics = self._build_metrics(
+                status=scan_status,
+                stop_called=False,
+                done=False,
+            )
+            self._latest_metrics = dict(metrics)
+            outputs.append((obs, 0.0, False, dict(metrics)))
+            previous_snapshot = snapshot
+            next_target_yaw = math.radians(step_deg * (len(outputs) + 1))
+
+        if scan_status is None:
+            scan_status = self.command_bridge.wait_for_status(
+                command_id,
+                timeout_s=max(float(deadline) - time.time(), 0.1),
+            )
+        else:
+            self.command_bridge.pop_status(command_id)
+
+        if len(outputs) < sample_total:
+            raise TimeoutError(
+                "continuous lookaround scan captured %d/%d samples; status=%s message=%s"
+                % (
+                    len(outputs),
+                    sample_total,
+                    str(scan_status.state),
+                    str(scan_status.message),
+                )
+            )
+
+        return outputs
+
+    def step(self, actions):
+        if not isinstance(actions, (list, tuple)) or not actions:
+            raise ValueError("real robot env expects one action in a list")
+
+        raw_action = actions[0]
+        action_name = self._normalize_action(raw_action)
+        target_meters, target_degrees = self._extract_action_targets(
+            raw_action,
+            action_name,
+        )
+        before_snapshot = self._latest_snapshot
+        if before_snapshot is None:
+            self.reset()
+            before_snapshot = self._latest_snapshot
+        if before_snapshot is None:
+            raise RuntimeError("real robot env has no initial observation")
+
+        command = self._build_command(
+            action_name,
+            target_meters=target_meters,
+            target_degrees=target_degrees,
+        )
         status = self.command_bridge.send_action(command)
 
         self._capture_if_needed("post_%s" % action_name.lower())
@@ -250,11 +431,15 @@ class RealRobotVectorEnv:
         pose = self._latest_snapshot.pose
         return float(pose.x), float(pose.y), float(pose.yaw_rad)
 
-    def call_at(self, index: int, method_name: str):
+    def set_final_navigation_success(self, success: bool) -> bool:
+        self._final_navigation_success = bool(success)
+        return self._final_navigation_success
+
+    def call_at(self, index: int, method_name: str, *args, **kwargs):
         if int(index) != 0:
             raise IndexError("real robot env only exposes index 0")
         target = getattr(self, method_name)
-        return target()
+        return target(*args, **kwargs)
 
     def close(self) -> None:
         try:

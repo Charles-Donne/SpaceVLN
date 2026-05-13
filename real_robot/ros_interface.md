@@ -86,7 +86,7 @@ To keep ROS2 integration lightweight, the runtime uses:
   "step_id": 17,
   "action": "MOVE_FORWARD",
   "target": {
-    "meters": 0.25,
+    "meters": 0.5,
     "degrees": 0.0
   },
   "speed_hint": {
@@ -103,14 +103,16 @@ To keep ROS2 integration lightweight, the runtime uses:
 - `MOVE_FORWARD`
 - `TURN_LEFT`
 - `TURN_RIGHT`
+- `LOOK_AROUND_360`
 - `STOP`
 
 ### 2.3 Execution expectations
 
 The low-level controller should execute each command as a closed-loop motion:
 
-- `MOVE_FORWARD`: drive toward the requested distance
+- `MOVE_FORWARD`: drive toward the requested distance, typically 0.5m to 1.5m from the VLM action output
 - `TURN_LEFT` / `TURN_RIGHT`: rotate toward the requested angle
+- `LOOK_AROUND_360`: rotate continuously through the requested angle, normally 360 degrees; SpaceVLN samples the camera stream during the motion
 - `STOP`: stop immediately and publish a terminal status
 
 This should not be implemented as a single open-loop velocity pulse.
@@ -180,11 +182,17 @@ Strongly recommended:
 - `executed.degrees`
 - `blocked`
 - `collision`
-- `goal_reached`
-- `distance_to_goal_m`
 - `message`
 
-If the low-level stack does not estimate goal distance, use:
+Optional offline-evaluation fields:
+
+- `goal_reached`
+- `distance_to_goal_m`
+
+The real-robot runtime does not require these fields for stopping or success.
+It stops when the model/planner emits `global_task_finish=true` and the final
+`STOP` command returns. If the low-level stack does not estimate goal distance,
+use:
 
 - `goal_reached: false`
 - `distance_to_goal_m: null`
@@ -216,13 +224,14 @@ Reference implementation in this repository:
 
 Closed-loop behavior expected from the executor:
 
-- `MOVE_FORWARD`: keep publishing forward velocity until odometry shows the target distance was reached
+- `MOVE_FORWARD`: keep publishing forward velocity until odometry shows the requested target distance was reached
 - `TURN_LEFT`: keep publishing positive angular velocity until odometry shows the target rotation was reached
 - `TURN_RIGHT`: keep publishing negative angular velocity until odometry shows the target rotation was reached
+- `LOOK_AROUND_360`: keep publishing positive angular velocity and report unwrapped accumulated yaw, so a full 360 degree scan does not collapse to zero after angle normalization
 - `STOP`: publish zero velocity immediately and return a terminal status
 
-Avoid a pure time-based implementation such as "publish 0.15 m/s for 1.7 seconds
-and assume it moved 0.25 m". That will drift too much on real hardware.
+Avoid a pure time-based implementation such as "publish 0.15 m/s for 3.3 seconds
+and assume it moved 0.5 m". That will drift too much on real hardware.
 
 ## 4. Optional Capture Trigger
 
@@ -282,5 +291,4 @@ Second-stage additions:
 
 - `/oak/imu/data`
 - `/spacevln/capture/request`
-- `distance_to_goal_m`
-- `goal_reached`
+- optional offline-evaluation fields such as `distance_to_goal_m` and `goal_reached`

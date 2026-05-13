@@ -30,6 +30,10 @@ from navigation_system.runtime.episode_io import (
     redirect_process_output_to_null,
     save_episode_stdout_log_enabled,
 )
+from navigation_system.runtime.failure_policy import (
+    is_initial_planner_api_error_result,
+    resolve_max_initial_planner_api_errors,
+)
 from navigation_system.runtime.output_policy import (
     add_output_artifact_args,
     add_output_profile_arg,
@@ -262,6 +266,7 @@ def _build_parser_defaults(run_defaults: dict | None = None) -> dict:
                 defaults.get("save_request_artifacts", True),
             )
         ),
+        "save_map_artifacts": bool(defaults.get("save_map_artifacts", False)),
     }
 
 
@@ -940,6 +945,14 @@ def _build_episode_summary_row(
     sample_index: int | None = None,
 ) -> dict:
     saved_metrics = _resolve_saved_metrics(result)
+    usage_summary = saved_metrics.get("vlm_usage_summary")
+    if not isinstance(usage_summary, dict):
+        usage_summary = result.get("vlm_usage_summary") if isinstance(result.get("vlm_usage_summary"), dict) else {}
+    overall_usage = dict((usage_summary or {}).get("overall") or {})
+    cost_count = int(overall_usage.get("count", 0) or 0)
+    cost_available = int(overall_usage.get("cost_available_count", 0) or 0)
+    cost_unavailable = int(overall_usage.get("cost_unavailable_count", 0) or 0)
+    has_cost = cost_count > 0 and cost_available > 0 and cost_unavailable == 0
     return {
         "sample_index": int(sample_index) if sample_index is not None else None,
         "episode_id": int(episode_id),
@@ -991,6 +1004,12 @@ def _build_episode_summary_row(
         "result_file": str(result.get("result_file", "") or ""),
         "reason": str(result.get("reason", "") or ""),
         "error": str(result.get("error", "") or ""),
+        "tokens": int(overall_usage.get("total_tokens", 0) or 0),
+        "tokens_avg": float(overall_usage.get("avg_total_tokens", 0.0) or 0.0),
+        "cost": float(overall_usage.get("total_cost", 0.0) or 0.0) if has_cost else None,
+        "cost_avg": float(overall_usage.get("avg_cost_per_call", 0.0) or 0.0) if has_cost else None,
+        "cost_available": has_cost,
+        "cache_hit_ratio": float(overall_usage.get("weighted_cache_hit_ratio", 0.0) or 0.0),
     }
 
 
@@ -1027,6 +1046,7 @@ def _build_parallel_episode_spec(
         "save_step_images": bool(args.save_step_images),
         "save_gif": bool(args.save_gif),
         "save_vlm_artifacts": bool(args.save_vlm_artifacts),
+        "save_map_artifacts": bool(args.save_map_artifacts),
         "episode_id": int(episode_spec["episode_id"]),
         "sample_index": (
             int(episode_spec["sample_index"])
@@ -1105,6 +1125,7 @@ def _run_parallel_episode_job(job_spec: dict) -> dict:
             save_step_images=bool(job_spec["save_step_images"]),
             save_gif=bool(job_spec["save_gif"]),
             save_vlm_artifacts=bool(job_spec["save_vlm_artifacts"]),
+            save_map_artifacts=bool(job_spec["save_map_artifacts"]),
             model_stack_builder=_select_model_stack_builder(str(job_spec["runtime"])),
             base_dataset=discovery_dataset,
             episode_lookup=episode_lookup,
@@ -1175,6 +1196,12 @@ def _run_parallel_episodes(
     total = len(ordered_specs)
     next_job_cursor = 0
     results_by_order: List[dict | None] = [None] * total
+    initial_planner_api_error_count = 0
+    max_initial_planner_api_errors = resolve_max_initial_planner_api_errors(
+        getattr(args, "max_initial_planner_api_errors", None),
+        worker_count=worker_count,
+    )
+    abort_for_initial_api_errors = False
     mp_context = multiprocessing.get_context("spawn")
     interrupted = False
     executor = concurrent.futures.ProcessPoolExecutor(
@@ -1187,6 +1214,8 @@ def _run_parallel_episodes(
 
         def _submit_next_job(worker_index: int) -> bool:
             nonlocal next_job_cursor
+            if abort_for_initial_api_errors:
+                return False
             if next_job_cursor >= total:
                 return False
             job_spec = _build_parallel_episode_spec(
@@ -1225,7 +1254,8 @@ def _run_parallel_episodes(
                 job_spec = future_to_job.pop(future)
                 order_index = int(job_spec["index"]) - 1
                 try:
-                    results_by_order[order_index] = future.result()
+                    result_payload = future.result()
+                    results_by_order[order_index] = result_payload
                 except (KeyboardInterrupt, SystemExit):
                     interrupted = True
                     future.cancel()
@@ -1251,6 +1281,25 @@ def _run_parallel_episodes(
                         "reason": "parallel_worker_failed",
                         "error": _format_exception_message(exc),
                     }
+                    result_payload = results_by_order[order_index] or {}
+                if is_initial_planner_api_error_result(result_payload):
+                    initial_planner_api_error_count += 1
+                    if (
+                        max_initial_planner_api_errors > 0
+                        and initial_planner_api_error_count >= max_initial_planner_api_errors
+                    ):
+                        abort_for_initial_api_errors = True
+                        interrupted = True
+                        print(
+                            "[Abort] Too many initial planner API errors "
+                            f"({initial_planner_api_error_count}/{max_initial_planner_api_errors}); "
+                            "stop submitting remaining OVON episodes.",
+                            flush=True,
+                        )
+                        for pending_future in list(future_to_job.keys()):
+                            pending_future.cancel()
+                        future_to_job.clear()
+                        break
                 _submit_next_job(int(job_spec["worker_index"]))
     finally:
         _shutdown_parallel_executor(executor, interrupted=interrupted)
@@ -1268,6 +1317,7 @@ def _run_one_episode(
     save_step_images: bool,
     save_gif: bool,
     save_vlm_artifacts: bool,
+    save_map_artifacts: bool,
     model_stack_builder,
     base_dataset=None,
     episode_lookup: dict[int, list] | None = None,
@@ -1295,6 +1345,7 @@ def _run_one_episode(
         save_request_artifacts=save_vlm_artifacts,
         save_step_images=save_step_images,
         save_gif=save_gif,
+        save_map_artifacts=save_map_artifacts,
     )
     save_stdout_log = save_episode_stdout_log_enabled(runtime_config)
     episode_log_path = (
@@ -1424,9 +1475,23 @@ def _build_aggregate(all_results: Sequence[dict]) -> dict:
             "avg_distance_to_goal": 0.0,
             "avg_spl": 0.0,
             "avg_soft_spl": 0.0,
+            "avg_tokens": 0.0,
+            "avg_cost": None,
+            "avg_cost_per_episode": None,
+            "cost_available": False,
+            "cache_hit_ratio": 0.0,
         }
 
     rows = list(all_results)
+    tokens = sum(float(item.get("tokens", 0) or 0.0) for item in rows)
+    cost_rows = [item for item in rows if bool(item.get("cost_available", False))]
+    cost = sum(float(item.get("cost", 0.0) or 0.0) for item in cost_rows)
+    costs_available = len(cost_rows) == count
+    cache_hit_ratio = (
+        sum(float(item.get("cache_hit_ratio", 0.0) or 0.0) for item in rows) / count
+        if count > 0
+        else 0.0
+    )
     return {
         "episodes": count,
         "successes": sum(1 for item in rows if bool(item.get("success", False))),
@@ -1437,14 +1502,21 @@ def _build_aggregate(all_results: Sequence[dict]) -> dict:
         ),
         "avg_spl": sum(float(item.get("spl", 0.0) or 0.0) for item in rows) / count,
         "avg_soft_spl": sum(float(item.get("soft_spl", 0.0) or 0.0) for item in rows) / count,
+        "avg_tokens": tokens / count if count > 0 else 0.0,
+        "avg_cost": cost / count if costs_available and count > 0 else None,
+        "avg_cost_per_episode": cost / count if costs_available and count > 0 else None,
+        "cost_available": costs_available,
+        "cache_hit_ratio": cache_hit_ratio,
     }
 
 
 def _format_ovon_metric(value: float, digits: int = 4) -> str:
+    if value is None:
+        return "N/A"
     try:
         return f"{float(value):.{digits}f}"
     except Exception:
-        return "0.0"
+        return "N/A"
 
 
 def _write_ovon_reports(
@@ -1474,6 +1546,9 @@ def _write_ovon_reports(
         f"SoftSPL:       {_format_ovon_metric(float(aggregate.get('avg_soft_spl', 0.0) or 0.0), 3)}\n"
         f"Avg DTG:       {_format_ovon_metric(float(aggregate.get('avg_distance_to_goal', 0.0) or 0.0), 3)}m\n"
         f"Avg Steps:     {_format_ovon_metric(float(aggregate.get('avg_steps', 0.0) or 0.0), 2)}\n"
+        f"Avg Tokens:    {_format_ovon_metric(float(aggregate.get('avg_tokens', 0.0) or 0.0), 0)}\n"
+        f"Avg Cost:      {_format_ovon_metric(aggregate.get('avg_cost'), 6)}\n"
+        f"Cache Hit:     {_format_ovon_metric(float(aggregate.get('cache_hit_ratio', 0.0) or 0.0) * 100.0, 1)}%\n"
         f"Success dist:  {float(success_distance_m):.2f}m\n"
         f"Selection:     {summary_meta.get('selection_mode', 'episode_id_order')}\n"
         "========================================\n"
@@ -1497,6 +1572,11 @@ def _write_ovon_reports(
         "spl",
         "soft_spl",
         "steps",
+        "tokens",
+        "tokens_avg",
+        "cost",
+        "cost_avg",
+        "cache_hit_pct",
         "reason",
         "error",
     ]
@@ -1518,6 +1598,14 @@ def _write_ovon_reports(
                     "spl": _format_ovon_metric(float(row.get("spl", 0.0) or 0.0), 4),
                     "soft_spl": _format_ovon_metric(float(row.get("soft_spl", 0.0) or 0.0), 4),
                     "steps": int(row.get("steps", 0) or 0),
+                    "tokens": int(row.get("tokens", 0) or 0),
+                    "tokens_avg": _format_ovon_metric(float(row.get("tokens_avg", 0.0) or 0.0), 2),
+                    "cost": _format_ovon_metric(row.get("cost"), 8),
+                    "cost_avg": _format_ovon_metric(row.get("cost_avg"), 8),
+                    "cache_hit_pct": _format_ovon_metric(
+                        float(row.get("cache_hit_ratio", 0.0) or 0.0) * 100.0,
+                        2,
+                    ),
                     "reason": str(row.get("reason", "") or ""),
                     "error": str(row.get("error", "") or ""),
                 }
@@ -1526,43 +1614,22 @@ def _write_ovon_reports(
     md_lines = [
         "# OVON Episode Results",
         "",
-        "| Episode | Sample | SR | DTG(m) | SPL | SoftSPL | Steps |",
-        "| --- | --- | --- | --- | --- | --- | --- |",
+        "## Summary",
+        "",
+        "| Episodes | SR | SPL | SoftSPL | Avg DTG(m) | Avg Steps | Tok/Ep | Cost/Ep | CacheHit% |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| {episodes} | {sr} | {spl} | {soft_spl} | {dtg} | {steps} | {tokens} | {cost} | {cache_hit} |".format(
+            episodes=int(aggregate.get("episodes", 0) or 0),
+            sr=_format_ovon_metric(float(aggregate.get("success_rate", 0.0) or 0.0), 4),
+            spl=_format_ovon_metric(float(aggregate.get("avg_spl", 0.0) or 0.0), 4),
+            soft_spl=_format_ovon_metric(float(aggregate.get("avg_soft_spl", 0.0) or 0.0), 4),
+            dtg=_format_ovon_metric(float(aggregate.get("avg_distance_to_goal", 0.0) or 0.0), 4),
+            steps=_format_ovon_metric(float(aggregate.get("avg_steps", 0.0) or 0.0), 2),
+            tokens=_format_ovon_metric(float(aggregate.get("avg_tokens", 0.0) or 0.0), 0),
+            cost=_format_ovon_metric(aggregate.get("avg_cost"), 6),
+            cache_hit=_format_ovon_metric(float(aggregate.get("cache_hit_ratio", 0.0) or 0.0) * 100.0, 1),
+        ),
     ]
-    for row in rows:
-        sample_value = (
-            str(int(row["sample_index"]))
-            if row.get("sample_index") is not None
-            else "-"
-        )
-        md_lines.append(
-            "| {episode} | {sample} | {sr} | {dtg} | {spl} | {soft_spl} | {steps} |".format(
-                episode=int(row.get("episode_id", -1) or -1),
-                sample=sample_value,
-                sr=int(bool(row.get("success", False))),
-                dtg=_format_ovon_metric(float(row.get("distance_to_goal", -1.0) or -1.0), 4),
-                spl=_format_ovon_metric(float(row.get("spl", 0.0) or 0.0), 4),
-                soft_spl=_format_ovon_metric(float(row.get("soft_spl", 0.0) or 0.0), 4),
-                steps=int(row.get("steps", 0) or 0),
-            )
-        )
-    md_lines.extend(
-        [
-            "",
-            "## Summary",
-            "",
-            "| Episodes | SR | SPL | SoftSPL | Avg DTG(m) | Avg Steps |",
-            "| --- | --- | --- | --- | --- | --- |",
-            "| {episodes} | {sr} | {spl} | {soft_spl} | {dtg} | {steps} |".format(
-                episodes=int(aggregate.get("episodes", 0) or 0),
-                sr=_format_ovon_metric(float(aggregate.get("success_rate", 0.0) or 0.0), 4),
-                spl=_format_ovon_metric(float(aggregate.get("avg_spl", 0.0) or 0.0), 4),
-                soft_spl=_format_ovon_metric(float(aggregate.get("avg_soft_spl", 0.0) or 0.0), 4),
-                dtg=_format_ovon_metric(float(aggregate.get("avg_distance_to_goal", 0.0) or 0.0), 4),
-                steps=_format_ovon_metric(float(aggregate.get("avg_steps", 0.0) or 0.0), 2),
-            ),
-        ]
-    )
     md_path.write_text("\n".join(md_lines) + "\n", encoding="utf-8")
 
     return {
@@ -1655,10 +1722,20 @@ def build_arg_parser(run_defaults: dict | None = None) -> argparse.ArgumentParse
         default=1,
         help="number of parallel episode workers",
     )
+    parser.add_argument(
+        "--max-initial-planner-api-errors",
+        type=int,
+        default=None,
+        help=(
+            "abort a batch after this many initial planner API failures "
+            "(default: max(10, 2 * parallel-workers); <=0 disables)"
+        ),
+    )
     parser.set_defaults(
         config_save_step_images=bool(defaults["save_step_images"]),
         config_save_gif=bool(defaults["save_gif"]),
         config_save_vlm_artifacts=bool(defaults["save_vlm_artifacts"]),
+        config_save_map_artifacts=bool(defaults["save_map_artifacts"]),
     )
     add_output_profile_arg(parser)
     add_output_artifact_args(parser)
@@ -1703,11 +1780,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         config_save_vlm_artifacts=bool(
             getattr(args, "config_save_vlm_artifacts", True)
         ),
+        config_save_map_artifacts=bool(
+            getattr(args, "config_save_map_artifacts", False)
+        ),
     )
     args.output_profile = output_policy.profile
     args.save_step_images = bool(output_policy.save_step_images)
     args.save_gif = bool(output_policy.save_gif)
     args.save_vlm_artifacts = bool(output_policy.save_vlm_artifacts)
+    args.save_map_artifacts = bool(output_policy.save_map_artifacts)
     model_stack_builder = _select_model_stack_builder(args.runtime)
 
     with redirect_process_output_to_null():
@@ -1806,6 +1887,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             all_results = _run_parallel_episodes(args, selected_specs)
         else:
             all_results = []
+            initial_planner_api_error_count = 0
+            max_initial_planner_api_errors = resolve_max_initial_planner_api_errors(
+                getattr(args, "max_initial_planner_api_errors", None),
+                worker_count=1,
+            )
             for index, episode_spec in enumerate(selected_specs, 1):
                 episode_id = int(episode_spec["episode_id"])
                 sample_index = episode_spec.get("sample_index")
@@ -1844,6 +1930,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         save_step_images=bool(args.save_step_images),
                         save_gif=bool(args.save_gif),
                         save_vlm_artifacts=bool(args.save_vlm_artifacts),
+                        save_map_artifacts=bool(args.save_map_artifacts),
                         model_stack_builder=model_stack_builder,
                         base_dataset=discovery_dataset,
                         episode_lookup=episode_lookup,
@@ -1892,6 +1979,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                     flush=True,
                 )
                 all_results.append(summary_row)
+                if is_initial_planner_api_error_result(summary_row):
+                    initial_planner_api_error_count += 1
+                    if (
+                        max_initial_planner_api_errors > 0
+                        and initial_planner_api_error_count >= max_initial_planner_api_errors
+                    ):
+                        print(
+                            "[Abort] Too many initial planner API errors "
+                            f"({initial_planner_api_error_count}/{max_initial_planner_api_errors}); "
+                            "stop remaining OVON episodes.",
+                            flush=True,
+                        )
+                        break
     except KeyboardInterrupt:
         print(
             "\n[OVON-ObjectNav] interrupted by user; summary logs were left untouched, detail artifacts were kept.",
@@ -1910,6 +2010,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "save_step_images": bool(args.save_step_images),
             "save_gif": bool(args.save_gif),
             "save_vlm_artifacts": bool(args.save_vlm_artifacts),
+            "save_map_artifacts": bool(args.save_map_artifacts),
             "split": str(args.split),
             "data_path": str(Path(args.data_path).resolve()),
             "exp_config": str(Path(args.exp_config).resolve()),

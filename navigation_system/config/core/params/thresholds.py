@@ -6,7 +6,7 @@ OBS_RISKY_M = 1.0
 OBS_OPEN_M = 2.0
 
 # High-level reasoning threshold for "near / arrived" judgments in thinking + replanning.
-ARRIVAL_NEAR_M = 1.5
+ARRIVAL_NEAR_M = 1.0
 
 # Low-level action-side auto-complete thresholds.
 AUTOCOMPLETE_OPENING_M = 0.5

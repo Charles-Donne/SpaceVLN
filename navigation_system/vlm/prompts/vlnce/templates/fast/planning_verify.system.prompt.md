@@ -24,7 +24,7 @@
 **2) Map + Space Structure**
 - Read current-area metadata, then cross-check with Part 1 nearby evidence.
 - Read each `Space WP#`: space/area, landmark meaning, direction/distance, reachability, task-alignment, and whether it is current/behind/next.
-- Connected/reachable waypoints within about 1.5m are strong current-anchor evidence.
+- Connected/reachable waypoints within about {arrival_near_m}m are strong current-anchor evidence.
 - `INITIAL POSITION` and old chain nodes are visited history unless the task explicitly returns there.
 - Read the Space Waypoint Chain as executed trajectory, not as the output `waypoint_chain`.
 - Use the chain and Previous Subtask evidence only to judge reached/current/behind relations.

@@ -66,7 +66,7 @@ class RealRobotConfig:
     hfov_deg: float = 69.0
     min_depth_m: float = 0.4
     max_depth_m: float = 8.0
-    forward_step_m: float = 0.25
+    forward_step_m: float = 0.5
     turn_angle_deg: float = 30.0
     linear_speed_mps: float = 0.15
     angular_speed_deg_s: float = 45.0
@@ -98,7 +98,7 @@ class RealRobotConfig:
             hfov_deg=float(camera_cfg.get("hfov_deg", 69.0)),
             min_depth_m=float(camera_cfg.get("min_depth_m", 0.4)),
             max_depth_m=float(camera_cfg.get("max_depth_m", 8.0)),
-            forward_step_m=float(control_cfg.get("forward_step_m", 0.25)),
+            forward_step_m=float(control_cfg.get("forward_step_m", 0.5)),
             turn_angle_deg=float(control_cfg.get("turn_angle_deg", 30.0)),
             linear_speed_mps=float(control_cfg.get("linear_speed_mps", 0.15)),
             angular_speed_deg_s=float(control_cfg.get("angular_speed_deg_s", 45.0)),
@@ -238,4 +238,3 @@ class ActionStatus:
 
     def is_terminal(self) -> bool:
         return bool(self.done or self.state in TERMINAL_ACTION_STATES)
-

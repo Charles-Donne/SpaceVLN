@@ -11,7 +11,7 @@ from std_msgs.msg import String
 
 
 TERMINAL_STATES = {"done", "failed", "timeout", "aborted", "emergency_stop"}
-ALLOWED_ACTIONS = {"MOVE_FORWARD", "TURN_LEFT", "TURN_RIGHT", "STOP"}
+ALLOWED_ACTIONS = {"MOVE_FORWARD", "TURN_LEFT", "TURN_RIGHT", "LOOK_AROUND_360", "STOP"}
 
 
 class SpaceVLNLowLevelBridgeDemo(Node):
@@ -177,7 +177,11 @@ class SpaceVLNLowLevelBridgeDemo(Node):
                 pass
 
         executed_meters = target_meters if action == "MOVE_FORWARD" else 0.0
-        executed_degrees = target_degrees if action in {"TURN_LEFT", "TURN_RIGHT"} else 0.0
+        executed_degrees = (
+            target_degrees
+            if action in {"TURN_LEFT", "TURN_RIGHT", "LOOK_AROUND_360"}
+            else 0.0
+        )
 
         self.publish_status(
             command_id=command_id,

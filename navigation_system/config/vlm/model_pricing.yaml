@@ -1,0 +1,86 @@
+# SpaceVLN local model pricing table.
+#
+# Prices are per 1M tokens. Keep this file local/configurable because vendor
+# pricing changes over time. A model entry may override the top-level currency.
+#
+# Source checked: Alibaba Cloud Model Studio China pricing docs, 2026-05-13.
+currency: CNY
+unit: per_1m_tokens
+last_checked: "2026-05-13"
+sources:
+  model_pricing: "https://help.aliyun.com/zh/model-studio/models"
+  context_cache: "https://help.aliyun.com/zh/model-studio/context-cache"
+
+cache:
+  explicit:
+    read_input_multiplier: 0.10
+    write_input_multiplier: 1.25
+  implicit:
+    read_input_multiplier: 0.20
+    write_input_multiplier: 1.00
+
+models:
+  dashscope:
+    qwen3.5-plus:
+      aliases:
+        - qwen3.5-plus-2026-02-15
+        - qwen3.5-plus-2026-04-20
+      tiers:
+        - max_input_tokens: 128000
+          input: 0.8
+          output: 4.8
+        - max_input_tokens: 256000
+          input: 2.0
+          output: 12.0
+        - max_input_tokens: 1000000
+          input: 4.0
+          output: 24.0
+    qwen3.5-flash:
+      aliases:
+        - qwen3.5-flash-2026-02-23
+      tiers:
+        - max_input_tokens: 128000
+          input: 0.2
+          output: 2.0
+        - max_input_tokens: 256000
+          input: 0.8
+          output: 8.0
+        - max_input_tokens: 1000000
+          input: 1.2
+          output: 12.0
+    qwen3-vl-plus:
+      aliases:
+        - qwen3-vl-plus-2025-09-23
+        - qwen3-vl-plus-2025-12-19
+      tiers:
+        - max_input_tokens: 32000
+          input: 1.0
+          output: 10.0
+        - max_input_tokens: 128000
+          input: 1.5
+          output: 15.0
+        - max_input_tokens: 256000
+          input: 3.0
+          output: 30.0
+    qwen3-vl-flash:
+      aliases:
+        - qwen3-vl-flash-2025-10-15
+        - qwen3-vl-flash-2026-01-22
+      tiers:
+        - max_input_tokens: 32000
+          input: 0.15
+          output: 1.5
+        - max_input_tokens: 128000
+          input: 0.3
+          output: 3.0
+        - max_input_tokens: 256000
+          input: 0.6
+          output: 6.0
+    kimi-k2.5:
+      aliases:
+        - kimi-k2.5
+        - kimi-2.5
+      tiers:
+        - max_input_tokens: 262144
+          input: 4.0
+          output: 21.0

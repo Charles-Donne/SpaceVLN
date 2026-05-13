@@ -79,15 +79,26 @@ The high-level runtime should keep producing discrete actions:
 - `MOVE_FORWARD`
 - `TURN_LEFT`
 - `TURN_RIGHT`
+- `LOOK_AROUND_360`
 - `STOP`
 
-The executor should translate each action into a closed-loop velocity sequence
+For `MOVE_FORWARD`, the runtime passes the VLM-selected target distance as one
+continuous command, usually 0.5m to 1.5m. The executor should translate each
+action into a closed-loop velocity sequence
 using:
 
 - input: `/spacevln/action_cmd`
 - feedback: `/odom`
 - output: `/cmd_vel`
 - completion: `/spacevln/action_status`
+
+For lookaround, the runtime sends one `LOOK_AROUND_360` command and samples 12
+camera frames from the live ROS stream while the base rotates continuously.
+
+For deployment, final success is not judged online from `goal_reached` or
+`distance_to_goal_m`. The runtime ends the episode when the model/planner marks
+`global_task_finish=true`, sends `STOP`, and records that model-level finish in
+the final metrics.
 
 This is safer than sending one open-loop velocity pulse for a fixed duration.
 

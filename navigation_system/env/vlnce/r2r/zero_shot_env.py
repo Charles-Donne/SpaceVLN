@@ -33,6 +33,18 @@ class VLNCEZeroShotEnv(habitat.RLEnv):
     def get_metrics(self) -> Dict[Any, Any]:
         """Return the current episode metrics."""
         return self.habitat_env.get_metrics()
+
+    def supports_continuous_lookaround_scan(self) -> bool:
+        """R2R-CE uses discrete turn actions for 360-degree lookaround scans."""
+        return False
+
+    def set_final_navigation_success(self, success: bool) -> None:
+        """Accept the shared controller's final-success signal for adapter parity."""
+        self.final_navigation_success = bool(success)
+
+    def get_global_map_input(self):
+        """R2R-CE does not expose a task-side global map payload."""
+        return None
     
     def get_done(self, observations):
         return self._env.episode_over

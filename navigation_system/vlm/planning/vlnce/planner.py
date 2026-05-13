@@ -298,6 +298,7 @@ class LLMPlanner(BaseAPIClient):
                     api_status=str(getattr(self, "last_call_status", "") or ""),
                 )
                 non_retryable_api_error = bool(self.is_last_call_non_retryable())
+            vlm_info_payload = dict(getattr(self, "last_vlm_info_payload", {}) or {})
             self.last_call_timing_info["records"].append({
                 "attempt": retry + 1,
                 "success": attempt_success,
@@ -307,6 +308,7 @@ class LLMPlanner(BaseAPIClient):
                 "http_status": int(getattr(self, "last_http_status", 0) or 0),
                 "api_error": str(getattr(self, "last_call_error", "") or ""),
                 "non_retryable_api_error": non_retryable_api_error,
+                "vlm_info": vlm_info_payload,
             })
             if attempt_success:
                 self.last_call_timing_info["final_failure_reason"] = ""

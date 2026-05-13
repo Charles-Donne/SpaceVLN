@@ -61,9 +61,11 @@ Notes:
   - Use --start-index explicitly if you want the same behavior in long-form flags.
   - Use --episode-id for an exact OVON episode id.
   - The workers argument matches the VLNCE launcher style and now enables parallel episode workers.
+  - --max-initial-planner-api-errors N aborts repeated initial API failures
+    (default: max(10, 2 * workers); 0 disables).
   - Output profiles are shared with VLNCE:
       --output-profile metric   keep final metrics/results only (default)
-      --output-profile debug    save VLM artifacts and navigation.gif
+      --output-profile debug    save VLM artifacts, local/global maps, and navigation.gif
       --output-profile config   preserve YAML/default save switches
 EOF
 }
@@ -100,7 +102,7 @@ while [[ $# -gt 0 ]]; do
             RUN_CONFIG="${1#*=}"
             shift
             ;;
-        --exp-config|--vlm-api-config|--data-path|--split|--episode-id|--episode-ids|--num-episodes|--gpu-id|--max-steps|--max-subtask-steps|--results-root|--results-dir|--episode-workdir|--seed|--parallel-workers|--output-profile)
+        --exp-config|--vlm-api-config|--data-path|--split|--episode-id|--episode-ids|--num-episodes|--gpu-id|--max-steps|--max-subtask-steps|--results-root|--results-dir|--episode-workdir|--seed|--parallel-workers|--max-initial-planner-api-errors|--output-profile)
             if [[ $# -lt 2 ]]; then
                 echo "Missing value for $1" >&2
                 exit 1
@@ -108,11 +110,11 @@ while [[ $# -gt 0 ]]; do
             PASSTHROUGH_ARGS+=("$1" "$2")
             shift 2
             ;;
-        --exp-config=*|--vlm-api-config=*|--data-path=*|--split=*|--episode-id=*|--episode-ids=*|--num-episodes=*|--gpu-id=*|--max-steps=*|--max-subtask-steps=*|--results-root=*|--results-dir=*|--episode-workdir=*|--seed=*|--parallel-workers=*|--output-profile=*)
+        --exp-config=*|--vlm-api-config=*|--data-path=*|--split=*|--episode-id=*|--episode-ids=*|--num-episodes=*|--gpu-id=*|--max-steps=*|--max-subtask-steps=*|--results-root=*|--results-dir=*|--episode-workdir=*|--seed=*|--parallel-workers=*|--max-initial-planner-api-errors=*|--output-profile=*)
             PASSTHROUGH_ARGS+=("$1")
             shift
             ;;
-        --random|--skip-sr1|--skip-existing-sr1|--save-step-images|--no-save-step-images|--save-gif|--no-gif|--no-save-gif|--save-vlm-artifacts|--no-vlm-artifacts|--no-report)
+        --random|--skip-sr1|--skip-existing-sr1|--save-step-images|--no-save-step-images|--save-gif|--no-gif|--no-save-gif|--save-vlm-artifacts|--no-vlm-artifacts|--save-map-artifacts|--no-save-map-artifacts|--save-local-map|--no-local-map|--no-report)
             PASSTHROUGH_ARGS+=("$1")
             shift
             ;;

@@ -81,8 +81,7 @@ class ActionCommandBridge:
         if self._publish_action is None:
             raise RuntimeError("action publisher is not attached")
 
-        payload = command.to_payload()
-        self._publish_action(payload)
+        payload = self.publish_action_command(command)
 
         if not self.config.action_status_required:
             return ActionStatus(
@@ -100,7 +99,22 @@ class ActionCommandBridge:
             timeout_s=float(command.timeout_s or self.config.action_timeout_s),
         )
 
+    def publish_action_command(self, command: ActionCommand) -> Dict:
+        if self._publish_action is None:
+            raise RuntimeError("action publisher is not attached")
+
+        payload = command.to_payload()
+        self._publish_action(payload)
+        return payload
+
+    def get_status(self, command_id: str) -> Optional[ActionStatus]:
+        with self._condition:
+            return self._status_by_command.get(str(command_id))
+
+    def pop_status(self, command_id: str) -> Optional[ActionStatus]:
+        with self._condition:
+            return self._status_by_command.pop(str(command_id), None)
+
     @staticmethod
     def encode_json(payload: Dict) -> str:
         return json.dumps(payload, ensure_ascii=False)
-

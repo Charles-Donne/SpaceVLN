@@ -11,6 +11,11 @@ from navigation_system.runtime.storage.artifacts import (
     get_episode_log_path,
     iter_all_episode_log_paths,
 )
+from navigation_system.vlm.reporting.usage import (
+    DEFAULT_CURRENCY,
+    merge_vlm_usage_summaries,
+    summarize_vlm_usage_from_artifact_dir,
+)
 
 
 def check_inf_nan(value: Any) -> Any:
@@ -47,6 +52,68 @@ def _summary_count(item: Dict[str, Any], prefix: str, key: str, default: int = 0
     if not isinstance(summary, dict):
         return _as_int(default, default)
     return _as_int(summary.get(key, default), default)
+
+
+def _normalize_usage_cost_counts(summary: Dict[str, Any]) -> Dict[str, Any]:
+    payload = dict(summary or {})
+    count = _as_int(payload.get("count", 0), 0)
+    if count <= 0:
+        payload.setdefault("cost_available_count", 0)
+        payload.setdefault("cost_unavailable_count", 0)
+        payload.setdefault("token_available_count", 0)
+        payload.setdefault("token_unavailable_count", 0)
+        return payload
+
+    token_available = _as_int(payload.get("token_available_count", 0), 0)
+    token_unavailable = _as_int(payload.get("token_unavailable_count", 0), 0)
+    if token_available + token_unavailable <= 0:
+        has_token_fields = any(key in payload for key in ("total_tokens", "input_tokens", "output_tokens"))
+        if has_token_fields:
+            token_available = count
+        else:
+            token_unavailable = count
+    elif token_available + token_unavailable < count:
+        token_unavailable += count - token_available - token_unavailable
+    payload["token_available_count"] = min(token_available, count)
+    payload["token_unavailable_count"] = min(token_unavailable, count - payload["token_available_count"])
+
+    available = _as_int(payload.get("cost_available_count", 0), 0)
+    unavailable = _as_int(payload.get("cost_unavailable_count", 0), 0)
+    if available + unavailable <= 0:
+        has_cost_fields = any(key in payload for key in ("total_cost", "input_cost", "output_cost"))
+        if has_cost_fields:
+            available = count
+        else:
+            unavailable = count
+    elif available + unavailable < count:
+        unavailable += count - available - unavailable
+    payload["cost_available_count"] = min(available, count)
+    payload["cost_unavailable_count"] = min(unavailable, count - payload["cost_available_count"])
+    return payload
+
+
+def _usage_summary(item: Dict[str, Any], prefix: str = "overall") -> Dict[str, Any]:
+    usage = item.get("vlm_usage_summary")
+    if isinstance(usage, dict):
+        summary = usage.get(prefix)
+        if isinstance(summary, dict):
+            return _normalize_usage_cost_counts(summary)
+    if prefix in {"thinking", "action"}:
+        summary = item.get(f"{prefix}_api_summary")
+        if isinstance(summary, dict):
+            return _normalize_usage_cost_counts(summary)
+    if prefix == "overall":
+        return merge_vlm_usage_summaries(
+            [
+                _usage_summary(item, "thinking"),
+                _usage_summary(item, "action"),
+            ]
+        )
+    return {}
+
+
+def _usage_value(item: Dict[str, Any], prefix: str, key: str, default: float = 0.0) -> float:
+    return _as_float(_usage_summary(item, prefix).get(key, default), default)
 
 
 def _episode_duration_s(item: Dict[str, Any]) -> float:
@@ -86,6 +153,53 @@ def _normalize_report_item(item: Dict[str, Any]) -> Dict[str, Any]:
             _episode_duration_s(payload) - api_total,
         )
     return payload
+
+
+def _compute_usage_metrics(results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    if not results:
+        empty = merge_vlm_usage_summaries([])
+        return {
+            "thinking": empty,
+            "action": empty,
+            "overall": empty,
+            "thinking_episode_count": 0,
+            "action_episode_count": 0,
+            "overall_episode_count": 0,
+            "cost_episode_count": 0,
+        }
+
+    thinking_results = [
+        item for item in results if _tokens_complete(_usage_summary(item, "thinking"))
+    ]
+    action_results = [
+        item for item in results if _tokens_complete(_usage_summary(item, "action"))
+    ]
+    overall_results = [
+        item for item in results if _tokens_complete(_usage_summary(item, "overall"))
+    ]
+    cost_results = [
+        item for item in overall_results if _cost_complete(_usage_summary(item, "overall"))
+    ]
+
+    thinking = merge_vlm_usage_summaries(_usage_summary(item, "thinking") for item in thinking_results)
+    action = merge_vlm_usage_summaries(_usage_summary(item, "action") for item in action_results)
+    overall = merge_vlm_usage_summaries(_usage_summary(item, "overall") for item in overall_results)
+    thinking = _normalize_usage_cost_counts(thinking)
+    action = _normalize_usage_cost_counts(action)
+    overall = _normalize_usage_cost_counts(overall)
+    thinking["episode_count"] = len(thinking_results)
+    action["episode_count"] = len(action_results)
+    overall["episode_count"] = len(overall_results)
+    overall["cost_episode_count"] = len(cost_results)
+    return {
+        "thinking": thinking,
+        "action": action,
+        "overall": overall,
+        "thinking_episode_count": len(thinking_results),
+        "action_episode_count": len(action_results),
+        "overall_episode_count": len(overall_results),
+        "cost_episode_count": len(cost_results),
+    }
 
 
 def _compute_timing_metrics(results: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -143,7 +257,39 @@ def _load_result_payload(filepath: str) -> Optional[Dict[str, Any]]:
     except Exception as exc:
         print(f"⚠️  Failed to read {filename}: {exc}")
         return None
-    return _normalize_report_item(payload)
+    payload = _normalize_report_item(payload)
+    return _maybe_backfill_usage_from_artifacts(payload, filepath)
+
+
+def _maybe_backfill_usage_from_artifacts(payload: Dict[str, Any], filepath: str) -> Dict[str, Any]:
+    if _usage_value(payload, "overall", "total_tokens", 0.0) > 0:
+        return payload
+
+    path = os.path.abspath(filepath)
+    path_parts = path.split(os.sep)
+    try:
+        log_index = len(path_parts) - 1 - list(reversed(path_parts)).index("log")
+    except ValueError:
+        return payload
+    results_dir = os.sep.join(path_parts[:log_index]) or os.sep
+    bucket_name = os.path.basename(os.path.dirname(path))
+    entry_name = os.path.splitext(os.path.basename(path))[0]
+    detail_dir = os.path.join(results_dir, "detail", bucket_name, entry_name)
+    if not os.path.isdir(detail_dir):
+        return payload
+
+    usage_summary = summarize_vlm_usage_from_artifact_dir(detail_dir)
+    if _as_int((usage_summary.get("overall") or {}).get("count", 0), 0) <= 0:
+        return payload
+
+    payload["vlm_usage_summary"] = usage_summary
+    for prefix in ("thinking", "action"):
+        current = dict(payload.get(f"{prefix}_api_summary") or {})
+        usage = dict(usage_summary.get(prefix) or {})
+        for key, value in usage.items():
+            current[key] = value
+        payload[f"{prefix}_api_summary"] = current
+    return payload
 
 
 def _bounded_load_workers(load_workers: int, item_count: int) -> int:
@@ -343,6 +489,7 @@ def compute_metrics(results: List[Dict[str, Any]]) -> Dict[str, Any]:
         "avg_ndtw": sum(ndtw_list) / n if n > 0 else 0.0,
         "avg_steps": sum(steps_list) / n if n > 0 else 0.0,
         "timing": _compute_timing_metrics(results),
+        "usage": _compute_usage_metrics(results),
         "detailed_results": results,
     }
 
@@ -350,6 +497,11 @@ def compute_metrics(results: List[Dict[str, Any]]) -> Dict[str, Any]:
 def print_summary(metrics: Dict[str, Any]) -> None:
     n = metrics["total_episodes"]
     timing = metrics["timing"]
+    usage = dict(metrics.get("usage") or {})
+    overall_usage = dict(usage.get("overall") or {})
+    thinking_usage = dict(usage.get("thinking") or {})
+    action_usage = dict(usage.get("action") or {})
+    currency = str(overall_usage.get("currency") or DEFAULT_CURRENCY)
     api_avg_s = timing["api_total_duration_s"] / n if n > 0 else 0.0
     fail_waste_avg_s = timing["failed_wasted_duration_s_total"] / n if n > 0 else 0.0
     print("\n" + "=" * 80)
@@ -376,6 +528,29 @@ def print_summary(metrics: Dict[str, Any]) -> None:
     print(f"  API avg:        {api_avg_s:.2f}s")
     print(f"  Failure avg:    {fail_waste_avg_s:.2f}s")
     print(f"  Episode avg:    {timing['episode_duration_s_avg']:.2f}s")
+    if _as_int(overall_usage.get("count", 0), 0) > 0:
+        usage_episode_count = _as_int(overall_usage.get("episode_count", 0), 0)
+        cost_per_episode = _format_cost_per_episode(overall_usage, n)
+        cost_label = f"{cost_per_episode} {currency}" if cost_per_episode != "N/A" else "N/A"
+        print(f"\n🔢 VLM tokens/cost:")
+        print(f"  Usage episodes: {usage_episode_count}/{n}")
+        print(
+            "  Thinking: "
+            f"{_format_tokens_per_episode(thinking_usage, n)} tok/episode "
+            f"| {_format_tokens_per_call(thinking_usage)} tok/call "
+            f"| calls={_as_int(thinking_usage.get('count', 0), 0)}"
+        )
+        print(
+            "  Action:   "
+            f"{_format_tokens_per_episode(action_usage, n)} tok/episode "
+            f"| {_format_tokens_per_call(action_usage)} tok/call "
+            f"| calls={_as_int(action_usage.get('count', 0), 0)}"
+        )
+        print(
+            "  Overall:  "
+            f"{_format_tokens_per_episode(overall_usage, n)} tok/episode "
+            f"| cost/episode={cost_label}"
+        )
     print(f"\n{'=' * 80}")
 
 
@@ -438,8 +613,16 @@ def print_debug_info(metrics: Dict[str, Any], success_distance_m: float) -> None
 def save_summary(metrics: Dict[str, Any], output_path: str) -> str:
     n = metrics["total_episodes"]
     timing = metrics["timing"]
+    usage = dict(metrics.get("usage") or {})
+    overall_usage = dict(usage.get("overall") or {})
+    thinking_usage = dict(usage.get("thinking") or {})
+    action_usage = dict(usage.get("action") or {})
+    currency = str(overall_usage.get("currency") or DEFAULT_CURRENCY)
     api_avg_s = timing["api_total_duration_s"] / n if n > 0 else 0.0
     fail_waste_avg_s = timing["failed_wasted_duration_s_total"] / n if n > 0 else 0.0
+    cost_per_episode = _format_cost_per_episode(overall_usage, n)
+    cost_label = f"{cost_per_episode} {currency}/episode" if cost_per_episode != "N/A" else "N/A"
+    usage_episode_count = _as_int(overall_usage.get("episode_count", 0), 0)
     title = str(metrics.get("report_title") or "SpaceVLN evaluation summary")
     content = f"""
 ================================================================================
@@ -461,6 +644,13 @@ def save_summary(metrics: Dict[str, Any], output_path: str) -> str:
   Failure avg:    {fail_waste_avg_s:.2f}s
   Episode avg:    {timing['episode_duration_s_avg']:.2f}s
 
+🔢 VLM tokens/cost:
+  Usage episodes:  {usage_episode_count}/{n}
+  Thinking tokens: {_format_tokens_per_episode(thinking_usage, n)}/episode | {_format_tokens_per_call(thinking_usage)}/call | calls={_as_int(thinking_usage.get('count', 0), 0)}
+  Action tokens:   {_format_tokens_per_episode(action_usage, n)}/episode | {_format_tokens_per_call(action_usage)}/call | calls={_as_int(action_usage.get('count', 0), 0)}
+  Overall tokens:  {_format_tokens_per_episode(overall_usage, n)}/episode
+  Estimated cost:  {cost_label}
+
 ================================================================================
 """
     with open(output_path, "w", encoding="utf-8") as f:
@@ -469,8 +659,13 @@ def save_summary(metrics: Dict[str, Any], output_path: str) -> str:
 
 
 def save_metrics_json(metrics: Dict[str, Any], output_path: str) -> str:
+    episode_count = int(metrics.get("total_episodes", 0) or 0)
+    usage = dict(metrics.get("usage") or {})
+    thinking_usage = dict(usage.get("thinking") or {})
+    action_usage = dict(usage.get("action") or {})
+    overall_usage = dict(usage.get("overall") or {})
     payload = {
-        "total_episodes": int(metrics.get("total_episodes", 0) or 0),
+        "total_episodes": episode_count,
         "avg_ne": _as_float(metrics.get("avg_ne", -1.0), -1.0),
         "avg_osr": _as_float(metrics.get("avg_osr", 0.0), 0.0),
         "avg_sr": _as_float(metrics.get("avg_sr", 0.0), 0.0),
@@ -478,6 +673,28 @@ def save_metrics_json(metrics: Dict[str, Any], output_path: str) -> str:
         "avg_ndtw": _as_float(metrics.get("avg_ndtw", 0.0), 0.0),
         "avg_steps": _as_float(metrics.get("avg_steps", 0.0), 0.0),
         "timing": dict(metrics.get("timing") or {}),
+        "usage": usage,
+        "usage_averages": {
+            "usage_episode_count": _as_int(overall_usage.get("episode_count", 0), 0),
+            "thinking_usage_episode_count": _as_int(thinking_usage.get("episode_count", 0), 0),
+            "action_usage_episode_count": _as_int(action_usage.get("episode_count", 0), 0),
+            "cost_episode_count": _as_int(overall_usage.get("cost_episode_count", 0), 0),
+            "thinking_total_tokens_per_episode": _tokens_per_episode_value(thinking_usage, episode_count),
+            "thinking_total_tokens_per_call": (
+                _as_float(thinking_usage.get("avg_total_tokens", 0.0), 0.0)
+                if _tokens_complete(thinking_usage)
+                else None
+            ),
+            "action_total_tokens_per_episode": _tokens_per_episode_value(action_usage, episode_count),
+            "action_total_tokens_per_call": (
+                _as_float(action_usage.get("avg_total_tokens", 0.0), 0.0)
+                if _tokens_complete(action_usage)
+                else None
+            ),
+            "overall_total_tokens_per_episode": _tokens_per_episode_value(overall_usage, episode_count),
+            "cost_per_episode": _cost_per_episode_value(overall_usage, episode_count),
+            "currency": str(overall_usage.get("currency") or DEFAULT_CURRENCY),
+        },
     }
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
@@ -492,12 +709,100 @@ def _format_metric_value(value: Any, digits: int = 3) -> str:
     return str(value)
 
 
+def _format_cost_value(usage_summary: Dict[str, Any], *, digits: int = 6) -> str:
+    count = _as_int(usage_summary.get("count", 0), 0)
+    available = _as_int(usage_summary.get("cost_available_count", 0), 0)
+    if count <= 0 or available <= 0:
+        return "N/A"
+    return _format_metric_value(_as_float(usage_summary.get("total_cost", 0.0), 0.0), digits)
+
+
+def _format_cost_per_episode(
+    usage_summary: Dict[str, Any],
+    episode_count: int,
+    *,
+    digits: int = 6,
+) -> str:
+    value = _cost_per_episode_value(usage_summary, episode_count)
+    if value is None:
+        return "N/A"
+    return _format_metric_value(value, digits)
+
+
+def _cost_per_episode_value(usage_summary: Dict[str, Any], episode_count: int) -> Optional[float]:
+    count = _as_int(usage_summary.get("count", 0), 0)
+    available = _as_int(usage_summary.get("cost_available_count", 0), 0)
+    denominator = _as_int(
+        usage_summary.get("cost_episode_count", usage_summary.get("episode_count", episode_count)),
+        int(episode_count or 0),
+    )
+    if denominator <= 0 or count <= 0 or available <= 0:
+        return None
+    return _as_float(usage_summary.get("total_cost", 0.0), 0.0) / denominator
+
+
+def _format_cost_per_call(usage_summary: Dict[str, Any], *, digits: int = 6) -> str:
+    count = _as_int(usage_summary.get("count", 0), 0)
+    available = _as_int(usage_summary.get("cost_available_count", 0), 0)
+    if count <= 0 or available <= 0:
+        return "N/A"
+    return _format_metric_value(
+        _as_float(usage_summary.get("total_cost", 0.0), 0.0) / available,
+        digits,
+    )
+
+
+def _tokens_per_episode(usage_summary: Dict[str, Any], episode_count: int) -> float:
+    denominator = _as_int(
+        usage_summary.get("episode_count", episode_count),
+        int(episode_count or 0),
+    )
+    if denominator <= 0:
+        return 0.0
+    return _as_float(usage_summary.get("total_tokens", 0.0), 0.0) / denominator
+
+
+def _tokens_complete(usage_summary: Dict[str, Any]) -> bool:
+    count = _as_int(usage_summary.get("count", 0), 0)
+    available = _as_int(usage_summary.get("token_available_count", 0), 0)
+    unavailable = _as_int(usage_summary.get("token_unavailable_count", 0), 0)
+    return count > 0 and available >= count and unavailable <= 0
+
+
+def _cost_complete(usage_summary: Dict[str, Any]) -> bool:
+    count = _as_int(usage_summary.get("count", 0), 0)
+    available = _as_int(usage_summary.get("cost_available_count", 0), 0)
+    unavailable = _as_int(usage_summary.get("cost_unavailable_count", 0), 0)
+    return count > 0 and available >= count and unavailable <= 0
+
+
+def _format_tokens_per_episode(usage_summary: Dict[str, Any], episode_count: int) -> str:
+    if not _tokens_complete(usage_summary):
+        return "N/A"
+    return _format_metric_value(_tokens_per_episode(usage_summary, episode_count), 0)
+
+
+def _format_tokens_per_call(usage_summary: Dict[str, Any]) -> str:
+    if not _tokens_complete(usage_summary):
+        return "N/A"
+    return _format_metric_value(usage_summary.get("avg_total_tokens", 0.0), 0)
+
+
+def _tokens_per_episode_value(usage_summary: Dict[str, Any], episode_count: int) -> Optional[float]:
+    if not _tokens_complete(usage_summary):
+        return None
+    return _tokens_per_episode(usage_summary, episode_count)
+
+
 def _build_episode_row(item: Dict[str, Any]) -> Dict[str, str]:
     think_avg = _summary_value(item, "thinking", "avg_duration_s", 0.0)
     think_total = _summary_value(item, "thinking", "total_duration_s", 0.0)
     action_avg = _summary_value(item, "action", "avg_duration_s", 0.0)
     action_total = _summary_value(item, "action", "total_duration_s", 0.0)
     api_total = think_total + action_total
+    thinking_usage = _usage_summary(item, "thinking")
+    action_usage = _usage_summary(item, "action")
+    overall_usage = _usage_summary(item, "overall")
     return {
         "sample_index": str(item.get("sample_index", "")),
         "episode_id": str(item.get("episode_id", "")),
@@ -509,12 +814,20 @@ def _build_episode_row(item: Dict[str, Any]) -> Dict[str, str]:
         "nDTW": _format_metric_value(_as_float(item.get("ndtw", 0.0), 0.0), 4),
         "ThinkAvg(s)": _format_metric_value(think_avg, 3),
         "ThinkTot(s)": _format_metric_value(think_total, 3),
+        "ThinkTok/Ep": _format_tokens_per_episode(thinking_usage, 1),
+        "ThinkTok/Call": _format_tokens_per_call(thinking_usage),
         "ActAvg(s)": _format_metric_value(action_avg, 3),
         "ActTot(s)": _format_metric_value(action_total, 3),
+        "ActTok/Ep": _format_tokens_per_episode(action_usage, 1),
+        "ActTok/Call": _format_tokens_per_call(action_usage),
         "API(s)": _format_metric_value(api_total, 3),
         "Local(s)": _format_metric_value(_as_float(item.get("local_non_api_duration_s", 0.0), 0.0), 3),
         "FailWaste(s)": _format_metric_value(_as_float(item.get("failed_wasted_duration_s", 0.0), 0.0), 3),
         "Episode(s)": _format_metric_value(_episode_duration_s(item), 3),
+        "Tok/Ep": _format_tokens_per_episode(overall_usage, 1),
+        "Cost/Ep": _format_cost_value(overall_usage),
+        "Cost/Call": _format_cost_per_call(overall_usage),
+        "CacheHit": _format_metric_value(_usage_value(item, "overall", "weighted_cache_hit_ratio", 0.0) * 100.0, 1),
     }
 
 
@@ -538,12 +851,18 @@ def save_episode_tables(
         ),
     )
     timing = metrics["timing"]
+    usage = dict(metrics.get("usage") or {})
+    usage.setdefault("thinking", {})
+    usage.setdefault("action", {})
+    usage.setdefault("overall", {})
+    usage_episode_count = _as_int(usage["overall"].get("episode_count", 0), 0)
     include_sample_index = any(str(item.get("sample_index", "")).strip() for item in sorted_results)
     headers = []
     if include_sample_index:
         headers.append("sample_index")
     headers.extend([
         "episode_id",
+        "UsageEp",
         "Steps",
         "NE",
         "OSR",
@@ -552,12 +871,20 @@ def save_episode_tables(
         "nDTW",
         "ThinkAvg(s)",
         "ThinkTot(s)",
+        "ThinkTok/Ep",
+        "ThinkTok/Call",
         "ActAvg(s)",
         "ActTot(s)",
+        "ActTok/Ep",
+        "ActTok/Call",
         "API(s)",
         "Local(s)",
         "FailWaste(s)",
         "Episode(s)",
+        "Tok/Ep",
+        "Cost/Ep",
+        "Cost/Call",
+        "CacheHit",
     ])
 
     saved_paths: Dict[str, str] = {}
@@ -574,6 +901,7 @@ def save_episode_tables(
                 {
                     **({"sample_index": "SUMMARY"} if include_sample_index else {}),
                     "episode_id": "SUMMARY",
+                    "UsageEp": usage_episode_count,
                     "Steps": _format_metric_value(metrics["avg_steps"], 2),
                     "NE": _format_metric_value(metrics["avg_ne"], 3),
                     "OSR": _format_metric_value(metrics["avg_osr"], 4),
@@ -582,12 +910,32 @@ def save_episode_tables(
                     "nDTW": _format_metric_value(metrics["avg_ndtw"], 4),
                     "ThinkAvg(s)": _format_metric_value(timing["thinking_api_avg_duration_s"], 3),
                     "ThinkTot(s)": _format_metric_value(timing["thinking_api_total_duration_s"], 3),
+                    "ThinkTok/Ep": _format_tokens_per_episode(
+                        usage["thinking"],
+                        metrics["total_episodes"],
+                    ),
+                    "ThinkTok/Call": _format_tokens_per_call(usage["thinking"]),
                     "ActAvg(s)": _format_metric_value(timing["action_api_avg_duration_s"], 3),
                     "ActTot(s)": _format_metric_value(timing["action_api_total_duration_s"], 3),
+                    "ActTok/Ep": _format_tokens_per_episode(
+                        usage["action"],
+                        metrics["total_episodes"],
+                    ),
+                    "ActTok/Call": _format_tokens_per_call(usage["action"]),
                     "API(s)": _format_metric_value(timing["api_total_duration_s"], 3),
                     "Local(s)": _format_metric_value(timing["local_non_api_duration_s_avg"], 3),
                     "FailWaste(s)": _format_metric_value(timing["failed_wasted_duration_s_total"], 3),
                     "Episode(s)": _format_metric_value(timing["episode_duration_s_avg"], 3),
+                    "Tok/Ep": _format_tokens_per_episode(
+                        usage["overall"],
+                        metrics["total_episodes"],
+                    ),
+                    "Cost/Ep": _format_cost_per_episode(usage["overall"], metrics["total_episodes"]),
+                    "Cost/Call": _format_cost_per_call(usage["overall"]),
+                    "CacheHit": _format_metric_value(
+                        usage["overall"].get("weighted_cache_hit_ratio", 0.0) * 100.0,
+                        1,
+                    ),
                 }
             )
         saved_paths["csv"] = csv_path
@@ -599,22 +947,22 @@ def save_episode_tables(
         if include_sample_index:
             md_lines.extend(
                 [
-                    "| Sample | Episode | Steps | NE(m) | OSR | SR | SPL | nDTW | ThinkAvg(s) | ThinkTot(s) | ActAvg(s) | ActTot(s) | API(s) | Local(s) | FailWaste(s) | Episode(s) |",
-                    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+                    "| Sample | Episode | Steps | NE(m) | OSR | SR | SPL | nDTW | ThinkAvg(s) | ThinkTot(s) | ThinkTok/Ep | ThinkTok/Call | ActAvg(s) | ActTot(s) | ActTok/Ep | ActTok/Call | API(s) | Local(s) | FailWaste(s) | Episode(s) | Tok/Ep | Cost/Ep | Cost/Call | CacheHit% |",
+                    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
                 ]
             )
         else:
             md_lines.extend(
                 [
-                    "| Episode | Steps | NE(m) | OSR | SR | SPL | nDTW | ThinkAvg(s) | ThinkTot(s) | ActAvg(s) | ActTot(s) | API(s) | Local(s) | FailWaste(s) | Episode(s) |",
-                    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+                    "| Episode | Steps | NE(m) | OSR | SR | SPL | nDTW | ThinkAvg(s) | ThinkTot(s) | ThinkTok/Ep | ThinkTok/Call | ActAvg(s) | ActTot(s) | ActTok/Ep | ActTok/Call | API(s) | Local(s) | FailWaste(s) | Episode(s) | Tok/Ep | Cost/Ep | Cost/Call | CacheHit% |",
+                    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
                 ]
             )
         for item in sorted_results:
             row = _build_episode_row(item)
             if include_sample_index:
                 md_lines.append(
-                    "| {sample} | {episode} | {steps} | {ne} | {osr} | {sr} | {spl} | {ndtw} | {think_avg} | {think_total} | {act_avg} | {act_total} | {api_total} | {local_s} | {fail_waste} | {episode_s} |".format(
+                    "| {sample} | {episode} | {steps} | {ne} | {osr} | {sr} | {spl} | {ndtw} | {think_avg} | {think_total} | {think_tok_ep} | {think_tok_call} | {act_avg} | {act_total} | {act_tok_ep} | {act_tok_call} | {api_total} | {local_s} | {fail_waste} | {episode_s} | {tok_ep} | {cost_ep} | {cost_call} | {cache_hit} |".format(
                         sample=row["sample_index"],
                         episode=row["episode_id"],
                         steps=row["Steps"],
@@ -625,17 +973,25 @@ def save_episode_tables(
                         ndtw=row["nDTW"],
                         think_avg=row["ThinkAvg(s)"],
                         think_total=row["ThinkTot(s)"],
+                        think_tok_ep=row["ThinkTok/Ep"],
+                        think_tok_call=row["ThinkTok/Call"],
                         act_avg=row["ActAvg(s)"],
                         act_total=row["ActTot(s)"],
+                        act_tok_ep=row["ActTok/Ep"],
+                        act_tok_call=row["ActTok/Call"],
                         api_total=row["API(s)"],
                         local_s=row["Local(s)"],
                         fail_waste=row["FailWaste(s)"],
                         episode_s=row["Episode(s)"],
+                        tok_ep=row["Tok/Ep"],
+                        cost_ep=row["Cost/Ep"],
+                        cost_call=row["Cost/Call"],
+                        cache_hit=row["CacheHit"],
                     )
                 )
             else:
                 md_lines.append(
-                    "| {episode} | {steps} | {ne} | {osr} | {sr} | {spl} | {ndtw} | {think_avg} | {think_total} | {act_avg} | {act_total} | {api_total} | {local_s} | {fail_waste} | {episode_s} |".format(
+                    "| {episode} | {steps} | {ne} | {osr} | {sr} | {spl} | {ndtw} | {think_avg} | {think_total} | {think_tok_ep} | {think_tok_call} | {act_avg} | {act_total} | {act_tok_ep} | {act_tok_call} | {api_total} | {local_s} | {fail_waste} | {episode_s} | {tok_ep} | {cost_ep} | {cost_call} | {cache_hit} |".format(
                     episode=row["episode_id"],
                     steps=row["Steps"],
                     ne=row["NE"],
@@ -645,22 +1001,31 @@ def save_episode_tables(
                     ndtw=row["nDTW"],
                     think_avg=row["ThinkAvg(s)"],
                     think_total=row["ThinkTot(s)"],
+                    think_tok_ep=row["ThinkTok/Ep"],
+                    think_tok_call=row["ThinkTok/Call"],
                     act_avg=row["ActAvg(s)"],
                     act_total=row["ActTot(s)"],
+                    act_tok_ep=row["ActTok/Ep"],
+                    act_tok_call=row["ActTok/Call"],
                     api_total=row["API(s)"],
                     local_s=row["Local(s)"],
                     fail_waste=row["FailWaste(s)"],
                     episode_s=row["Episode(s)"],
+                    tok_ep=row["Tok/Ep"],
+                    cost_ep=row["Cost/Ep"],
+                    cost_call=row["Cost/Call"],
+                    cache_hit=row["CacheHit"],
                 )
                 )
         md_lines.extend(["", "## Summary", ""])
 
     md_lines.extend(
         [
-            "| Episodes | NE(m) | OSR | SR | SPL | nDTW | StepsAvg | ThinkAvg(s) | ActAvg(s) | APIAvg(s) | LocalAvg(s) | FailWasteAvg(s) | EpisodeAvg(s) |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-            "| {total} | {avg_ne} | {avg_osr} | {avg_sr} | {avg_spl} | {avg_ndtw} | {avg_steps} | {think_avg} | {action_avg} | {api_avg} | {local_avg} | {fail_waste_avg} | {episode_avg} |".format(
+            "| Episodes | UsageEp | NE(m) | OSR | SR | SPL | nDTW | StepsAvg | ThinkAvg(s) | ThinkTok/Ep | ThinkTok/Call | ActAvg(s) | ActTok/Ep | ActTok/Call | APIAvg(s) | Tok/Ep | LocalAvg(s) | FailWasteAvg(s) | EpisodeAvg(s) | Cost/Ep | CacheHit% |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| {total} | {usage_ep} | {avg_ne} | {avg_osr} | {avg_sr} | {avg_spl} | {avg_ndtw} | {avg_steps} | {think_avg} | {think_tok_ep} | {think_tok_call} | {action_avg} | {act_tok_ep} | {act_tok_call} | {api_avg} | {tok_ep} | {local_avg} | {fail_waste_avg} | {episode_avg} | {cost_ep} | {cache_hit} |".format(
                 total=metrics["total_episodes"],
+                usage_ep=usage_episode_count,
                 avg_ne=_format_metric_value(metrics["avg_ne"], 3),
                 avg_osr=_format_metric_value(metrics["avg_osr"], 4),
                 avg_sr=_format_metric_value(metrics["avg_sr"], 4),
@@ -668,13 +1033,18 @@ def save_episode_tables(
                 avg_ndtw=_format_metric_value(metrics["avg_ndtw"], 4),
                 avg_steps=_format_metric_value(metrics["avg_steps"], 2),
                 think_avg=_format_metric_value(timing["thinking_api_avg_duration_s"], 3),
+                think_tok_ep=_format_tokens_per_episode(usage["thinking"], metrics["total_episodes"]),
+                think_tok_call=_format_tokens_per_call(usage["thinking"]),
                 action_avg=_format_metric_value(timing["action_api_avg_duration_s"], 3),
+                act_tok_ep=_format_tokens_per_episode(usage["action"], metrics["total_episodes"]),
+                act_tok_call=_format_tokens_per_call(usage["action"]),
                 api_avg=_format_metric_value(
                     timing["api_total_duration_s"] / metrics["total_episodes"]
                     if metrics["total_episodes"] > 0
                     else 0.0,
                     3,
                 ),
+                tok_ep=_format_tokens_per_episode(usage["overall"], metrics["total_episodes"]),
                 local_avg=_format_metric_value(timing["local_non_api_duration_s_avg"], 3),
                 fail_waste_avg=_format_metric_value(
                     timing["failed_wasted_duration_s_total"] / metrics["total_episodes"]
@@ -683,7 +1053,20 @@ def save_episode_tables(
                     3,
                 ),
                 episode_avg=_format_metric_value(timing["episode_duration_s_avg"], 3),
+                cost_ep=_format_cost_per_episode(usage["overall"], metrics["total_episodes"]),
+                cache_hit=_format_metric_value(
+                    usage["overall"].get("weighted_cache_hit_ratio", 0.0) * 100.0,
+                    1,
+                ),
             ),
+        ]
+    )
+    currency = str(usage.get("overall", {}).get("currency") or DEFAULT_CURRENCY)
+    md_lines.extend(
+        [
+            "",
+            f"> Cost columns use `{currency}` from `navigation_system/config/vlm/model_pricing.yaml`.",
+            "> Token/cost/cache columns use only `UsageEp` episodes with complete VLM usage; navigation metrics use all `Episodes`.",
         ]
     )
     if not summary_only_md:
@@ -819,6 +1202,7 @@ def generate_results_report(
                         results,
                         metrics,
                         report_output_dir,
+                        summary_only_md=True,
                         report_title=metrics["report_title"],
                     )
                 )

@@ -1,4 +1,4 @@
-"""DashScope explicit-context-cache helpers for Qwen planning/action runtimes."""
+"""DashScope explicit-context-cache helpers for planning/action runtimes."""
 
 from dataclasses import asdict, dataclass
 import json
@@ -17,18 +17,29 @@ from navigation_system.vlm.api.config import (
 )
 
 
-SUPPORTED_QWEN_CONTEXT_CACHE_PREFIXES = (
+# Keep the old public function/module names for compatibility. The runtime now
+# supports all DashScope models that expose OpenAI-compatible explicit cache.
+SUPPORTED_DASHSCOPE_CONTEXT_CACHE_PREFIXES = (
     "qwen3.5-plus",
     "qwen3.5-flash",
     "qwen3.6-plus",
     "qwen3-vl-plus",
     "qwen3-vl-flash",
+    "kimi-k2.5",
+    "kimi-k2.6",
+    "deepseek-v3.2",
+    "glm-4.6",
+    "glm-5.1",
 )
+SUPPORTED_QWEN_CONTEXT_CACHE_PREFIXES = SUPPORTED_DASHSCOPE_CONTEXT_CACHE_PREFIXES
 
 
 def supports_qwen_explicit_context_cache(model_name: str) -> bool:
     normalized = str(model_name or "").strip().lower()
-    return any(normalized.startswith(prefix) for prefix in SUPPORTED_QWEN_CONTEXT_CACHE_PREFIXES)
+    return any(
+        normalized.startswith(prefix)
+        for prefix in SUPPORTED_DASHSCOPE_CONTEXT_CACHE_PREFIXES
+    )
 
 
 def validate_qwen_context_cache_api_config(config_path: str) -> None:
@@ -37,7 +48,7 @@ def validate_qwen_context_cache_api_config(config_path: str) -> None:
     if not settings.enabled:
         raise ValueError(
             "context_cache runtime is selected, but qwen_context_cache.enabled=false. "
-            "Use --runtime standard, or enable qwen_context_cache for DashScope Qwen models."
+            "Use --runtime standard, or enable qwen_context_cache for supported DashScope models."
         )
 
     errors = []
@@ -58,12 +69,13 @@ def validate_qwen_context_cache_api_config(config_path: str) -> None:
 
     if errors:
         raise ValueError(
-            "context_cache runtime is DashScope/Qwen-only. "
+            "context_cache runtime requires a DashScope model that supports explicit context cache. "
             "Current API config is not compatible: "
             + "; ".join(errors)
             + ". For Xiaomi MiMo/OpenAI/OpenRouter, run with --runtime standard; "
-            "for Qwen cache runs, set provider: dashscope with qwen3.5-plus/qwen3.5-flash "
-            "or qwen3-vl-plus/qwen3-vl-flash."
+            "for DashScope cache runs, set provider: dashscope with supported models such as "
+            "qwen3.5-plus/qwen3.5-flash, qwen3-vl-plus/qwen3-vl-flash, "
+            "kimi-k2.5, deepseek-v3.2, or glm-4.6/glm-5.1."
         )
 
 
@@ -147,12 +159,13 @@ class QwenContextCacheMixin:
         if not self.context_cache_settings.enabled:
             return
         if provider != "dashscope" and "dashscope" not in base_url:
-            raise ValueError("Qwen explicit-context-cache runtime requires DashScope provider/base_url")
+            raise ValueError("Explicit context-cache runtime requires DashScope provider/base_url")
         if not supports_qwen_explicit_context_cache(model_name):
             raise ValueError(
                 f"Model does not support this cached runtime: {model_name}. "
-                "Use qwen3.5-plus / qwen3.5-flash, qwen3-vl-plus / qwen3-vl-flash, "
-                "or newer supported Qwen cache models."
+                "Use a DashScope model with explicit context cache, for example "
+                "qwen3.5-plus / qwen3.5-flash, qwen3-vl-plus / qwen3-vl-flash, "
+                "kimi-k2.5, deepseek-v3.2, or glm-4.6/glm-5.1."
             )
 
     @staticmethod
@@ -424,6 +437,7 @@ class QwenContextCacheMixin:
         self._set_last_http_status(0)
         self._set_last_call_timing(request_latency_s=0.0, total_call_duration_s=0.0)
         self._set_last_response_artifacts(response_text="", parsed_payload=None)
+        self.last_vlm_info_payload = {}
         try:
             if prompt_bundle is not None:
                 system_prompt = prompt_bundle.system_prompt

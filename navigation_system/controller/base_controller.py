@@ -789,6 +789,43 @@ class BaseNavigationController:
         """Subclass hook for per-step side effects during lookaround."""
         return None
 
+    def _env_supports_continuous_lookaround_scan(self) -> bool:
+        checker = getattr(self.envs, "supports_continuous_lookaround_scan", None)
+        if callable(checker):
+            try:
+                return bool(checker())
+            except Exception:
+                return False
+        call_at = getattr(self.envs, "call_at", None)
+        if callable(call_at):
+            try:
+                return bool(call_at(0, "supports_continuous_lookaround_scan"))
+            except Exception:
+                return False
+        return bool(getattr(self.envs, "continuous_lookaround_scan", False))
+
+    def _run_continuous_lookaround_env_scan(
+        self,
+        *,
+        sample_count: int,
+        angle_step_deg: float,
+    ) -> List[Tuple[Dict[str, Any], float, bool, Dict[str, Any]]]:
+        call_at = getattr(self.envs, "call_at", None)
+        if callable(call_at):
+            return call_at(
+                0,
+                "run_lookaround_scan",
+                sample_count=int(sample_count),
+                angle_step_deg=float(angle_step_deg),
+            )
+        runner = getattr(self.envs, "run_lookaround_scan", None)
+        if not callable(runner):
+            raise RuntimeError("environment does not expose run_lookaround_scan")
+        return runner(
+            sample_count=int(sample_count),
+            angle_step_deg=float(angle_step_deg),
+        )
+
     def _capture_lookaround_scan(
         self,
         phase: str,
@@ -805,21 +842,55 @@ class BaseNavigationController:
         final_snapshot_paths: Dict[str, Any] = {}
         final_last_waypoint_angle = None
         look_step = self.current_step
+        continuous_scan_steps = None
+
+        if self._env_supports_continuous_lookaround_scan():
+            angle_step_deg = float(
+                getattr(
+                    self,
+                    "turn_angle",
+                    getattr(getattr(self, "action_executor", None), "turn_angle", 30.0),
+                )
+                or 30.0
+            )
+            try:
+                continuous_scan_steps = self._run_continuous_lookaround_env_scan(
+                    sample_count=12,
+                    angle_step_deg=angle_step_deg,
+                )
+            except Exception as exc:
+                self.latest_lookaround_end_reason = "incomplete"
+                print(f"[WARN] Continuous lookaround scan failed: {exc}")
+                return None
 
         for look_index in range(1, 13):
             self.current_step += 1
             look_step = self.current_step
 
-            step_data = self._safe_env_step(
-                [{"action": resolve_habitat_action("TURN_LEFT")}],
-                context=f"lookaround step {look_index}/12",
-            )
-            if step_data is None:
-                self.current_step = max(0, self.current_step - 1)
-                self.latest_lookaround_end_reason = "episode_done"
-                print(f"[WARN] Episode ended at lookaround step {look_index}/12")
-                return None
-            obs, _, dones, infos = step_data
+            if continuous_scan_steps is None:
+                step_data = self._safe_env_step(
+                    [{"action": resolve_habitat_action("TURN_LEFT")}],
+                    context=f"lookaround step {look_index}/12",
+                )
+                if step_data is None:
+                    self.current_step = max(0, self.current_step - 1)
+                    self.latest_lookaround_end_reason = "episode_done"
+                    print(f"[WARN] Episode ended at lookaround step {look_index}/12")
+                    return None
+                obs, _, dones, infos = step_data
+            else:
+                if look_index > len(continuous_scan_steps):
+                    self.current_step = max(0, self.current_step - 1)
+                    self.latest_lookaround_end_reason = "incomplete"
+                    print(
+                        f"[WARN] Continuous lookaround returned "
+                        f"{len(continuous_scan_steps)}/12 samples"
+                    )
+                    return None
+                obs_item, _reward, done, info = continuous_scan_steps[look_index - 1]
+                obs = [obs_item]
+                dones = [bool(done)]
+                infos = [dict(info or {})]
 
             if dones[0]:
                 self.latest_lookaround_end_reason = "episode_done"
@@ -927,7 +998,7 @@ class BaseNavigationController:
         }
 
     def step(self, action: int, save_vis: bool = True, phase: str = "action",
-             enable_landmark_detection: bool = True) -> Dict[str, Any]:
+             enable_landmark_detection: bool = True, env_action: Any = None) -> Dict[str, Any]:
         """执行一步动作，更新地图并保存可视化
 
         Args:
@@ -945,7 +1016,8 @@ class BaseNavigationController:
         
         print(f"[{self.current_step}]{self._action_name(action)}", end=" ")
         
-        step_data = self._safe_env_step([action], context=f"{self._action_name(action)} step")
+        step_action = action if env_action is None else env_action
+        step_data = self._safe_env_step([step_action], context=f"{self._action_name(action)} step")
         if step_data is None:
             self.current_step = max(0, self.current_step - 1)
             print(" → Episode已结束，跳过")
@@ -990,6 +1062,17 @@ class BaseNavigationController:
 # print(f" +{new_classes}类" if new_classes > 0 else "")
         
         if save_vis:
+            render_policy = None
+            if (
+                bool(getattr(self.output_maps_config, "SAVE_STEP_ARTIFACTS", False))
+                and not enable_landmark_detection
+            ):
+                render_policy = {
+                    "render_global_map": False,
+                    "save_global_map": False,
+                    "render_local_map": False,
+                    "save_local_map": False,
+                }
             if enable_landmark_detection:
                 vis_landmark_classes = self.landmark_classes
                 vis_detections = self.latest_detections_full if hasattr(self, 'latest_detections_full') else None
@@ -1010,6 +1093,7 @@ class BaseNavigationController:
                 labels=vis_labels,
                 masks=vis_masks,
                 landmark_classes=vis_landmark_classes,
+                render_policy=render_policy,
             )
             
             # 记录当前step的landmark检测结果（用于action决策与去重）
@@ -1164,7 +1248,7 @@ class BaseNavigationController:
                 "render_global_map": False,
                 "save_global_map": False,
                 "render_local_map": bool(self.output_maps_config.SAVE_STEP_ARTIFACTS),
-                "save_local_map": bool(self.output_maps_config.SAVE_STEP_ARTIFACTS),
+                "save_local_map": False,
                 "render_detection": True,
                 "save_detection": False,
             },
@@ -1252,6 +1336,16 @@ class BaseNavigationController:
     def current_episode_dir(self) -> str:
         """Return the current episode output directory if the subclass uses RESULTS_DIR layout."""
         return get_episode_detail_dir(self.config.PATHS.RESULTS_DIR, self.current_episode_id)
+
+    @staticmethod
+    def _env_call_at_uses_function_args_dict(envs) -> bool:
+        """Habitat VectorEnv.call_at expects function kwargs as its third argument."""
+        env_type = type(envs)
+        type_name = getattr(env_type, "__name__", "")
+        module_name = getattr(env_type, "__module__", "")
+        return type_name in {"VectorEnv", "ThreadedVectorEnv"} or module_name.startswith(
+            "habitat.core.vector_env"
+        )
     
     def finish_episode(self, success: bool = False, stop_action: bool = False) -> dict:
         """
@@ -1272,6 +1366,28 @@ class BaseNavigationController:
         
         # 检查episode是否已经结束（避免在已done的episode上调用step）
         episode_already_done = self._episode_done_cached()
+
+        final_success_setter_called = False
+        try:
+            if hasattr(self.envs, 'call_at'):
+                if self._env_call_at_uses_function_args_dict(self.envs):
+                    self.envs.call_at(
+                        0,
+                        'set_final_navigation_success',
+                        {'success': bool(success)},
+                    )
+                else:
+                    self.envs.call_at(0, 'set_final_navigation_success', bool(success))
+                final_success_setter_called = True
+        except Exception:
+            final_success_setter_called = False
+        if not final_success_setter_called:
+            try:
+                setter = getattr(self.envs, 'set_final_navigation_success', None)
+                if callable(setter):
+                    setter(bool(success))
+            except Exception:
+                pass
         
         if stop_action and not episode_already_done:
             try:
@@ -1507,6 +1623,19 @@ class BaseNavigationController:
     
     @staticmethod
     def _action_name(action: int) -> str:
+        if isinstance(action, dict) and "action" in action:
+            action = action.get("action")
+        if isinstance(action, str):
+            normalized = action.strip().upper()
+            return {
+                "STOP": "STOP",
+                "MOVE_FORWARD": "FORWARD",
+                "FORWARD": "FORWARD",
+                "TURN_LEFT": "LEFT",
+                "LEFT": "LEFT",
+                "TURN_RIGHT": "RIGHT",
+                "RIGHT": "RIGHT",
+            }.get(normalized, normalized or "UNKNOWN")
         names = {0: 'STOP', 1: 'FORWARD', 2: 'LEFT', 3: 'RIGHT'}
         return names.get(action, f'UNKNOWN({action})')
     

@@ -5,6 +5,11 @@ import time
 from typing import Any, Dict, List, Optional, Sequence
 
 from navigation_system.runtime.storage.naming import build_subtask_name
+from navigation_system.vlm.reporting.usage import (
+    compact_vlm_info_payload,
+    merge_vlm_usage_summaries,
+    summarize_vlm_usage,
+)
 
 
 @dataclass(frozen=True)
@@ -162,6 +167,31 @@ class EpisodeTimingTracker:
             "failed_total_duration_s": cls.round_duration_s(failed_total_duration_s),
         }
 
+    @classmethod
+    def summarize_record_usage(cls, records: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+        return summarize_vlm_usage(
+            [
+                dict(item.get("vlm_info") or {})
+                for item in list(records or [])
+                if isinstance(item, dict) and isinstance(item.get("vlm_info"), dict)
+            ]
+        )
+
+    @classmethod
+    def attach_usage_summary(
+        cls,
+        api_summary: Dict[str, Any],
+        records: Sequence[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        payload = dict(api_summary or {})
+        usage_summary = cls.summarize_record_usage(records)
+        for key, value in usage_summary.items():
+            if key == "count":
+                payload["token_count"] = int(value or 0)
+            else:
+                payload[key] = value
+        return payload
+
     def reset(self) -> None:
         self.episode_wall_start_time = None
         self.episode_wall_end_time = None
@@ -248,20 +278,23 @@ class EpisodeTimingTracker:
         duration_s: float,
         success: bool,
         next_waypoint: Optional[str] = None,
+        vlm_info: Optional[Dict[str, Any]] = None,
     ) -> None:
-        self.thinking_records.append(
-            {
-                "index": len(self.thinking_records) + 1,
-                "mode": str(mode or ""),
-                "phase": str(phase or ""),
-                "step": int(step or 0),
-                "subtask_count": int(subtask_count or 0),
-                "subtask_attempt": int(subtask_attempt or 0),
-                "success": bool(success),
-                "duration_s": self.round_duration_s(duration_s),
-                "next_waypoint": str(next_waypoint or ""),
-            }
-        )
+        record = {
+            "index": len(self.thinking_records) + 1,
+            "mode": str(mode or ""),
+            "phase": str(phase or ""),
+            "step": int(step or 0),
+            "subtask_count": int(subtask_count or 0),
+            "subtask_attempt": int(subtask_attempt or 0),
+            "success": bool(success),
+            "duration_s": self.round_duration_s(duration_s),
+            "next_waypoint": str(next_waypoint or ""),
+        }
+        compact_info = compact_vlm_info_payload(vlm_info)
+        if compact_info:
+            record["vlm_info"] = compact_info
+        self.thinking_records.append(record)
 
     def record_action_call(
         self,
@@ -272,21 +305,40 @@ class EpisodeTimingTracker:
         duration_s: float,
         success: bool,
         action_name: Optional[str] = None,
+        vlm_info: Optional[Dict[str, Any]] = None,
     ) -> None:
-        self.action_records.append(
-            {
-                "index": len(self.action_records) + 1,
-                "step": int(step or 0) + 1,
-                "subtask_id": build_subtask_name(int(subtask_count or 0) or 1),
-                "success": bool(success),
-                "duration_s": self.round_duration_s(duration_s),
-                "action": str(action_name or ""),
-            }
-        )
+        record = {
+            "index": len(self.action_records) + 1,
+            "step": int(step or 0) + 1,
+            "subtask_id": build_subtask_name(int(subtask_count or 0) or 1),
+            "success": bool(success),
+            "duration_s": self.round_duration_s(duration_s),
+            "action": str(action_name or ""),
+        }
+        compact_info = compact_vlm_info_payload(vlm_info)
+        if compact_info:
+            record["vlm_info"] = compact_info
+        self.action_records.append(record)
 
     def build_summary(self) -> Dict[str, Any]:
-        thinking_api_summary = self.summarize_records(self.thinking_records)
-        action_api_summary = self.summarize_records(self.action_records)
+        thinking_api_summary = self.attach_usage_summary(
+            self.summarize_records(self.thinking_records),
+            self.thinking_records,
+        )
+        action_api_summary = self.attach_usage_summary(
+            self.summarize_records(self.action_records),
+            self.action_records,
+        )
+        vlm_usage_summary = {
+            "thinking": self.summarize_record_usage(self.thinking_records),
+            "action": self.summarize_record_usage(self.action_records),
+        }
+        vlm_usage_summary["overall"] = merge_vlm_usage_summaries(
+            [
+                vlm_usage_summary["thinking"],
+                vlm_usage_summary["action"],
+            ]
+        )
         episode_duration_s = self.current_episode_duration_s()
         failed_api_total_duration_s = float(
             thinking_api_summary.get("failed_total_duration_s", 0.0) or 0.0
@@ -309,5 +361,6 @@ class EpisodeTimingTracker:
             "failed_wasted_duration_s": failed_wasted_duration_s,
             "thinking_api_summary": thinking_api_summary,
             "action_api_summary": action_api_summary,
+            "vlm_usage_summary": vlm_usage_summary,
             "local_timing_summary": local_timing_summary,
         }

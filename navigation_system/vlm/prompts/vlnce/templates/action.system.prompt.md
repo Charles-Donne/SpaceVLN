@@ -49,7 +49,7 @@ Return exactly one JSON object. Keep all reasoning inside `"reasoning"`; never e
 **Ex3 - Object near but not reached**
 {{
     "reasoning": "The destination is near in front but not yet reached, so take a short forward step.",
-    "action": "MOVE_FORWARD 0.25m"
+    "action": "MOVE_FORWARD 0.5m"
 }}
 
 **Ex4 - Destination reached**
