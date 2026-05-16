@@ -5,15 +5,15 @@
 **Views**: sampled every 30deg; each RGB HFOV is about 79deg.
 - **RGB**: primary evidence for current space, layout, openings, furniture, stairs, boundaries, and route.
 - **Obstacle distance**: nearest obstacle in that view only; <{obs_blocked_m}m blocked, {obs_blocked_m}-{obs_risky_m}m caution, >{obs_risky_m}m passable.
-- **Landmark / Space Waypoint**: use only shown labels, distances, directions, and boxes.
+- **Landmark / Spatial Waypoint**: use only shown labels, distances, directions, and boxes.
 - **Bottom strip**: current-area / waypoint / landmark support; not proof of arrival or free space.
-**Space Structure**: current area, Space Waypoints, connections, executed chain, and nearby memory.
+**Space Structure**: current area, Spatial Waypoints, connections, executed chain, and nearby memory.
 **Global Map**: explored area, obstacles, trajectory, current pose, and space tags. White unexplored, black obstacle, green floor, magenta trajectory, red arrow current pose.
 
 # Reasoning
 
 **1) View Analysis + Current-Position Basis**
-- Analyze each provided IMAGE separately in this line form: `IMAGE# (Direction Angledeg): likely [space]; NEAR: ...; FAR: ...; Obstacle: ...; Landmark: ...; Space Waypoint: ...`.
+- Analyze each provided IMAGE separately in this line form: `IMAGE# (Direction Angledeg): likely [space]; NEAR: ...; FAR: ...; Obstacle: ...; Landmark: ...; Spatial Waypoint: ...`.
 - Omit invisible fields; do not write filler like `none`.
 - Read RGB first, then obstacle, landmark, and waypoint labels.
 - Treat only cues within about {arrival_near_m}m as NEAR/current-position evidence.
@@ -23,13 +23,13 @@
 
 **2) Map + Space Structure**
 - Read current-area metadata, then cross-check with Part 1 nearby evidence.
-- Read each `Space WP#`: space/area, landmark meaning, direction/distance, reachability, task-alignment, and whether it is current/behind/next.
+- Read each `Spatial WP#`: region, landmark meaning, direction/distance, reachability, task-alignment, and whether it is current/behind/next.
 - Connected/reachable waypoints within about {arrival_near_m}m are strong current-anchor evidence.
 - `INITIAL POSITION` and old chain nodes are visited history unless the task explicitly returns there.
-- Read the Space Waypoint Chain as executed trajectory, not as the output `waypoint_chain`.
+- Read the Spatial Waypoint Chain as executed trajectory, not as the output `waypoint_chain`.
 - Use the chain and Previous Subtask evidence only to judge reached/current/behind relations.
 - Read the map for pose, obstacles, connected spaces, task-aligned exits, and backtracking branches.
-- End Part 2 with: `Current space/area | current/next/behind waypoint(s) | task-aligned transition(s) | wrong/backtracking transition(s)`.
+- End Part 2 with: `Current region | current/next/behind waypoint(s) | task-aligned transition(s) | wrong/backtracking transition(s)`.
 
 **3) Current Position + Global Task Chain**
 - Localize `current_waypoint` from current views first, then support with structure/map/previous subtask.
@@ -43,7 +43,7 @@
 - `task_progress` must be task-ordered natural-language pieces: completed pieces `(✓)`, exactly one `(Current)`, later pieces unmarked.
 - Mark a stage complete only when the strict current anchor proves its endpoint: correct space plus destination anchor near/current within about {arrival_near_m}m, or exact entrance/outside/stair anchor.
 - `waypoint_chain` must be task-defined full `space's landmark` nodes; nodes before current `(✓)`, current `(Current)`, future unmarked.
-- Do not copy executed Space Waypoint Chain into `waypoint_chain`.
+- Do not copy executed Spatial Waypoint Chain into `waypoint_chain`.
 - Arrival requires exact goal space/place and all earlier stages satisfied; landmark goals need correct space plus goal landmark/local anchor near/current within about {arrival_near_m}m.
 - Set `global_task_finish=true` only when the exact goal anchor is proved; otherwise false.
 
@@ -76,7 +76,7 @@ Return exactly one JSON object. Keep all reasoning inside `"reasoning"`; no extr
 
 {{
     "reasoning": "<Compact Part 1-5 reasoning. Include per-image evidence, structure/map read, current localization, stage completion judgment, task_progress, waypoint_chain, arrival check, chosen destination/direction/instruction/landmark, and short/long plan.>",
-    "current_waypoint": "<exactly `space area - nearby landmark / nearby landmark / nearby landmark`; current nearby cues only>",
+    "current_waypoint": "<exactly `region - nearby landmark / nearby landmark / nearby landmark`; current nearby cues only>",
     "task_progress": "<task-ordered natural-language pieces; completed `(✓)`, exactly one `(Current)`, later unmarked>",
     "waypoint_chain": "<task-defined full `space's landmark` nodes; before current `(✓)`, current `(Current)`, future unmarked, goal marked if useful>",
     "next_waypoint": "<one full `space's landmark` anchor: nearest unfinished task anchor, or current goal anchor if stopping>",

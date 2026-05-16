@@ -366,7 +366,6 @@ class NavGBenchSubprocessEnvClient:
             if self._process.poll() is None:
                 try:
                     send_message(self._writer, {"cmd": "close"})
-                    receive_message(self._reader, eof_message=_WORKER_EOF_MESSAGE)
                 except Exception:
                     pass
         finally:

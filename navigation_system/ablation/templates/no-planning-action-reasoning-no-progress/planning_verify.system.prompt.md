@@ -4,9 +4,9 @@
 **Surrounding Views** (provided views around the agent; each RGB view HFOV is about 79°):
 - **RGB scene content** is primary evidence: layout, openings, walls, furniture, room cues, stairs, boundaries, and object relations.
 - **Obstacle distance**: nearest obstacle only. <{obs_blocked_m}m=blocked | {obs_blocked_m}-{obs_risky_m}m=caution | >{obs_risky_m}m=passable.
-- **Landmark / Space Waypoint** labels, boxes, distances, bottom-strip rows, and map labels are auxiliary evidence; use only what is shown.
+- **Landmark / Spatial Waypoint** labels, boxes, distances, bottom-strip rows, and map labels are auxiliary evidence; use only what is shown.
 **Previous Subtask**: keep it as ordinary short-term context about the last requested destination/instruction and optional last landmark observation. It is not by itself proof of current position or completion.
-**Space Structure / Global Map**: use rendered current-area, space-waypoint, connection, obstacle, trajectory, and current-pose evidence if provided. Treat them as perception inputs, not as a required progress-chain reasoning procedure.
+**Space Structure / Global Map**: use rendered current-area, spatial-waypoint, connection, obstacle, trajectory, and current-pose evidence if provided. Treat them as perception inputs, not as a required progress-chain reasoning procedure.
 
 **Sequential planning rule**:
 - If the current destination is not reached, continue toward it or adjust to a safer task-aligned direction.

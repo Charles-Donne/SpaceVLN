@@ -215,7 +215,7 @@ class LLMPlanner(BaseAPIClient):
                 self._last_response_rejection_notice = (
                     f"Your previous response was rejected because `{field_name}` contained `Unknown`. "
                     "Do not output `Unknown`, `Unknown's ...`, or any unresolved current area. "
-                    "Infer the current area from the nearby current scene first. Previous Space Waypoints only show visited history, not where you are now."
+                    "Infer the current area from the nearby current scene first. Previous Spatial Waypoints only show visited history, not where you are now."
                 )
                 return False
             if re.search(r"(?i)(^|->\s*)(?:area|room|space)(?:'s|\s*-)", field_text):

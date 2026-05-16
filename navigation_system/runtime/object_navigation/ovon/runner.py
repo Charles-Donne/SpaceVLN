@@ -39,6 +39,7 @@ from navigation_system.runtime.output_policy import (
     add_output_profile_arg,
     resolve_output_policy,
 )
+from navigation_system.runtime.process_lifecycle import close_with_timeout
 from navigation_system.runtime.storage.results_layout import (
     build_default_results_family_root,
     build_model_results_dir_name,
@@ -1421,7 +1422,10 @@ def _run_one_episode(
             controller.reset_episode(episode_id=episode_id, sample_index=sample_index)
             result = controller.run_navigation(max_subtask_steps=max_subtask_steps)
         finally:
-            controller.close()
+            close_with_timeout(
+                controller.close,
+                label=f"OVON episode {int(episode_id)} environment",
+            )
 
     return result
 

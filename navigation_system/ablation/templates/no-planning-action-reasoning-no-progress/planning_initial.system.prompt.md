@@ -4,8 +4,8 @@
 **12 Views** (sampled every 30° around 360°; each RGB view HFOV is about 79°):
 - **RGB scene content** is primary evidence: layout, openings, walls, furniture, room cues, stairs, boundaries, and object relations.
 - **Obstacle distance**: nearest obstacle only. <{obs_blocked_m}m=blocked | {obs_blocked_m}-{obs_risky_m}m=caution | >{obs_risky_m}m=passable.
-- **Landmark / Space Waypoint** labels, boxes, distances, bottom-strip rows, and map labels are auxiliary evidence; use only what is shown.
-**Space Structure / Global Map**: use rendered current-area, space-waypoint, connection, obstacle, trajectory, and current-pose evidence if provided. Treat them as perception inputs, not as a required progress-chain reasoning procedure.
+- **Landmark / Spatial Waypoint** labels, boxes, distances, bottom-strip rows, and map labels are auxiliary evidence; use only what is shown.
+**Space Structure / Global Map**: use rendered current-area, spatial-waypoint, connection, obstacle, trajectory, and current-pose evidence if provided. Treat them as perception inputs, not as a required progress-chain reasoning procedure.
 
 **Initial planning rule**:
 - You are at the task start. Choose only the first immediate subtask from the Global Task.

@@ -283,7 +283,7 @@ class NavigationAgentController(BaseNavigationController):
 
     def _is_in_initial_position_neighborhood(self, waypoint_summary: Optional[str] = None) -> bool:
         summary_text = str(waypoint_summary or "")
-        if "near INITIAL POSITION Space WP#" in summary_text:
+        if "near INITIAL POSITION" in summary_text and "Spatial WP#" in summary_text:
             return True
 
         mapper = getattr(self, "mapper", None)
@@ -2083,7 +2083,7 @@ class NavigationAgentController(BaseNavigationController):
         return self.landmark_memory.get_step_visible_entries(self.current_step)
 
     def _save_waypoint_area_memory_snapshot(self) -> None:
-        """Persist waypoint/space-area state for debugging after each planning update."""
+        """Persist waypoint/region state for debugging after each planning update."""
         if self.save_manager is None or self.mapper is None:
             return
 
@@ -3490,7 +3490,7 @@ class NavigationAgentController(BaseNavigationController):
         thinking_dir: Optional[str] = None,
         refresh_direction_views: bool = True,
     ) -> Optional[int]:
-        """Persist planner space-area output into the world map only."""
+        """Persist planner region output into the world map only."""
         _ = phase
         _ = thinking_dir
         _ = refresh_direction_views

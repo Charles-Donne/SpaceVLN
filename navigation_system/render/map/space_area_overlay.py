@@ -1,4 +1,4 @@
-"""Auto-extracted helper module from MapVisualizer for space-area overlay logic."""
+"""Auto-extracted helper module from MapVisualizer for region overlay logic."""
 
 import re
 from typing import Any, Dict, List, Optional, Tuple

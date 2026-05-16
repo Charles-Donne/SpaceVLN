@@ -9,7 +9,7 @@ The system is built on the Habitat VLN-CE ecosystem and adapts components and de
 ## Highlights
 
 - VLM planner and VLM action executor with standard and explicit-context-cache runtimes.
-- Persistent spatial memory with space waypoints, area labels, landmark memory, and map-rendered reasoning evidence.
+- Persistent spatial memory with spatial waypoints, area labels, landmark memory, and map-rendered reasoning evidence.
 - Two task families under one Navigation Agent core: VLN-CE-style navigation and object navigation.
 - Benchmarks are task plugins: R2R-CE and NavGBench under `vlnce`, OVON under `object_navigation`.
 - GroundingDINO + SAM perception interface for open-vocabulary landmark grounding.

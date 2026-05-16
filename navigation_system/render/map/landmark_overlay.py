@@ -355,7 +355,7 @@ def build_landmark_strip_lines(
                 priority=2,
                 sort_key=sort_key,
                 segments=(
-                    LandmarkStripSegment("space waypoint: ", status_color),
+                    LandmarkStripSegment("spatial waypoint: ", status_color),
                     LandmarkStripSegment(_short_text(waypoint_label, 34), value_color),
                     LandmarkStripSegment(f"  {distance_m:.1f}m", value_color),
                     LandmarkStripSegment(f"  {format_relative_direction(angle_deg)}", value_color),

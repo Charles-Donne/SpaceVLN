@@ -11,6 +11,7 @@ import os
 import shutil
 import signal
 import threading
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from navigation_system.config import ConfigHelper, get_config
@@ -36,6 +37,7 @@ from navigation_system.runtime.output_policy import (
     build_output_job_fields,
     build_output_namespace_kwargs,
 )
+from navigation_system.runtime.process_lifecycle import close_with_timeout, env_float
 from navigation_system.runtime.storage.artifacts import (
     SaveManager,
     get_episode_detail_dir,
@@ -72,9 +74,10 @@ UNRECORDED_INITIAL_FAILURE_REASONS = {
 
 DEFAULT_INITIAL_FAILURE_MAX_ATTEMPTS = 3
 
-_EPISODE_TRANSFER_EXECUTOR: Optional[concurrent.futures.ThreadPoolExecutor] = None
 _EPISODE_TRANSFER_FUTURES: List[concurrent.futures.Future] = []
 _EPISODE_TRANSFER_LOCK = threading.Lock()
+_EPISODE_TRANSFER_SEMAPHORE: Optional[threading.BoundedSemaphore] = None
+_EPISODE_TRANSFER_SEMAPHORE_LIMIT = 0
 
 
 def _positive_int(value: Any, default: int) -> int:
@@ -533,18 +536,55 @@ def _transfer_episode_staging_outputs(
             _remove_empty_parent_dirs(staging_results_dir, max_levels=2)
 
 
-def _get_episode_transfer_executor() -> concurrent.futures.ThreadPoolExecutor:
-    global _EPISODE_TRANSFER_EXECUTOR
-    if _EPISODE_TRANSFER_EXECUTOR is None:
-        worker_count = min(
-            4,
-            _positive_int(os.getenv("SPACEVLN_EPISODE_TRANSFER_WORKERS", "2"), 2),
-        )
-        _EPISODE_TRANSFER_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
-            max_workers=worker_count,
-            thread_name_prefix="spacevln-transfer",
-        )
-    return _EPISODE_TRANSFER_EXECUTOR
+def _episode_transfer_worker_count() -> int:
+    return min(
+        4,
+        _positive_int(os.getenv("SPACEVLN_EPISODE_TRANSFER_WORKERS", "2"), 2),
+    )
+
+
+def _get_episode_transfer_semaphore() -> threading.BoundedSemaphore:
+    global _EPISODE_TRANSFER_SEMAPHORE, _EPISODE_TRANSFER_SEMAPHORE_LIMIT
+    worker_count = _episode_transfer_worker_count()
+    if (
+        _EPISODE_TRANSFER_SEMAPHORE is None
+        or _EPISODE_TRANSFER_SEMAPHORE_LIMIT != worker_count
+    ):
+        _EPISODE_TRANSFER_SEMAPHORE = threading.BoundedSemaphore(worker_count)
+        _EPISODE_TRANSFER_SEMAPHORE_LIMIT = worker_count
+    return _EPISODE_TRANSFER_SEMAPHORE
+
+
+def _submit_daemon_episode_transfer(**kwargs: Any) -> concurrent.futures.Future:
+    """Run one transfer on daemon threads so process exit is not held hostage."""
+    future: concurrent.futures.Future = concurrent.futures.Future()
+    semaphore = _get_episode_transfer_semaphore()
+
+    def _runner() -> None:
+        acquired = False
+        try:
+            semaphore.acquire()
+            acquired = True
+            if not future.set_running_or_notify_cancel():
+                return
+            _transfer_episode_staging_outputs(**kwargs)
+            future.set_result(None)
+        except BaseException as exc:  # pragma: no cover - defensive background path
+            future.set_exception(exc)
+        finally:
+            if acquired:
+                try:
+                    semaphore.release()
+                except ValueError:
+                    pass
+
+    thread = threading.Thread(
+        target=_runner,
+        name="spacevln-transfer",
+        daemon=True,
+    )
+    thread.start()
+    return future
 
 
 def _forget_episode_transfer_future(future: concurrent.futures.Future) -> None:
@@ -587,8 +627,7 @@ def _submit_episode_staging_sync(
             postprocess_futures=postprocess_futures,
         )
         return
-    future = _get_episode_transfer_executor().submit(
-        _transfer_episode_staging_outputs,
+    future = _submit_daemon_episode_transfer(
         staging_results_dir=staging_results_dir,
         final_results_dir=final_results_dir,
         episode_id=episode_id,
@@ -625,6 +664,10 @@ def _episode_transfer_batch_size(pool_limit: int) -> int:
 def _throttle_episode_transfer_backlog() -> None:
     pool_limit = _episode_transfer_pool_limit()
     transfer_batch = _episode_transfer_batch_size(pool_limit)
+    throttle_timeout_s = max(
+        0.0,
+        env_float("SPACEVLN_EPISODE_TRANSFER_THROTTLE_TIMEOUT_S", 60.0),
+    )
     while True:
         with _EPISODE_TRANSFER_LOCK:
             pending_futures = list(_EPISODE_TRANSFER_FUTURES)
@@ -634,9 +677,15 @@ def _throttle_episode_transfer_backlog() -> None:
         while len(pending_futures) > target_pending:
             done, _ = concurrent.futures.wait(
                 pending_futures,
+                timeout=throttle_timeout_s if throttle_timeout_s > 0 else None,
                 return_when=concurrent.futures.FIRST_COMPLETED,
             )
             if not done:
+                print(
+                    "⚠️  Episode artifact transfer backlog did not drain within "
+                    f"{throttle_timeout_s:.1f}s; continuing without blocking the run.",
+                    flush=True,
+                )
                 return
             for future in done:
                 try:
@@ -661,30 +710,92 @@ def _wait_for_episode_postprocess_futures(
     episode_id: int,
 ) -> None:
     """Wait for GIF/topdown post-processing before moving or deleting staging dirs."""
-    for future in list(futures or []):
-        if future is None:
-            continue
-        try:
-            future.result()
-        except BaseException as exc:
-            print(
-                f"⚠️  Episode {int(episode_id)} post-processing failed before artifact sync: "
-                f"{_format_exception_message(exc)}"
-            )
+    pending = [future for future in list(futures or []) if future is not None]
+    if not pending:
+        return
+    timeout_s = max(0.0, env_float("SPACEVLN_POSTPROCESS_WAIT_TIMEOUT_S", 120.0))
+    deadline = time.monotonic() + timeout_s if timeout_s > 0 else None
+    while pending:
+        wait_timeout = None
+        if deadline is not None:
+            wait_timeout = max(0.0, deadline - time.monotonic())
+            if wait_timeout <= 0:
+                break
+        done, not_done = concurrent.futures.wait(
+            pending,
+            timeout=wait_timeout,
+            return_when=concurrent.futures.FIRST_COMPLETED,
+        )
+        if not done:
+            break
+        for future in done:
+            try:
+                future.result()
+            except BaseException as exc:
+                print(
+                    f"⚠️  Episode {int(episode_id)} post-processing failed before artifact sync: "
+                    f"{_format_exception_message(exc)}",
+                    flush=True,
+                )
+        pending = list(not_done)
+    if pending:
+        for future in pending:
+            try:
+                future.cancel()
+            except Exception:
+                pass
+        print(
+            f"⚠️  Episode {int(episode_id)} post-processing did not finish within "
+            f"{timeout_s:.1f}s; continuing shutdown.",
+            flush=True,
+        )
 
 
 def wait_for_pending_episode_transfers() -> None:
+    timeout_s = max(0.0, env_float("SPACEVLN_EPISODE_TRANSFER_WAIT_TIMEOUT_S", 120.0))
+    deadline = time.monotonic() + timeout_s if timeout_s > 0 else None
+    timed_out = False
     while True:
         with _EPISODE_TRANSFER_LOCK:
             pending_futures = list(_EPISODE_TRANSFER_FUTURES)
         if not pending_futures:
             break
-        for future in concurrent.futures.as_completed(pending_futures):
+        wait_timeout = None
+        if deadline is not None:
+            wait_timeout = max(0.0, deadline - time.monotonic())
+            if wait_timeout <= 0:
+                timed_out = True
+                break
+        done, _not_done = concurrent.futures.wait(
+            pending_futures,
+            timeout=wait_timeout,
+            return_when=concurrent.futures.FIRST_COMPLETED,
+        )
+        if not done:
+            timed_out = True
+            break
+        for future in done:
             try:
                 future.result()
             except BaseException:
                 # The done callback already prints the concrete error once.
                 pass
+            _forget_episode_transfer_future(future)
+    if timed_out:
+        with _EPISODE_TRANSFER_LOCK:
+            pending_futures = list(_EPISODE_TRANSFER_FUTURES)
+            _EPISODE_TRANSFER_FUTURES.clear()
+        for future in pending_futures:
+            try:
+                future.cancel()
+            except Exception:
+                pass
+        print(
+            "⚠️  Episode artifact transfer did not finish within "
+            f"{timeout_s:.1f}s; continuing shutdown. "
+            "Increase SPACEVLN_EPISODE_TRANSFER_WAIT_TIMEOUT_S or set it to 0 to wait indefinitely.",
+            flush=True,
+        )
 
 
 atexit.register(wait_for_pending_episode_transfers)
@@ -868,10 +979,10 @@ def _run_single_episode_attempt(
         }
     finally:
         if controller is not None:
-            try:
-                controller.envs.close()
-            except Exception as cleanup_error:
-                print(f"⚠️  Failed to clean up the environment: {cleanup_error}")
+            close_with_timeout(
+                controller.envs.close,
+                label=f"episode {int(episode_id)} environment",
+            )
             try:
                 postprocess_futures = controller.pop_pending_post_episode_futures()
                 if postprocess_futures:
@@ -1030,6 +1141,11 @@ def run_single_episode(
                     console_result.get("_staging_save_stdout_log", save_stdout_log)
                 ),
                 postprocess_futures=postprocess_futures,
+            )
+        elif postprocess_futures:
+            _wait_for_episode_postprocess_futures(
+                postprocess_futures,
+                episode_id=episode_id,
             )
         if not should_retry:
             break

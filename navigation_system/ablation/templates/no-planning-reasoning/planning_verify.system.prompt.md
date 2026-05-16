@@ -6,9 +6,9 @@
 **Surrounding Views** (sampled every 30° around 360°; each RGB view HFOV is about 79°):
 - **RGB scene content**: this is the primary evidence. First read the actual image content: layout, openings, walls, furniture, room cues, stairs, boundaries, and object relations.
 - **Obstacle distance**: nearest obstacle only. <{obs_blocked_m}m=blocked | {obs_blocked_m}-{obs_risky_m}m=caution | >{obs_risky_m}m=passable
-- **Landmark / Space Waypoint** (if present): `Landmark` and `Space Waypoint` labels may appear on the RGB view, and custom landmark bbox may add name + distance/angle cues. Use only the shown values.
-- **Bottom white strip** (if present): bottom summary rows may show `your current area`, `space waypoint`, and `landmark` entries, including names, distances, directions, confidence, connection info, or status tags. Treat it as structured current-view / nearby-memory summary, not obstacle/free-space/path-clearance proof. Use the preserved `your current area` row only as a supporting current space/area tag for the left side of `current_waypoint` when it agrees with RGB/layout.
-**Space Structure**: rendered current area, Space Waypoints, connections, executed Space Waypoint Chain, and previous/nearby memory supplied in the user prompt. Use it as structured evidence together with the views and map.
+- **Landmark / Spatial Waypoint** (if present): `Landmark` and `Spatial Waypoint` labels may appear on the RGB view, and custom landmark bbox may add name + distance/angle cues. Use only the shown values.
+- **Bottom white strip** (if present): bottom summary rows may show `your current area`, `spatial waypoint`, and `landmark` entries, including names, distances, directions, confidence, connection info, or status tags. Treat it as structured current-view / nearby-memory summary, not obstacle/free-space/path-clearance proof. Use the preserved `your current area` row only as a supporting current region tag for the left side of `current_waypoint` when it agrees with RGB/layout.
+**Space Structure**: rendered current area, Spatial Waypoints, connections, executed Spatial Waypoint Chain, and previous/nearby memory supplied in the user prompt. Use it as structured evidence together with the views and map.
 **Global Map**: explored area + obstacles + trajectory + current pose + space structure
 - **Map colors**: White=unexplored | Black=obstacles | Green=safe floor | Purple/magenta=trajectory | Red Arrow=you position | Colored regions + blue tags=space structure on Global Map
 
@@ -41,7 +41,7 @@ Return exactly one JSON object. Use `reasoning` as one short task-grounded summa
 **Task**: Exit bedroom, turn left. Walk straight passing gray couch, stop at rug.
 **Previous Subtask**: Navigate past gray couch toward rug
 **Previous Landmark**: Landmark: [gray couch] (you have arrived now), 0.6m, Left 90deg
-**Obs:** IMAGE 1: Rug <0.5m and a living-room space waypoint. IMAGE 10: Gray couch beside. IMAGE 7: Hallway behind with hallway space waypoint.
+**Obs:** IMAGE 1: Rug <0.5m and a living-room spatial waypoint. IMAGE 10: Gray couch beside. IMAGE 7: Hallway behind with hallway spatial waypoint.
 
 {{
     "reasoning": "Current views and nearby structure place the agent at the living-room rug beside the gray couch, so the goal is already satisfied and the correct next action is to stop.",
@@ -59,7 +59,7 @@ Return exactly one JSON object. Use `reasoning` as one short task-grounded summa
 **Task**: Walk through hallway, then enter bedroom on left and go to bed.
 **Previous Subtask**: Navigate through hallway
 **Previous Landmark**: Landmark: [hallway forward section] (you have arrived now), 0.4m, Back 180deg
-**Obs:** IMAGE 1: Hallway ahead 3.0m. IMAGE 5: Bedroom opening (~2.5m), bed inside, plus bedroom space waypoint. IMAGE 7: Kitchen behind with kitchen space waypoint.
+**Obs:** IMAGE 1: Hallway ahead 3.0m. IMAGE 5: Bedroom opening (~2.5m), bed inside, plus bedroom spatial waypoint. IMAGE 7: Kitchen behind with kitchen spatial waypoint.
 
 {{
     "reasoning": "Current views and nearby structure place the agent at the hallway bedroom opening, so the hallway stage is done and the next unfinished stage is entering the bedroom through IMAGE5 toward the doorway.",

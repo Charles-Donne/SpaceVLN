@@ -785,7 +785,7 @@ class ThinkingViewRenderer:
             distance_m = waypoint_distance_m
             sort_key = (cls._distance_sort_value(distance_m), 1.0, 0.0)
             segments = [
-                LandmarkStripSegment("space waypoint: ", prefix_color),
+                LandmarkStripSegment("spatial waypoint: ", prefix_color),
                 LandmarkStripSegment(waypoint_text, value_color),
                 LandmarkStripSegment(f"  {cls._distance_text(distance_m)}", value_color),
             ]

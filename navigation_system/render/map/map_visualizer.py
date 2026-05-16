@@ -1252,7 +1252,7 @@ from navigation_system.space.landmarks import landmark_selection as _landmark_se
 from . import map_renderer as _map_renderer
 from . import space_area_overlay as _space_area_overlay
 
-# Space-area overlay / label-layout helpers
+# Region overlay / label-layout helpers
 MapVisualizer._normalize_space_area_type = _space_area_overlay._normalize_space_area_type
 MapVisualizer._space_area_color_preference_order = _space_area_overlay._space_area_color_preference_order
 MapVisualizer._build_space_area_adjacency = _space_area_overlay._build_space_area_adjacency

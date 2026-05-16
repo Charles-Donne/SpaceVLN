@@ -677,7 +677,7 @@ class BaseNavigationController:
         return self.envs.call_at(0, "get_agent_pose")
 
     def _draw_waypoints_on_view(self, image: np.ndarray, waypoint_entry: Dict[str, Any]) -> np.ndarray:
-        """Draw the visible space-waypoint label and distance on a thinking view."""
+        """Draw the visible spatial-waypoint label and distance on a thinking view."""
         if not waypoint_entry:
             return image
 

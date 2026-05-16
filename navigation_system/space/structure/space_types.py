@@ -130,7 +130,7 @@ def canonical_space_types_text() -> str:
 
 
 def strip_space_type_variant_suffixes(text: Optional[str]) -> Optional[str]:
-    """Remove space-area variant numbers such as bedroom1 / hallway2 from free-form text."""
+    """Remove region variant numbers such as bedroom1 / hallway2 from free-form text."""
     if text is None:
         return None
 

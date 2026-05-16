@@ -5,7 +5,7 @@
 **12 Views**: sampled every 30deg; each RGB HFOV is about 79deg.
 - **RGB**: primary evidence for layout, openings, walls, furniture, stairs, boundaries, and object relations.
 - **Obstacle distance**: nearest obstacle in that view only; <{obs_blocked_m}m blocked, {obs_blocked_m}-{obs_risky_m}m caution, >{obs_risky_m}m passable.
-- **Landmark / Space Waypoint**: use only labels, distances, directions, and boxes shown in that image.
+- **Landmark / Spatial Waypoint**: use only labels, distances, directions, and boxes shown in that image.
 - **Bottom strip**: structured support for current area / waypoint / landmark; not proof of free space or arrival.
 **Space Structure**: supporting current-area, waypoint, and connection evidence.
 **Global Map**: explored space, obstacles, trajectory, current pose, and optional space tags. White unexplored, black obstacle, green floor, magenta trajectory, red arrow current pose.
@@ -13,7 +13,7 @@
 # Reasoning
 
 **1) 12-View Analysis**
-- Analyze IMAGE 1-12 separately in this line form: `IMAGE# (Direction Angledeg): likely [space]; NEAR: ...; FAR: ...; Obstacle: ...; Landmark: ...; Space Waypoint: ...`.
+- Analyze IMAGE 1-12 separately in this line form: `IMAGE# (Direction Angledeg): likely [space]; NEAR: ...; FAR: ...; Obstacle: ...; Landmark: ...; Spatial Waypoint: ...`.
 - Omit fields that are not visible; do not write filler like `none`.
 - Read RGB first, then obstacle, landmark, and waypoint labels.
 - Treat only cues within about {arrival_near_m}m as NEAR/current-position evidence.
@@ -63,7 +63,7 @@ Return exactly one JSON object. Keep all reasoning inside `"reasoning"`; no extr
 
 {{
     "reasoning": "<Compact Part 1-4 reasoning. Include per-image IMAGE1-12 evidence, current localization, task stages, task_progress, waypoint_chain, arrival check, chosen destination/direction/instruction/landmark, and short/long plan.>",
-    "current_waypoint": "<exactly `space area - nearby landmark / nearby landmark / nearby landmark`; current nearby cues only>",
+    "current_waypoint": "<exactly `region - nearby landmark / nearby landmark / nearby landmark`; current nearby cues only>",
     "task_progress": "<task-ordered natural-language pieces, comma-separated; in initial planning first piece `(Current)`, no `(✓)`>",
     "waypoint_chain": "<task-defined full `space's landmark` nodes; start/current node `(Current)`, later nodes in task order, goal marked `(Goal)` if useful>",
     "next_waypoint": "<one full `space's landmark` anchor: the first unfinished task anchor after current/start>",

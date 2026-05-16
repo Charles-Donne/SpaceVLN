@@ -1,5 +1,5 @@
 """
-Persistent space-area manager built on top of the world semantic map.
+Persistent region manager built on top of the world semantic map.
 """
 
 from collections import deque

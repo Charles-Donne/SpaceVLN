@@ -162,4 +162,6 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    from navigation_system.runtime.process_lifecycle import exit_process
+
+    exit_process(main())

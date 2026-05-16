@@ -95,6 +95,22 @@ def _select_tier(pricing: Dict[str, Any], input_tokens: int) -> Dict[str, Any]:
     return sorted_tiers[-1]
 
 
+def _tier_price(
+    tier: Dict[str, Any],
+    keys: Sequence[str],
+    *,
+    default: float = 0.0,
+) -> float:
+    for key in keys:
+        if key in tier and tier.get(key) is not None:
+            return _safe_float(tier.get(key), default)
+    return _safe_float(default, 0.0)
+
+
+def _tier_has_price(tier: Dict[str, Any], keys: Sequence[str]) -> bool:
+    return any(key in tier and tier.get(key) is not None for key in keys)
+
+
 def _pricing_currency(pricing: Optional[Dict[str, Any]], price_table: Dict[str, Any]) -> str:
     return str((pricing or {}).get("currency") or price_table.get("currency") or DEFAULT_CURRENCY)
 
@@ -220,6 +236,20 @@ def estimate_vlm_usage_cost(
     tier = _select_tier(pricing, input_tokens)
     input_price = _safe_float(tier.get("input"), 0.0)
     output_price = _safe_float(tier.get("output"), 0.0)
+    cached_input_price_keys = ("cached_input", "cache_hit_input", "input_cache_hit")
+    cache_write_input_price_keys = ("cache_write_input", "write_input", "cache_creation_input")
+    has_cached_input_price = _tier_has_price(tier, cached_input_price_keys)
+    has_cache_write_input_price = _tier_has_price(tier, cache_write_input_price_keys)
+    cached_input_price = _tier_price(
+        tier,
+        cached_input_price_keys,
+        default=input_price,
+    )
+    cache_write_input_price = _tier_price(
+        tier,
+        cache_write_input_price_keys,
+        default=input_price,
+    )
     cache = dict((payload or {}).get("cache") or {})
     cache_reported = bool(cache.get("reported", False))
     cached_tokens = _safe_int(cache.get("cached_tokens"), 0)
@@ -229,28 +259,79 @@ def estimate_vlm_usage_cost(
     if cache_reported:
         if uncached_tokens <= 0 and (cached_tokens > 0 or write_tokens > 0):
             uncached_tokens = max(0, input_tokens - cached_tokens - write_tokens)
-        multipliers = _resolve_cache_multipliers(cache_type, price_table)
-        billed_input_tokens = (
-            float(max(0, uncached_tokens))
-            + float(max(0, cached_tokens)) * float(multipliers["read"])
-            + float(max(0, write_tokens)) * float(multipliers["write"])
-        )
+        if has_cached_input_price or has_cache_write_input_price:
+            multipliers = _resolve_cache_multipliers(cache_type, price_table)
+            effective_cached_input_price = (
+                cached_input_price
+                if has_cached_input_price
+                else input_price * float(multipliers["read"])
+            )
+            effective_cache_write_input_price = (
+                cache_write_input_price
+                if has_cache_write_input_price
+                else input_price * float(multipliers["write"])
+            )
+            input_cost = (
+                float(max(0, uncached_tokens)) * input_price
+                + float(max(0, cached_tokens)) * effective_cached_input_price
+                + float(max(0, write_tokens)) * effective_cache_write_input_price
+            ) / 1_000_000.0
+            if input_price > 0:
+                billed_input_tokens = input_cost * 1_000_000.0 / input_price
+            else:
+                billed_input_tokens = float(
+                    max(0, uncached_tokens) + max(0, cached_tokens) + max(0, write_tokens)
+                )
+        else:
+            multipliers = _resolve_cache_multipliers(cache_type, price_table)
+            billed_input_tokens = (
+                float(max(0, uncached_tokens))
+                + float(max(0, cached_tokens)) * float(multipliers["read"])
+                + float(max(0, write_tokens)) * float(multipliers["write"])
+            )
+            input_cost = billed_input_tokens * input_price / 1_000_000.0
     else:
         billed_input_tokens = float(input_tokens)
+        input_cost = billed_input_tokens * input_price / 1_000_000.0
 
-    input_cost = billed_input_tokens * input_price / 1_000_000.0
     output_cost = float(output_tokens) * output_price / 1_000_000.0
     total_cost = input_cost + output_cost
 
-    if input_tokens > 0 and cache_reported:
-        billed_input_multiplier = billed_input_tokens / float(input_tokens)
+    baseline_input_cost = float(input_tokens) * input_price / 1_000_000.0
+    if input_tokens > 0 and cache_reported and baseline_input_cost > 0:
+        billed_input_multiplier = input_cost / baseline_input_cost
     else:
         billed_input_multiplier = 1.0
+    computed_cache_hit_ratio = (
+        float(max(0, cached_tokens)) / float(input_tokens)
+        if input_tokens > 0 and cache_reported
+        else _safe_float(cache.get("hit_ratio"), 0.0)
+    )
+    computed_cache_cost_ratio = (
+        billed_input_multiplier
+        if cache_reported and baseline_input_cost > 0
+        else _safe_float(cache.get("cost_ratio"), 0.0)
+    )
+    computed_cache_savings_ratio = (
+        1.0 - computed_cache_cost_ratio
+        if cache_reported and baseline_input_cost > 0
+        else _safe_float(cache.get("savings_ratio"), 0.0)
+    )
 
     return {
         "cost_available": True,
         "currency": currency,
         "input_price_per_1m": input_price,
+        "cached_input_price_per_1m": (
+            cached_input_price
+            if has_cached_input_price
+            else input_price * float(_resolve_cache_multipliers(cache_type, price_table)["read"])
+        ),
+        "cache_write_input_price_per_1m": (
+            cache_write_input_price
+            if has_cache_write_input_price
+            else input_price * float(_resolve_cache_multipliers(cache_type, price_table)["write"])
+        ),
         "output_price_per_1m": output_price,
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
@@ -264,9 +345,9 @@ def estimate_vlm_usage_cost(
         "cached_tokens": cached_tokens,
         "cache_write_tokens": write_tokens,
         "uncached_tokens": uncached_tokens,
-        "cache_hit_ratio": _safe_float(cache.get("hit_ratio"), 0.0),
-        "cache_cost_ratio": _safe_float(cache.get("cost_ratio"), 0.0),
-        "cache_savings_ratio": _safe_float(cache.get("savings_ratio"), 0.0),
+        "cache_hit_ratio": computed_cache_hit_ratio,
+        "cache_cost_ratio": computed_cache_cost_ratio,
+        "cache_savings_ratio": computed_cache_savings_ratio,
     }
 
 

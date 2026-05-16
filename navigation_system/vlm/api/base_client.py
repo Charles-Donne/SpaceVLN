@@ -341,6 +341,12 @@ class BaseAPIClient(ABC):
     ) -> None:
         enriched_payload = dict(payload or {})
         cost_payload = estimate_vlm_usage_cost(enriched_payload)
+        if bool(cost_payload.get("cache_reported", False)) and isinstance(enriched_payload.get("cache"), dict):
+            cache_payload = dict(enriched_payload.get("cache") or {})
+            cache_payload["hit_ratio"] = round(float(cost_payload.get("cache_hit_ratio", 0.0) or 0.0), 4)
+            cache_payload["cost_ratio"] = round(float(cost_payload.get("cache_cost_ratio", 0.0) or 0.0), 4)
+            cache_payload["savings_ratio"] = round(float(cost_payload.get("cache_savings_ratio", 0.0) or 0.0), 4)
+            enriched_payload["cache"] = cache_payload
         if bool(cost_payload.get("cost_available", False)):
             enriched_payload["cost"] = {
                 "currency": str(cost_payload.get("currency") or DEFAULT_CURRENCY),
@@ -349,6 +355,7 @@ class BaseAPIClient(ABC):
                 "total_cost": round(float(cost_payload.get("total_cost", 0.0) or 0.0), 8),
                 "billed_input_tokens": round(float(cost_payload.get("billed_input_tokens", 0.0) or 0.0), 4),
                 "input_price_per_1m": float(cost_payload.get("input_price_per_1m", 0.0) or 0.0),
+                "cached_input_price_per_1m": float(cost_payload.get("cached_input_price_per_1m", 0.0) or 0.0),
                 "output_price_per_1m": float(cost_payload.get("output_price_per_1m", 0.0) or 0.0),
             }
         self.last_vlm_info_payload = enriched_payload

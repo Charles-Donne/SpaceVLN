@@ -39,7 +39,7 @@ class AblationThinkingViewRenderer(ThinkingViewRenderer):
                 first_text = str(line.segments[0].text or "").strip().lower()
             is_landmark_line = first_text.startswith("landmark:")
             is_space_line = (
-                first_text.startswith("space waypoint:")
+                first_text.startswith("spatial waypoint:")
                 or first_text.startswith("your current area:")
             )
             if is_landmark_line and not include_landmarks:

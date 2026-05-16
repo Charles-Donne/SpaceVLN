@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import uuid
 
 from navigation_system.controller.agent.controller import NavigationAgentController
+from navigation_system.runtime.process_lifecycle import close_with_timeout
 from navigation_system.runtime.vlnce.r2r.execution import load_runtime_config
 from navigation_system.runtime.vlnce.profiles import (
     CONTEXT_CACHE_RUNTIME_PROFILE,
@@ -203,10 +204,7 @@ def main() -> int:
         )
         return 0
     finally:
-        try:
-            if controller is not None and hasattr(controller, "envs") and controller.envs is not None:
-                controller.envs.close()
-            else:
-                env.close()
-        except Exception:
-            pass
+        if controller is not None and hasattr(controller, "envs") and controller.envs is not None:
+            close_with_timeout(controller.envs.close, label="real-robot environment")
+        else:
+            close_with_timeout(env.close, label="real-robot environment")

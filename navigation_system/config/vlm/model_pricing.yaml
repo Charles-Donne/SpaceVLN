@@ -3,13 +3,16 @@
 # Prices are per 1M tokens. Keep this file local/configurable because vendor
 # pricing changes over time. A model entry may override the top-level currency.
 #
-# Source checked: Alibaba Cloud Model Studio China pricing docs, 2026-05-13.
+# Sources checked: Alibaba Cloud Model Studio China pricing docs, 2026-05-13;
+# Xiaomi MiMo official pricing and Token Plan docs, 2026-05-15.
 currency: CNY
 unit: per_1m_tokens
-last_checked: "2026-05-13"
+last_checked: "2026-05-15"
 sources:
   model_pricing: "https://help.aliyun.com/zh/model-studio/models"
   context_cache: "https://help.aliyun.com/zh/model-studio/context-cache"
+  mimo_pricing: "https://platform.xiaomimimo.com/static/docs/pricing.md"
+  mimo_token_plan: "https://platform.xiaomimimo.com/static/docs/tokenplan/subscription.md"
 
 cache:
   explicit:
@@ -84,3 +87,86 @@ models:
         - max_input_tokens: 262144
           input: 4.0
           output: 21.0
+  mimo:
+    mimo-v2.5-pro:
+      aliases:
+        - mimo-v2-pro
+      tiers:
+        - max_input_tokens: 256000
+          input: 7.0
+          cached_input: 1.4
+          cache_write_input: 0.0
+          output: 21.0
+        - max_input_tokens: 1000000
+          input: 14.0
+          cached_input: 2.8
+          cache_write_input: 0.0
+          output: 42.0
+    mimo-v2.5:
+      tiers:
+        - max_input_tokens: 256000
+          input: 2.8
+          cached_input: 0.56
+          cache_write_input: 0.0
+          output: 14.0
+        - max_input_tokens: 1000000
+          input: 5.6
+          cached_input: 1.12
+          cache_write_input: 0.0
+          output: 28.0
+    mimo-v2-omni:
+      tiers:
+        - max_input_tokens: 256000
+          input: 2.8
+          cached_input: 0.56
+          cache_write_input: 0.0
+          output: 14.0
+    mimo-v2-flash:
+      tiers:
+        - max_input_tokens: 256000
+          input: 0.7
+          cached_input: 0.07
+          cache_write_input: 0.0
+          output: 2.1
+  mimo_token_plan:
+    # Token Plan entries estimate quota burn in Credits, not cash. The official
+    # Token Plan docs specify model-level Credit multipliers but do not document
+    # an additional cache-hit Credit discount, so cached_input equals input here.
+    mimo-v2.5-pro:
+      currency: Credits
+      aliases:
+        - mimo-v2-pro
+      tiers:
+        - max_input_tokens: 1000000
+          input: 2000000
+          cached_input: 2000000
+          cache_write_input: 2000000
+          output: 2000000
+    mimo-v2.5:
+      currency: Credits
+      tiers:
+        - max_input_tokens: 1000000
+          input: 1000000
+          cached_input: 1000000
+          cache_write_input: 1000000
+          output: 1000000
+    mimo-v2-omni:
+      currency: Credits
+      tiers:
+        - max_input_tokens: 256000
+          input: 1000000
+          cached_input: 1000000
+          cache_write_input: 1000000
+          output: 1000000
+    mimo-v2.5-tts:
+      currency: Credits
+      aliases:
+        - mimo-v2.5-tts-voiceclone
+        - mimo-v2.5-tts-voicedesign
+        - mimo-v2-tts
+      tiers:
+        - max_input_tokens: 8000
+          input: 0
+          cached_input: 0
+          cache_write_input: 0
+          output: 0

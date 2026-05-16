@@ -6,7 +6,8 @@ This module saves RGB + top-down composites and optionally assembles GIFs.
 import os
 import cv2
 import numpy as np
-from concurrent.futures import Future, ThreadPoolExecutor
+import threading
+from concurrent.futures import Future
 from typing import List, Dict, Optional
 try:
     from habitat.utils.visualizations import maps
@@ -23,7 +24,29 @@ except ImportError:
     print("⚠️  imageio not installed, GIF generation disabled")
 
 
-_GIF_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="spacevln-gif")
+def _submit_daemon_gif_encode(
+    output_path: str,
+    frames_rgb: List[np.ndarray],
+    fps: int,
+) -> Future:
+    """Submit GIF encoding on a daemon thread so interpreter shutdown is never blocked."""
+    future: Future = Future()
+
+    def _runner() -> None:
+        if not future.set_running_or_notify_cancel():
+            return
+        try:
+            future.set_result(_encode_gif(output_path, frames_rgb, fps))
+        except BaseException as exc:  # pragma: no cover - defensive background path
+            future.set_exception(exc)
+
+    thread = threading.Thread(
+        target=_runner,
+        name="spacevln-gif",
+        daemon=True,
+    )
+    thread.start()
+    return future
 
 
 def _encode_gif(output_path: str, frames_rgb: List[np.ndarray], fps: int) -> Optional[str]:
@@ -361,7 +384,7 @@ class NavigationVisualizer:
         if not output_path:
             return None
         frames_rgb = self._copy_gif_frames()
-        future = _GIF_EXECUTOR.submit(_encode_gif, output_path, frames_rgb, int(fps or 2))
+        future = _submit_daemon_gif_encode(output_path, frames_rgb, int(fps or 2))
 
         def _report_result(done_future: Future) -> None:
             try:

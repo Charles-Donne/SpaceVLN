@@ -306,7 +306,7 @@ def _build_current_area_initial_waypoint_note(
         else 1
     )
     return (
-        f" (still near INITIAL POSITION(Task start) Space WP#{initial_wp_id}; "
+        f" (still near INITIAL POSITION(Task start) Spatial WP#{initial_wp_id}; "
         "do not set global_task_finish=true; "
         "execute Task first stage first)"
     )
@@ -986,15 +986,15 @@ def build_waypoint_summary(
     if include_area_chain:
         current_area_display = _format_current_area_chain_label(current_space_area_label)
         if current_area_display == "Current Position":
-            empty_area_chain_line = "Space Waypoint Chain: Current Position"
+            empty_area_chain_line = "Spatial Waypoint Chain: Current Position"
         else:
-            empty_area_chain_line = f"Space Waypoint Chain: {current_area_display} (Current)"
+            empty_area_chain_line = f"Spatial Waypoint Chain: {current_area_display} (Current)"
 
     if not waypoint_ids:
         lines = list(header_lines)
         if empty_area_chain_line:
             lines.append(empty_area_chain_line)
-        lines.append("No space waypoints recorded yet.")
+        lines.append("No spatial waypoints recorded yet.")
         return "\n".join(lines)
 
     current_floor_waypoint_distances_m = [
@@ -1391,7 +1391,7 @@ def build_waypoint_summary(
                         if reachability_note:
                             spatial_info = f"{spatial_info} | {reachability_note}"
                 waypoint_prefix = "    -" if render_multi_floor else "  -"
-                node_lines.append(f"{waypoint_prefix} Space WP#{wp_id} [{wp_desc}] -- {spatial_info}{suffix}")
+                node_lines.append(f"{waypoint_prefix} Spatial WP#{wp_id} [{wp_desc}] -- {spatial_info}{suffix}")
 
     current_area_display = _format_current_area_chain_label(display_area_label)
     displayed_chain_global_indices = [
@@ -1518,7 +1518,7 @@ def _has_clear_path_to_waypoint(
 
 def _format_waypoint_area_ref(waypoint_id: int, area_label: str) -> str:
     clean_area = _format_area_display_label(area_label)
-    return f"Space WP#{int(waypoint_id)}({clean_area})"
+    return f"Spatial WP#{int(waypoint_id)}({clean_area})"
 
 
 def _build_waypoint_reachability_note(
@@ -1577,7 +1577,7 @@ def _build_waypoint_reachability_note(
             if next_index < len(waypoint_descriptions)
             else ""
         )
-        next_area_ref = f"Space WP#{int(next_waypoint_id)}(" + _format_area_display_label(
+        next_area_ref = f"Spatial WP#{int(next_waypoint_id)}(" + _format_area_display_label(
             next_area,
             cue_texts=[next_description],
         ) + ")"
@@ -1688,7 +1688,7 @@ def _build_waypoint_area_path_line(
         })
 
     if not node_entries:
-        return "Space Waypoint Chain: Current Position" if include_area_chain else None
+        return "Spatial Waypoint Chain: Current Position" if include_area_chain else None
 
     grouped_entries: List[Dict[str, Any]] = []
     for entry in node_entries:
@@ -1748,7 +1748,7 @@ def _build_waypoint_area_path_line(
         )
 
     if len(grouped_entries) == 1:
-        return "Space Waypoint Chain: " + _format_group(grouped_entries[0])
+        return "Spatial Waypoint Chain: " + _format_group(grouped_entries[0])
 
     parts: List[str] = [_format_group(grouped_entries[0])]
     for index in range(1, len(grouped_entries)):
@@ -1805,7 +1805,7 @@ def _build_waypoint_area_path_line(
             parts.append(" -> ")
         parts.append(_format_group(curr_group))
 
-    return "Space Waypoint Chain: " + "".join(parts)
+    return "Spatial Waypoint Chain: " + "".join(parts)
 
 
 def build_action_landmark_map_info(

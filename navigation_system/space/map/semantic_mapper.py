@@ -80,7 +80,7 @@ class SemanticMapper:
         # 轨迹开关（轨迹实际存储在mapping_module中）
         self.enable_trajectory = True
 
-        # Waypoint / space area 状态拆到独立模块，mapper 只负责协调 world-map 数据流。
+        # Waypoint / region 状态拆到独立模块，mapper 只负责协调 world-map 数据流。
         self.waypoint_manager = WaypointManager(resolution=resolution)
         self.global_waypoint_manager = WaypointManager(resolution=resolution)
         self.space_area_manager = SpaceAreaManager(map_shape=map_shape, resolution=resolution)
@@ -387,7 +387,7 @@ class SemanticMapper:
             self.mapping_module.clear_landmark_channels(n_mapping=len(mapping_classes))
 
     def add_waypoint(self, description: str = "") -> int:
-        """添加 waypoint 到当前位置，并同步更新 space area。"""
+        """添加 waypoint 到当前位置，并同步更新 region。"""
         agent_x_m = self.full_pose[0]
         agent_y_m = self.full_pose[1]
         pixel_y = int(round(float(agent_y_m) * 100.0 / float(self.resolution)))

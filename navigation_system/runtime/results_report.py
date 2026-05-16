@@ -13,6 +13,7 @@ from navigation_system.runtime.storage.artifacts import (
 )
 from navigation_system.vlm.reporting.usage import (
     DEFAULT_CURRENCY,
+    estimate_vlm_usage_cost,
     merge_vlm_usage_summaries,
     summarize_vlm_usage_from_artifact_dir,
 )
@@ -261,10 +262,214 @@ def _load_result_payload(filepath: str) -> Optional[Dict[str, Any]]:
     return _maybe_backfill_usage_from_artifacts(payload, filepath)
 
 
-def _maybe_backfill_usage_from_artifacts(payload: Dict[str, Any], filepath: str) -> Dict[str, Any]:
-    if _usage_value(payload, "overall", "total_tokens", 0.0) > 0:
+def _find_vlm_info_metadata(detail_dir: str, request_kind: str) -> Dict[str, str]:
+    target = str(request_kind or "").strip().lower()
+    if not target:
+        return {}
+    for current_dir, _, filenames in os.walk(detail_dir):
+        parts = {
+            part.strip().lower()
+            for part in os.path.abspath(current_dir).split(os.sep)
+            if part.strip()
+        }
+        if target not in parts or "vlm_info.json" not in filenames:
+            continue
+        info_path = os.path.join(current_dir, "vlm_info.json")
+        try:
+            with open(info_path, "r", encoding="utf-8") as f:
+                info = json.load(f) or {}
+        except Exception:
+            continue
+        if not isinstance(info, dict):
+            continue
+        provider = str(info.get("provider") or "").strip()
+        model = str(info.get("model") or "").strip()
+        if provider and model:
+            return {"provider": provider, "model": model}
+    return {}
+
+
+def _reprice_usage_summary(summary: Dict[str, Any], metadata: Dict[str, str]) -> Dict[str, Any]:
+    payload = _normalize_usage_cost_counts(dict(summary or {}))
+    count = _as_int(payload.get("count", 0), 0)
+    if count <= 0 or not _tokens_complete(payload):
+        return payload
+    provider = str(metadata.get("provider") or "").strip()
+    model = str(metadata.get("model") or "").strip()
+    if not provider or not model:
         return payload
 
+    cache_payload = {
+        "reported": _as_int(payload.get("cache_reported_count", 0), 0) > 0,
+        "type": "implicit",
+        "cached_tokens": _as_int(payload.get("cached_tokens", 0), 0),
+        "write_tokens": _as_int(payload.get("cache_write_tokens", 0), 0),
+        "uncached_tokens": _as_int(payload.get("uncached_tokens", 0), 0),
+        "hit_ratio": _as_float(payload.get("weighted_cache_hit_ratio", 0.0), 0.0),
+    }
+    cost = estimate_vlm_usage_cost(
+        {
+            "provider": provider,
+            "model": model,
+            "success": True,
+            "input_tokens": _as_int(payload.get("input_tokens", 0), 0),
+            "input_text_tokens": _as_int(payload.get("input_text_tokens", 0), 0),
+            "input_image_tokens": _as_int(payload.get("input_image_tokens", 0), 0),
+            "output_tokens": _as_int(payload.get("output_tokens", 0), 0),
+            "total_tokens": _as_int(payload.get("total_tokens", 0), 0),
+            "cache": cache_payload,
+        }
+    )
+    if not bool(cost.get("cost_available", False)):
+        return payload
+
+    total_cost = _as_float(cost.get("total_cost", 0.0), 0.0)
+    input_cost = _as_float(cost.get("input_cost", 0.0), 0.0)
+    output_cost = _as_float(cost.get("output_cost", 0.0), 0.0)
+    output_tokens = _as_int(payload.get("output_tokens", 0), 0)
+    payload.update(
+        {
+            "currency": str(cost.get("currency") or DEFAULT_CURRENCY),
+            "cost_available_count": count,
+            "cost_unavailable_count": 0,
+            "input_cost": input_cost,
+            "output_cost": output_cost,
+            "total_cost": total_cost,
+            "avg_cost_per_call": total_cost / count if count > 0 else 0.0,
+            "avg_input_cost_per_call": input_cost / count if count > 0 else 0.0,
+            "avg_output_cost_per_call": output_cost / count if count > 0 else 0.0,
+            "cost_per_1k_output_tokens": (
+                total_cost * 1000.0 / output_tokens if output_tokens > 0 else 0.0
+            ),
+            "cache_cost_ratio": _as_float(cost.get("cache_cost_ratio", 0.0), 0.0),
+            "cache_savings_ratio": _as_float(cost.get("cache_savings_ratio", 0.0), 0.0),
+        }
+    )
+    return payload
+
+
+def _maybe_reprice_usage_from_artifact_metadata(
+    payload: Dict[str, Any],
+    detail_dir: str,
+) -> Dict[str, Any]:
+    if not os.path.isdir(detail_dir):
+        return payload
+
+    updated = False
+    usage_summary = dict(payload.get("vlm_usage_summary") or {})
+    for prefix in ("thinking", "action"):
+        summary = _usage_summary(payload, prefix)
+        if not _tokens_complete(summary) or _cost_complete(summary):
+            continue
+        metadata = _find_vlm_info_metadata(detail_dir, prefix)
+        repriced = _reprice_usage_summary(summary, metadata)
+        if not _cost_complete(repriced):
+            continue
+        updated = True
+        usage_summary[prefix] = repriced
+        current_api_summary = dict(payload.get(f"{prefix}_api_summary") or {})
+        current_api_summary.update(repriced)
+        payload[f"{prefix}_api_summary"] = current_api_summary
+
+    if not updated:
+        return payload
+
+    usage_summary.setdefault("other", _usage_summary(payload, "other"))
+    usage_summary["overall"] = merge_vlm_usage_summaries(
+        [
+            usage_summary.get("thinking"),
+            usage_summary.get("action"),
+            usage_summary.get("other"),
+        ]
+    )
+    payload["vlm_usage_summary"] = usage_summary
+    return payload
+
+
+def _token_plan_model_multiplier(model_name: str) -> float:
+    model = str(model_name or "").strip().lower()
+    if model in {"mimo-v2.5-pro", "mimo-v2-pro"}:
+        return 2.0
+    if model in {"mimo-v2.5", "mimo-v2-omni"}:
+        return 1.0
+    if model in {
+        "mimo-v2.5-tts",
+        "mimo-v2.5-tts-voiceclone",
+        "mimo-v2.5-tts-voicedesign",
+        "mimo-v2-tts",
+    }:
+        return 0.0
+    return 1.0
+
+
+def _reprice_token_plan_summary(summary: Dict[str, Any], model_name: str) -> Dict[str, Any]:
+    payload = _normalize_usage_cost_counts(dict(summary or {}))
+    count = _as_int(payload.get("count", 0), 0)
+    if count <= 0 or not _tokens_complete(payload):
+        return payload
+
+    multiplier = _token_plan_model_multiplier(model_name)
+    input_tokens = _as_int(payload.get("input_tokens", 0), 0)
+    output_tokens = _as_int(payload.get("output_tokens", 0), 0)
+    total_tokens = _as_int(payload.get("total_tokens", input_tokens + output_tokens), 0)
+    input_cost = float(input_tokens) * multiplier
+    output_cost = float(output_tokens) * multiplier
+    total_cost = float(total_tokens) * multiplier
+    payload.update(
+        {
+            "currency": "Credits",
+            "cost_available_count": count,
+            "cost_unavailable_count": 0,
+            "input_cost": input_cost,
+            "output_cost": output_cost,
+            "total_cost": total_cost,
+            "avg_cost_per_call": total_cost / count if count > 0 else 0.0,
+            "avg_input_cost_per_call": input_cost / count if count > 0 else 0.0,
+            "avg_output_cost_per_call": output_cost / count if count > 0 else 0.0,
+            "cost_per_1k_output_tokens": (
+                total_cost * 1000.0 / output_tokens if output_tokens > 0 else 0.0
+            ),
+        }
+    )
+    return payload
+
+
+def _reprice_token_plan_payload(
+    payload: Dict[str, Any],
+    *,
+    llm_model: str,
+    vlm_model: str,
+) -> Dict[str, Any]:
+    updated = False
+    usage_summary = dict(payload.get("vlm_usage_summary") or {})
+    for prefix, model_name in (("thinking", llm_model), ("action", vlm_model)):
+        summary = _usage_summary(payload, prefix)
+        if not _tokens_complete(summary):
+            continue
+        repriced = _reprice_token_plan_summary(summary, model_name)
+        updated = True
+        usage_summary[prefix] = repriced
+        current_api_summary = dict(payload.get(f"{prefix}_api_summary") or {})
+        current_api_summary.update(repriced)
+        payload[f"{prefix}_api_summary"] = current_api_summary
+
+    if not updated:
+        return payload
+
+    usage_summary.setdefault("other", _usage_summary(payload, "other"))
+    usage_summary["overall"] = merge_vlm_usage_summaries(
+        [
+            usage_summary.get("thinking"),
+            usage_summary.get("action"),
+            usage_summary.get("other"),
+        ]
+    )
+    payload["vlm_usage_summary"] = usage_summary
+    return payload
+
+
+def _maybe_backfill_usage_from_artifacts(payload: Dict[str, Any], filepath: str) -> Dict[str, Any]:
+    current_overall_usage = _usage_summary(payload, "overall")
     path = os.path.abspath(filepath)
     path_parts = path.split(os.sep)
     try:
@@ -272,11 +477,29 @@ def _maybe_backfill_usage_from_artifacts(payload: Dict[str, Any], filepath: str)
     except ValueError:
         return payload
     results_dir = os.sep.join(path_parts[:log_index]) or os.sep
+
+    if _tokens_complete(current_overall_usage) and _as_int(current_overall_usage.get("count", 0), 0) > 0:
+        current_currency = str(current_overall_usage.get("currency") or "").strip().lower()
+        if current_currency == "credits":
+            model_dir = os.path.basename(results_dir)
+            if model_dir.endswith("_cache"):
+                model_dir = model_dir[: -len("_cache")]
+            llm_model = model_dir.split("__", 1)[0].strip() if "__" in model_dir else model_dir.strip()
+            vlm_model = model_dir.split("__", 1)[1].strip() if "__" in model_dir else model_dir.strip()
+            return _reprice_token_plan_payload(payload, llm_model=llm_model, vlm_model=vlm_model)
+        if _cost_complete(current_overall_usage):
+            return payload
+
     bucket_name = os.path.basename(os.path.dirname(path))
     entry_name = os.path.splitext(os.path.basename(path))[0]
     detail_dir = os.path.join(results_dir, "detail", bucket_name, entry_name)
     if not os.path.isdir(detail_dir):
         return payload
+
+    if _tokens_complete(current_overall_usage) and not _cost_complete(current_overall_usage):
+        repriced_payload = _maybe_reprice_usage_from_artifact_metadata(payload, detail_dir)
+        if _cost_complete(_usage_summary(repriced_payload, "overall")):
+            return repriced_payload
 
     usage_summary = summarize_vlm_usage_from_artifact_dir(detail_dir)
     if _as_int((usage_summary.get("overall") or {}).get("count", 0), 0) <= 0:
@@ -474,6 +697,7 @@ def compute_metrics(results: List[Dict[str, Any]]) -> Dict[str, Any]:
     spl_list = [_as_float(item.get("spl", 0.0), 0.0) for item in results]
     ndtw_list = [_as_float(item.get("ndtw", 0.0), 0.0) for item in results]
     steps_list = [_as_float(item.get("total_steps", 0.0), 0.0) for item in results]
+    path_length_list = [_as_float(item.get("path_length", 0.0), 0.0) for item in results]
 
     valid_ne = [value for value in ne_list if value >= 0]
     sr_count = sum(sr_list)
@@ -488,6 +712,7 @@ def compute_metrics(results: List[Dict[str, Any]]) -> Dict[str, Any]:
         "avg_spl": sum(spl_list) / n if n > 0 else 0.0,
         "avg_ndtw": sum(ndtw_list) / n if n > 0 else 0.0,
         "avg_steps": sum(steps_list) / n if n > 0 else 0.0,
+        "avg_path_length": sum(path_length_list) / n if n > 0 else 0.0,
         "timing": _compute_timing_metrics(results),
         "usage": _compute_usage_metrics(results),
         "detailed_results": results,
@@ -672,6 +897,7 @@ def save_metrics_json(metrics: Dict[str, Any], output_path: str) -> str:
         "avg_spl": _as_float(metrics.get("avg_spl", 0.0), 0.0),
         "avg_ndtw": _as_float(metrics.get("avg_ndtw", 0.0), 0.0),
         "avg_steps": _as_float(metrics.get("avg_steps", 0.0), 0.0),
+        "avg_path_length": _as_float(metrics.get("avg_path_length", 0.0), 0.0),
         "timing": dict(metrics.get("timing") or {}),
         "usage": usage,
         "usage_averages": {
@@ -707,6 +933,22 @@ def _format_metric_value(value: Any, digits: int = 3) -> str:
             return "N/A"
         return f"{value:.{digits}f}"
     return str(value)
+
+
+def _format_percent_value(value: Any, digits: int = 1) -> str:
+    return _format_metric_value(_as_float(value, 0.0) * 100.0, digits)
+
+
+def _is_navgbench_report(results_dir: str, report_title: str) -> bool:
+    title = str(report_title or "").strip().lower()
+    if "navgbench" in title:
+        return True
+    path_parts = {
+        part.strip().lower()
+        for part in os.path.abspath(str(results_dir or "")).split(os.sep)
+        if part.strip()
+    }
+    return "navgbench" in path_parts
 
 
 def _format_cost_value(usage_summary: Dict[str, Any], *, digits: int = 6) -> str:
@@ -856,6 +1098,7 @@ def save_episode_tables(
     usage.setdefault("action", {})
     usage.setdefault("overall", {})
     usage_episode_count = _as_int(usage["overall"].get("episode_count", 0), 0)
+    is_navgbench_report = _is_navgbench_report(results_dir, report_title)
     include_sample_index = any(str(item.get("sample_index", "")).strip() for item in sorted_results)
     headers = []
     if include_sample_index:
@@ -1019,56 +1262,72 @@ def save_episode_tables(
                 )
         md_lines.extend(["", "## Summary", ""])
 
-    md_lines.extend(
-        [
-            "| Episodes | UsageEp | NE(m) | OSR | SR | SPL | nDTW | StepsAvg | ThinkAvg(s) | ThinkTok/Ep | ThinkTok/Call | ActAvg(s) | ActTok/Ep | ActTok/Call | APIAvg(s) | Tok/Ep | LocalAvg(s) | FailWasteAvg(s) | EpisodeAvg(s) | Cost/Ep | CacheHit% |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-            "| {total} | {usage_ep} | {avg_ne} | {avg_osr} | {avg_sr} | {avg_spl} | {avg_ndtw} | {avg_steps} | {think_avg} | {think_tok_ep} | {think_tok_call} | {action_avg} | {act_tok_ep} | {act_tok_call} | {api_avg} | {tok_ep} | {local_avg} | {fail_waste_avg} | {episode_avg} | {cost_ep} | {cache_hit} |".format(
-                total=metrics["total_episodes"],
-                usage_ep=usage_episode_count,
-                avg_ne=_format_metric_value(metrics["avg_ne"], 3),
-                avg_osr=_format_metric_value(metrics["avg_osr"], 4),
-                avg_sr=_format_metric_value(metrics["avg_sr"], 4),
-                avg_spl=_format_metric_value(metrics["avg_spl"], 4),
-                avg_ndtw=_format_metric_value(metrics["avg_ndtw"], 4),
-                avg_steps=_format_metric_value(metrics["avg_steps"], 2),
-                think_avg=_format_metric_value(timing["thinking_api_avg_duration_s"], 3),
-                think_tok_ep=_format_tokens_per_episode(usage["thinking"], metrics["total_episodes"]),
-                think_tok_call=_format_tokens_per_call(usage["thinking"]),
-                action_avg=_format_metric_value(timing["action_api_avg_duration_s"], 3),
-                act_tok_ep=_format_tokens_per_episode(usage["action"], metrics["total_episodes"]),
-                act_tok_call=_format_tokens_per_call(usage["action"]),
-                api_avg=_format_metric_value(
-                    timing["api_total_duration_s"] / metrics["total_episodes"]
-                    if metrics["total_episodes"] > 0
-                    else 0.0,
-                    3,
+    if is_navgbench_report:
+        md_lines.extend(
+            [
+                "| Episodes | TL | NE ↓ | OS ↑ | SR ↑ | SPL ↑ |",
+                "| --- | --- | --- | --- | --- | --- |",
+                "| {total} | {tl} | {ne} | {os} | {sr} | {spl} |".format(
+                    total=metrics["total_episodes"],
+                    tl=_format_metric_value(metrics.get("avg_path_length", 0.0), 1),
+                    ne=_format_metric_value(metrics["avg_ne"], 1),
+                    os=_format_percent_value(metrics["avg_osr"], 1),
+                    sr=_format_percent_value(metrics["avg_sr"], 1),
+                    spl=_format_percent_value(metrics["avg_spl"], 1),
                 ),
-                tok_ep=_format_tokens_per_episode(usage["overall"], metrics["total_episodes"]),
-                local_avg=_format_metric_value(timing["local_non_api_duration_s_avg"], 3),
-                fail_waste_avg=_format_metric_value(
-                    timing["failed_wasted_duration_s_total"] / metrics["total_episodes"]
-                    if metrics["total_episodes"] > 0
-                    else 0.0,
-                    3,
+            ]
+        )
+    else:
+        md_lines.extend(
+            [
+                "| Episodes | UsageEp | NE(m) | OSR | SR | SPL | nDTW | StepsAvg | ThinkAvg(s) | ThinkTok/Ep | ThinkTok/Call | ActAvg(s) | ActTok/Ep | ActTok/Call | APIAvg(s) | Tok/Ep | LocalAvg(s) | FailWasteAvg(s) | EpisodeAvg(s) | Cost/Ep | CacheHit% |",
+                "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+                "| {total} | {usage_ep} | {avg_ne} | {avg_osr} | {avg_sr} | {avg_spl} | {avg_ndtw} | {avg_steps} | {think_avg} | {think_tok_ep} | {think_tok_call} | {action_avg} | {act_tok_ep} | {act_tok_call} | {api_avg} | {tok_ep} | {local_avg} | {fail_waste_avg} | {episode_avg} | {cost_ep} | {cache_hit} |".format(
+                    total=metrics["total_episodes"],
+                    usage_ep=usage_episode_count,
+                    avg_ne=_format_metric_value(metrics["avg_ne"], 3),
+                    avg_osr=_format_metric_value(metrics["avg_osr"], 4),
+                    avg_sr=_format_metric_value(metrics["avg_sr"], 4),
+                    avg_spl=_format_metric_value(metrics["avg_spl"], 4),
+                    avg_ndtw=_format_metric_value(metrics["avg_ndtw"], 4),
+                    avg_steps=_format_metric_value(metrics["avg_steps"], 2),
+                    think_avg=_format_metric_value(timing["thinking_api_avg_duration_s"], 3),
+                    think_tok_ep=_format_tokens_per_episode(usage["thinking"], metrics["total_episodes"]),
+                    think_tok_call=_format_tokens_per_call(usage["thinking"]),
+                    action_avg=_format_metric_value(timing["action_api_avg_duration_s"], 3),
+                    act_tok_ep=_format_tokens_per_episode(usage["action"], metrics["total_episodes"]),
+                    act_tok_call=_format_tokens_per_call(usage["action"]),
+                    api_avg=_format_metric_value(
+                        timing["api_total_duration_s"] / metrics["total_episodes"]
+                        if metrics["total_episodes"] > 0
+                        else 0.0,
+                        3,
+                    ),
+                    tok_ep=_format_tokens_per_episode(usage["overall"], metrics["total_episodes"]),
+                    local_avg=_format_metric_value(timing["local_non_api_duration_s_avg"], 3),
+                    fail_waste_avg=_format_metric_value(
+                        timing["failed_wasted_duration_s_total"] / metrics["total_episodes"]
+                        if metrics["total_episodes"] > 0
+                        else 0.0,
+                        3,
+                    ),
+                    episode_avg=_format_metric_value(timing["episode_duration_s_avg"], 3),
+                    cost_ep=_format_cost_per_episode(usage["overall"], metrics["total_episodes"]),
+                    cache_hit=_format_metric_value(
+                        usage["overall"].get("weighted_cache_hit_ratio", 0.0) * 100.0,
+                        1,
+                    ),
                 ),
-                episode_avg=_format_metric_value(timing["episode_duration_s_avg"], 3),
-                cost_ep=_format_cost_per_episode(usage["overall"], metrics["total_episodes"]),
-                cache_hit=_format_metric_value(
-                    usage["overall"].get("weighted_cache_hit_ratio", 0.0) * 100.0,
-                    1,
-                ),
-            ),
-        ]
-    )
-    currency = str(usage.get("overall", {}).get("currency") or DEFAULT_CURRENCY)
-    md_lines.extend(
-        [
-            "",
-            f"> Cost columns use `{currency}` from `navigation_system/config/vlm/model_pricing.yaml`.",
-            "> Token/cost/cache columns use only `UsageEp` episodes with complete VLM usage; navigation metrics use all `Episodes`.",
-        ]
-    )
+            ]
+        )
+        currency = str(usage.get("overall", {}).get("currency") or DEFAULT_CURRENCY)
+        md_lines.extend(
+            [
+                "",
+                f"> Cost columns use `{currency}` from `navigation_system/config/vlm/model_pricing.yaml`.",
+                "> Token/cost/cache columns use only `UsageEp` episodes with complete VLM usage; navigation metrics use all `Episodes`.",
+            ]
+        )
     if not summary_only_md:
         md_lines.extend(
             [

@@ -31,6 +31,7 @@ from navigation_system.runtime.output_policy import (
     build_output_job_fields,
     build_output_namespace_kwargs,
 )
+from navigation_system.runtime.process_lifecycle import close_with_timeout
 from navigation_system.runtime.storage.artifacts import get_episode_log_path
 from navigation_system.runtime.vlnce.r2r.execution import (
     DEFAULT_INITIAL_FAILURE_MAX_ATTEMPTS,
@@ -227,10 +228,10 @@ def _run_single_episode_attempt(
         }
     finally:
         if controller is not None:
-            try:
-                controller.envs.close()
-            except Exception as cleanup_error:
-                print(f"⚠️  清理环境时出错: {cleanup_error}")
+            close_with_timeout(
+                controller.envs.close,
+                label=f"ablation episode {int(episode_id)} environment",
+            )
 
     if staging_results_dir:
         console_result["_staging_results_dir"] = staging_results_dir

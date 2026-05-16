@@ -52,6 +52,7 @@ from navigation_system.runtime.output_policy import (
     add_output_profile_arg,
     apply_output_policy_to_config,
 )
+from navigation_system.runtime.process_lifecycle import close_with_timeout
 from navigation_system.runtime.results_report import generate_results_report
 from navigation_system.runtime.storage.artifacts import (
     SaveManager,
@@ -1026,10 +1027,10 @@ def _run_one_episode(
     finally:
         target = controller.envs if controller is not None else env
         if target is not None:
-            try:
-                target.close()
-            except Exception:
-                pass
+            close_with_timeout(
+                target.close,
+                label=f"NavGBench episode {storage_episode_id} environment",
+            )
 
 
 def _find_episode_by_stable_id(episodes: Sequence[Any], stable_id: str) -> Any:
