@@ -29,6 +29,10 @@ Options are forwarded to tools/export_habitat_topdown_map.py, e.g.
   --width 1024 --height 1024
   --height-above 3
   --hfov 105
+  --rgb-center start|scene|reference_mid|reference_bounds
+  --center-offset-x METERS --center-offset-z METERS
+  --fit-reference
+  --clean / --no-overlays
   --mode rgb|map
 EOF
 }
@@ -83,10 +87,24 @@ ARGS=(
     --height-above 3
     --hfov 105
     --transparent-background
-    --overlay-path
-    --overlay-goals
-    --overlay-start
 )
+OVERLAYS=1
+PASSTHROUGH=()
+while (( $# > 0 )); do
+    case "$1" in
+        --clean|--no-overlays)
+            OVERLAYS=0
+            shift
+            ;;
+        *)
+            PASSTHROUGH+=("$1")
+            shift
+            ;;
+    esac
+done
+if [[ "$OVERLAYS" == "1" ]]; then
+    ARGS+=(--overlay-path --overlay-goals --overlay-start)
+fi
 if [[ "$KIND" == "sample" ]]; then
     ARGS+=(--sample-index "$ID_VALUE")
 else
@@ -97,4 +115,4 @@ cd "$PROJECT_ROOT"
 PYTHONPATH="$PROJECT_ROOT:${PYTHONPATH:-}" "$PYTHON_BIN" \
     tools/export_habitat_topdown_map.py \
     "${ARGS[@]}" \
-    "$@"
+    "${PASSTHROUGH[@]}"

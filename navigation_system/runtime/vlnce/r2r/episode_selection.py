@@ -204,12 +204,16 @@ def _episode_has_existing_sr1(
     candidate_paths.extend(
         get_episode_log_path_candidates(results_dir, episode_id, entry_kind=entry_kind)
     )
-    for detail_dir in get_episode_detail_path_candidates(
-        results_dir,
-        episode_id,
-        entry_kind=entry_kind,
-    ):
-        candidate_paths.append(os.path.join(detail_dir, "records", "result.json"))
+    check_detail = str(
+        os.environ.get("SPACEVLN_SKIP_SR1_CHECK_DETAIL", "") or ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    if check_detail:
+        for detail_dir in get_episode_detail_path_candidates(
+            results_dir,
+            episode_id,
+            entry_kind=entry_kind,
+        ):
+            candidate_paths.append(os.path.join(detail_dir, "records", "result.json"))
 
     deduped_paths: List[str] = []
     for path in candidate_paths:
@@ -243,6 +247,10 @@ def filter_episode_ids(args, config, episode_ids: List[int]) -> List[int]:
             for index, episode_id in enumerate(get_available_episode_ids(config), 1)
         }
     start_index = max(1, int(getattr(args, "start_index", 1) or 1))
+    print(
+        f"[SkipSR1] Checking {len(episode_ids)} episode summary log(s) under {results_dir}",
+        flush=True,
+    )
     for offset, episode_id in enumerate(episode_ids):
         if ordered:
             storage_entry_id = start_index + offset

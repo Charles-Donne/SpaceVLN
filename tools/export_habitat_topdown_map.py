@@ -113,15 +113,183 @@ def _quat_from_angle_axis(angle_rad: float, axis) -> np.quaternion:
     )
 
 
-def _birdseye_position(sim, episode, *, center: str, height_above_m: float) -> np.ndarray:
+def _normalize_episode_point(point):
+    if point is None:
+        return None
+    if isinstance(point, dict):
+        if "position" in point:
+            return point.get("position")
+        if "view_points" in point and point.get("view_points"):
+            vp = point["view_points"][0]
+            if isinstance(vp, dict) and "position" in vp:
+                return vp.get("position")
+    if isinstance(point, np.ndarray):
+        return point.tolist()
+    if isinstance(point, (list, tuple)):
+        return point
+    if hasattr(point, "position"):
+        return getattr(point, "position")
+    if hasattr(point, "view_points"):
+        view_points = getattr(point, "view_points")
+        if view_points:
+            return _normalize_episode_point(view_points[0])
+    return None
+
+
+def _as_xyz(point) -> Optional[np.ndarray]:
+    normalized = _normalize_episode_point(point)
+    if normalized is None:
+        return None
+    arr = np.asarray(normalized, dtype=np.float32)
+    if arr.ndim != 1 or arr.shape[0] < 3:
+        return None
+    return arr[:3]
+
+
+def _episode_reference_positions(episode) -> list[np.ndarray]:
+    points: list[np.ndarray] = []
+    for point in list(getattr(episode, "reference_path", None) or []):
+        xyz = _as_xyz(point)
+        if xyz is not None:
+            points.append(xyz)
+    return points
+
+
+def _episode_fit_positions(episode) -> list[np.ndarray]:
+    points: list[np.ndarray] = []
+    start = _as_xyz(getattr(episode, "start_position", None))
+    if start is not None:
+        points.append(start)
+    points.extend(_episode_reference_positions(episode))
+    for goal in list(getattr(episode, "goals", None) or []):
+        xyz = _as_xyz(goal)
+        if xyz is not None:
+            points.append(xyz)
+    return points
+
+
+def _polyline_midpoint(points: list[np.ndarray]) -> Optional[np.ndarray]:
+    if not points:
+        return None
+    if len(points) == 1:
+        return points[0].copy()
+    segment_lengths = [
+        float(np.linalg.norm(points[index + 1][[0, 2]] - points[index][[0, 2]]))
+        for index in range(len(points) - 1)
+    ]
+    total_length = float(sum(segment_lengths))
+    if total_length <= 1e-6:
+        return points[len(points) // 2].copy()
+    target = total_length / 2.0
+    accumulated = 0.0
+    for index, segment_length in enumerate(segment_lengths):
+        if segment_length <= 1e-6:
+            continue
+        if accumulated + segment_length >= target:
+            ratio = (target - accumulated) / segment_length
+            return points[index] + (points[index + 1] - points[index]) * float(ratio)
+        accumulated += segment_length
+    return points[-1].copy()
+
+
+def _bounds_center(points: list[np.ndarray], fallback_y: float) -> Optional[np.ndarray]:
+    if not points:
+        return None
+    stacked = np.stack(points, axis=0)
+    lower = stacked.min(axis=0)
+    upper = stacked.max(axis=0)
+    center = (lower + upper) / 2.0
+    center[1] = float(fallback_y)
+    return center.astype(np.float32, copy=False)
+
+
+def _rgb_vertical_fov_deg(width: int, height: int, hfov_deg: float) -> float:
+    width = max(1, int(width))
+    height = max(1, int(height))
+    hfov_rad = math.radians(float(hfov_deg))
+    fx = (width / 2.0) / math.tan(hfov_rad / 2.0)
+    vfov_rad = 2.0 * math.atan((height / 2.0) / fx)
+    return math.degrees(vfov_rad)
+
+
+def _fit_height_above_for_points(
+    base_position: np.ndarray,
+    points: list[np.ndarray],
+    *,
+    width: int,
+    height: int,
+    hfov_deg: float,
+    margin: float,
+) -> float:
+    if len(points) < 2:
+        return 0.0
+    stacked = np.stack(points, axis=0)
+    center_x = float(base_position[0])
+    center_z = float(base_position[2])
+    half_width_m = float(np.max(np.abs(stacked[:, 0] - center_x)))
+    half_height_m = float(np.max(np.abs(stacked[:, 2] - center_z)))
+    hfov_rad = math.radians(float(hfov_deg))
+    vfov_rad = math.radians(_rgb_vertical_fov_deg(width, height, hfov_deg))
+    required_by_width = half_width_m / max(1e-6, math.tan(hfov_rad / 2.0))
+    required_by_height = half_height_m / max(1e-6, math.tan(vfov_rad / 2.0))
+    return max(required_by_width, required_by_height) * max(1.0, float(margin))
+
+
+def _birdseye_base_position(sim, episode, *, center: str) -> np.ndarray:
+    center = str(center or "start").strip().lower()
+    start_position = np.asarray(episode.start_position, dtype=np.float32)
     if center == "scene":
         lower, upper = sim.pathfinder.get_bounds()
         x = (float(lower[0]) + float(upper[0])) / 2.0
         z = (float(lower[2]) + float(upper[2])) / 2.0
-        base_y = float(getattr(episode, "start_position", [0.0, 0.0, 0.0])[1])
-        return np.array([x, base_y + float(height_above_m), z], dtype=np.float32)
-    start_position = np.asarray(episode.start_position, dtype=np.float32)
-    return start_position + np.array([0.0, float(height_above_m), 0.0], dtype=np.float32)
+        return np.array([x, float(start_position[1]), z], dtype=np.float32)
+    if center == "reference_mid":
+        midpoint = _polyline_midpoint(_episode_reference_positions(episode))
+        if midpoint is not None:
+            return midpoint.astype(np.float32, copy=False)
+    if center == "reference_bounds":
+        bounds_center = _bounds_center(
+            _episode_fit_positions(episode),
+            fallback_y=float(start_position[1]),
+        )
+        if bounds_center is not None:
+            return bounds_center
+    return start_position
+
+
+def _birdseye_position(
+    sim,
+    episode,
+    *,
+    center: str,
+    height_above_m: float,
+    center_offset_x: float,
+    center_offset_z: float,
+    width: int,
+    height: int,
+    hfov_deg: float,
+    fit_reference: bool,
+    fit_margin: float,
+) -> np.ndarray:
+    base_position = _birdseye_base_position(sim, episode, center=center)
+    base_position = base_position + np.array(
+        [float(center_offset_x), 0.0, float(center_offset_z)],
+        dtype=np.float32,
+    )
+    resolved_height = float(height_above_m)
+    if bool(fit_reference):
+        resolved_height = max(
+            resolved_height,
+            _fit_height_above_for_points(
+                base_position,
+                _episode_fit_positions(episode),
+                width=width,
+                height=height,
+                hfov_deg=hfov_deg,
+                margin=fit_margin,
+            ),
+        )
+    return base_position + np.array([0.0, resolved_height, 0.0], dtype=np.float32)
 
 
 def _project_world_point_to_image(
@@ -150,27 +318,6 @@ def _project_world_point_to_image(
     if u < 0 or u >= width or v < 0 or v >= height:
         return None
     return int(round(u)), int(round(v))
-
-
-def _normalize_episode_point(point):
-    if point is None:
-        return None
-    if isinstance(point, dict):
-        if "position" in point:
-            return point.get("position")
-        if "view_points" in point and point.get("view_points"):
-            vp = point["view_points"][0]
-            if isinstance(vp, dict) and "position" in vp:
-                return vp.get("position")
-    if isinstance(point, (list, tuple)):
-        return point
-    if hasattr(point, "position"):
-        return getattr(point, "position")
-    if hasattr(point, "view_points"):
-        view_points = getattr(point, "view_points")
-        if view_points:
-            return _normalize_episode_point(view_points[0])
-    return None
 
 
 def _draw_overlay_points(image, points, *, color, radius=6, thickness=-1):
@@ -227,6 +374,13 @@ def _apply_rgb_overlays(image, sim, episode, args: argparse.Namespace) -> None:
         episode,
         center=str(args.rgb_center),
         height_above_m=float(args.height_above),
+        center_offset_x=float(args.center_offset_x),
+        center_offset_z=float(args.center_offset_z),
+        width=width,
+        height=height,
+        hfov_deg=float(args.hfov),
+        fit_reference=bool(args.fit_reference),
+        fit_margin=float(args.fit_margin),
     )
     camera_rotation = _quat_from_angle_axis(-math.pi / 2.0, [1.0, 0.0, 0.0])
     projected_path = []
@@ -289,6 +443,13 @@ def _render_birdseye_rgb(sim, episode, args: argparse.Namespace):
         episode,
         center=str(args.rgb_center),
         height_above_m=float(args.height_above),
+        center_offset_x=float(args.center_offset_x),
+        center_offset_z=float(args.center_offset_z),
+        width=int(args.width),
+        height=int(args.height),
+        hfov_deg=float(args.hfov),
+        fit_reference=bool(args.fit_reference),
+        fit_margin=float(args.fit_margin),
     )
     # Habitat RGB sensors look along -Z. Rotate -90 degrees around X so the
     # camera looks down along -Y.
@@ -400,10 +561,36 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--hfov", type=float, default=90.0, help="RGB birdseye horizontal FOV")
     parser.add_argument("--height-above", type=float, default=3.5, help="RGB camera height above the floor/start point")
     parser.add_argument(
+        "--center-offset-x",
+        type=float,
+        default=0.0,
+        help="Shift the RGB birdseye center along the Habitat world X axis in meters",
+    )
+    parser.add_argument(
+        "--center-offset-z",
+        type=float,
+        default=0.0,
+        help="Shift the RGB birdseye center along the Habitat world Z axis in meters",
+    )
+    parser.add_argument(
         "--rgb-center",
-        choices=("start", "scene"),
+        choices=("start", "scene", "reference_mid", "reference_bounds"),
         default="start",
-        help="RGB birdseye center: episode start point or scene bounds center",
+        help=(
+            "RGB birdseye center: start point, scene bounds center, "
+            "reference-path midpoint, or reference-path/start/goal bounds center"
+        ),
+    )
+    parser.add_argument(
+        "--fit-reference",
+        action="store_true",
+        help="Raise the RGB camera enough to include start/reference-path/goal points",
+    )
+    parser.add_argument(
+        "--fit-margin",
+        type=float,
+        default=1.25,
+        help="Scale factor applied to the auto-fit RGB camera height",
     )
     parser.add_argument("--overlay-path", action="store_true", help="Draw the episode reference path")
     parser.add_argument("--overlay-goals", action="store_true", help="Draw episode goal points")

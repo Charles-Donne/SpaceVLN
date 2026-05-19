@@ -3,13 +3,14 @@
 # Prices are per 1M tokens. Keep this file local/configurable because vendor
 # pricing changes over time. A model entry may override the top-level currency.
 #
-# Sources checked: Alibaba Cloud Model Studio China pricing docs, 2026-05-13;
-# Xiaomi MiMo official pricing and Token Plan docs, 2026-05-15.
+# Sources checked: Alibaba Cloud Model Studio China-mainland pricing and
+# Context Cache docs, 2026-05-18; Xiaomi MiMo official pricing and Token Plan
+# docs, 2026-05-15.
 currency: CNY
 unit: per_1m_tokens
-last_checked: "2026-05-15"
+last_checked: "2026-05-18"
 sources:
-  model_pricing: "https://help.aliyun.com/zh/model-studio/models"
+  model_pricing: "https://help.aliyun.com/zh/model-studio/model-pricing"
   context_cache: "https://help.aliyun.com/zh/model-studio/context-cache"
   mimo_pricing: "https://platform.xiaomimimo.com/static/docs/pricing.md"
   mimo_token_plan: "https://platform.xiaomimimo.com/static/docs/tokenplan/subscription.md"
@@ -24,6 +25,9 @@ cache:
 
 models:
   dashscope:
+    # These DashScope entries use the official China mainland / Beijing-region
+    # prices because vlm_api_config.yaml points at dashscope.aliyuncs.com.
+    # International and EU endpoints publish different prices.
     qwen3.5-plus:
       aliases:
         - qwen3.5-plus-2026-02-15
