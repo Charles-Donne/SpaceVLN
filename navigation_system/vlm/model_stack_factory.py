@@ -1,4 +1,4 @@
-"""Shared helpers for assembling planner/action model stacks."""
+"""Shared helpers for assembling planner/executor model stacks."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ def build_planner(
     )
 
 
-def build_action_executor(
+def build_executor(
     executor_cls: type,
     *,
     config_path: str,
@@ -54,7 +54,7 @@ def build_action_executor(
 
 
 __all__ = [
-    "build_action_executor",
+    "build_executor",
     "build_planner",
     "configure_component",
 ]

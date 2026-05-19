@@ -5,4 +5,4 @@
 **Previous Subtask**:
 - Destination: {subtask_destination}
 - Instruction: {subtask_instruction}
-**Space Structure**: {waypoint_summary}
+**Region Structure**: {waypoint_summary}

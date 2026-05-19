@@ -1,19 +1,19 @@
-"""Explicit-cache action executor wrapper for ablation runs."""
+"""Explicit-cache executor wrapper for ablation runs."""
 
 from __future__ import annotations
 
 import os
 from typing import Any, Dict, Optional, Sequence, Tuple
 
-from navigation_system.ablation.prompts.builders import build_action_prompt_bundle
+from navigation_system.ablation.prompts.builders import build_executor_prompt_bundle
 from navigation_system.ablation.config import AblationSpec, load_ablation_spec
 from navigation_system.vlm.api.qwen_context_cache_client import QwenContextCacheMixin
-from navigation_system.vlm.execution.vlnce.executor import ActionExecutor
+from navigation_system.vlm.execution.vlnce.executor import Executor
 from navigation_system.vlm.prompts.common import PromptBundle
 
 
-class AblationContextCacheActionExecutor(QwenContextCacheMixin, ActionExecutor):
-    """Ablation action executor variant that preserves the explicit-cache runtime."""
+class AblationContextCacheExecutor(QwenContextCacheMixin, Executor):
+    """Ablation executor variant that preserves the explicit-cache runtime."""
 
     def __init__(
         self,
@@ -30,7 +30,7 @@ class AblationContextCacheActionExecutor(QwenContextCacheMixin, ActionExecutor):
         )
         self._init_qwen_context_cache(config_path)
         print(
-            f"  AblationAction(ContextCache): {self.ablation_spec.slug} | explicit-context-cache"
+            f"  AblationExecutor(ContextCache): {self.ablation_spec.slug} | explicit-context-cache"
         )
 
     def call_api(
@@ -70,7 +70,7 @@ class AblationContextCacheActionExecutor(QwenContextCacheMixin, ActionExecutor):
                 "right_30": "Unknown",
             }
 
-        prompt_bundle = build_action_prompt_bundle(
+        prompt_bundle = build_executor_prompt_bundle(
             next_waypoint=next_waypoint,
             subtask_instruction=subtask_instruction,
             progress_summary=progress_summary,
@@ -153,7 +153,6 @@ class AblationContextCacheActionExecutor(QwenContextCacheMixin, ActionExecutor):
         print(f"  Action: {info} | {response.get('reasoning', '')[:60]}")
         return action_id, action_name, response, degrees, meters, prompt_bundle.full_prompt
 
-
 __all__ = [
-    "AblationContextCacheActionExecutor",
+    "AblationContextCacheExecutor",
 ]

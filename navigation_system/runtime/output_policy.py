@@ -68,7 +68,8 @@ def _default_profile() -> str:
 def add_output_profile_arg(parser: argparse.ArgumentParser) -> None:
     """Add the shared output profile selector to a runner parser."""
     parser.add_argument(
-        "--output-profile",
+        "--output",
+        dest="output_profile",
         choices=OUTPUT_PROFILE_CHOICES,
         default=_default_profile(),
         help=(
@@ -76,6 +77,13 @@ def add_output_profile_arg(parser: argparse.ArgumentParser) -> None:
             "debug saves VLM artifacts, map artifacts, and GIF; "
             "config preserves YAML defaults."
         ),
+    )
+    parser.add_argument(
+        "--output-profile",
+        dest="output_profile",
+        choices=OUTPUT_PROFILE_CHOICES,
+        default=argparse.SUPPRESS,
+        help=argparse.SUPPRESS,
     )
 
 

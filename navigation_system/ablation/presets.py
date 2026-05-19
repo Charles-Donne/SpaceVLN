@@ -87,7 +87,7 @@ _PRESET_DEFINITIONS: tuple[AblationPresetDefinition, ...] = (
         config_filename="no_planning_reasoning_no_progress.yaml",
         description=(
             "Remove thinking/planning reasoning flow plus task-chain/progress/local-loop guidance, "
-            "while keeping perception inputs, Previous Subtask context, key constraints, examples, and full action prompt."
+            "while keeping perception inputs, Previous Subtask context, key constraints, examples, and full executor prompt."
         ),
         aliases=(
             "thinking_reasoning_no_progress",
@@ -102,7 +102,7 @@ _PRESET_DEFINITIONS: tuple[AblationPresetDefinition, ...] = (
         config_filename="no_planning_action_reasoning_no_progress.yaml",
         description=(
             "Remove thinking/planning reasoning flow plus task-chain/progress/local-loop guidance, "
-            "and use the no-action-reasoning action prompt."
+            "and use the no-action-reasoning executor prompt."
         ),
         aliases=(
             "thinking_action_reasoning_no_progress",

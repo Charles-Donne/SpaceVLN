@@ -1,12 +1,12 @@
-"""Build pluggable planner/action model stacks for navigation runtime."""
+"""Build pluggable planner/executor model stacks for navigation runtime."""
 
-from navigation_system.vlm.execution.vlnce.executor import ActionExecutor
+from navigation_system.vlm.execution.vlnce.executor import Executor
 from navigation_system.vlm.execution.vlnce.executor_context_cache import (
-    ContextCacheActionExecutor,
+    ContextCacheExecutor,
 )
 from navigation_system.vlm.interfaces import NavigationModelStack
 from navigation_system.vlm.model_stack_factory import (
-    build_action_executor,
+    build_executor,
     build_planner,
 )
 from navigation_system.vlm.planning.vlnce.planner import LLMPlanner
@@ -21,7 +21,7 @@ def build_default_navigation_model_stack(
     move_distance: float,
     save_request_artifacts: bool,
 ) -> NavigationModelStack:
-    """Build the standard planner + action executor stack."""
+    """Build the standard planner + executor stack."""
     planner = build_planner(
         LLMPlanner,
         config_path=config_path,
@@ -29,13 +29,13 @@ def build_default_navigation_model_stack(
         save_request_artifacts=save_request_artifacts,
         label="LLM Planner",
     )
-    action_executor = build_action_executor(
-        ActionExecutor,
+    action_executor = build_executor(
+        Executor,
         config_path=config_path,
         turn_angle=turn_angle,
         move_distance=move_distance,
         save_request_artifacts=save_request_artifacts,
-        label="Action Executor",
+        label="Executor",
     )
     return NavigationModelStack(
         planner=planner,
@@ -51,7 +51,7 @@ def build_context_cache_navigation_model_stack(
     move_distance: float,
     save_request_artifacts: bool,
 ) -> NavigationModelStack:
-    """Build the explicit-cache planner + action executor stack."""
+    """Build the explicit-cache planner + executor stack."""
     planner = build_planner(
         ContextCachePlanner,
         config_path=config_path,
@@ -59,13 +59,13 @@ def build_context_cache_navigation_model_stack(
         save_request_artifacts=save_request_artifacts,
         label="Cached LLM Planner",
     )
-    action_executor = build_action_executor(
-        ContextCacheActionExecutor,
+    action_executor = build_executor(
+        ContextCacheExecutor,
         config_path=config_path,
         turn_angle=turn_angle,
         move_distance=move_distance,
         save_request_artifacts=save_request_artifacts,
-        label="Cached Action Executor",
+        label="Cached Executor",
     )
     return NavigationModelStack(
         planner=planner,

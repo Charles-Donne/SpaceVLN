@@ -1,0 +1,12 @@
+OVON:
+  results_family: hm3d_v2_objectnav
+  index_entry_kind: episode
+  runtime: context_cache
+  official_exp_config: objectnav_hm3d_benchmark/config/objectnav_hm3d_v2.yaml
+  split: val_mini
+  data_path: data/datasets/objectnav/hm3d/v2/val_mini/val_mini.json.gz
+  gpu_id: 0
+  max_steps: 500
+  max_subtask_steps: 4
+save_step_images: false
+save_gif: false

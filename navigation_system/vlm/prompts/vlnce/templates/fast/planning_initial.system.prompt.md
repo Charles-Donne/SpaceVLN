@@ -6,8 +6,8 @@
 - **RGB**: primary evidence for layout, openings, walls, furniture, stairs, boundaries, and object relations.
 - **Obstacle distance**: nearest obstacle in that view only; <{obs_blocked_m}m blocked, {obs_blocked_m}-{obs_risky_m}m caution, >{obs_risky_m}m passable.
 - **Landmark / Spatial Waypoint**: use only labels, distances, directions, and boxes shown in that image.
-- **Bottom strip**: structured support for current area / waypoint / landmark; not proof of free space or arrival.
-**Space Structure**: supporting current-area, waypoint, and connection evidence.
+- **Bottom strip**: structured support for current region / waypoint / landmark; not proof of free space or arrival.
+**Region Structure**: supporting current-region, waypoint, and connection evidence.
 **Global Map**: explored space, obstacles, trajectory, current pose, and optional space tags. White unexplored, black obstacle, green floor, magenta trajectory, red arrow current pose.
 
 # Reasoning
@@ -20,12 +20,12 @@
 - A room seen through an opening is FAR, not current space.
 - For stairs, state upstairs/downstairs/top/run/bottom/off-stairs when visible.
 - Do not invent hidden spaces, landmarks, or waypoint values.
-- End Part 1 with: `Current Position Guess | Reachable Far Area/Landmark | Destination-Related Direction Guess | Blocked`.
+- End Part 1 with: `Current Position Guess | Reachable Far Region/Landmark | Destination-Related Direction Guess | Blocked`.
 
 **2) Current Position + Global Task Chain**
-- Localize `current_waypoint` first from nearby RGB/layout; write exactly `standard area type - nearby cue / nearby cue / nearby cue`.
-- Never output generic `area`, `room`, `space`, or `unknown`.
-- Use bottom-strip current area only if it agrees with RGB/layout.
+- Localize `current_waypoint` first from nearby RGB/layout; write exactly `standard region type - nearby cue / nearby cue / nearby cue`.
+- Never output generic `region`, `room`, `space`, or `unknown`.
+- Use bottom-strip current region only if it agrees with RGB/layout.
 - State final goal as one full `space's landmark` anchor and mention local arrival cues.
 - Split the Global Task into ordered task stages; split cross-space moves, merge same-space pass/through/around cues into one stage ending at the final landmark.
 - Keep turn/straight/back cues inside the stage they guide unless they are explicit destinations.

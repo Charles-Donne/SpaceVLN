@@ -7,10 +7,10 @@
 - **RGB scene content**: this is the primary evidence. First read the actual image content: layout, openings, walls, furniture, room cues, stairs, boundaries, and object relations.
 - **Obstacle distance**: nearest obstacle only. <{obs_blocked_m}m=blocked | {obs_blocked_m}-{obs_risky_m}m=caution | >{obs_risky_m}m=passable
 - **Landmark / Spatial Waypoint** (if present): `Landmark` and `Spatial Waypoint` labels may appear on the RGB view, and custom landmark bbox may add name + distance/angle cues. Use only the shown values.
-- **Bottom white strip** (if present): bottom summary rows may show `your current area`, `spatial waypoint`, and `landmark` entries, including names, distances, directions, confidence, connection info, or status tags. Treat it as structured current-view / nearby-memory summary, not obstacle/free-space/path-clearance proof. Use the preserved `your current area` row only as a supporting current region tag for the left side of `current_waypoint` when it agrees with RGB/layout.
-**Space Structure**: rendered current-area / Spatial Waypoint / connection evidence if provided; use it with the views and map, not as a replacement for current-view localization.
-**Global Map**: explored area + obstacles + trajectory + current pose + space structure if rendered
-- **Map colors**: White=unexplored | Black=obstacles | Green=safe floor | Purple/magenta=trajectory | Red Arrow=you position | Colored regions + blue tags=space structure on Global Map when present
+- **Bottom white strip** (if present): bottom summary rows may show `your current region`, `spatial waypoint`, and `landmark` entries, including names, distances, directions, confidence, connection info, or status tags. Treat it as structured current-view / nearby-memory summary, not obstacle/free-space/path-clearance proof. Use the preserved `your current region` row only as a supporting current region tag for the left side of `current_waypoint` when it agrees with RGB/layout.
+**Region Structure**: rendered current-region / Spatial Waypoint / connection evidence if provided; use it with the views and map, not as a replacement for current-view localization.
+**Global Map**: explored region + obstacles + trajectory + current pose + region structure if rendered
+- **Map colors**: White=unexplored | Black=obstacles | Green=safe floor | Purple/magenta=trajectory | Red Arrow=you position | Colored regions + blue tags=region structure on Global Map when present
 
 **Sequential planning rule**:
 - Output only the immediate next task stage/subtask. At task start, the task-start anchor is current and the next node is the true first-stage endpoint.
@@ -23,7 +23,7 @@ Return exactly one JSON object. Use `reasoning` as one short task-grounded summa
 
 {{
     "reasoning": "<One short task-grounded summary of the current start position, the active first task stage, and the chosen destination/direction.>",
-    "current_waypoint": "<Write exactly `standard area type - nearby cue / nearby cue / nearby cue`. Infer the left side only from current nearby RGB/layout/objects/openings (use `your current area` only if consistent); never copy old waypoints/chains, use generic area/room/space/unknown, or name a farther room seen through an opening. The right side contains only nearby current cues.>",
+    "current_waypoint": "<Write exactly `standard region type - nearby cue / nearby cue / nearby cue`. Infer the left side only from current nearby RGB/layout/objects/openings (use `your current region` only if consistent); never copy old waypoints/chains, use generic region/room/space/unknown, or name a farther room seen through an opening. The right side contains only nearby current cues.>",
     "task_progress": "<Task-ordered natural-language pieces from the Global Task. In initial planning, the first unfinished piece is `(Current)` and later pieces remain unmarked.>",
     "waypoint_chain": "<Ordered task-defined chain with full `[space]'s [landmark]` nodes only. The current/start node must be `(Current)`, and the next node must be the first unfinished task anchor.>",
     "next_waypoint": "<One `[space]'s [landmark]` only: the first unfinished task-defined anchor after the current/start anchor.>",

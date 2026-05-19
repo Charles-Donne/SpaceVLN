@@ -4,7 +4,7 @@
 **Previous Subtask Destination**: {subtask_destination}
 **Previous Subtask Instruction**: {subtask_instruction}
 
-**Space Structure + Waypoint History**:
+**Region Structure + Waypoint History**:
 {waypoint_summary}
 
 **Previous Subtask Landmark Evidence**:

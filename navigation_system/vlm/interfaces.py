@@ -1,4 +1,4 @@
-"""Typed interfaces for pluggable planner/action runtime adapters."""
+"""Typed interfaces for pluggable planner/executor runtime adapters."""
 
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Protocol, Sequence, Tuple
@@ -38,7 +38,7 @@ class PlannerLike(Protocol):
         ...
 
 
-class ActionExecutorLike(Protocol):
+class ExecutorLike(Protocol):
     def set_request_artifact_saving(self, enabled: bool) -> None:
         ...
 
@@ -64,7 +64,8 @@ class ActionExecutorLike(Protocol):
 @dataclass(frozen=True)
 class NavigationModelStack:
     planner: Optional[PlannerLike]
-    action_executor: Optional[ActionExecutorLike]
+    action_executor: Optional[ExecutorLike]
+
 
 
 class NavigationModelStackBuilder(Protocol):

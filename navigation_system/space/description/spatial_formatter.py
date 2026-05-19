@@ -203,7 +203,7 @@ def _trim_local_place_prefix(local_text: str) -> str:
     return clean_text
 
 
-def _format_space_waypoint_chain_member(
+def _format_spatial_waypoint_chain_member(
     waypoint_token: str,
     waypoint_description: str = "",
     is_current: bool = False,
@@ -219,7 +219,7 @@ def _format_space_waypoint_chain_member(
     return member_label
 
 
-def _format_space_waypoint_chain_group(area_label: str, member_labels: Sequence[str]) -> str:
+def _format_spatial_waypoint_chain_group(area_label: str, member_labels: Sequence[str]) -> str:
     members = [str(item).strip() for item in member_labels if str(item).strip()]
     clean_area = _format_area_display_label(area_label, cue_texts=members)
     if not members:
@@ -233,7 +233,7 @@ def _build_current_area_initial_waypoint_note(
     waypoint_area_labels: Optional[Sequence[str]],
     current_pose: Optional[Sequence[float]],
     resolution_cm: float,
-    current_space_area_label: str,
+    current_region_label: str,
     full_map: Optional[np.ndarray],
     crop_offset: Optional[Tuple[int, int]],
     initial_waypoint_index: Optional[int] = 0,
@@ -254,7 +254,7 @@ def _build_current_area_initial_waypoint_note(
     if initial_waypoint is None:
         return ""
 
-    current_area = _clean_area_label(current_space_area_label)
+    current_area = _clean_area_label(current_region_label)
     initial_area = _clean_area_label(
         waypoint_area_labels[int(initial_waypoint_index)]
         if waypoint_area_labels and int(initial_waypoint_index) < len(waypoint_area_labels)
@@ -531,7 +531,7 @@ def _find_current_area_waypoint_anchor_index(
     waypoint_area_labels: Optional[Sequence[str]],
     current_pose: Optional[Sequence[float]],
     resolution_cm: float,
-    current_space_area_label: str = "",
+    current_region_label: str = "",
     full_map: Optional[np.ndarray] = None,
     crop_offset: Optional[Tuple[int, int]] = None,
     obstacle_mask: Optional[np.ndarray] = None,
@@ -541,7 +541,7 @@ def _find_current_area_waypoint_anchor_index(
     if current_pose is None or not waypoint_positions:
         return None
 
-    target_area_label = _clean_area_label(current_space_area_label)
+    target_area_label = _clean_area_label(current_region_label)
     area_labels = list(waypoint_area_labels or [])
     matching_candidates: List[Tuple[float, int]] = []
     fallback_candidates: List[Tuple[float, int, str]] = []
@@ -617,13 +617,13 @@ def resolve_display_current_area(
     waypoint_area_labels: Optional[Sequence[str]],
     current_pose: Optional[Sequence[float]],
     resolution_cm: float,
-    current_space_area_label: str = "",
-    current_space_area_type: str = "",
+    current_region_label: str = "",
+    current_region_type: str = "",
     waypoint_descriptions: Optional[Sequence[str]] = None,
     full_map: Optional[np.ndarray] = None,
     crop_offset: Optional[Tuple[int, int]] = None,
 ) -> Tuple[str, Optional[int]]:
-    current_area_label = str(current_space_area_label or "").strip()
+    current_area_label = str(current_region_label or "").strip()
     obstacle_mask = (
         np.asarray(full_map[0] > 0.5, dtype=bool)
         if full_map is not None and current_pose is not None and crop_offset is not None
@@ -654,7 +654,7 @@ def resolve_display_current_area(
         waypoint_area_labels=waypoint_area_labels,
         current_pose=current_pose,
         resolution_cm=resolution_cm,
-        current_space_area_label=current_space_area_label,
+        current_region_label=current_region_label,
         full_map=full_map,
         crop_offset=crop_offset,
         obstacle_mask=obstacle_mask,
@@ -672,7 +672,7 @@ def resolve_display_current_area(
             if _is_unknown_area_label(current_area_label):
                 display_label = _resolve_display_area_label(
                     anchor_label,
-                    current_space_area_type,
+                    current_region_type,
                     cue_texts=[anchor_description],
                 )
                 if display_label:
@@ -680,14 +680,14 @@ def resolve_display_current_area(
             if _clean_area_label(anchor_label) == _clean_area_label(current_area_label):
                 display_label = _resolve_display_area_label(
                     anchor_label,
-                    current_space_area_type,
+                    current_region_type,
                     cue_texts=[anchor_description],
                 )
                 return display_label or anchor_label, int(anchor_index)
 
     display_current_label = _resolve_display_area_label(
         current_area_label,
-        current_space_area_type,
+        current_region_type,
         cue_texts=list(waypoint_descriptions or []),
     )
     return display_current_label or current_area_label or "Unknown", anchor_index
@@ -853,8 +853,8 @@ def build_waypoint_summary(
     waypoint_floor_ids: Optional[Sequence[int]],
     current_pose: Optional[Sequence[float]],
     resolution_cm: float,
-    current_space_area_label: str = "",
-    current_space_area_type: str = "",
+    current_region_label: str = "",
+    current_region_type: str = "",
     full_map: Optional[np.ndarray] = None,
     crop_offset: Optional[Tuple[int, int]] = None,
     initial_waypoint_index: Optional[int] = 0,
@@ -868,8 +868,8 @@ def build_waypoint_summary(
 ) -> str:
     """Summarize visited waypoints relative to the current pose as a maintained chain."""
     header_lines: List[str] = []
-    display_area_label = current_space_area_label or "Unknown"
-    display_area_type = current_space_area_type or "Unknown"
+    display_area_label = current_region_label or "Unknown"
+    display_area_type = current_region_type or "Unknown"
     normalized_floor_ids = _normalize_waypoint_floor_ids(
         waypoint_ids=waypoint_ids,
         waypoint_floor_ids=waypoint_floor_ids,
@@ -953,7 +953,7 @@ def build_waypoint_summary(
         waypoint_area_labels=current_floor_area_labels,
         current_pose=current_pose,
         resolution_cm=resolution_cm,
-        current_space_area_label=current_space_area_label,
+        current_region_label=current_region_label,
         full_map=full_map,
         crop_offset=crop_offset,
         initial_waypoint_index=current_floor_initial_index,
@@ -962,7 +962,7 @@ def build_waypoint_summary(
         current_distance_field=current_distance_field,
     )
     header_lines.append(
-        "Your Current Area: "
+        "Your Current Region: "
         f"{_format_current_area_header_label(display_area_label, display_area_type)}"
         f"{space_type_note}{current_area_initial_note}"
     )
@@ -984,7 +984,7 @@ def build_waypoint_summary(
 
     empty_area_chain_line = None
     if include_area_chain:
-        current_area_display = _format_current_area_chain_label(current_space_area_label)
+        current_area_display = _format_current_area_chain_label(current_region_label)
         if current_area_display == "Current Position":
             empty_area_chain_line = "Spatial Waypoint Chain: Current Position"
         else:
@@ -1012,8 +1012,8 @@ def build_waypoint_summary(
         waypoint_area_labels=current_floor_area_labels,
         current_pose=current_pose,
         resolution_cm=resolution_cm,
-        current_space_area_label=current_space_area_label,
-        current_space_area_type=current_space_area_type,
+        current_region_label=current_region_label,
+        current_region_type=current_region_type,
         waypoint_descriptions=current_floor_descriptions,
         full_map=full_map,
         crop_offset=crop_offset,
@@ -1035,7 +1035,7 @@ def build_waypoint_summary(
         waypoint_area_labels=current_floor_area_labels,
         current_pose=current_pose,
         resolution_cm=resolution_cm,
-        current_space_area_label=display_area_label,
+        current_region_label=display_area_label,
         full_map=full_map,
         crop_offset=crop_offset,
         initial_waypoint_index=current_floor_initial_index,
@@ -1044,7 +1044,7 @@ def build_waypoint_summary(
         current_distance_field=current_distance_field,
     )
     header_lines[0] = (
-        "Your Current Area: "
+        "Your Current Region: "
         f"{_format_current_area_header_label(display_area_label, display_area_type)}"
         f"{space_type_note}{current_area_initial_note}"
     )
@@ -1386,7 +1386,7 @@ def build_waypoint_summary(
                             full_map=full_map,
                             crop_offset=crop_offset,
                             visible_indices=displayed_current_floor_visible_local_indices,
-                            current_space_area_label=display_area_label,
+                            current_region_label=display_area_label,
                         )
                         if reachability_note:
                             spatial_info = f"{spatial_info} | {reachability_note}"
@@ -1533,7 +1533,7 @@ def _build_waypoint_reachability_note(
     full_map: Optional[np.ndarray],
     crop_offset: Optional[Tuple[int, int]],
     visible_indices: Sequence[int],
-    current_space_area_label: str,
+    current_region_label: str,
 ) -> str:
     if waypoint_index >= len(waypoint_positions):
         return ""
@@ -1584,7 +1584,7 @@ def _build_waypoint_reachability_note(
         return f"blocked to current position; reach via {next_area_ref}"
 
     if current_pose is not None:
-        current_area_display = _format_area_display_label(current_space_area_label)
+        current_area_display = _format_area_display_label(current_region_label)
         return f"blocked to current position; reach via Current({current_area_display})"
     return "blocked to current position"
 
@@ -1735,14 +1735,14 @@ def _build_waypoint_area_path_line(
         ):
             return formatted_area_label
         member_labels = [
-            _format_space_waypoint_chain_member(
+            _format_spatial_waypoint_chain_member(
                 waypoint_token=str(member.get("token", "")),
                 waypoint_description=str(member.get("description", "") or ""),
                 is_current=bool(member.get("is_current", False)),
             )
             for member in entry_members
         ]
-        return _format_space_waypoint_chain_group(
+        return _format_spatial_waypoint_chain_group(
             area_label=formatted_area_label,
             member_labels=member_labels,
         )
@@ -1814,7 +1814,7 @@ def build_action_landmark_map_info(
     landmark_dist_map_multi: Optional[Dict[str, List[Tuple[float, float]]]] = None,
     landmark_instances_world: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> Optional[str]:
-    """Build the action prompt's landmark summary from the selected action top-k list."""
+    """Build the executor prompt's landmark summary from the selected action top-k list."""
     _ = landmark_dist_map
     _ = landmark_dist_map_multi
     _ = landmark_instances_world

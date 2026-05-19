@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 
 
-def _normalize_space_area_type(self, space_type: str) -> str:
+def _normalize_region_type(self, space_type: str) -> str:
     normalized = re.sub(r"[^a-z0-9]+", " ", str(space_type or "").strip().lower())
     normalized = " ".join(normalized.split())
     if not normalized:
@@ -20,13 +20,13 @@ def _normalize_space_area_type(self, space_type: str) -> str:
     return normalized
 
 
-def _space_area_color_preference_order(
+def _region_color_preference_order(
     self,
     area_id: int,
     space_type: str,
 ) -> List[int]:
     palette_len = len(self.SPACE_AREA_COLOR_PALETTE)
-    normalized_type = self._normalize_space_area_type(space_type)
+    normalized_type = self._normalize_region_type(space_type)
     preferred_index = self.SPACE_TYPE_PREFERRED_COLOR_INDEX.get(normalized_type)
     seed = 0
     for index, ch in enumerate(normalized_type):
@@ -42,7 +42,7 @@ def _space_area_color_preference_order(
     return fallback_order
 
 
-def _build_space_area_adjacency(
+def _build_region_adjacency(
     self,
     display_layer: np.ndarray,
     area_ids: List[int],
@@ -82,16 +82,16 @@ def _build_space_area_adjacency(
     return adjacency
 
 
-def _resolve_space_area_colors(
+def _resolve_region_colors(
     self,
     display_layer: np.ndarray,
-    space_area_records: List[Dict[str, Any]],
+    region_records: List[Dict[str, Any]],
 ) -> Dict[int, Tuple[int, int, int]]:
-    if display_layer is None or display_layer.size == 0 or not space_area_records:
+    if display_layer is None or display_layer.size == 0 or not region_records:
         return {}
 
     record_by_id: Dict[int, Dict[str, Any]] = {}
-    for record in list(space_area_records or []):
+    for record in list(region_records or []):
         try:
             area_id = int(record.get("id", 0) or 0)
         except (TypeError, ValueError):
@@ -111,13 +111,13 @@ def _resolve_space_area_colors(
     if not area_ids:
         return {}
 
-    adjacency = self._build_space_area_adjacency(display_layer, area_ids)
+    adjacency = self._build_region_adjacency(display_layer, area_ids)
     ordered_area_ids = sorted(
         area_ids,
         key=lambda area_id: (
             -len(adjacency.get(int(area_id), set())),
             -int(area_sizes.get(int(area_id), 0)),
-            self._normalize_space_area_type(
+            self._normalize_region_type(
                 str(record_by_id.get(int(area_id), {}).get("space_type", ""))
             ),
             int(area_id),
@@ -132,7 +132,7 @@ def _resolve_space_area_colors(
             for neighbor_id in adjacency.get(int(area_id), set())
             if neighbor_id in color_assignments
         }
-        preference_order = self._space_area_color_preference_order(
+        preference_order = self._region_color_preference_order(
             area_id=int(area_id),
             space_type=str(record_by_id.get(int(area_id), {}).get("space_type", "")),
         )
@@ -148,28 +148,28 @@ def _resolve_space_area_colors(
     return color_assignments
 
 
-def _prepare_space_area_display_layer(
+def _prepare_region_display_layer(
     self,
-    space_area_layer: Optional[np.ndarray],
+    region_layer: Optional[np.ndarray],
     output_size: int = 480,
     cache_key: Optional[Any] = None,
 ) -> Optional[np.ndarray]:
-    if space_area_layer is None or space_area_layer.size == 0:
+    if region_layer is None or region_layer.size == 0:
         return None
     cache_token = cache_key if cache_key is not None else self._active_render_cache_key
     cache_entry = None
     if cache_token is not None:
-        cache_entry = self._render_cache["space_area_layer"].get((cache_token, int(output_size)))
+        cache_entry = self._render_cache["region_layer"].get((cache_token, int(output_size)))
         if cache_entry is not None:
             return cache_entry.copy()
-    layer = np.flipud(np.asarray(space_area_layer, dtype=np.int32))
+    layer = np.flipud(np.asarray(region_layer, dtype=np.int32))
     display_layer = cv2.resize(layer, (output_size, output_size), interpolation=cv2.INTER_NEAREST)
     if cache_token is not None:
-        self._render_cache["space_area_layer"][(cache_token, int(output_size))] = display_layer.copy()
+        self._render_cache["region_layer"][(cache_token, int(output_size))] = display_layer.copy()
     return display_layer
 
 
-def _refine_space_area_mask(self, mask: np.ndarray) -> np.ndarray:
+def _refine_region_mask(self, mask: np.ndarray) -> np.ndarray:
     mask_uint8 = mask.astype(np.uint8) * 255
     if mask_uint8.size == 0 or np.count_nonzero(mask_uint8) == 0:
         return mask
@@ -187,11 +187,11 @@ def _refine_space_area_mask(self, mask: np.ndarray) -> np.ndarray:
     return filled > 127
 
 
-def _draw_space_areas_in_place(
+def _draw_regions_in_place(
     self,
     image: np.ndarray,
-    space_area_layer: Optional[np.ndarray],
-    space_area_records: Optional[List[Dict[str, Any]]],
+    region_layer: Optional[np.ndarray],
+    region_records: Optional[List[Dict[str, Any]]],
     alpha: float = 0.45,
     fill_regions: bool = True,
     show_labels: bool = False,
@@ -211,12 +211,12 @@ def _draw_space_areas_in_place(
                 interpolation=cv2.INTER_NEAREST,
             )
     else:
-        display_layer = self._prepare_space_area_display_layer(
-            space_area_layer,
+        display_layer = self._prepare_region_display_layer(
+            region_layer,
             output_size=image.shape[1],
             cache_key=cache_token,
         )
-    if display_layer is None or not space_area_records:
+    if display_layer is None or not region_records:
         return image
 
     color_assignments: Dict[int, Tuple[int, int, int]] = {}
@@ -232,7 +232,7 @@ def _draw_space_areas_in_place(
             if int(area_id) > 0
         )
         visible_area_ids = [int(area_id) for area_id, _count in visible_area_signature]
-        adjacency = self._build_space_area_adjacency(display_layer, visible_area_ids)
+        adjacency = self._build_region_adjacency(display_layer, visible_area_ids)
         adjacency_signature = tuple(
             sorted(
                 (
@@ -247,9 +247,9 @@ def _draw_space_areas_in_place(
             sorted(
                 (
                     int(record.get("id", 0) or 0),
-                    self._normalize_space_area_type(str(record.get("space_type", ""))),
+                    self._normalize_region_type(str(record.get("space_type", ""))),
                 )
-                for record in list(space_area_records or [])
+                for record in list(region_records or [])
                 if int(record.get("id", 0) or 0) > 0
             )
         )
@@ -260,20 +260,20 @@ def _draw_space_areas_in_place(
             visible_area_signature,
             adjacency_signature,
         )
-        cached_colors = self._render_cache["space_area_color_assignments"].get(color_cache_key)
+        cached_colors = self._render_cache["region_color_assignments"].get(color_cache_key)
         if isinstance(cached_colors, dict):
             color_assignments = dict(cached_colors)
     if not color_assignments:
-        color_assignments = self._resolve_space_area_colors(display_layer, list(space_area_records or []))
+        color_assignments = self._resolve_region_colors(display_layer, list(region_records or []))
         if color_cache_key is not None:
-            self._render_cache["space_area_color_assignments"][color_cache_key] = dict(color_assignments)
+            self._render_cache["region_color_assignments"][color_cache_key] = dict(color_assignments)
 
     label_candidates: List[Dict[str, Any]] = []
-    for record in space_area_records:
+    for record in region_records:
         area_id = int(record.get("id", 0) or 0)
         if area_id <= 0:
             continue
-        mask, contours, label_anchor = self._get_space_area_render_assets(
+        mask, contours, label_anchor = self._get_region_render_assets(
             display_layer=display_layer,
             area_id=area_id,
             output_size=int(image.shape[1]),
@@ -286,7 +286,7 @@ def _draw_space_areas_in_place(
                 mask = clipped_mask
                 mask_uint8 = (mask.astype(np.uint8) * 255)
                 contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                label_anchor = self._compute_space_area_label_anchor(mask_uint8, contours)
+                label_anchor = self._compute_region_label_anchor(mask_uint8, contours)
         if not np.any(mask):
             continue
         color = tuple(
@@ -310,7 +310,7 @@ def _draw_space_areas_in_place(
                 cv2.drawContours(image, contours, -1, contour_color, 2)
             if show_labels:
                 label_key = "display_label" if use_display_label else "label"
-                label = self._compact_space_area_overlay_label(
+                label = self._compact_region_overlay_label(
                     str(record.get(label_key, record.get("label", "")) or "")
                 )
                 if label:
@@ -334,7 +334,7 @@ def _draw_space_areas_in_place(
             label_candidates,
             key=lambda item: (-int(item.get("mask_pixels", 0) or 0), str(item.get("label", ""))),
         ):
-            label_layout = self._resolve_space_area_label_layout(
+            label_layout = self._resolve_region_label_layout(
                 image_shape=image.shape,
                 label=str(candidate.get("label", "")),
                 label_anchor=candidate.get("label_anchor"),
@@ -343,7 +343,7 @@ def _draw_space_areas_in_place(
             )
             if label_layout is None:
                 continue
-            self._draw_space_area_label(
+            self._draw_region_label(
                 image=image,
                 label=str(candidate.get("label", "")),
                 color=tuple(candidate.get("color", (255, 0, 0))),
@@ -357,11 +357,11 @@ def _draw_space_areas_in_place(
     return image
 
 
-def _overlay_space_areas(
+def _overlay_regions(
     self,
     image: np.ndarray,
-    space_area_layer: Optional[np.ndarray],
-    space_area_records: Optional[List[Dict[str, Any]]],
+    region_layer: Optional[np.ndarray],
+    region_records: Optional[List[Dict[str, Any]]],
     alpha: float = 0.45,
     fill_regions: bool = True,
     show_labels: bool = False,
@@ -371,10 +371,10 @@ def _overlay_space_areas(
     reserved_boxes: Optional[List[Tuple[int, int, int, int]]] = None,
 ) -> np.ndarray:
     output = image.copy()
-    return self._draw_space_areas_in_place(
+    return self._draw_regions_in_place(
         output,
-        space_area_layer,
-        space_area_records,
+        region_layer,
+        region_records,
         alpha=alpha,
         fill_regions=fill_regions,
         show_labels=show_labels,
@@ -385,7 +385,7 @@ def _overlay_space_areas(
     )
 
 
-def _get_space_area_render_assets(
+def _get_region_render_assets(
     self,
     display_layer: np.ndarray,
     area_id: int,
@@ -400,9 +400,9 @@ def _get_space_area_render_assets(
             int(area_id),
         )
 
-    mask_bucket = self._render_cache["space_area_mask"]
-    contours_bucket = self._render_cache["space_area_contours"]
-    anchor_bucket = self._render_cache["space_area_label_anchor"]
+    mask_bucket = self._render_cache["region_mask"]
+    contours_bucket = self._render_cache["region_contours"]
+    anchor_bucket = self._render_cache["region_label_anchor"]
 
     has_mask = cache_key is not None and cache_key in mask_bucket
     has_contours = cache_key is not None and cache_key in contours_bucket
@@ -411,7 +411,7 @@ def _get_space_area_render_assets(
     if has_mask:
         mask = mask_bucket[cache_key]
     else:
-        mask = self._refine_space_area_mask(display_layer == int(area_id))
+        mask = self._refine_region_mask(display_layer == int(area_id))
         if cache_key is not None:
             mask_bucket[cache_key] = mask
 
@@ -426,14 +426,14 @@ def _get_space_area_render_assets(
     if has_anchor:
         label_anchor = anchor_bucket[cache_key]
     else:
-        label_anchor = self._compute_space_area_label_anchor(mask_uint8, contours)
+        label_anchor = self._compute_region_label_anchor(mask_uint8, contours)
         if cache_key is not None:
             anchor_bucket[cache_key] = label_anchor
 
     return mask, contours, label_anchor
 
 
-def _compute_space_area_label_anchor(
+def _compute_region_label_anchor(
     self,
     mask_uint8: np.ndarray,
     contours: List[np.ndarray],
@@ -454,7 +454,7 @@ def _compute_space_area_label_anchor(
     return int(moments["m10"] / moments["m00"]), int(moments["m01"] / moments["m00"])
 
 
-def _compact_space_area_overlay_label(
+def _compact_region_overlay_label(
     self,
     label: str,
 ) -> str:
@@ -515,7 +515,7 @@ def _label_center_from_box(
     return int(round((x1 + x2) / 2.0)), int(round((y1 + y2) / 2.0))
 
 
-def _get_space_area_label_style(
+def _get_region_label_style(
     self,
     image_shape: Tuple[int, ...],
 ) -> Dict[str, Any]:
@@ -545,7 +545,7 @@ def _get_space_area_label_style(
     }
 
 
-def _resolve_space_area_label_layout(
+def _resolve_region_label_layout(
     self,
     image_shape: Tuple[int, ...],
     label: str,
@@ -559,7 +559,7 @@ def _resolve_space_area_label_layout(
     anchor_x = int(label_anchor[0])
     anchor_y = int(label_anchor[1])
     font = cv2.FONT_HERSHEY_SIMPLEX
-    label_style = self._get_space_area_label_style(image_shape)
+    label_style = self._get_region_label_style(image_shape)
     font_scale = float(label_style["font_scale"])
     thickness = int(label_style["thickness"])
     (text_w, text_h), baseline = cv2.getTextSize(str(label), font, font_scale, thickness)
@@ -629,7 +629,7 @@ def _resolve_space_area_label_layout(
     return best_layout
 
 
-def _draw_space_area_label(
+def _draw_region_label(
     self,
     image: np.ndarray,
     label: str,
@@ -643,7 +643,7 @@ def _draw_space_area_label(
     x1, y1, x2, y2 = label_box
     draw_x2 = max(x1, x2 - 1)
     draw_y2 = max(y1, y2 - 1)
-    label_style = self._get_space_area_label_style(image.shape)
+    label_style = self._get_region_label_style(image.shape)
     label_bg_color = tuple(int(v) for v in self.SPACE_AREA_TAG_BG_COLOR)
     label_border_color = tuple(int(v) for v in self.SPACE_AREA_TAG_BORDER_COLOR)
     label_text_color = tuple(int(v) for v in self.SPACE_AREA_TAG_TEXT_COLOR)

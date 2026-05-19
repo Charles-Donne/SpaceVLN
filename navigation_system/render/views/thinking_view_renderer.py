@@ -208,7 +208,7 @@ class ThinkingViewRenderer:
         return " ".join(word.capitalize() for word in str(text or "").split())
 
     @classmethod
-    def _strip_space_waypoint_suffix(cls, text: str) -> str:
+    def _strip_spatial_waypoint_suffix(cls, text: str) -> str:
         cleaned = cls._strip_visual_brackets(strip_space_type_variant_suffixes(text) or text)
         cleaned = cleaned.strip()
         if not cleaned:
@@ -230,9 +230,9 @@ class ThinkingViewRenderer:
     ) -> str:
         clean_area_label, _connected_area_labels = cls._split_area_label_links(area_label)
         candidates = [
-            cls._strip_space_waypoint_suffix(clean_area_label),
-            cls._strip_space_waypoint_suffix(description),
-            cls._strip_space_waypoint_suffix(display_text),
+            cls._strip_spatial_waypoint_suffix(clean_area_label),
+            cls._strip_spatial_waypoint_suffix(description),
+            cls._strip_spatial_waypoint_suffix(display_text),
         ]
         for candidate in candidates:
             normalized_space_type = normalize_space_type(candidate)
@@ -255,10 +255,10 @@ class ThinkingViewRenderer:
         waypoint_floor_ids: Optional[List[int]],
         current_pose: Optional[np.ndarray],
         resolution_cm: float,
-        current_space_area_label: str,
+        current_region_label: str,
         full_map: Optional[np.ndarray],
         crop_offset: Optional[Tuple[int, int]],
-        current_space_area_type: str = "",
+        current_region_type: str = "",
         current_floor_id: int = 0,
         initial_waypoint_index: Optional[int] = 0,
     ) -> List[Dict[str, Any]]:
@@ -267,7 +267,7 @@ class ThinkingViewRenderer:
 
         if not waypoint_info:
             current_area_text = cls._strip_visual_brackets(
-                str(current_space_area_label or "Unknown").strip() or "Unknown"
+                str(current_region_label or "Unknown").strip() or "Unknown"
             )
             clean_current_area_text, connected_area_labels = cls._split_area_label_links(current_area_text)
             if not cls._is_known_area_label(clean_current_area_text):
@@ -290,7 +290,7 @@ class ThinkingViewRenderer:
 
         waypoint_positions, waypoint_ids, waypoint_descriptions = waypoint_info
         if not waypoint_ids:
-            current_area_text = str(current_space_area_label or "Unknown").strip() or "Unknown"
+            current_area_text = str(current_region_label or "Unknown").strip() or "Unknown"
             clean_current_area_text, connected_area_labels = cls._split_area_label_links(current_area_text)
             if not cls._is_known_area_label(clean_current_area_text):
                 return []
@@ -346,8 +346,8 @@ class ThinkingViewRenderer:
             waypoint_area_labels=current_floor_area_labels,
             current_pose=current_pose,
             resolution_cm=resolution_cm,
-            current_space_area_label=current_space_area_label,
-            current_space_area_type=current_space_area_type,
+            current_region_label=current_region_label,
+            current_region_type=current_region_type,
             waypoint_descriptions=current_floor_descriptions,
             full_map=full_map,
             crop_offset=crop_offset,
@@ -429,7 +429,7 @@ class ThinkingViewRenderer:
             })
 
         current_area_text = cls._strip_visual_brackets(
-            str(resolved_current_area_text or current_space_area_label or "Unknown").strip() or "Unknown"
+            str(resolved_current_area_text or current_region_label or "Unknown").strip() or "Unknown"
         )
         clean_current_area_text, connected_current_area_labels = cls._split_area_label_links(current_area_text)
         current_area_view_angle = 0.0
@@ -732,7 +732,7 @@ class ThinkingViewRenderer:
                     or "Unknown"
                 ).strip() or "Unknown"
                 segments = [
-                    LandmarkStripSegment("your current area: ", prefix_color),
+                    LandmarkStripSegment("your current region: ", prefix_color),
                     LandmarkStripSegment(display_text, value_color),
                 ]
                 if connected_area_labels:
@@ -1251,7 +1251,7 @@ class ThinkingViewRenderer:
         waypoint_floor_ids: Optional[List[int]],
         current_pose: Optional[np.ndarray],
         resolution_cm: float,
-        current_space_area_label: str,
+        current_region_label: str,
         full_map: Optional[np.ndarray],
         crop_offset: Optional[Tuple[int, int]],
         waypoint_angle_deg: Optional[float],
@@ -1277,7 +1277,7 @@ class ThinkingViewRenderer:
             waypoint_floor_ids=waypoint_floor_ids,
             current_pose=current_pose,
             resolution_cm=resolution_cm,
-            current_space_area_label=current_space_area_label,
+            current_region_label=current_region_label,
             full_map=full_map,
             crop_offset=crop_offset,
             waypoint_angle_deg=waypoint_angle_deg,
@@ -1314,7 +1314,7 @@ class ThinkingViewRenderer:
         waypoint_floor_ids: Optional[List[int]],
         current_pose: Optional[np.ndarray],
         resolution_cm: float,
-        current_space_area_label: str,
+        current_region_label: str,
         full_map: Optional[np.ndarray],
         crop_offset: Optional[Tuple[int, int]],
         waypoint_angle_deg: Optional[float],
@@ -1331,7 +1331,7 @@ class ThinkingViewRenderer:
             waypoint_floor_ids=waypoint_floor_ids,
             current_pose=current_pose,
             resolution_cm=resolution_cm,
-            current_space_area_label=current_space_area_label,
+            current_region_label=current_region_label,
             full_map=full_map,
             crop_offset=crop_offset,
             current_floor_id=current_floor_id,

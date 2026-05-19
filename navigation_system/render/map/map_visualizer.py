@@ -165,11 +165,11 @@ class MapVisualizer:
             "obstacle_mask_raw": {},
             "obstacle_mask_logic": {},
             "obstacle_mask_display": {},
-            "space_area_layer": {},
-            "space_area_mask": {},
-            "space_area_contours": {},
-            "space_area_label_anchor": {},
-            "space_area_color_assignments": {},
+            "region_layer": {},
+            "region_mask": {},
+            "region_contours": {},
+            "region_label_anchor": {},
+            "region_color_assignments": {},
         }
         self._active_render_cache_key = None
 
@@ -205,11 +205,11 @@ class MapVisualizer:
                 bucket.pop(key, None)
 
         for name in (
-            "space_area_layer",
-            "space_area_mask",
-            "space_area_contours",
-            "space_area_label_anchor",
-            "space_area_color_assignments",
+            "region_layer",
+            "region_mask",
+            "region_contours",
+            "region_label_anchor",
+            "region_color_assignments",
         ):
             bucket = self._render_cache.get(name, {})
             stale_keys = [key for key in bucket.keys() if not isinstance(key, tuple) or not key or key[0] != keep_token]
@@ -554,12 +554,12 @@ class MapVisualizer:
     def _make_render_cache_key(
         step: int,
         full_map: Optional[np.ndarray],
-        space_area_layer: Optional[np.ndarray],
+        region_layer: Optional[np.ndarray],
     ) -> Tuple[int, int, int]:
         return (
             int(step),
             int(id(full_map)) if full_map is not None else 0,
-            int(id(space_area_layer)) if space_area_layer is not None else 0,
+            int(id(region_layer)) if region_layer is not None else 0,
         )
 
     @staticmethod
@@ -814,8 +814,8 @@ class MapVisualizer:
                                landmark_config: Optional[Dict] = None,
                                waypoint_positions: Optional[List[Tuple[int, int]]] = None,
                                waypoint_ids: Optional[List[int]] = None,
-                               space_area_layer: Optional[np.ndarray] = None,
-                               space_area_records: Optional[List[Dict[str, Any]]] = None,
+                               region_layer: Optional[np.ndarray] = None,
+                               region_records: Optional[List[Dict[str, Any]]] = None,
                                masks: Optional[np.ndarray] = None,
                                phase: str = "action",
                                global_trajectory_points: Optional[List[Tuple[int, int]]] = None,
@@ -851,7 +851,7 @@ class MapVisualizer:
         """
         paths = {}
         policy = self.get_render_policy(phase, render_policy)
-        render_cache_key = self._make_render_cache_key(step, full_map, space_area_layer)
+        render_cache_key = self._make_render_cache_key(step, full_map, region_layer)
         previous_cache_key = self._active_render_cache_key
         if render_cache_key != previous_cache_key:
             self._prune_render_cache(render_cache_key)
@@ -922,7 +922,7 @@ class MapVisualizer:
                 _, global_map_with_trajectory, landmarks, _global_map_clean, last_waypoint_angle = self.render_global_map(
                     full_map, global_traj_to_use, detected_classes, floor,
                     current_pose, landmark_classes, landmark_instances_world, landmark_config,
-                    waypoint_positions, waypoint_ids, space_area_layer, space_area_records, crop_offset,
+                    waypoint_positions, waypoint_ids, region_layer, region_records, crop_offset,
                     mapping_classes=mapping_classes
                 )
                 if global_map_with_trajectory is not None:
@@ -970,7 +970,7 @@ class MapVisualizer:
                 local_map = self.render_local_map(
                     full_map, trajectory_points, detected_classes, current_pose,
                     floor, landmark_classes, selected_action_landmark_instances, landmark_config, hfov,
-                    waypoint_positions, waypoint_ids, space_area_layer, space_area_records, crop_offset,
+                    waypoint_positions, waypoint_ids, region_layer, region_records, crop_offset,
                     mapping_classes=mapping_classes
                 )
             local_map_debug_lines = self._build_local_map_landmark_debug_lines(
@@ -1250,26 +1250,26 @@ class MapVisualizer:
 from navigation_system.render.views import detection_renderer as _detection_renderer
 from navigation_system.space.landmarks import landmark_selection as _landmark_selection
 from . import map_renderer as _map_renderer
-from . import space_area_overlay as _space_area_overlay
+from . import region_overlay as _region_overlay
 
 # Region overlay / label-layout helpers
-MapVisualizer._normalize_space_area_type = _space_area_overlay._normalize_space_area_type
-MapVisualizer._space_area_color_preference_order = _space_area_overlay._space_area_color_preference_order
-MapVisualizer._build_space_area_adjacency = _space_area_overlay._build_space_area_adjacency
-MapVisualizer._resolve_space_area_colors = _space_area_overlay._resolve_space_area_colors
-MapVisualizer._prepare_space_area_display_layer = _space_area_overlay._prepare_space_area_display_layer
-MapVisualizer._refine_space_area_mask = _space_area_overlay._refine_space_area_mask
-MapVisualizer._draw_space_areas_in_place = _space_area_overlay._draw_space_areas_in_place
-MapVisualizer._overlay_space_areas = _space_area_overlay._overlay_space_areas
-MapVisualizer._get_space_area_render_assets = _space_area_overlay._get_space_area_render_assets
-MapVisualizer._compute_space_area_label_anchor = _space_area_overlay._compute_space_area_label_anchor
-MapVisualizer._compact_space_area_overlay_label = _space_area_overlay._compact_space_area_overlay_label
-MapVisualizer._label_box_intersection_area = _space_area_overlay._label_box_intersection_area
-MapVisualizer._build_label_box_from_center = _space_area_overlay._build_label_box_from_center
-MapVisualizer._label_center_from_box = _space_area_overlay._label_center_from_box
-MapVisualizer._get_space_area_label_style = _space_area_overlay._get_space_area_label_style
-MapVisualizer._resolve_space_area_label_layout = _space_area_overlay._resolve_space_area_label_layout
-MapVisualizer._draw_space_area_label = _space_area_overlay._draw_space_area_label
+MapVisualizer._normalize_region_type = _region_overlay._normalize_region_type
+MapVisualizer._region_color_preference_order = _region_overlay._region_color_preference_order
+MapVisualizer._build_region_adjacency = _region_overlay._build_region_adjacency
+MapVisualizer._resolve_region_colors = _region_overlay._resolve_region_colors
+MapVisualizer._prepare_region_display_layer = _region_overlay._prepare_region_display_layer
+MapVisualizer._refine_region_mask = _region_overlay._refine_region_mask
+MapVisualizer._draw_regions_in_place = _region_overlay._draw_regions_in_place
+MapVisualizer._overlay_regions = _region_overlay._overlay_regions
+MapVisualizer._get_region_render_assets = _region_overlay._get_region_render_assets
+MapVisualizer._compute_region_label_anchor = _region_overlay._compute_region_label_anchor
+MapVisualizer._compact_region_overlay_label = _region_overlay._compact_region_overlay_label
+MapVisualizer._label_box_intersection_area = _region_overlay._label_box_intersection_area
+MapVisualizer._build_label_box_from_center = _region_overlay._build_label_box_from_center
+MapVisualizer._label_center_from_box = _region_overlay._label_center_from_box
+MapVisualizer._get_region_label_style = _region_overlay._get_region_label_style
+MapVisualizer._resolve_region_label_layout = _region_overlay._resolve_region_label_layout
+MapVisualizer._draw_region_label = _region_overlay._draw_region_label
 
 # Landmark selection / matching helpers
 MapVisualizer._candidate_distance_m = staticmethod(_landmark_selection._candidate_distance_m)

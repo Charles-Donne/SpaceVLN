@@ -7,4 +7,4 @@
 - Instruction: {subtask_instruction}
 {previous_subtask_landmark_block}
 
-**Space Structure**: {waypoint_summary}
+**Region Structure**: {waypoint_summary}

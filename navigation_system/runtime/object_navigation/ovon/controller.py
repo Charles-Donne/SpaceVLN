@@ -72,17 +72,30 @@ class OVONObjectNavigationController(NavigationAgentController):
             return float(OVON_TARGET_BOX_THRESHOLD), float(OVON_TARGET_TEXT_THRESHOLD)
         return super()._get_landmark_detection_thresholds(landmark_query)
 
-    def reset_episode(self, episode_id: int = None, sample_index: int = None):
-        """Reset OVON state while storing artifacts under sample-index paths."""
-        self.ovon_sample_index = int(sample_index) if sample_index is not None else None
+    def reset_episode(
+        self,
+        episode_id: int = None,
+        sample_index: int = None,
+        storage_entry_id: int = None,
+        entry_kind: str = "episode",
+    ):
+        """Reset OVON state while storing artifacts under the requested entry kind."""
+        normalized_entry_kind = str(entry_kind or "episode").strip() or "episode"
+        self.ovon_sample_index = (
+            int(sample_index)
+            if sample_index is not None and normalized_entry_kind == "sample"
+            else None
+        )
         self.ovon_storage_entry_id = (
-            int(self.ovon_sample_index)
-            if self.ovon_sample_index is not None
-            else int(episode_id if episode_id is not None else 0)
+            int(storage_entry_id)
+            if storage_entry_id is not None
+            else (
+                int(sample_index)
+                if sample_index is not None and normalized_entry_kind == "sample"
+                else int(episode_id if episode_id is not None else 0)
+            )
         )
-        self.ovon_storage_entry_kind = (
-            "sample" if self.ovon_sample_index is not None else "episode"
-        )
+        self.ovon_storage_entry_kind = normalized_entry_kind
 
         if self.ovon_storage_entry_id is not None:
             for old_episode_dir in get_episode_detail_path_candidates(
@@ -779,7 +792,7 @@ class OVONObjectNavigationController(NavigationAgentController):
         self._ovon_persist_thinking_response_artifact(response, cycle_info)
         if mode_key == "initial" and bool(task_finished):
             phase = str(cycle_info.get("phase", "initial"))
-            self._apply_postplanning_space_area_update(
+            self._apply_postplanning_region_update(
                 response=response,
                 phase=phase,
                 thinking_dir=cycle_info.get("thinking_dir"),

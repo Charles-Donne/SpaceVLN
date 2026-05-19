@@ -1,12 +1,12 @@
 """Build NavGBench-specific VLNCE model stacks."""
 
-from navigation_system.vlm.execution.vlnce.executor import ActionExecutor
+from navigation_system.vlm.execution.vlnce.executor import Executor
 from navigation_system.vlm.execution.vlnce.executor_context_cache import (
-    ContextCacheActionExecutor,
+    ContextCacheExecutor,
 )
 from navigation_system.vlm.interfaces import NavigationModelStack
 from navigation_system.vlm.model_stack_factory import (
-    build_action_executor,
+    build_executor,
     configure_component,
 )
 from navigation_system.vlm.planning.vlnce.navgbench import (
@@ -56,13 +56,13 @@ def build_navgbench_navigation_model_stack(
         save_request_artifacts=save_request_artifacts,
         label="NavGBench Planner",
     )
-    action_executor = build_action_executor(
-        ActionExecutor,
+    action_executor = build_executor(
+        Executor,
         config_path=config_path,
         turn_angle=turn_angle,
         move_distance=move_distance,
         save_request_artifacts=save_request_artifacts,
-        label="NavGBench Action Executor",
+        label="NavGBench Executor",
     )
     return NavigationModelStack(
         planner=planner,
@@ -87,13 +87,13 @@ def build_navgbench_context_cache_navigation_model_stack(
         save_request_artifacts=save_request_artifacts,
         label="NavGBench Cached Planner",
     )
-    action_executor = build_action_executor(
-        ContextCacheActionExecutor,
+    action_executor = build_executor(
+        ContextCacheExecutor,
         config_path=config_path,
         turn_angle=turn_angle,
         move_distance=move_distance,
         save_request_artifacts=save_request_artifacts,
-        label="NavGBench Cached Action Executor",
+        label="NavGBench Cached Executor",
     )
     return NavigationModelStack(
         planner=planner,

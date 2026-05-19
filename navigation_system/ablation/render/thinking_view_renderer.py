@@ -28,8 +28,8 @@ class AblationThinkingViewRenderer(ThinkingViewRenderer):
             return []
 
         include_landmarks = bool(self.ablation_spec.thinking_image.include_landmark_strip)
-        include_space_waypoints = bool(self.ablation_spec.thinking_image.include_space_waypoint_strip)
-        if include_landmarks and include_space_waypoints:
+        include_spatial_waypoints = bool(self.ablation_spec.thinking_image.include_spatial_waypoint_strip)
+        if include_landmarks and include_spatial_waypoints:
             return lines
 
         filtered: List[LandmarkStripLine] = []
@@ -38,13 +38,13 @@ class AblationThinkingViewRenderer(ThinkingViewRenderer):
             if getattr(line, "segments", None):
                 first_text = str(line.segments[0].text or "").strip().lower()
             is_landmark_line = first_text.startswith("landmark:")
-            is_space_line = (
+            is_spatial_line = (
                 first_text.startswith("spatial waypoint:")
-                or first_text.startswith("your current area:")
+                or first_text.startswith("your current region:")
             )
             if is_landmark_line and not include_landmarks:
                 continue
-            if is_space_line and not include_space_waypoints:
+            if is_spatial_line and not include_spatial_waypoints:
                 continue
             filtered.append(line)
         return filtered
@@ -65,7 +65,7 @@ class AblationThinkingViewRenderer(ThinkingViewRenderer):
         waypoint_floor_ids: Optional[List[int]],
         current_pose: Optional[np.ndarray],
         resolution_cm: float,
-        current_space_area_label: str,
+        current_region_label: str,
         full_map: Optional[np.ndarray],
         crop_offset: Optional[Tuple[int, int]],
         waypoint_angle_deg: Optional[float],
@@ -82,7 +82,7 @@ class AblationThinkingViewRenderer(ThinkingViewRenderer):
             waypoint_floor_ids=waypoint_floor_ids,
             current_pose=current_pose,
             resolution_cm=resolution_cm,
-            current_space_area_label=current_space_area_label,
+            current_region_label=current_region_label,
             full_map=full_map,
             crop_offset=crop_offset,
             current_floor_id=current_floor_id,

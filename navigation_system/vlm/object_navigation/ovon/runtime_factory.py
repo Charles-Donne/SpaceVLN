@@ -1,8 +1,8 @@
-"""Build OVON-specific planner/action stacks."""
+"""Build OVON-specific planner/executor stacks."""
 
-from navigation_system.vlm.execution.object_navigation.executor import OVONActionExecutor
+from navigation_system.vlm.execution.object_navigation.executor import OVONExecutor
 from navigation_system.vlm.execution.object_navigation.executor_context_cache import (
-    OVONContextCacheActionExecutor,
+    OVONContextCacheExecutor,
 )
 from navigation_system.vlm.planning.object_navigation.planner import OVONPlanner
 from navigation_system.vlm.planning.object_navigation.planner_context_cache import (
@@ -10,7 +10,7 @@ from navigation_system.vlm.planning.object_navigation.planner_context_cache impo
 )
 from navigation_system.vlm.interfaces import NavigationModelStack
 from navigation_system.vlm.model_stack_factory import (
-    build_action_executor,
+    build_executor,
     build_planner,
 )
 
@@ -30,13 +30,13 @@ def build_ovon_navigation_model_stack(
         save_request_artifacts=save_request_artifacts,
         label="OVON Planner",
     )
-    action_executor = build_action_executor(
-        OVONActionExecutor,
+    action_executor = build_executor(
+        OVONExecutor,
         config_path=config_path,
         turn_angle=turn_angle,
         move_distance=move_distance,
         save_request_artifacts=save_request_artifacts,
-        label="OVON Action Executor",
+        label="OVON Executor",
     )
     return NavigationModelStack(
         planner=planner,
@@ -59,13 +59,13 @@ def build_ovon_context_cache_navigation_model_stack(
         save_request_artifacts=save_request_artifacts,
         label="OVON Cached Planner",
     )
-    action_executor = build_action_executor(
-        OVONContextCacheActionExecutor,
+    action_executor = build_executor(
+        OVONContextCacheExecutor,
         config_path=config_path,
         turn_angle=turn_angle,
         move_distance=move_distance,
         save_request_artifacts=save_request_artifacts,
-        label="OVON Cached Action Executor",
+        label="OVON Cached Executor",
     )
     return NavigationModelStack(
         planner=planner,

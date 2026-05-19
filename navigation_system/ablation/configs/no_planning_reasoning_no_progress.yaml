@@ -1,5 +1,5 @@
 name: no-planning-reasoning-no-progress
-description: "Spatial reasoning ablation: remove thinking/planning reasoning flow plus task-chain/progress/local-loop guidance while keeping perception inputs, Previous Subtask context, key constraints, examples, output format, and full action prompt."
+description: "Spatial reasoning ablation: remove thinking/planning reasoning flow plus task-chain/progress/local-loop guidance while keeping perception inputs, Previous Subtask context, key constraints, examples, output format, and full executor prompt."
 
 thinking_prompt:
   include_detected_landmarks: true
@@ -18,7 +18,7 @@ thinking_image:
   include_detection_boxes: true
   include_obstacle_text: true
   include_landmark_strip: true
-  include_space_waypoint_strip: true
+  include_spatial_waypoint_strip: true
   include_last_visited_marker: true
   include_global_map_space_structure: true
 

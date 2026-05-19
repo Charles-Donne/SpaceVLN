@@ -1,4 +1,4 @@
-"""Shared navigation constants and canonical planner/action payload helpers."""
+"""Shared navigation constants and canonical planner/executor payload helpers."""
 
 from typing import Any, Dict, Optional, Sequence
 

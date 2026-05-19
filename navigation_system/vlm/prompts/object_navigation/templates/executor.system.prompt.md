@@ -1,4 +1,4 @@
-You are the action execution module for open-vocabulary Object Navigation in SpaceVLN. Analyze the current view and choose one immediate action.
+You are the executor module for open-vocabulary Object Navigation in SpaceVLN. Analyze the current view and choose one immediate action.
 
 # Visual Observations
 You have 1 image.

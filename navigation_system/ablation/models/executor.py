@@ -1,4 +1,4 @@
-"""Ablation action executor wrappers."""
+"""Ablation executor wrappers."""
 
 from __future__ import annotations
 
@@ -6,12 +6,12 @@ import os
 from typing import Any, Dict, Optional, Sequence, Tuple
 
 from navigation_system.ablation.config import AblationSpec, load_ablation_spec
-from navigation_system.ablation.prompts.builders import build_action_prompt_bundle
-from navigation_system.vlm.execution.vlnce.executor import ActionExecutor
+from navigation_system.ablation.prompts.builders import build_executor_prompt_bundle
+from navigation_system.vlm.execution.vlnce.executor import Executor
 
 
-class AblationActionExecutor(ActionExecutor):
-    """Action executor that keeps original parsing / validation but swaps prompts."""
+class AblationExecutor(Executor):
+    """Executor that keeps original parsing / validation but swaps prompts."""
 
     def __init__(
         self,
@@ -26,7 +26,7 @@ class AblationActionExecutor(ActionExecutor):
             turn_angle=turn_angle,
             move_distance=move_distance,
         )
-        print(f"  AblationAction: {self.ablation_spec.slug}")
+        print(f"  AblationExecutor: {self.ablation_spec.slug}")
 
     def decide_action(
         self,
@@ -51,7 +51,7 @@ class AblationActionExecutor(ActionExecutor):
                 "right_30": "Unknown",
             }
 
-        prompt = build_action_prompt_bundle(
+        prompt = build_executor_prompt_bundle(
             next_waypoint=next_waypoint,
             subtask_instruction=subtask_instruction,
             progress_summary=progress_summary,
@@ -134,7 +134,6 @@ class AblationActionExecutor(ActionExecutor):
         print(f"  Action: {info} | {response.get('reasoning', '')[:60]}")
         return action_id, action_name, response, degrees, meters, prompt.full_prompt
 
-
 __all__ = [
-    "AblationActionExecutor",
+    "AblationExecutor",
 ]

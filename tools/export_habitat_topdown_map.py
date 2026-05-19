@@ -262,6 +262,8 @@ def _birdseye_position(
     episode,
     *,
     center: str,
+    center_x: Optional[float],
+    center_z: Optional[float],
     height_above_m: float,
     center_offset_x: float,
     center_offset_z: float,
@@ -272,6 +274,10 @@ def _birdseye_position(
     fit_margin: float,
 ) -> np.ndarray:
     base_position = _birdseye_base_position(sim, episode, center=center)
+    if center_x is not None:
+        base_position[0] = float(center_x)
+    if center_z is not None:
+        base_position[2] = float(center_z)
     base_position = base_position + np.array(
         [float(center_offset_x), 0.0, float(center_offset_z)],
         dtype=np.float32,
@@ -373,6 +379,8 @@ def _apply_rgb_overlays(image, sim, episode, args: argparse.Namespace) -> None:
         sim,
         episode,
         center=str(args.rgb_center),
+        center_x=args.center_x,
+        center_z=args.center_z,
         height_above_m=float(args.height_above),
         center_offset_x=float(args.center_offset_x),
         center_offset_z=float(args.center_offset_z),
@@ -442,6 +450,8 @@ def _render_birdseye_rgb(sim, episode, args: argparse.Namespace):
         sim,
         episode,
         center=str(args.rgb_center),
+        center_x=args.center_x,
+        center_z=args.center_z,
         height_above_m=float(args.height_above),
         center_offset_x=float(args.center_offset_x),
         center_offset_z=float(args.center_offset_z),
@@ -560,6 +570,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--height", type=int, default=1024, help="RGB birdseye height")
     parser.add_argument("--hfov", type=float, default=90.0, help="RGB birdseye horizontal FOV")
     parser.add_argument("--height-above", type=float, default=3.5, help="RGB camera height above the floor/start point")
+    parser.add_argument(
+        "--center-x",
+        type=float,
+        default=None,
+        help="Override the RGB birdseye center Habitat world X coordinate",
+    )
+    parser.add_argument(
+        "--center-z",
+        type=float,
+        default=None,
+        help="Override the RGB birdseye center Habitat world Z coordinate",
+    )
     parser.add_argument(
         "--center-offset-x",
         type=float,

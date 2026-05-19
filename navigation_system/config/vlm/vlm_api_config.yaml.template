@@ -67,7 +67,7 @@ llm_max_tokens: 2000    # 规划需要充足输出空间（6段 reasoning）
 llm_timeout:    25     # 大模型首 token 慢，给足等待时间
 
 # VLM 执行器参数
-vlm_max_tokens: 500     # action prompt较长时，给足JSON收尾空间，减少500截断
+vlm_max_tokens: 500     # executor prompt较长时，给足JSON收尾空间，减少500截断
 vlm_timeout:    6      # 给动作模型留够输出完成时间，避免6s时刚好超时
 
 # DashScope 显式缓存参数（仅 context_cache runtime 会使用）

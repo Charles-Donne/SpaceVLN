@@ -11,10 +11,10 @@ from navigation_system.config.core.params.api import (
     ACTION_IMAGE_COMPRESSION_QUALITY,
 )
 from navigation_system.vlm.api.api_client import APIConfig, BaseAPIClient
-from navigation_system.vlm.prompts.vlnce.builders import build_action_prompt_bundle
+from navigation_system.vlm.prompts.vlnce.builders import build_executor_prompt_bundle
 
 
-class ActionExecutor(BaseAPIClient):
+class Executor(BaseAPIClient):
     """VLM动作执行器 - 负责低层动作决策"""
     
     REQUIRED_FIELDS = ['reasoning', 'action']  # degrees/meters/progress_summary optional
@@ -44,7 +44,7 @@ class ActionExecutor(BaseAPIClient):
         self.compression_resolution = ACTION_IMAGE_COMPRESSION_MAX_SIZE
         self.compression_quality = ACTION_IMAGE_COMPRESSION_QUALITY
         
-        print(f"  ActionVLM: {self.config.model} | {self.compression_resolution}px Q{self.compression_quality}")
+        print(f"  Executor: {self.config.model} | {self.compression_resolution}px Q{self.compression_quality}")
         
         # 配置父类的压缩参数（父类的encode_image_base64会自动使用）
         self.set_compression_config(
@@ -323,7 +323,7 @@ class ActionExecutor(BaseAPIClient):
             first_person_image: 第一人称RGB图像路径
             action_mapping: 动作名称到ID的映射
             progress_summary: 当前子任务进度摘要
-            waypoint_summary: 兼容保留字段，action prompt当前不再使用
+            waypoint_summary: 兼容保留字段，executor prompt 当前不再使用
             detection_image: 目标检测图像路径（可选）
             detected_landmarks: 已检测landmark类别字符串（可选）
             obstacle_distances: 预计算的障碍物距离字典 {'front': 'X.XXm', 'left_30': ..., ...}
@@ -340,7 +340,7 @@ class ActionExecutor(BaseAPIClient):
             }
         
         # 构建 system/user prompt bundle（standard 与 context-cache 共享同一提示结构）
-        prompt = build_action_prompt_bundle(
+        prompt = build_executor_prompt_bundle(
             next_waypoint=next_waypoint,
             subtask_instruction=subtask_instruction,
             subtask_landmark=subtask_landmark,

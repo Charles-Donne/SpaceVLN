@@ -95,7 +95,7 @@ class ThinkingImageAblation:
     include_detection_boxes: bool = True
     include_obstacle_text: bool = True
     include_landmark_strip: bool = True
-    include_space_waypoint_strip: bool = True
+    include_spatial_waypoint_strip: bool = True
     include_last_visited_marker: bool = True
     include_global_map_space_structure: bool = True
 
@@ -106,7 +106,7 @@ class ThinkingImageAblation:
             include_detection_boxes=_safe_bool(payload.get("include_detection_boxes"), True),
             include_obstacle_text=_safe_bool(payload.get("include_obstacle_text"), True),
             include_landmark_strip=_safe_bool(payload.get("include_landmark_strip"), True),
-            include_space_waypoint_strip=_safe_bool(payload.get("include_space_waypoint_strip"), True),
+            include_spatial_waypoint_strip=_safe_bool(payload.get("include_spatial_waypoint_strip"), True),
             include_last_visited_marker=_safe_bool(payload.get("include_last_visited_marker"), True),
             include_global_map_space_structure=_safe_bool(
                 payload.get("include_global_map_space_structure"),

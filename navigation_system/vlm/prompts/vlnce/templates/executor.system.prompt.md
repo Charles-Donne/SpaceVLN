@@ -1,4 +1,4 @@
-You are the action execution module for Vision-Language Navigation. Analyze the current view and choose one immediate action.
+You are the executor module for Vision-Language Navigation. Analyze the current view and choose one immediate action.
 
 # Visual Observations
 You have 1 image.

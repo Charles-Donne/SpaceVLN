@@ -13,6 +13,7 @@ import random
 import shutil
 import signal
 import sys
+import time
 from pathlib import Path
 from typing import List, Sequence
 
@@ -39,7 +40,6 @@ from navigation_system.runtime.output_policy import (
     add_output_profile_arg,
     resolve_output_policy,
 )
-from navigation_system.runtime.process_lifecycle import close_with_timeout
 from navigation_system.runtime.storage.results_layout import (
     build_default_results_family_root,
     build_model_results_dir_name,
@@ -226,8 +226,14 @@ def _build_parser_defaults(run_defaults: dict | None = None) -> dict:
     defaults = dict(run_defaults or {})
     split = str(defaults.get("split", "val_unseen")).strip() or "val_unseen"
     runtime = str(defaults.get("runtime", "context_cache")).strip().lower() or "context_cache"
+    results_family = str(defaults.get("results_family", "ovon")).strip() or "ovon"
+    index_entry_kind = str(defaults.get("index_entry_kind", "sample")).strip().lower() or "sample"
+    if index_entry_kind not in {"episode", "sample"}:
+        index_entry_kind = "sample"
     return {
         "runtime": runtime if runtime in RUNTIME_CHOICES else "context_cache",
+        "results_family": results_family,
+        "index_entry_kind": index_entry_kind,
         "exp_config": str(
             _resolve_nav_ws_path(
                 defaults.get(
@@ -342,8 +348,9 @@ def _resolve_ovon_dataset_path(
     )
 
 
-def _default_results_dir() -> str:
-    return str((Path(build_default_results_family_root("ovon")) / "ovon_smoke").resolve())
+def _default_results_dir(results_family: str = "ovon") -> str:
+    family = str(results_family or "ovon").strip() or "ovon"
+    return str((Path(build_default_results_family_root(family)) / f"{family}_smoke").resolve())
 
 
 def _default_api_config(runtime: str) -> str:
@@ -366,13 +373,15 @@ def _default_results_dir_for_runtime(
     api_config_path: str,
     *,
     results_root: str | None = None,
+    results_family: str = "ovon",
 ) -> str:
     runtime_name = str(runtime or "context_cache").strip().lower()
+    family = str(results_family or "ovon").strip() or "ovon"
     suffix = "_cache" if runtime_name == "context_cache" else ""
     model_dir = build_model_results_dir_name(api_config_path)
     return str(
         (
-            Path(build_default_results_family_root("ovon", results_root=results_root))
+            Path(build_default_results_family_root(family, results_root=results_root))
             / f"{model_dir}{suffix}"
         ).resolve()
     )
@@ -401,6 +410,26 @@ def _parse_episode_ids(raw: str | None) -> List[int]:
             continue
         result.append(int(text))
     return result
+
+
+def _config_getattr(config, attr: str, default=None):
+    try:
+        return getattr(config, attr)
+    except Exception:
+        return default
+
+
+def _debug_stdout_enabled() -> bool:
+    raw_value = str(os.getenv("SPACEVLN_OVON_DEBUG_STDOUT", "") or "").strip().lower()
+    return raw_value in {"1", "true", "yes", "on", "y"}
+
+
+def _quiet_output_context():
+    import contextlib
+
+    if _debug_stdout_enabled():
+        return contextlib.nullcontext()
+    return redirect_process_output_to_null()
 
 
 def _prepare_ovon_config(
@@ -506,13 +535,15 @@ def _prepare_ovon_config(
             config.habitat.task.measurements.pop("frontier_exploration_map")
         if hasattr(config.habitat.task.lab_sensors, "objnav_explorer"):
             config.habitat.task.lab_sensors.pop("objnav_explorer")
-        if hasattr(config.habitat_baselines.rl.policy, "obs_transforms") and hasattr(
-            config.habitat_baselines.rl.policy.obs_transforms,
+        habitat_baselines = _config_getattr(config, "habitat_baselines")
+        rl_config = _config_getattr(habitat_baselines, "rl")
+        policy_config = _config_getattr(rl_config, "policy")
+        obs_transforms = _config_getattr(policy_config, "obs_transforms")
+        if obs_transforms is not None and _config_getattr(
+            obs_transforms,
             "relabel_teacher_actions",
-        ):
-            config.habitat_baselines.rl.policy.obs_transforms.pop(
-                "relabel_teacher_actions"
-            )
+        ) is not None:
+            obs_transforms.pop("relabel_teacher_actions")
 
     return config
 
@@ -526,11 +557,13 @@ def _load_dataset_for_episodes(config, episode_ids: Sequence[int] | None):
     )
 
     episodes = list(getattr(dataset, "episodes", []) or [])
-    ovon_repo_root = (_nav_ws_root() / "ovon").resolve()
     for episode in episodes:
         scene_id = str(getattr(episode, "scene_id", "") or "").strip()
         if scene_id and not os.path.isabs(scene_id):
-            episode.scene_id = str((ovon_repo_root / scene_id).resolve())
+            if scene_id.startswith("data/") or scene_id.startswith("hm3d_v0.2/"):
+                episode.scene_id = str((_nav_ws_root() / scene_id).resolve())
+            else:
+                episode.scene_id = str((_nav_ws_root() / "ovon" / scene_id).resolve())
 
     if episode_ids:
         wanted = {int(ep_id) for ep_id in episode_ids}
@@ -614,18 +647,29 @@ def _episode_by_sample_index(dataset, sample_index: int):
     return episodes[index - 1]
 
 
-def _build_sample_episode_specs(dataset, sample_indices: Sequence[int]) -> List[dict]:
+def _build_sample_episode_specs(
+    dataset,
+    sample_indices: Sequence[int],
+    *,
+    entry_kind: str = "sample",
+) -> List[dict]:
     specs: List[dict] = []
+    normalized_entry_kind = str(entry_kind or "sample").strip().lower() or "sample"
+    if normalized_entry_kind not in {"episode", "sample"}:
+        normalized_entry_kind = "sample"
     for sample_index in sample_indices:
         episode = _episode_by_sample_index(dataset, int(sample_index))
         if episode is None:
             continue
+        episode_id = int(getattr(episode, "episode_id"))
         specs.append(
             {
-                "episode_id": int(getattr(episode, "episode_id")),
+                "episode_id": episode_id,
                 "sample_index": int(sample_index),
-                "storage_entry_id": int(sample_index),
-                "entry_kind": "sample",
+                "storage_entry_id": (
+                    episode_id if normalized_entry_kind == "episode" else int(sample_index)
+                ),
+                "entry_kind": normalized_entry_kind,
             }
         )
     return specs
@@ -814,12 +858,27 @@ def _filter_existing_sr1_specs(
     for spec in episode_specs:
         storage_entry_id = int(spec.get("storage_entry_id", spec.get("episode_id", 0)) or 0)
         entry_kind = str(spec.get("entry_kind", "episode") or "episode")
-        if _episode_has_existing_sr1(
+        has_existing_sr1 = _episode_has_existing_sr1(
             results_dir,
             storage_entry_id,
             entry_kind=entry_kind,
+        )
+        skip_label = f"{entry_kind}_{storage_entry_id}"
+        if (
+            not has_existing_sr1
+            and entry_kind == "episode"
+            and spec.get("sample_index") is not None
         ):
-            skipped.append(f"{entry_kind}_{storage_entry_id}")
+            legacy_sample_index = int(spec["sample_index"])
+            has_existing_sr1 = _episode_has_existing_sr1(
+                results_dir,
+                legacy_sample_index,
+                entry_kind="sample",
+            )
+            if has_existing_sr1:
+                skip_label = f"episode_{storage_entry_id} (legacy sample_{legacy_sample_index})"
+        if has_existing_sr1:
+            skipped.append(skip_label)
         else:
             kept.append(dict(spec))
     if skipped:
@@ -827,7 +886,7 @@ def _filter_existing_sr1_specs(
         suffix = "..." if len(skipped) > 20 else ""
         print(
             f"[OVON-ObjectNav] skip-sr1 skipped {len(skipped)} existing "
-            f"complete successful samples: {preview}{suffix}"
+            f"complete successful entries: {preview}{suffix}"
         )
     return kept
 
@@ -954,8 +1013,7 @@ def _build_episode_summary_row(
     cost_available = int(overall_usage.get("cost_available_count", 0) or 0)
     cost_unavailable = int(overall_usage.get("cost_unavailable_count", 0) or 0)
     has_cost = cost_count > 0 and cost_available > 0 and cost_unavailable == 0
-    return {
-        "sample_index": int(sample_index) if sample_index is not None else None,
+    row = {
         "episode_id": int(episode_id),
         "success": bool(
             _coalesce_metric(
@@ -1012,6 +1070,9 @@ def _build_episode_summary_row(
         "cost_available": has_cost,
         "cache_hit_ratio": float(overall_usage.get("weighted_cache_hit_ratio", 0.0) or 0.0),
     }
+    if sample_index is not None:
+        row["sample_index"] = int(sample_index)
+    return row
 
 
 def _build_console_metrics(summary_row: dict) -> dict:
@@ -1087,7 +1148,7 @@ def _run_parallel_episode_job(job_spec: dict) -> dict:
     print(
         build_episode_start_summary(
             episode_id=episode_id,
-            sample_index=sample_index,
+            sample_index=sample_index if entry_kind == "sample" else None,
             index=index,
             total=total,
             worker_index=worker_index,
@@ -1102,7 +1163,7 @@ def _run_parallel_episode_job(job_spec: dict) -> dict:
         entry_kind=entry_kind,
     )
 
-    with redirect_process_output_to_null():
+    with _quiet_output_context():
         ovon_config = _prepare_ovon_config(
             exp_config=str(job_spec["exp_config"]),
             split=str(job_spec["split"]),
@@ -1110,7 +1171,7 @@ def _run_parallel_episode_job(job_spec: dict) -> dict:
             gpu_id=int(job_spec["gpu_id"]),
             max_steps=int(job_spec["max_steps"]),
         )
-        if sample_index is not None and entry_kind == "sample":
+        if sample_index is not None:
             discovery_dataset = _load_dataset_for_sample_indices(ovon_config, [sample_index])
         else:
             discovery_dataset = _load_dataset_for_episodes(ovon_config, [episode_id])
@@ -1167,18 +1228,18 @@ def _run_parallel_episode_job(job_spec: dict) -> dict:
     summary_row = _build_episode_summary_row(
         episode_id,
         result,
-        sample_index=sample_index,
+        sample_index=sample_index if entry_kind == "sample" else None,
     )
     print(
         build_episode_console_summary(
             episode_id=episode_id,
-            sample_index=sample_index,
             index=index,
             total=total,
             result=summary_row,
             metrics=_build_console_metrics(summary_row),
             worker_index=worker_index,
             worker_count=worker_count,
+            sample_index=sample_index if entry_kind == "sample" else None,
         ),
         flush=True,
     )
@@ -1227,6 +1288,7 @@ def _run_parallel_episodes(
                 worker_index=worker_index,
                 worker_count=worker_count,
             )
+            job_spec["submitted_at"] = time.monotonic()
             future = executor.submit(_run_parallel_episode_job, job_spec)
             future_to_job[future] = job_spec
             next_job_cursor += 1
@@ -1236,10 +1298,17 @@ def _run_parallel_episodes(
             if not _submit_next_job(worker_index):
                 break
 
+        progress_interval = float(getattr(args, "progress_interval", 60.0) or 0.0)
+        last_progress_log_at = time.monotonic()
         while future_to_job:
             try:
+                wait_timeout = None
+                if progress_interval > 0:
+                    elapsed_since_log = time.monotonic() - last_progress_log_at
+                    wait_timeout = max(1.0, progress_interval - elapsed_since_log)
                 done, _ = concurrent.futures.wait(
                     list(future_to_job.keys()),
+                    timeout=wait_timeout,
                     return_when=concurrent.futures.FIRST_COMPLETED,
                 )
             except KeyboardInterrupt:
@@ -1251,6 +1320,32 @@ def _run_parallel_episodes(
                     episode_specs=list(future_to_job.values()),
                 )
                 raise
+            if not done:
+                if progress_interval > 0:
+                    now = time.monotonic()
+                    if now - last_progress_log_at >= progress_interval:
+                        active_parts = []
+                        for active_job in sorted(
+                            future_to_job.values(),
+                            key=lambda item: int(item.get("worker_index", 0) or 0),
+                        ):
+                            active_elapsed = max(
+                                0,
+                                int(now - float(active_job.get("submitted_at", now))),
+                            )
+                            active_parts.append(
+                                f"W{int(active_job['worker_index'])}:"
+                                f"E{int(active_job['episode_id'])}/{active_elapsed}s"
+                            )
+                        completed = sum(item is not None for item in results_by_order)
+                        print(
+                            "[OVON-ObjectNav] still running | "
+                            f"completed={completed}/{total} | "
+                            f"active={', '.join(active_parts)}",
+                            flush=True,
+                        )
+                        last_progress_log_at = now
+                continue
             for future in done:
                 job_spec = future_to_job.pop(future)
                 order_index = int(job_spec["index"]) - 1
@@ -1270,7 +1365,11 @@ def _run_parallel_episodes(
                 except Exception as exc:
                     results_by_order[order_index] = {
                         "episode_id": int(job_spec["episode_id"]),
-                        "sample_index": job_spec.get("sample_index"),
+                        "sample_index": (
+                            job_spec.get("sample_index")
+                            if str(job_spec.get("entry_kind", "episode") or "episode") == "sample"
+                            else None
+                        ),
                         "success": False,
                         "steps": 0,
                         "distance_to_goal": -1.0,
@@ -1361,7 +1460,7 @@ def _run_one_episode(
     redirect_context = (
         redirect_process_output_to_file(episode_log_path, mode="w")
         if save_stdout_log and episode_log_path
-        else redirect_process_output_to_null()
+        else _quiet_output_context()
     )
 
     with redirect_context:
@@ -1419,13 +1518,15 @@ def _run_one_episode(
         )
 
         try:
-            controller.reset_episode(episode_id=episode_id, sample_index=sample_index)
+            controller.reset_episode(
+                episode_id=episode_id,
+                sample_index=sample_index,
+                storage_entry_id=storage_entry_id,
+                entry_kind=entry_kind,
+            )
             result = controller.run_navigation(max_subtask_steps=max_subtask_steps)
         finally:
-            close_with_timeout(
-                controller.close,
-                label=f"OVON episode {int(episode_id)} environment",
-            )
+            controller.close()
 
     return result
 
@@ -1663,6 +1764,19 @@ def build_arg_parser(run_defaults: dict | None = None) -> argparse.ArgumentParse
         help="runtime profile for OVON: standard or context_cache",
     )
     parser.add_argument(
+        "--results-family",
+        type=str,
+        default=defaults["results_family"],
+        help="subdirectory under the SpaceVLN results root for this benchmark",
+    )
+    parser.add_argument(
+        "--index-entry-kind",
+        type=str,
+        choices=("episode", "sample"),
+        default=defaults["index_entry_kind"],
+        help="storage/display label for split-order index selection",
+    )
+    parser.add_argument(
         "--exp-config",
         type=str,
         default=defaults["exp_config"],
@@ -1727,6 +1841,12 @@ def build_arg_parser(run_defaults: dict | None = None) -> argparse.ArgumentParse
         help="number of parallel episode workers",
     )
     parser.add_argument(
+        "--progress-interval",
+        type=float,
+        default=60.0,
+        help="seconds between parallel-run heartbeat logs; <=0 disables",
+    )
+    parser.add_argument(
         "--max-initial-planner-api-errors",
         type=int,
         default=None,
@@ -1774,8 +1894,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.runtime,
             args.vlm_api_config,
             results_root=results_root,
+            results_family=args.results_family,
         )
-        or _default_results_dir()
+        or _default_results_dir(args.results_family)
     )
     output_policy = resolve_output_policy(
         args,
@@ -1795,7 +1916,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args.save_map_artifacts = bool(output_policy.save_map_artifacts)
     model_stack_builder = _select_model_stack_builder(args.runtime)
 
-    with redirect_process_output_to_null():
+    with _quiet_output_context():
         ovon_config = _prepare_ovon_config(
             exp_config=args.exp_config,
             split=args.split,
@@ -1819,6 +1940,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 num_episodes=args.num_episodes,
                 seed=args.seed,
             ),
+            entry_kind=args.index_entry_kind,
         )
     elif args.start_index is not None:
         sample_indices = _sample_indices_from_range(
@@ -1830,11 +1952,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise RuntimeError(
                 f"Requested start index {int(args.start_index)} is outside split '{args.split}'"
             )
-        selected_specs = _build_sample_episode_specs(discovery_dataset, sample_indices)
+        selected_specs = _build_sample_episode_specs(
+            discovery_dataset,
+            sample_indices,
+            entry_kind=args.index_entry_kind,
+        )
         print(
             f"[OVON-ObjectNav] start-index {int(args.start_index)} "
-            f"mapped to sample {int(sample_indices[0])} / episode id "
-            f"{int(selected_specs[0]['episode_id'])} in split '{args.split}'."
+            f"mapped to episode {int(selected_specs[0]['episode_id'])} "
+            f"in split '{args.split}'."
         )
     elif args.episode_id is not None:
         episode_ids = _discover_episode_ids_from_start(
@@ -1857,6 +1983,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 start_index=1,
                 num_episodes=args.num_episodes,
             ),
+            entry_kind=args.index_entry_kind,
         )
 
     if bool(args.skip_sr1):
@@ -1879,13 +2006,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         if int(args.parallel_workers or 1) > 1 and total > 1:
-            selection_label = (
-                "split-order sample index"
-                if args.start_index is not None
-                else "ascending episode id"
-            )
+            actual_workers = max(1, min(int(args.parallel_workers or 1), total))
+            selection_label = "split-order episode" if args.start_index is not None else "ascending episode id"
             print(
-                f"[OVON-ObjectNav] parallel execution enabled | workers={int(args.parallel_workers)} | "
+                f"[OVON-ObjectNav] parallel execution enabled | workers={actual_workers} "
+                f"(requested={int(args.parallel_workers)}) | "
                 f"episodes={total} | selection={selection_label} | completion logs may interleave",
             )
             all_results = _run_parallel_episodes(args, selected_specs)
@@ -1902,7 +2027,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(
                     build_episode_start_summary(
                         episode_id=int(episode_id),
-                        sample_index=sample_index,
+                        sample_index=(
+                            sample_index
+                            if str(episode_spec.get("entry_kind", "episode") or "episode") == "sample"
+                            else None
+                        ),
                         index=index,
                         total=total,
                     ),
@@ -1968,17 +2097,23 @@ def main(argv: Sequence[str] | None = None) -> int:
                     int(episode_id),
                     result,
                     sample_index=(
-                        int(sample_index) if sample_index is not None else None
+                        int(sample_index)
+                        if sample_index is not None and entry_kind == "sample"
+                        else None
                     ),
                 )
                 print(
                     build_episode_console_summary(
                         episode_id=int(episode_id),
-                        sample_index=sample_index,
                         index=index,
                         total=total,
                         result=summary_row,
                         metrics=_build_console_metrics(summary_row),
+                        sample_index=(
+                            sample_index
+                            if str(episode_spec.get("entry_kind", "episode") or "episode") == "sample"
+                            else None
+                        ),
                     ),
                     flush=True,
                 )
@@ -2011,6 +2146,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "meta": {
             "runtime": str(args.runtime),
             "output_profile": str(args.output_profile),
+            "results_family": str(args.results_family),
             "save_step_images": bool(args.save_step_images),
             "save_gif": bool(args.save_gif),
             "save_vlm_artifacts": bool(args.save_vlm_artifacts),

@@ -756,7 +756,7 @@ class NavigationAgentController(BaseNavigationController):
             "so the current FRONT route is blocked. Stop that forward attempt immediately. "
             "For this call, do not output `MOVE_FORWARD` into the same front route. "
             f"{locked_sentence}"
-            "Use the current view, obstacle lines, destination, and space structure to choose only "
+            "Use the current view, obstacle lines, destination, and region structure to choose only "
             "`TURN_LEFT_AVOID 30deg` or `TURN_RIGHT_AVOID 30deg` around the obstacle, unless the destination is already reached and `STOP` is valid. "
             "Choose the side that best matches the destination and avoids the obstacle. "
             "After one side turn, if FRONT becomes passable and still points toward the destination, prefer forward progress instead of turning back."
@@ -1479,12 +1479,12 @@ class NavigationAgentController(BaseNavigationController):
         dest_room_norm = strip_space_type_variant_suffixes(str(dest_room or "").strip().lower()) or None
         dest_object_norm = self._normalize_waypoint_endpoint_label(dest_object) or self._normalize_landmark_text(dest_object)
         current_area_text = (
-            getattr(self.mapper, "current_space_area_display_label", "")
-            or getattr(self.mapper, "current_space_area_label", "")
+            getattr(self.mapper, "current_region_display_label", "")
+            or getattr(self.mapper, "current_region_label", "")
         )
         current_area_norm = self._normalize_waypoint_endpoint_label(current_area_text)
         current_area_type = self._normalize_landmark_text(
-            getattr(self.mapper, "current_space_area_type", "")
+            getattr(self.mapper, "current_region_type", "")
         )
         dest_side = self._landing_side_from_text(dest_object_norm)
 
@@ -2098,10 +2098,10 @@ class NavigationAgentController(BaseNavigationController):
             str(label or "Unknown")
             for label in map_state.get('waypoint_area_labels', []) or []
         ]
-        space_area_records = []
-        for record in map_state.get('space_area_records', []) or []:
+        region_records = []
+        for record in map_state.get('region_records', []) or []:
             center_world_px = record.get("center_world_px", (0, 0))
-            space_area_records.append({
+            region_records.append({
                 "id": int(record.get("id", 0) or 0),
                 "label": str(record.get("label", "")),
                 "display_label": str(record.get("display_label", record.get("label", ""))),
@@ -2113,8 +2113,8 @@ class NavigationAgentController(BaseNavigationController):
             })
 
         waypoint_memory = {
-            "current_space_area_label": str(map_state.get('current_space_area_label', 'Unknown') or 'Unknown'),
-            "current_space_area_type": str(map_state.get('current_space_area_type', 'Unknown') or 'Unknown'),
+            "current_region_label": str(map_state.get('current_region_label', 'Unknown') or 'Unknown'),
+            "current_region_type": str(map_state.get('current_region_type', 'Unknown') or 'Unknown'),
             "current_floor_id": int(map_state.get('current_floor_id', 0) or 0),
             "current_floor_label": str(map_state.get('current_floor_label', 'F1') or 'F1'),
             "current_world_z": map_state.get('current_world_z'),
@@ -2133,7 +2133,7 @@ class NavigationAgentController(BaseNavigationController):
                 bool(flag)
                 for flag in self.mapper.get_global_waypoint_initial_neighborhood_flags()
             ],
-            "space_area_records": space_area_records,
+            "region_records": region_records,
             "waypoint_summary": self._get_waypoint_summary(include_area_chain=True),
         }
         self.save_manager.save_waypoint_memory(
@@ -2708,8 +2708,8 @@ class NavigationAgentController(BaseNavigationController):
         if mapper is None:
             return ""
         current_area = (
-            getattr(mapper, "current_space_area_display_label", "")
-            or getattr(mapper, "current_space_area_label", "")
+            getattr(mapper, "current_region_display_label", "")
+            or getattr(mapper, "current_region_label", "")
             or ""
         )
         current_area = self._strip_visual_brackets_from_text(
@@ -2723,7 +2723,7 @@ class NavigationAgentController(BaseNavigationController):
         terms = set()
         for raw_text in (
             self._get_runtime_current_area_label(),
-            getattr(mapper, "current_space_area_type", "") if mapper is not None else "",
+            getattr(mapper, "current_region_type", "") if mapper is not None else "",
         ):
             normalized = self._normalize_current_waypoint_area_token(raw_text)
             if normalized:
@@ -3000,7 +3000,7 @@ class NavigationAgentController(BaseNavigationController):
             waypoint_floor_ids=(final_map_state or {}).get('waypoint_floor_ids', []),
             current_pose=(final_map_state or {}).get('full_pose'),
             resolution_cm=float(getattr(self.mapper, 'resolution', 5)),
-            current_space_area_label=str((final_map_state or {}).get('current_space_area_label', 'Unknown') or 'Unknown'),
+            current_region_label=str((final_map_state or {}).get('current_region_label', 'Unknown') or 'Unknown'),
             full_map=(final_map_state or {}).get('full_map'),
             crop_offset=(final_map_state or {}).get('crop_offset'),
             waypoint_angle_deg=last_waypoint_angle_deg,
@@ -3415,7 +3415,7 @@ class NavigationAgentController(BaseNavigationController):
             attempt_letter = self._current_attempt_letter()
             print(f"  #{self.subtask_count}{attempt_letter} -> {self._get_next_waypoint_field(response) or 'N/A'} | finish={task_finished}")
 
-        self._apply_postplanning_space_area_update(
+        self._apply_postplanning_region_update(
             response=response,
             phase=str(cycle_info.get('phase', phase_default)),
             thinking_dir=cycle_info.get('thinking_dir'),
@@ -3483,7 +3483,7 @@ class NavigationAgentController(BaseNavigationController):
             return 'complete', response, None
         return 'action', response, prompt
 
-    def _apply_postplanning_space_area_update(
+    def _apply_postplanning_region_update(
         self,
         response: Dict[str, Any],
         phase: str,
@@ -4457,7 +4457,7 @@ class NavigationAgentController(BaseNavigationController):
                 print(
                     "[ActionStagnation] Blocked low-level forward step: "
                     f"latest actual movement {latest_actual_meters:.2f}m <= {stagnation_threshold_m:.2f}m | "
-                    "stop the current forward action and re-query action prompt with a forced side-turn warning"
+                    "stop the current forward action and re-query executor prompt with a forced side-turn warning"
                 )
                 continue
 
@@ -4928,8 +4928,8 @@ class NavigationAgentController(BaseNavigationController):
             waypoint_floor_ids=self.mapper.get_global_waypoint_floor_ids(),
             current_pose=self.mapper.full_pose,
             resolution_cm=self.mapper.resolution,
-            current_space_area_label=getattr(self.mapper, 'current_space_area_display_label', ""),
-            current_space_area_type=getattr(self.mapper, 'current_space_area_type', ""),
+            current_region_label=getattr(self.mapper, 'current_region_display_label', ""),
+            current_region_type=getattr(self.mapper, 'current_region_type', ""),
             full_map=getattr(self.mapper, 'full_map', None),
             crop_offset=getattr(getattr(self.mapper, 'mapping_module', None), 'full_map_crop_offset', None),
             initial_waypoint_index=getattr(getattr(self.mapper, 'global_waypoint_manager', None), 'initial_waypoint_index', 0),

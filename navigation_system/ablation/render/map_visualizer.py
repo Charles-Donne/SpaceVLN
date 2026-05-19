@@ -80,8 +80,8 @@ class AblationMapVisualizer(MapVisualizer):
         landmark_config=None,
         waypoint_positions=None,
         waypoint_ids=None,
-        space_area_layer=None,
-        space_area_records=None,
+        region_layer=None,
+        region_records=None,
         crop_offset=None,
         mapping_classes=None,
     ):
@@ -89,8 +89,8 @@ class AblationMapVisualizer(MapVisualizer):
             self._is_thinking_phase(self._ablation_phase)
             and not self.ablation_spec.thinking_image.include_global_map_space_structure
         ):
-            space_area_layer = None
-            space_area_records = None
+            region_layer = None
+            region_records = None
         return super().render_global_map(
             full_map,
             trajectory_points,
@@ -102,8 +102,8 @@ class AblationMapVisualizer(MapVisualizer):
             landmark_config=landmark_config,
             waypoint_positions=waypoint_positions,
             waypoint_ids=waypoint_ids,
-            space_area_layer=space_area_layer,
-            space_area_records=space_area_records,
+            region_layer=region_layer,
+            region_records=region_records,
             crop_offset=crop_offset,
             mapping_classes=mapping_classes,
         )

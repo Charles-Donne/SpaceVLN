@@ -57,7 +57,7 @@ from navigation_system.space.geometry.connectivity import (
     build_bounded_geodesic_distance_field,
     query_world_distance_from_field_m,
 )
-from navigation_system.space.structure.space_area_manager import SpaceAreaManager
+from navigation_system.space.structure.region_manager import RegionManager
 from navigation_system.space.structure.space_types import normalize_space_type
 from navigation_system.space.structure.waypoint_manager import WaypointManager
 from navigation_system.space.geometry.map_projection import RotatedMapProjector
@@ -83,7 +83,7 @@ class SemanticMapper:
         # Waypoint / region 状态拆到独立模块，mapper 只负责协调 world-map 数据流。
         self.waypoint_manager = WaypointManager(resolution=resolution)
         self.global_waypoint_manager = WaypointManager(resolution=resolution)
-        self.space_area_manager = SpaceAreaManager(map_shape=map_shape, resolution=resolution)
+        self.region_manager = RegionManager(map_shape=map_shape, resolution=resolution)
 
         # 楼层感知配置：只增强底层拓扑，不改上层推理主流程。
         args = getattr(self.mapping_module, "args", None)
@@ -105,9 +105,9 @@ class SemanticMapper:
         self.floor = np.zeros(map_shape)
         self.full_map = None
         self.full_pose = None
-        self._cached_space_area_crop_offset: Optional[Tuple[int, int]] = None
-        self._cached_space_area_layer = np.zeros(map_shape, dtype=np.int32)
-        self._cached_space_area_records: List[Dict[str, Any]] = []
+        self._cached_region_crop_offset: Optional[Tuple[int, int]] = None
+        self._cached_region_layer = np.zeros(map_shape, dtype=np.int32)
+        self._cached_region_records: List[Dict[str, Any]] = []
         self._floor_switched_this_step = False
 
         self._reset_floor_topology_state()
@@ -131,7 +131,7 @@ class SemanticMapper:
     @property
     def waypoint_area_display_labels(self) -> List[str]:
         return [
-            self.space_area_manager.get_display_label(label)
+            self.region_manager.get_display_label(label)
             for label in self.waypoint_manager.area_labels
         ]
 
@@ -164,22 +164,22 @@ class SemanticMapper:
         return self.global_waypoint_manager.get_initial_neighborhood_flags()
 
     @property
-    def space_area_records(self) -> List[Dict[str, Any]]:
-        return self.space_area_manager.space_area_records
+    def region_records(self) -> List[Dict[str, Any]]:
+        return self.region_manager.region_records
 
     @property
-    def current_space_area_label(self) -> str:
-        return self.space_area_manager.current_space_area_label
+    def current_region_label(self) -> str:
+        return self.region_manager.current_region_label
 
     @property
-    def current_space_area_display_label(self) -> str:
-        return self.space_area_manager.get_display_label(
-            self.space_area_manager.current_space_area_label
+    def current_region_display_label(self) -> str:
+        return self.region_manager.get_display_label(
+            self.region_manager.current_region_label
         )
 
     @property
-    def current_space_area_type(self) -> str:
-        return self.space_area_manager.current_space_area_type
+    def current_region_type(self) -> str:
+        return self.region_manager.current_region_type
 
     @property
     def current_floor_label(self) -> str:
@@ -204,11 +204,11 @@ class SemanticMapper:
         """重置建图器状态"""
         self.waypoint_manager.reset()
         self.global_waypoint_manager.reset()
-        self.space_area_manager.reset()
+        self.region_manager.reset()
         self.floor = np.zeros(self.map_shape)
         self.full_map = None
         self.full_pose = None
-        self._invalidate_space_area_cache()
+        self._invalidate_region_cache()
         self.mapping_module.reset()
         self._reset_floor_topology_state()
 
@@ -217,8 +217,8 @@ class SemanticMapper:
         self.mapping_module.init_map_and_pose(num_detected_classes=num_detected_classes)
         self.waypoint_manager.reset()
         self.global_waypoint_manager.reset()
-        self.space_area_manager.reset()
-        self._invalidate_space_area_cache()
+        self.region_manager.reset()
+        self._invalidate_region_cache()
         self.full_pose = np.asarray([6.0, 6.0, 0.0], dtype=np.float32)
         self.current_floor_id = 0
         self.floor_contexts = {}
@@ -308,21 +308,21 @@ class SemanticMapper:
         )
 
         self._maybe_finalize_active_stair_connector()
-        self._invalidate_space_area_cache()
+        self._invalidate_region_cache()
         self.floor = self._compute_floor_mask(self.full_map)
         self.mapping_module.clear_one_step_buffers()
 
         global_traj = list(self.mapping_module.global_trajectory_points)
         subtask_traj = list(self.mapping_module.subtask_trajectory_points)
-        space_area_layer, space_area_metadata = self._get_space_area_state(crop_offset)
+        region_layer, region_metadata = self._get_region_state(crop_offset)
 
         self.multi_floor_active = len(self.floor_z_anchors) > 1
         return self._compose_map_state(
             crop_offset=crop_offset,
             global_traj=global_traj,
             subtask_traj=subtask_traj,
-            space_area_layer=space_area_layer,
-            space_area_metadata=space_area_metadata,
+            region_layer=region_layer,
+            region_metadata=region_metadata,
         )
 
     def _compose_map_state(
@@ -330,8 +330,8 @@ class SemanticMapper:
         crop_offset: Optional[Tuple[int, int]],
         global_traj: List[Tuple[int, int]],
         subtask_traj: List[Tuple[int, int]],
-        space_area_layer: np.ndarray,
-        space_area_metadata: List[Dict[str, Any]],
+        region_layer: np.ndarray,
+        region_metadata: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
         return {
             "full_map": self.full_map,
@@ -348,10 +348,10 @@ class SemanticMapper:
             "waypoint_area_labels": list(self.waypoint_area_display_labels),
             "waypoint_initial_neighborhood_flags": self.waypoint_manager.get_initial_neighborhood_flags(),
             "waypoint_initial_index": self.waypoint_manager.initial_waypoint_index,
-            "space_area_layer": space_area_layer,
-            "space_area_records": space_area_metadata,
-            "current_space_area_label": self.current_space_area_display_label,
-            "current_space_area_type": self.current_space_area_type,
+            "region_layer": region_layer,
+            "region_records": region_metadata,
+            "current_region_label": self.current_region_display_label,
+            "current_region_type": self.current_region_type,
             "current_world_z": self.current_world_z,
             "current_floor_id": self.current_floor_id,
             "current_floor_label": self.current_floor_label,
@@ -396,7 +396,7 @@ class SemanticMapper:
             pixel_y=pixel_y,
             pixel_x=pixel_x,
         )
-        area_label = self.space_area_manager.update_from_waypoint(
+        area_label = self.region_manager.update_from_waypoint(
             description=description,
             pixel_y=pixel_y,
             pixel_x=pixel_x,
@@ -404,8 +404,8 @@ class SemanticMapper:
             full_pose=self.full_pose,
             crop_offset=getattr(self.mapping_module, "full_map_crop_offset", None),
         )
-        self._invalidate_space_area_cache()
-        display_area_label = self.space_area_manager.get_display_label(area_label)
+        self._invalidate_region_cache()
+        display_area_label = self.region_manager.get_display_label(area_label)
         waypoint_id = self.global_waypoint_manager.add_waypoint(
             pixel_y=pixel_y,
             pixel_x=pixel_x,
@@ -530,7 +530,7 @@ class SemanticMapper:
     def clear_waypoints(self):
         """清空当前楼层的所有 waypoint。"""
         self.waypoint_manager.clear()
-        self._invalidate_space_area_cache()
+        self._invalidate_region_cache()
 
     def get_waypoint_count(self) -> int:
         """获取 waypoint 总数。"""
@@ -541,13 +541,13 @@ class SemanticMapper:
         crop_offset = tuple(getattr(self.mapping_module, "full_map_crop_offset", (0, 0)) or (0, 0))
         global_traj = list(getattr(self.mapping_module, "global_trajectory_points", []) or [])
         subtask_traj = list(getattr(self.mapping_module, "subtask_trajectory_points", []) or [])
-        space_area_layer, space_area_records = self._get_space_area_state(crop_offset)
+        region_layer, region_records = self._get_region_state(crop_offset)
         return self._compose_map_state(
             crop_offset=crop_offset,
             global_traj=global_traj,
             subtask_traj=subtask_traj,
-            space_area_layer=space_area_layer,
-            space_area_metadata=space_area_records,
+            region_layer=region_layer,
+            region_metadata=region_records,
         )
 
     def get_current_pose(self) -> Optional[Tuple[float, float, float]]:
@@ -556,36 +556,36 @@ class SemanticMapper:
             return None
         return tuple(float(value) for value in self.full_pose[:3])
 
-    def _invalidate_space_area_cache(self) -> None:
-        self._cached_space_area_crop_offset = None
-        self._cached_space_area_layer = np.zeros(self.map_shape, dtype=np.int32)
-        self._cached_space_area_records = []
+    def _invalidate_region_cache(self) -> None:
+        self._cached_region_crop_offset = None
+        self._cached_region_layer = np.zeros(self.map_shape, dtype=np.int32)
+        self._cached_region_records = []
 
-    def _get_space_area_state(
+    def _get_region_state(
         self, crop_offset: Optional[Tuple[int, int]]
     ) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
         if self.full_map is None:
-            self._invalidate_space_area_cache()
-            return self._cached_space_area_layer, self._cached_space_area_records
+            self._invalidate_region_cache()
+            return self._cached_region_layer, self._cached_region_records
 
         if (
-            self._cached_space_area_crop_offset is not None
-            and crop_offset == self._cached_space_area_crop_offset
+            self._cached_region_crop_offset is not None
+            and crop_offset == self._cached_region_crop_offset
         ):
-            return self._cached_space_area_layer, list(self._cached_space_area_records)
+            return self._cached_region_layer, list(self._cached_region_records)
 
-        layer, records = self._build_space_area_layer(crop_offset)
+        layer, records = self._build_region_layer(crop_offset)
         for record in records:
             record["floor_id"] = int(self.current_floor_id)
-        self._cached_space_area_crop_offset = crop_offset
-        self._cached_space_area_layer = layer
-        self._cached_space_area_records = list(records)
+        self._cached_region_crop_offset = crop_offset
+        self._cached_region_layer = layer
+        self._cached_region_records = list(records)
         return layer, list(records)
 
-    def _build_space_area_layer(
+    def _build_region_layer(
         self, crop_offset: Optional[Tuple[int, int]]
     ) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
-        return self.space_area_manager.build_layer(
+        return self.region_manager.build_layer(
             full_map=self.full_map,
             full_pose=self.full_pose,
             crop_offset=crop_offset,
@@ -687,7 +687,7 @@ class SemanticMapper:
         return {
             "mapping_state": self.mapping_module.export_state(),
             "waypoint_state": self.waypoint_manager.export_state(),
-            "space_area_state": self.space_area_manager.export_state(),
+            "region_state": self.region_manager.export_state(),
             "full_map": None if self.full_map is None else np.array(self.full_map, copy=True),
             "floor": np.array(self.floor, copy=True),
             "full_pose": None if self.full_pose is None else np.array(self.full_pose, copy=True),
@@ -706,7 +706,7 @@ class SemanticMapper:
             return
         self.mapping_module.import_state(context.get("mapping_state"))
         self.waypoint_manager.import_state(context.get("waypoint_state"))
-        self.space_area_manager.import_state(context.get("space_area_state"))
+        self.region_manager.import_state(context.get("region_state"))
         if pose_override is not None:
             self.mapping_module.recenter_to_world_pose(pose_override, clear_one_step=True)
             self.full_map = None
@@ -724,7 +724,7 @@ class SemanticMapper:
                 if context.get("full_pose") is None
                 else np.array(context.get("full_pose"), copy=True)
             )
-        self._invalidate_space_area_cache()
+        self._invalidate_region_cache()
 
     def _prepare_new_floor_context(
         self,
@@ -740,11 +740,11 @@ class SemanticMapper:
         self.waypoint_manager.reset()
         if int(floor_id) != 0:
             self.waypoint_manager.initial_waypoint_index = None
-        self.space_area_manager.reset()
+        self.region_manager.reset()
         self.full_map = None
         self.floor = np.zeros(self.map_shape, dtype=np.uint8)
         self.full_pose = np.asarray(initial_pose, dtype=np.float32)
-        self._invalidate_space_area_cache()
+        self._invalidate_region_cache()
 
     def _start_stair_connector_if_needed(
         self, predicted_pose: Tuple[float, float, float]
@@ -800,10 +800,10 @@ class SemanticMapper:
             world_pixels.setdefault(floor_key, set()).update(pixels)
 
     def _is_current_area_stairs(self) -> bool:
-        space_type = normalize_space_type(getattr(self.space_area_manager, "current_space_area_type", ""))
+        space_type = normalize_space_type(getattr(self.region_manager, "current_region_type", ""))
         if space_type == "stairs":
             return True
-        space_label = normalize_space_type(getattr(self.space_area_manager, "current_space_area_label", ""))
+        space_label = normalize_space_type(getattr(self.region_manager, "current_region_label", ""))
         return space_label == "stairs"
 
     def _serialize_stair_connectors(self) -> List[Dict[str, Any]]:

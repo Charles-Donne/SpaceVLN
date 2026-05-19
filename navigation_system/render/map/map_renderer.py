@@ -123,8 +123,8 @@ def render_global_map(owner,
                      landmark_config: Optional[Dict] = None,
                      waypoint_positions: Optional[List[Tuple[int, int]]] = None,
                      waypoint_ids: Optional[List[int]] = None,
-                     space_area_layer: Optional[np.ndarray] = None,
-                     space_area_records: Optional[List[Dict[str, Any]]] = None,
+                     region_layer: Optional[np.ndarray] = None,
+                     region_records: Optional[List[Dict[str, Any]]] = None,
                      crop_offset: Optional[Tuple[int, int]] = None,
                      mapping_classes: Optional[List[str]] = None,
                      output_scale: int = 1) -> Tuple[np.ndarray, np.ndarray, List, np.ndarray, Optional[float]]:
@@ -214,14 +214,14 @@ def render_global_map(owner,
         (global_map_base_size, global_map_base_size),
         interpolation=cv2.INTER_NEAREST,
     )
-    global_label_display_layer = owner._prepare_space_area_display_layer(
-        space_area_layer,
+    global_label_display_layer = owner._prepare_region_display_layer(
+        region_layer,
         output_size=global_map_base_size,
     )
-    owner._draw_space_areas_in_place(
+    owner._draw_regions_in_place(
         sem_map_vis,
-        space_area_layer,
-        space_area_records,
+        region_layer,
+        region_records,
         alpha=1.0,
         fill_regions=True,
         show_labels=False,
@@ -321,10 +321,10 @@ def render_global_map(owner,
                     lineType=cv2.LINE_AA,
                 )
 
-        owner._draw_space_areas_in_place(
+        owner._draw_regions_in_place(
             global_map_rotated,
-            space_area_layer,
-            space_area_records,
+            region_layer,
+            region_records,
             fill_regions=False,
             show_labels=True,
             use_display_label=True,
@@ -353,10 +353,10 @@ def render_global_map(owner,
             global_map_rotated.shape[:2],
             padding=max(6, int(round(min(global_map_rotated.shape[:2]) * 0.01))),
         )
-        owner._draw_space_areas_in_place(
+        owner._draw_regions_in_place(
             global_map_with_trajectory,
-            space_area_layer,
-            space_area_records,
+            region_layer,
+            region_records,
             fill_regions=False,
             show_labels=True,
             use_display_label=True,
@@ -393,8 +393,8 @@ def render_local_map(owner,
                     hfov: float = 90.0,
                     waypoint_positions: Optional[List[Tuple[int, int]]] = None,
                     waypoint_ids: Optional[List[int]] = None,
-                    space_area_layer: Optional[np.ndarray] = None,
-                    space_area_records: Optional[List[Dict[str, Any]]] = None,
+                    region_layer: Optional[np.ndarray] = None,
+                    region_records: Optional[List[Dict[str, Any]]] = None,
                     crop_offset: Optional[Tuple[int, int]] = None,
                     mapping_classes: Optional[List[str]] = None) -> np.ndarray:
     """
@@ -464,10 +464,10 @@ def render_local_map(owner,
     sem_map_vis = np.array(sem_map_vis)
     sem_map_vis = sem_map_vis[:, :, [2, 1, 0]]  # RGB → BGR
     sem_map_vis = cv2.resize(sem_map_vis, (480, 480), interpolation=cv2.INTER_NEAREST)
-    owner._draw_space_areas_in_place(
+    owner._draw_regions_in_place(
         sem_map_vis,
-        space_area_layer,
-        space_area_records,
+        region_layer,
+        region_records,
         alpha=1.0,
         show_labels=False,
     )

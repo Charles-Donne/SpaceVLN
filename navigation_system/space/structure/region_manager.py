@@ -33,8 +33,8 @@ from navigation_system.space.structure.space_types import (
 from navigation_system.space.geometry.map_projection import RotatedMapProjector
 
 
-class SpaceAreaManager:
-    """Track space-type areas, variants, and the current area label on the world map."""
+class RegionManager:
+    """Track region types, variants, and the current region label on the world map."""
 
     CONNECTOR_SPACE_TYPES = SPACE_AREA_CONNECTOR_TYPES
     MAX_CONNECTED_AREAS = SPACE_AREA_MAX_CONNECTED_AREAS
@@ -55,15 +55,15 @@ class SpaceAreaManager:
         self.reset()
 
     def reset(self) -> None:
-        self.space_area_records: List[Dict[str, Any]] = []
-        self.space_area_counter = 0
+        self.region_records: List[Dict[str, Any]] = []
+        self.region_counter = 0
         self.label_aliases: Dict[str, str] = {}
-        self.current_space_area_label = "Unknown"
-        self.current_space_area_type = "Unknown"
+        self.current_region_label = "Unknown"
+        self.current_region_type = "Unknown"
 
     def export_state(self) -> Dict[str, Any]:
         records: List[Dict[str, Any]] = []
-        for record in self.space_area_records:
+        for record in self.region_records:
             center_world_px = record.get("center_world_px", (0, 0))
             records.append({
                 "id": int(record.get("id", 0) or 0),
@@ -85,26 +85,26 @@ class SpaceAreaManager:
                 "display_label": str(record.get("display_label", record.get("label", ""))),
             })
         return {
-            "space_area_records": records,
-            "space_area_counter": int(self.space_area_counter),
+            "region_records": records,
+            "region_counter": int(self.region_counter),
             "label_aliases": {str(key): str(value) for key, value in self.label_aliases.items()},
-            "current_space_area_label": str(self.current_space_area_label or "Unknown"),
-            "current_space_area_type": str(self.current_space_area_type or "Unknown"),
+            "current_region_label": str(self.current_region_label or "Unknown"),
+            "current_region_type": str(self.current_region_type or "Unknown"),
         }
 
     def import_state(self, state: Optional[Dict[str, Any]]) -> None:
         self.reset()
         if not state:
             return
-        self.space_area_counter = int(state.get("space_area_counter", 0) or 0)
+        self.region_counter = int(state.get("region_counter", 0) or 0)
         self.label_aliases = {
             str(key): str(value)
             for key, value in dict(state.get("label_aliases", {}) or {}).items()
         }
-        self.current_space_area_label = str(state.get("current_space_area_label", "Unknown") or "Unknown")
-        self.current_space_area_type = str(state.get("current_space_area_type", "Unknown") or "Unknown")
+        self.current_region_label = str(state.get("current_region_label", "Unknown") or "Unknown")
+        self.current_region_type = str(state.get("current_region_type", "Unknown") or "Unknown")
         restored_records: List[Dict[str, Any]] = []
-        for raw_record in list(state.get("space_area_records", []) or []):
+        for raw_record in list(state.get("region_records", []) or []):
             center_world_px = raw_record.get("center_world_px", (0, 0))
             restored_records.append({
                 "id": int(raw_record.get("id", 0) or 0),
@@ -127,7 +127,7 @@ class SpaceAreaManager:
                 "connected_area_labels": [str(item) for item in list(raw_record.get("connected_area_labels", []) or [])],
                 "display_label": str(raw_record.get("display_label", raw_record.get("label", ""))),
             })
-        self.space_area_records = restored_records
+        self.region_records = restored_records
 
     def update_from_waypoint(
         self,
@@ -142,7 +142,7 @@ class SpaceAreaManager:
         if space_type == "Unknown":
             return "Unknown"
         space_key = self._space_type_key(space_type)
-        world_pixels = self._compute_space_area_world_pixels(
+        world_pixels = self._compute_region_world_pixels(
             pixel_y=pixel_y,
             pixel_x=pixel_x,
             full_map=full_map,
@@ -174,7 +174,7 @@ class SpaceAreaManager:
         )
 
         overlapping_records = [
-            record for record in self.space_area_records
+            record for record in self.region_records
             if record["space_key"] == space_key
             and self._records_match_new_area(
                 existing_record=record,
@@ -206,11 +206,11 @@ class SpaceAreaManager:
                     old_label=str(extra_record["label"]),
                     new_label=str(merged_record["label"]),
                 )
-                self.space_area_records.remove(extra_record)
+                self.region_records.remove(extra_record)
             merged_record["center_world_px"] = self._compute_record_center_from_pixels(merged_record)
 
-            self.current_space_area_label = str(merged_record["label"])
-            self.current_space_area_type = str(merged_record["space_type"])
+            self.current_region_label = str(merged_record["label"])
+            self.current_region_type = str(merged_record["space_type"])
             self._consolidate_same_type_records(
                 obstacle_mask=obstacle_mask,
                 projector=projector,
@@ -220,14 +220,14 @@ class SpaceAreaManager:
 
         existing_variants = [
             int(record["variant"])
-            for record in self.space_area_records
+            for record in self.region_records
             if record["space_key"] == space_key
         ]
         variant = (max(existing_variants) + 1) if existing_variants else 1
-        self.space_area_counter += 1
-        label = self._space_area_label(space_type, variant)
+        self.region_counter += 1
+        label = self._region_label(space_type, variant)
         record = {
-            "id": self.space_area_counter,
+            "id": self.region_counter,
             "label": label,
             "space_type": space_type,
             "space_key": space_key,
@@ -238,9 +238,9 @@ class SpaceAreaManager:
             "description": description,
         }
         record["center_world_px"] = self._compute_record_center_from_pixels(record)
-        self.space_area_records.append(record)
-        self.current_space_area_label = label
-        self.current_space_area_type = space_type
+        self.region_records.append(record)
+        self.current_region_label = label
+        self.current_region_type = space_type
         self._consolidate_same_type_records(
             obstacle_mask=obstacle_mask,
             projector=projector,
@@ -289,7 +289,7 @@ class SpaceAreaManager:
         traversible = ~obstacle_mask
         area_records: List[Dict[str, Any]] = []
         self._refresh_connection_metadata(full_map, full_pose, crop_offset)
-        for record in self.space_area_records:
+        for record in self.region_records:
             record_pixels = set(record.get("pixels", set()) or set())
             if not record_pixels:
                 continue
@@ -336,7 +336,7 @@ class SpaceAreaManager:
                     projector=projector,
                 )
 
-        self._set_current_space_area_from_layer(
+        self._set_current_region_from_layer(
             layer=layer,
             full_map=full_map,
             full_pose=full_pose,
@@ -357,7 +357,7 @@ class SpaceAreaManager:
             return
 
         obstacle_mask = np.asarray(full_map[0] > 0.5, dtype=bool)
-        for record in self.space_area_records:
+        for record in self.region_records:
             filtered_pixels = self._filter_record_pixels_against_current_visibility(
                 record=record,
                 obstacle_mask=obstacle_mask,
@@ -472,13 +472,13 @@ class SpaceAreaManager:
         clearance_map: Optional[np.ndarray] = None,
     ) -> None:
         """Merge any same-type area records that now overlap or touch."""
-        self._normalize_space_area_records()
+        self._normalize_region_records()
 
         changed = True
         while changed:
             changed = False
-            for idx, record in enumerate(list(self.space_area_records)):
-                for other in self.space_area_records[idx + 1:]:
+            for idx, record in enumerate(list(self.region_records)):
+                for other in self.region_records[idx + 1:]:
                     if record.get("space_key") != other.get("space_key"):
                         continue
                     should_merge = (
@@ -523,18 +523,18 @@ class SpaceAreaManager:
                         (record, other),
                         key=lambda item: (int(item.get("variant", 0)), int(item.get("id", 0))),
                     )
-                    self._merge_space_area_records(primary, secondary)
-                    self._normalize_space_area_records()
+                    self._merge_region_records(primary, secondary)
+                    self._normalize_region_records()
                     changed = True
                     break
                 if changed:
                     break
 
-        resolved_current = self._resolve_label_alias(self.current_space_area_label)
+        resolved_current = self._resolve_label_alias(self.current_region_label)
         if resolved_current and resolved_current != "Unknown":
             current_record = next(
                 (
-                    item for item in self.space_area_records
+                    item for item in self.region_records
                     if str(item.get("label", "")) == resolved_current
                 ),
                 None,
@@ -542,7 +542,7 @@ class SpaceAreaManager:
             if current_record is not None:
                 self._set_current_area_from_record(current_record)
 
-    def _merge_space_area_records(
+    def _merge_region_records(
         self,
         primary: Dict[str, Any],
         secondary: Dict[str, Any],
@@ -557,8 +557,8 @@ class SpaceAreaManager:
             old_label=str(secondary.get("label", "")),
             new_label=str(primary.get("label", "")),
         )
-        if secondary in self.space_area_records:
-            self.space_area_records.remove(secondary)
+        if secondary in self.region_records:
+            self.region_records.remove(secondary)
 
     @staticmethod
     def _compute_record_center_from_pixels(record: Dict[str, Any]) -> Tuple[int, int]:
@@ -583,9 +583,9 @@ class SpaceAreaManager:
             return canonical
         return compact_text
 
-    def _normalize_space_area_records(self) -> None:
+    def _normalize_region_records(self) -> None:
         grouped_records: Dict[str, List[Dict[str, Any]]] = {}
-        for record in self.space_area_records:
+        for record in self.region_records:
             normalized_type = self._normalize_space_type_name(str(record.get("space_type", "Unknown") or "Unknown"))
             record["space_type"] = normalized_type
             record["space_key"] = self._space_type_key(normalized_type)
@@ -595,7 +595,7 @@ class SpaceAreaManager:
             records.sort(key=lambda item: (int(item.get("variant", 0) or 0), int(item.get("id", 0) or 0)))
             for variant, record in enumerate(records, start=1):
                 old_label = str(record.get("label", "") or "")
-                new_label = self._space_area_label(str(record.get("space_type", "Unknown") or "Unknown"), variant)
+                new_label = self._region_label(str(record.get("space_type", "Unknown") or "Unknown"), variant)
                 record["variant"] = variant
                 record["label"] = new_label
                 if old_label and old_label != new_label:
@@ -610,14 +610,14 @@ class SpaceAreaManager:
         for sep in ("|", "-", "Nearby", "Connected"):
             if sep in text:
                 text = text.split(sep)[0].strip()
-        return SpaceAreaManager._normalize_space_type_name(text)
+        return RegionManager._normalize_space_type_name(text)
 
     @staticmethod
     def _space_type_key(space_type: str) -> str:
         return "".join(ch.lower() for ch in space_type if ch.isalnum())
 
     @staticmethod
-    def _space_area_label(space_type: str, variant: int) -> str:
+    def _region_label(space_type: str, variant: int) -> str:
         words = [word.capitalize() for word in space_type.split() if word]
         base = "".join(words) if words else "Unknown"
         return f"{base}{variant}"
@@ -762,7 +762,7 @@ class SpaceAreaManager:
         del space_type, projector, clearance_map
         return set(world_pixels)
 
-    def _find_space_area_start(
+    def _find_region_start(
         self,
         traversible: np.ndarray,
         center_row: int,
@@ -784,7 +784,7 @@ class SpaceAreaManager:
         best_idx = int(indices[np.argmin(d2[within])])
         return int(ys[best_idx]), int(xs[best_idx])
 
-    def _compute_space_area_world_pixels(
+    def _compute_region_world_pixels(
         self,
         pixel_y: int,
         pixel_x: int,
@@ -811,7 +811,7 @@ class SpaceAreaManager:
             and 0 <= center_col < traversible.shape[1]
             and traversible[center_row, center_col]
         ):
-            nearest = self._find_space_area_start(traversible, center_row, center_col)
+            nearest = self._find_region_start(traversible, center_row, center_col)
             if nearest is None:
                 if self._world_pixel_is_traversible_with_projector(
                     pixel_y=int(pixel_y),
@@ -1032,7 +1032,7 @@ class SpaceAreaManager:
         if not (0 <= seed_row < traversible.shape[0] and 0 <= seed_col < traversible.shape[1]):
             return
         if not traversible[seed_row, seed_col]:
-            nearest = self._find_space_area_start(traversible, seed_row, seed_col)
+            nearest = self._find_region_start(traversible, seed_row, seed_col)
             if nearest is None:
                 return
             seed_row, seed_col = int(nearest[0]), int(nearest[1])
@@ -1048,7 +1048,7 @@ class SpaceAreaManager:
                 best_distance[row, col] = dist
                 layer[row, col] = int(record_id)
 
-    def _set_current_space_area_from_layer(
+    def _set_current_region_from_layer(
         self,
         layer: np.ndarray,
         full_map: Optional[np.ndarray],
@@ -1058,7 +1058,7 @@ class SpaceAreaManager:
         waypoint_positions: Optional[Sequence[Tuple[int, int]]] = None,
         waypoint_area_labels: Optional[Sequence[str]] = None,
     ) -> None:
-        if full_pose is None or not self.space_area_records:
+        if full_pose is None or not self.region_records:
             self._set_unknown_current_area()
             return
 
@@ -1071,7 +1071,7 @@ class SpaceAreaManager:
             full_pose=full_pose,
             crop_offset=crop_offset,
         )
-        current_record = self._resolve_current_space_area_record(
+        current_record = self._resolve_current_region_record(
             pixel_y=curr_py,
             pixel_x=curr_px,
             probe_py=probe_py,
@@ -1091,8 +1091,8 @@ class SpaceAreaManager:
         self._set_unknown_current_area()
 
     def _set_unknown_current_area(self) -> None:
-        self.current_space_area_label = "Unknown"
-        self.current_space_area_type = "Unknown"
+        self.current_region_label = "Unknown"
+        self.current_region_type = "Unknown"
 
     def _maintain_current_area_with_pose(
         self,
@@ -1102,7 +1102,7 @@ class SpaceAreaManager:
         waypoint_positions: Optional[Sequence[Tuple[int, int]]] = None,
         waypoint_area_labels: Optional[Sequence[str]] = None,
     ) -> None:
-        if full_map is None or full_pose is None or not self.space_area_records:
+        if full_map is None or full_pose is None or not self.region_records:
             self._set_unknown_current_area()
             return
 
@@ -1116,7 +1116,7 @@ class SpaceAreaManager:
             crop_offset=crop_offset,
         )
 
-        current_record = self._resolve_current_space_area_record(
+        current_record = self._resolve_current_region_record(
             pixel_y=curr_py,
             pixel_x=curr_px,
             probe_py=probe_py,
@@ -1139,7 +1139,7 @@ class SpaceAreaManager:
         pixel_x: int,
     ) -> Optional[Dict[str, Any]]:
         target_pixel = (int(pixel_y), int(pixel_x))
-        for record in reversed(self.space_area_records):
+        for record in reversed(self.region_records):
             if target_pixel in record["pixels"]:
                 return record
         return None
@@ -1184,7 +1184,7 @@ class SpaceAreaManager:
             return containing_record
         return None
 
-    def _resolve_current_space_area_record(
+    def _resolve_current_region_record(
         self,
         pixel_y: int,
         pixel_x: int,
@@ -1217,7 +1217,7 @@ class SpaceAreaManager:
                 resolution_cm=float(self.resolution),
             )
 
-        sticky_record = self._record_from_label_map(self.current_space_area_label, record_map)
+        sticky_record = self._record_from_label_map(self.current_region_label, record_map)
         if sticky_record is not None and self._record_has_nearby_area_waypoint(
             record=sticky_record,
             pixel_y=probe_py,
@@ -1242,7 +1242,7 @@ class SpaceAreaManager:
                     area_id = int(layer[row, col])
                     if area_id > 0:
                         layer_record = next(
-                            (record for record in self.space_area_records if int(record["id"]) == area_id),
+                            (record for record in self.region_records if int(record["id"]) == area_id),
                             None,
                         )
                         if layer_record is not None and self._record_has_nearby_area_waypoint(
@@ -1307,7 +1307,7 @@ class SpaceAreaManager:
 
     def _build_record_label_map(self) -> Dict[str, Dict[str, Any]]:
         record_map: Dict[str, Dict[str, Any]] = {}
-        for record in self.space_area_records:
+        for record in self.region_records:
             resolved_label = self._resolve_label_alias(str(record.get("label", "")).strip())
             if resolved_label and resolved_label != "Unknown":
                 record_map[resolved_label] = record
@@ -1506,7 +1506,7 @@ class SpaceAreaManager:
         obstacle_mask: Optional[np.ndarray] = None,
         projector: Optional[RotatedMapProjector] = None,
     ) -> Optional[Dict[str, Any]]:
-        if not self.space_area_records:
+        if not self.region_records:
             return None
 
         local_projector = projector or self._build_projector(full_map, full_pose, crop_offset)
@@ -1524,7 +1524,7 @@ class SpaceAreaManager:
             initial_waypoint = (int(waypoint_positions[0][0]), int(waypoint_positions[0][1]))
 
         candidates: List[Tuple[float, int, Dict[str, Any]]] = []
-        for record in self.space_area_records:
+        for record in self.region_records:
             best_match: Optional[Tuple[float, int]] = None
             for waypoint_point in self._record_waypoint_points(record):
                 point = (int(waypoint_point[0]), int(waypoint_point[1]))
@@ -1582,8 +1582,8 @@ class SpaceAreaManager:
         return candidates[0][2]
 
     def _set_current_area_from_record(self, record: Dict[str, Any]) -> None:
-        self.current_space_area_label = str(record.get("label", "Unknown") or "Unknown")
-        self.current_space_area_type = str(record.get("space_type", "Unknown") or "Unknown")
+        self.current_region_label = str(record.get("label", "Unknown") or "Unknown")
+        self.current_region_type = str(record.get("space_type", "Unknown") or "Unknown")
 
     def _resolve_current_area_probe_pixel(
         self,
@@ -1613,7 +1613,7 @@ class SpaceAreaManager:
         ):
             return int(pixel_y), int(pixel_x)
 
-        nearest = self._find_space_area_start(traversible, center_row, center_col)
+        nearest = self._find_region_start(traversible, center_row, center_col)
         if nearest is None:
             return int(pixel_y), int(pixel_x)
 
@@ -1629,7 +1629,7 @@ class SpaceAreaManager:
         if target_label == "Unknown":
             return "Unknown"
         record = next(
-            (item for item in self.space_area_records if str(item.get("label", "")) == target_label),
+            (item for item in self.region_records if str(item.get("label", "")) == target_label),
             None,
         )
         if record is None:
@@ -1664,9 +1664,9 @@ class SpaceAreaManager:
         full_pose: Optional[Sequence[float]],
         crop_offset: Optional[Tuple[int, int]],
     ) -> None:
-        for record in self.space_area_records:
+        for record in self.region_records:
             record["connected_area_labels"] = []
-            record["display_label"] = self._space_area_label(
+            record["display_label"] = self._region_label(
                 str(record.get("space_type", "Unknown") or "Unknown"),
                 int(record.get("variant", 0) or 1),
             )
@@ -1679,7 +1679,7 @@ class SpaceAreaManager:
             return
 
         obstacle_mask = np.asarray(full_map[0] > 0.5, dtype=bool)
-        for record in self.space_area_records:
+        for record in self.region_records:
             if str(record.get("space_type", "")) not in self.CONNECTOR_SPACE_TYPES:
                 continue
 
@@ -1689,7 +1689,7 @@ class SpaceAreaManager:
                 projector=projector,
             )
             connected_labels = [
-                self._space_area_label(
+                self._region_label(
                     str(item.get("space_type", "Unknown") or "Unknown"),
                     int(item.get("variant", 0) or 1),
                 )
@@ -1697,7 +1697,7 @@ class SpaceAreaManager:
             ]
             record["connected_area_labels"] = connected_labels
             if connected_labels:
-                base_label = self._space_area_label(
+                base_label = self._region_label(
                     str(record.get("space_type", "Unknown") or "Unknown"),
                     int(record.get("variant", 0) or 1),
                 )
@@ -1714,7 +1714,7 @@ class SpaceAreaManager:
         candidates: List[Tuple[float, Dict[str, Any]]] = []
         max_distance_px = (self.MAX_CONNECTION_DISTANCE_M * 100.0) / float(self.resolution)
 
-        for other in self.space_area_records:
+        for other in self.region_records:
             if other is record:
                 continue
             if self._records_are_adjacent(record, other):
@@ -1743,7 +1743,7 @@ class SpaceAreaManager:
 
     @staticmethod
     def _records_are_adjacent(record_a: Dict[str, Any], record_b: Dict[str, Any]) -> bool:
-        return SpaceAreaManager._pixel_sets_are_adjacent(
+        return RegionManager._pixel_sets_are_adjacent(
             record_a.get("pixels", set()),
             record_b.get("pixels", set()),
         )
@@ -1852,7 +1852,7 @@ class SpaceAreaManager:
         obstacle_mask: np.ndarray,
         projector: RotatedMapProjector,
     ) -> bool:
-        for connector_record in self.space_area_records:
+        for connector_record in self.region_records:
             if connector_record is record_a or connector_record is record_b:
                 continue
             if str(connector_record.get("space_type", "")) not in self.CONNECTOR_SPACE_TYPES:

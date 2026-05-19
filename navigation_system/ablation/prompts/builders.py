@@ -143,7 +143,7 @@ def build_verify_planner_prompt_bundle(
     )
 
 
-def build_action_prompt_bundle(
+def build_executor_prompt_bundle(
     *,
     next_waypoint: str,
     subtask_instruction: str,
@@ -165,11 +165,11 @@ def build_action_prompt_bundle(
     resolved_spec = _active_spec(spec)
     system_template = load_ablation_template(
         resolved_spec,
-        "action.system.prompt.md",
+        "executor.system.prompt.md",
     )
     user_template = load_ablation_template(
         resolved_spec,
-        "action.user.prompt.md",
+        "executor.user.prompt.md",
     )
 
     prompt_progress_summary = (
@@ -239,7 +239,7 @@ def build_action_prompt_bundle(
 
 
 __all__ = [
-    "build_action_prompt_bundle",
+    "build_executor_prompt_bundle",
     "build_initial_planner_prompt_bundle",
     "build_verify_planner_prompt_bundle",
 ]

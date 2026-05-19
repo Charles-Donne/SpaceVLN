@@ -1,8 +1,11 @@
-"""VLNCE-specific action executors."""
+"""VLNCE-specific executors."""
 
-from navigation_system.vlm.execution.vlnce.executor import ActionExecutor
+from navigation_system.vlm.execution.vlnce.executor import Executor
 from navigation_system.vlm.execution.vlnce.executor_context_cache import (
-    ContextCacheActionExecutor,
+    ContextCacheExecutor,
 )
 
-__all__ = ["ActionExecutor", "ContextCacheActionExecutor"]
+__all__ = [
+    "ContextCacheExecutor",
+    "Executor",
+]

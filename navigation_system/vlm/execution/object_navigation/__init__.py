@@ -1,8 +1,13 @@
-"""Object-navigation action-execution variants."""
+"""Object-navigation executor variants."""
 
-from navigation_system.vlm.execution.object_navigation.executor import OVONActionExecutor
+from navigation_system.vlm.execution.object_navigation.executor import (
+    OVONExecutor,
+)
 from navigation_system.vlm.execution.object_navigation.executor_context_cache import (
-    OVONContextCacheActionExecutor,
+    OVONContextCacheExecutor,
 )
 
-__all__ = ["OVONActionExecutor", "OVONContextCacheActionExecutor"]
+__all__ = [
+    "OVONContextCacheExecutor",
+    "OVONExecutor",
+]

@@ -21,6 +21,8 @@ from navigation_system.config.core.params.spatial import (
     DEFAULT_MAP_SIZE_CM,
     DEFAULT_MAP_VISION_RANGE,
     DEFAULT_MAX_SEMANTIC_CATEGORIES,
+    DEFAULT_OBSTACLE_MAX_HEIGHT_CM,
+    DEFAULT_OBSTACLE_MIN_HEIGHT_CM,
     DEFAULT_STAIR_CLEAR_RADIUS_M,
 )
 from navigation_system.config.core.params.thresholds import (
@@ -147,6 +149,8 @@ def build_objectnav_runtime_config(
                     "CATEGORY_THRESHOLD": 5.0,
                     "EXPLORED_THRESHOLD": 1.0,
                     "OBSTACLE_THRESHOLD": 1.0,
+                    "OBSTACLE_MIN_HEIGHT_CM": float(DEFAULT_OBSTACLE_MIN_HEIGHT_CM),
+                    "OBSTACLE_MAX_HEIGHT_CM": float(DEFAULT_OBSTACLE_MAX_HEIGHT_CM),
                     "MAX_SEMANTIC_CATEGORIES": int(DEFAULT_MAX_SEMANTIC_CATEGORIES),
                     "CENTER_RESET_STEPS": int(DEFAULT_MAP_CENTER_RESET_STEPS),
                     "MIN_Z_CM": int(DEFAULT_MAP_MIN_Z_CM),
@@ -200,6 +204,7 @@ def build_objectnav_runtime_config(
                     "LOW_LEVEL_CAP_M": float(LOW_LEVEL_STAGNATION_CAP_M),
                 },
                 "STOPPING": {
+                    "ENABLE_FINAL_DESTINATION_MATCH_AUTOSTOP": True,
                     "FINAL_DESTINATION_MATCH_AUTOSTOP_STREAK": 2,
                     "FINAL_DESTINATION_MATCH_AUTOSTOP_RADIUS_M": float(OVON_AUTOCOMPLETE_SOLID_M),
                 },

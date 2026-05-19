@@ -3,13 +3,13 @@
 from typing import Any, Dict, Optional, Sequence, Tuple
 
 from navigation_system.vlm.prompts.object_navigation.builders import (
-    build_ovon_action_prompt_bundle,
+    build_ovon_executor_prompt_bundle,
 )
-from navigation_system.vlm.execution.vlnce.executor import ActionExecutor
+from navigation_system.vlm.execution.vlnce.executor import Executor
 
 
-class OVONActionExecutor(ActionExecutor):
-    """Action executor variant with OVON-specific action prompt wording."""
+class OVONExecutor(Executor):
+    """Executor variant with OVON-specific executor prompt wording."""
 
     def decide_action(
         self,
@@ -34,7 +34,7 @@ class OVONActionExecutor(ActionExecutor):
                 "right_30": "Unknown",
             }
 
-        prompt = build_ovon_action_prompt_bundle(
+        prompt = build_ovon_executor_prompt_bundle(
             next_waypoint=next_waypoint,
             subtask_instruction=subtask_instruction,
             subtask_landmark=subtask_landmark,

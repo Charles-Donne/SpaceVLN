@@ -18,7 +18,7 @@ thinking_image:
   include_detection_boxes: true
   include_obstacle_text: true
   include_landmark_strip: true
-  include_space_waypoint_strip: true
+  include_spatial_waypoint_strip: true
   include_last_visited_marker: true
   include_global_map_space_structure: true
 

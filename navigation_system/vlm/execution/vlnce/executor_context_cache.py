@@ -3,14 +3,14 @@
 import os
 from typing import Any, Dict, Optional, Sequence, Tuple
 
-from navigation_system.vlm.execution.vlnce.executor import ActionExecutor
+from navigation_system.vlm.execution.vlnce.executor import Executor
 from navigation_system.vlm.prompts.common import PromptBundle
-from navigation_system.vlm.prompts.vlnce.builders import build_action_prompt_bundle
+from navigation_system.vlm.prompts.vlnce.builders import build_executor_prompt_bundle
 from navigation_system.vlm.api.qwen_context_cache_client import QwenContextCacheMixin
 
 
-class ContextCacheActionExecutor(QwenContextCacheMixin, ActionExecutor):
-    """Action executor variant that reuses a long stable system prompt via explicit cache."""
+class ContextCacheExecutor(QwenContextCacheMixin, Executor):
+    """Executor variant that reuses a long stable system prompt via explicit cache."""
 
     def __init__(
         self,
@@ -24,7 +24,7 @@ class ContextCacheActionExecutor(QwenContextCacheMixin, ActionExecutor):
             move_distance=move_distance,
         )
         self._init_qwen_context_cache(config_path)
-        print(f"  ActionVLM(ContextCache): {self.config.model} | explicit-context-cache")
+        print(f"  Executor(ContextCache): {self.config.model} | explicit-context-cache")
 
     def call_api(
         self,
@@ -63,7 +63,7 @@ class ContextCacheActionExecutor(QwenContextCacheMixin, ActionExecutor):
                 "right_30": "Unknown",
             }
 
-        prompt_bundle = build_action_prompt_bundle(
+        prompt_bundle = build_executor_prompt_bundle(
             next_waypoint=next_waypoint,
             subtask_instruction=subtask_instruction,
             subtask_landmark=subtask_landmark,

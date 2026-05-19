@@ -1,8 +1,8 @@
 """Ablation-specific model-stack builders."""
 
-from navigation_system.ablation.models.executor import AblationActionExecutor
+from navigation_system.ablation.models.executor import AblationExecutor
 from navigation_system.ablation.models.executor_context_cache import (
-    AblationContextCacheActionExecutor,
+    AblationContextCacheExecutor,
 )
 from navigation_system.ablation.models.planner import AblationLLMPlanner
 from navigation_system.ablation.models.planner_context_cache import (
@@ -10,7 +10,7 @@ from navigation_system.ablation.models.planner_context_cache import (
 )
 from navigation_system.vlm.interfaces import NavigationModelStack
 from navigation_system.vlm.model_stack_factory import (
-    build_action_executor,
+    build_executor,
     build_planner,
 )
 
@@ -30,13 +30,13 @@ def build_ablation_navigation_model_stack(
         save_request_artifacts=save_request_artifacts,
         label="Ablation LLM Planner",
     )
-    action_executor = build_action_executor(
-        AblationActionExecutor,
+    action_executor = build_executor(
+        AblationExecutor,
         config_path=config_path,
         turn_angle=turn_angle,
         move_distance=move_distance,
         save_request_artifacts=save_request_artifacts,
-        label="Ablation Action Executor",
+        label="Ablation Executor",
     )
     return NavigationModelStack(
         planner=planner,
@@ -59,13 +59,13 @@ def build_ablation_context_cache_navigation_model_stack(
         save_request_artifacts=save_request_artifacts,
         label="Ablation Cached LLM Planner",
     )
-    action_executor = build_action_executor(
-        AblationContextCacheActionExecutor,
+    action_executor = build_executor(
+        AblationContextCacheExecutor,
         config_path=config_path,
         turn_angle=turn_angle,
         move_distance=move_distance,
         save_request_artifacts=save_request_artifacts,
-        label="Ablation Cached Action Executor",
+        label="Ablation Cached Executor",
     )
     return NavigationModelStack(
         planner=planner,

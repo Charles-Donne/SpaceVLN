@@ -25,8 +25,8 @@ INITIAL_PLANNING_SYSTEM_PROMPT = load_prompt_template("planning_initial.system.p
 INITIAL_PLANNING_USER_PROMPT = load_prompt_template("planning_initial.user.prompt.md")
 VERIFY_PLANNING_SYSTEM_PROMPT = load_prompt_template("planning_verify.system.prompt.md")
 VERIFY_PLANNING_USER_PROMPT = load_prompt_template("planning_verify.user.prompt.md")
-ACTION_SYSTEM_PROMPT = load_prompt_template("action.system.prompt.md")
-ACTION_USER_PROMPT = load_prompt_template("action.user.prompt.md")
+EXECUTOR_SYSTEM_PROMPT = load_prompt_template("executor.system.prompt.md")
+EXECUTOR_USER_PROMPT = load_prompt_template("executor.user.prompt.md")
 FAST_INITIAL_PLANNING_SYSTEM_PROMPT = load_prompt_template(
     "fast/planning_initial.system.prompt.md"
 )
@@ -39,8 +39,8 @@ FAST_VERIFY_PLANNING_SYSTEM_PROMPT = load_prompt_template(
 FAST_VERIFY_PLANNING_USER_PROMPT = load_prompt_template(
     "fast/planning_verify.user.prompt.md"
 )
-FAST_ACTION_SYSTEM_PROMPT = load_prompt_template("fast/action.system.prompt.md")
-FAST_ACTION_USER_PROMPT = load_prompt_template("fast/action.user.prompt.md")
+FAST_EXECUTOR_SYSTEM_PROMPT = load_prompt_template("fast/executor.system.prompt.md")
+FAST_EXECUTOR_USER_PROMPT = load_prompt_template("fast/executor.user.prompt.md")
 DEFAULT_ALLOWED_ACTION_NAMES = ("MOVE_FORWARD", "TURN_LEFT", "TURN_RIGHT", "STOP")
 
 
@@ -511,10 +511,10 @@ def _normalize_action_prompt_text(prompt: str, *, move_distance: float = 0.25) -
     return normalized
 
 
-def _render_action_system_prompt(*, model_name=None, prompt_profile=None) -> str:
+def _render_executor_system_prompt(*, model_name=None, prompt_profile=None) -> str:
     template = _select_prompt_template(
-        ACTION_SYSTEM_PROMPT,
-        FAST_ACTION_SYSTEM_PROMPT,
+        EXECUTOR_SYSTEM_PROMPT,
+        FAST_EXECUTOR_SYSTEM_PROMPT,
         model_name=model_name,
         prompt_profile=prompt_profile,
     )
@@ -531,7 +531,7 @@ def _render_action_system_prompt(*, model_name=None, prompt_profile=None) -> str
     )
 
 
-def build_action_prompt_bundle(
+def build_executor_prompt_bundle(
     *,
     next_waypoint: str,
     subtask_instruction: str,
@@ -547,19 +547,19 @@ def build_action_prompt_bundle(
     model_name: str = None,
     prompt_profile: str = None,
 ) -> PromptBundle:
-    """Render the action-execution system/user prompt bundle."""
+    """Render the executor system/user prompt bundle."""
     del waypoint_summary
     del turn_angle
     if not progress_summary:
         progress_summary = "Just started"
 
-    system_prompt = _normalize_action_prompt_text(_render_action_system_prompt(
+    system_prompt = _normalize_action_prompt_text(_render_executor_system_prompt(
         model_name=model_name,
         prompt_profile=prompt_profile,
     ), move_distance=move_distance)
     user_template = _select_prompt_template(
-        ACTION_USER_PROMPT,
-        FAST_ACTION_USER_PROMPT,
+        EXECUTOR_USER_PROMPT,
+        FAST_EXECUTOR_USER_PROMPT,
         model_name=model_name,
         prompt_profile=prompt_profile,
     )
@@ -585,7 +585,7 @@ def build_action_prompt_bundle(
     )
 
 
-def get_action_execution_prompt(
+def get_executor_prompt(
     next_waypoint: str,
     subtask_instruction: str,
     subtask_landmark: str = "",
@@ -600,8 +600,8 @@ def get_action_execution_prompt(
     model_name: str = None,
     prompt_profile: str = None,
 ) -> str:
-    """Compatibility helper returning the combined action-execution prompt."""
-    return build_action_prompt_bundle(
+    """Return the combined executor prompt."""
+    return build_executor_prompt_bundle(
         next_waypoint=next_waypoint,
         subtask_instruction=subtask_instruction,
         subtask_landmark=subtask_landmark,
@@ -619,9 +619,9 @@ def get_action_execution_prompt(
 
 
 __all__ = [
-    "ACTION_SYSTEM_PROMPT",
-    "ACTION_USER_PROMPT",
     "DEFAULT_ALLOWED_ACTION_NAMES",
+    "EXECUTOR_SYSTEM_PROMPT",
+    "EXECUTOR_USER_PROMPT",
     "INITIAL_PLANNING_SYSTEM_PROMPT",
     "INITIAL_PLANNING_USER_PROMPT",
     "VERIFY_PLANNING_SYSTEM_PROMPT",
@@ -634,10 +634,10 @@ __all__ = [
     "_build_obstacle_perception_summary",
     "_fmt_threshold_m",
     "_get_verify_view_count",
-    "build_action_prompt_bundle",
+    "build_executor_prompt_bundle",
     "build_initial_planner_prompt_bundle",
     "build_verify_planner_prompt_bundle",
-    "get_action_execution_prompt",
+    "get_executor_prompt",
     "get_initial_planning_prompt",
     "get_verification_replanning_prompt",
 ]

@@ -34,8 +34,8 @@ INITIAL_PLANNING_SYSTEM_PROMPT = load_objectnav_prompt_template("planning_initia
 INITIAL_PLANNING_USER_PROMPT = load_objectnav_prompt_template("planning_initial.user.prompt.md")
 VERIFY_PLANNING_SYSTEM_PROMPT = load_objectnav_prompt_template("planning_verify.system.prompt.md")
 VERIFY_PLANNING_USER_PROMPT = load_objectnav_prompt_template("planning_verify.user.prompt.md")
-ACTION_SYSTEM_PROMPT = load_objectnav_prompt_template("action.system.prompt.md")
-ACTION_USER_PROMPT = load_objectnav_prompt_template("action.user.prompt.md")
+EXECUTOR_SYSTEM_PROMPT = load_objectnav_prompt_template("executor.system.prompt.md")
+EXECUTOR_USER_PROMPT = load_objectnav_prompt_template("executor.user.prompt.md")
 
 
 def _fmt_threshold_m(value: float) -> str:
@@ -142,8 +142,8 @@ def get_ovon_verification_replanning_prompt(
     ).full_prompt
 
 
-def _render_action_system_prompt() -> str:
-    return ACTION_SYSTEM_PROMPT.format(
+def _render_executor_system_prompt() -> str:
+    return EXECUTOR_SYSTEM_PROMPT.format(
         obs_blocked_m=_fmt_threshold_m(OBS_BLOCKED_M),
         obs_risky_m=_fmt_threshold_m(OBS_RISKY_M),
         obs_open_m=_fmt_threshold_m(OBS_OPEN_M),
@@ -154,7 +154,7 @@ def _render_action_system_prompt() -> str:
     )
 
 
-def build_ovon_action_prompt_bundle(
+def build_ovon_executor_prompt_bundle(
     *,
     next_waypoint: str,
     subtask_instruction: str,
@@ -171,8 +171,8 @@ def build_ovon_action_prompt_bundle(
     del waypoint_summary
     del move_distance
     del turn_angle
-    system_prompt = _normalize_action_prompt_text(_render_action_system_prompt())
-    user_prompt = _normalize_action_prompt_text(ACTION_USER_PROMPT.format(
+    system_prompt = _normalize_action_prompt_text(_render_executor_system_prompt())
+    user_prompt = _normalize_action_prompt_text(EXECUTOR_USER_PROMPT.format(
         subtask_destination=next_waypoint,
         subtask_landmark=str(subtask_landmark or "").strip() or "none",
         subtask_instruction=subtask_instruction,
@@ -196,7 +196,7 @@ def build_ovon_action_prompt_bundle(
     )
 
 
-def get_ovon_action_execution_prompt(
+def get_ovon_executor_prompt(
     next_waypoint: str,
     subtask_instruction: str,
     subtask_landmark: str = "",
@@ -206,7 +206,7 @@ def get_ovon_action_execution_prompt(
     landmark_map_info: str = None,
     allowed_action_names=None,
 ) -> str:
-    return build_ovon_action_prompt_bundle(
+    return build_ovon_executor_prompt_bundle(
         next_waypoint=next_waypoint,
         subtask_instruction=subtask_instruction,
         subtask_landmark=subtask_landmark,
@@ -216,3 +216,4 @@ def get_ovon_action_execution_prompt(
         landmark_map_info=landmark_map_info,
         allowed_action_names=allowed_action_names,
     ).full_prompt
+

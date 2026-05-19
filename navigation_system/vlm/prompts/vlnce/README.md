@@ -23,10 +23,10 @@ This directory contains the prompt definitions and renderers for the main VLNCE 
   - Stable verify / replanning system instructions.
 - `templates/planning_verify.user.prompt.md`
   - Dynamic verify / replanning user content.
-- `templates/action.system.prompt.md`
-  - Stable action-execution system instructions.
-- `templates/action.user.prompt.md`
-  - Dynamic action-execution user content.
+- `templates/executor.system.prompt.md`
+  - Stable executor system instructions.
+- `templates/executor.user.prompt.md`
+  - Dynamic executor user content.
 
 ## Runtime Behavior
 

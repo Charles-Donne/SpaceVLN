@@ -6,15 +6,15 @@ import os
 from typing import Any, Dict, Optional, Sequence, Tuple
 
 from navigation_system.vlm.prompts.object_navigation.builders import (
-    build_ovon_action_prompt_bundle,
+    build_ovon_executor_prompt_bundle,
 )
 from navigation_system.vlm.api.qwen_context_cache_client import QwenContextCacheMixin
-from navigation_system.vlm.execution.vlnce.executor import ActionExecutor
+from navigation_system.vlm.execution.vlnce.executor import Executor
 from navigation_system.vlm.prompts.common import PromptBundle
 
 
-class OVONContextCacheActionExecutor(QwenContextCacheMixin, ActionExecutor):
-    """OVON low-level action executor using explicit context cache."""
+class OVONContextCacheExecutor(QwenContextCacheMixin, Executor):
+    """OVON low-level executor using explicit context cache."""
 
     def __init__(
         self,
@@ -28,7 +28,7 @@ class OVONContextCacheActionExecutor(QwenContextCacheMixin, ActionExecutor):
             move_distance=move_distance,
         )
         self._init_qwen_context_cache(config_path)
-        print(f"  OVONActionVLM(ContextCache): {self.config.model} | explicit-context-cache")
+        print(f"  OVONExecutor(ContextCache): {self.config.model} | explicit-context-cache")
 
     def call_api(
         self,
@@ -67,7 +67,7 @@ class OVONContextCacheActionExecutor(QwenContextCacheMixin, ActionExecutor):
                 "right_30": "Unknown",
             }
 
-        prompt_bundle = build_ovon_action_prompt_bundle(
+        prompt_bundle = build_ovon_executor_prompt_bundle(
             next_waypoint=next_waypoint,
             subtask_instruction=subtask_instruction,
             subtask_landmark=subtask_landmark,

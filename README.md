@@ -345,7 +345,7 @@ result/
 
 Per-episode artifacts may include:
 
-- planner/action prompts and responses;
+- planner/executor prompts and responses;
 - rendered thinking views and action views;
 - global/local maps and visual summaries;
 - `vlm_info.json` request metadata;
