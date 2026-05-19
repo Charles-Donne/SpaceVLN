@@ -31,6 +31,7 @@ from navigation_system.runtime.failure_policy import (
     INITIAL_PLANNER_API_ERROR_REASON,
     is_initial_planner_api_error_result,
     resolve_max_initial_planner_api_errors,
+    should_suppress_persistent_record_for_failure,
 )
 from navigation_system.runtime.output_policy import (
     apply_output_policy_to_config,
@@ -478,12 +479,13 @@ def _sync_episode_staging_outputs(
     )
     staging_result = SaveManager._load_json_if_exists(staging_result_path)
     detail_updated = False
-    if SaveManager.is_complete_result(staging_result):
+    suppress_staging_record = should_suppress_persistent_record_for_failure(staging_result)
+    if SaveManager.is_complete_result(staging_result) and not suppress_staging_record:
         _copytree_replace(staging_detail_dir, final_detail_dir)
         detail_updated = True
 
     staging_log = SaveManager._load_json_if_exists(staging_log_path)
-    if staging_log is not None:
+    if staging_log is not None and not should_suppress_persistent_record_for_failure(staging_log):
         final_log = SaveManager._load_json_if_exists(final_log_path)
         final_baseline = final_log if SaveManager.is_complete_result(final_log) else None
         if SaveManager.is_complete_result(staging_log) and (

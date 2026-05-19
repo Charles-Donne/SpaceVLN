@@ -23,6 +23,10 @@ def should_skip_best_log_for_failure(result: Optional[Dict[str, Any]]) -> bool:
     return result_failure_reason(result) in NON_BEST_LOG_FAILURE_REASONS
 
 
+def should_suppress_persistent_record_for_failure(result: Optional[Dict[str, Any]]) -> bool:
+    return should_skip_best_log_for_failure(result)
+
+
 def is_initial_planner_api_error_result(result: Optional[Dict[str, Any]]) -> bool:
     return result_failure_reason(result) == INITIAL_PLANNER_API_ERROR_REASON
 

@@ -9,7 +9,10 @@ from navigation_system.runtime.storage.naming import (
     build_subtask_name,
     build_subtask_name_from_token,
 )
-from navigation_system.runtime.failure_policy import should_skip_best_log_for_failure
+from navigation_system.runtime.failure_policy import (
+    should_skip_best_log_for_failure,
+    should_suppress_persistent_record_for_failure,
+)
 
 
 DETAIL_DIR_NAME = "detail"
@@ -614,6 +617,14 @@ class SaveManager:
         1. `detail/<bucket>/episode_xxx/records/result.json` for this run
         2. `log/<bucket>/episode_xxx.json` for the current best episode result
         """
+        log_path = get_episode_log_path(
+            self.dump_dir,
+            self.storage_entry_id,
+            entry_kind=self.entry_kind,
+        )
+        if should_suppress_persistent_record_for_failure(result):
+            return log_path
+
         result_path = os.path.join(self.records_dir, "result.json")
         with open(result_path, 'w', encoding='utf-8') as f:
             json.dump(self._build_detail_result(result), f, indent=2, ensure_ascii=False)
@@ -626,12 +637,6 @@ class SaveManager:
             )
         )
         os.makedirs(log_dir, exist_ok=True)
-        log_path = get_episode_log_path(
-            self.dump_dir,
-            self.storage_entry_id,
-            entry_kind=self.entry_kind,
-        )
-
         log_result = self._build_log_result(result)
 
         existing_best_log = self._load_json_if_exists(log_path)
