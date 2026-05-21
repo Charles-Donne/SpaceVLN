@@ -34,9 +34,11 @@ class ExecutorConfig:
     action_status_topic: str = "/spacevln/action_status"
     odom_topic: str = "/odom"
     cmd_vel_topic: str = "/cmd_vel"
-    control_rate_hz: float = 20.0
-    position_tolerance_m: float = 0.02
-    angle_tolerance_deg: float = 3.0
+    control_mode: str = "odom"
+    control_rate_hz: float = 10.0
+    odom_timeout_s: float = 0.5
+    position_tolerance_m: float = 0.10
+    angle_tolerance_deg: float = 10.0
     default_linear_speed_mps: float = 0.15
     default_angular_speed_deg_s: float = 45.0
     max_linear_speed_mps: float = 0.25
@@ -60,8 +62,10 @@ class ActiveCommand:
     timeout_s: float
     started_at: float
     deadline: float
-    start_pose: PoseFrame
+    start_pose: Optional[PoseFrame]
     last_yaw_rad: float
+    control_mode: str
+    timed_duration_s: float = 0.0
     turn_progress_rad: float = 0.0
 
 
@@ -70,6 +74,7 @@ class CmdVelActionExecutor(Node):
         super().__init__(config.node_name)
         self.config = config
         self._latest_pose: Optional[PoseFrame] = None
+        self._latest_odom_received_at: float = 0.0
         self._active_command: Optional[ActiveCommand] = None
 
         qos_sensor = QoSProfile(
@@ -111,6 +116,7 @@ class CmdVelActionExecutor(Node):
             msg,
             fallback_stamp=self.now_s(),
         )
+        self._latest_odom_received_at = self.now_s()
 
     def on_action_cmd(self, msg: String) -> None:
         try:
@@ -179,7 +185,11 @@ class CmdVelActionExecutor(Node):
             )
             return
 
-        if self._latest_pose is None:
+        configured_control_mode = self.resolve_control_mode()
+        control_mode = configured_control_mode
+        if configured_control_mode == "auto":
+            control_mode = "odom" if self._latest_pose is not None else "timed"
+        if control_mode == "odom" and self._latest_pose is None:
             self.publish_status(
                 session_id=session_id,
                 command_id=command_id,
@@ -201,6 +211,14 @@ class CmdVelActionExecutor(Node):
 
         if action == "LOOK_AROUND_360" and target_degrees <= 0.0:
             target_degrees = 360.0
+        timed_duration_s = self.estimate_timed_duration_s(
+            action=action,
+            target_meters=target_meters,
+            target_degrees=target_degrees,
+            linear_speed_mps=linear_speed_mps,
+            angular_speed_deg_s=angular_speed_deg_s,
+        )
+        start_pose = self._latest_pose
 
         command = ActiveCommand(
             session_id=session_id,
@@ -214,8 +232,10 @@ class CmdVelActionExecutor(Node):
             timeout_s=timeout_s,
             started_at=self.now_s(),
             deadline=self.now_s() + timeout_s,
-            start_pose=self._latest_pose,
-            last_yaw_rad=float(self._latest_pose.yaw_rad),
+            start_pose=start_pose,
+            last_yaw_rad=float(start_pose.yaw_rad) if start_pose is not None else 0.0,
+            control_mode=control_mode,
+            timed_duration_s=timed_duration_s,
         )
         self._active_command = command
 
@@ -236,13 +256,15 @@ class CmdVelActionExecutor(Node):
             message="command executing",
         )
         self.get_logger().info(
-            "accepted step_id=%d action=%s meters=%.3f degrees=%.3f timeout=%.2f"
+            "accepted step_id=%d action=%s meters=%.3f degrees=%.3f timeout=%.2f mode=%s duration=%.2f"
             % (
                 command.step_id,
                 command.action,
                 command.target_meters,
                 command.target_degrees,
                 command.timeout_s,
+                control_mode,
+                command.timed_duration_s,
             )
         )
 
@@ -250,11 +272,19 @@ class CmdVelActionExecutor(Node):
         command = self._active_command
         if command is None:
             return
-        if self._latest_pose is None:
+        control_mode = str(command.control_mode or "odom")
+        if control_mode == "odom" and self._latest_pose is None:
             self.finish_active_command(
                 state="failed",
                 success=False,
                 message="odometry unavailable during execution",
+            )
+            return
+        if control_mode == "odom" and not self.odom_is_fresh():
+            self.finish_active_command(
+                state="failed",
+                success=False,
+                message="odometry stale during execution",
             )
             return
         if self.now_s() >= command.deadline:
@@ -263,6 +293,10 @@ class CmdVelActionExecutor(Node):
                 success=False,
                 message="command timeout",
             )
+            return
+
+        if control_mode == "timed":
+            self.control_timed(command)
             return
 
         if command.action == "MOVE_FORWARD":
@@ -276,6 +310,74 @@ class CmdVelActionExecutor(Node):
             state="failed",
             success=False,
             message=f"unhandled action: {command.action}",
+        )
+
+    def resolve_control_mode(self) -> str:
+        mode = str(self.config.control_mode or "odom").strip().lower()
+        if mode not in {"odom", "timed", "auto"}:
+            return "odom"
+        return mode
+
+    def odom_is_fresh(self) -> bool:
+        if self._latest_pose is None:
+            return False
+        if float(self.config.odom_timeout_s) <= 0.0:
+            return True
+        age_s = self.now_s() - float(self._latest_odom_received_at or 0.0)
+        return age_s <= float(self.config.odom_timeout_s)
+
+    @staticmethod
+    def estimate_timed_duration_s(
+        *,
+        action: str,
+        target_meters: float,
+        target_degrees: float,
+        linear_speed_mps: float,
+        angular_speed_deg_s: float,
+    ) -> float:
+        if action == "MOVE_FORWARD":
+            speed = max(float(linear_speed_mps or 0.0), 1e-3)
+            return max(float(target_meters or 0.0) / speed, 0.0)
+        if action in TURN_ACTIONS:
+            speed = max(float(angular_speed_deg_s or 0.0), 1e-3)
+            return max(float(target_degrees or 0.0) / speed, 0.0)
+        return 0.0
+
+    def control_timed(self, command: ActiveCommand) -> None:
+        elapsed_s = max(0.0, self.now_s() - float(command.started_at))
+        if elapsed_s >= float(command.timed_duration_s):
+            self.finish_active_command(
+                state="done",
+                success=True,
+                message="timed command complete",
+            )
+            return
+
+        if command.action == "MOVE_FORWARD":
+            linear_speed = min(
+                float(command.linear_speed_mps),
+                float(self.config.max_linear_speed_mps),
+            )
+            self.publish_twist(linear_x=max(linear_speed, 0.0), angular_z=0.0)
+            return
+
+        if command.action in TURN_ACTIONS:
+            angular_speed_rad_s = math.radians(
+                min(
+                    float(command.angular_speed_deg_s),
+                    float(self.config.max_angular_speed_deg_s),
+                )
+            )
+            self.publish_twist(
+                linear_x=0.0,
+                angular_z=self.turn_direction(command) * angular_speed_rad_s,
+            )
+            return
+
+        self.finish_active_command(
+            state="failed",
+            success=False,
+            message=f"unhandled timed action: {command.action}",
         )
 
     def control_move_forward(self, command: ActiveCommand) -> None:
@@ -363,6 +465,12 @@ class CmdVelActionExecutor(Node):
         return max(0.0, float(command.turn_progress_rad))
 
     def measure_forward_progress(self, command: ActiveCommand) -> float:
+        if command.control_mode == "timed" or command.start_pose is None:
+            elapsed_s = max(0.0, min(self.now_s() - float(command.started_at), float(command.timed_duration_s)))
+            return min(
+                float(command.target_meters),
+                max(0.0, float(command.linear_speed_mps) * elapsed_s),
+            )
         if self._latest_pose is None:
             return 0.0
         dx_world = float(self._latest_pose.x) - float(command.start_pose.x)
@@ -372,6 +480,12 @@ class CmdVelActionExecutor(Node):
         return max(0.0, float(forward))
 
     def measure_turn_progress_deg(self, command: ActiveCommand) -> float:
+        if command.control_mode == "timed" or command.start_pose is None:
+            elapsed_s = max(0.0, min(self.now_s() - float(command.started_at), float(command.timed_duration_s)))
+            return min(
+                float(command.target_degrees),
+                max(0.0, float(command.angular_speed_deg_s) * elapsed_s),
+            )
         if self._latest_pose is None:
             return 0.0
         if command.action not in TURN_ACTIONS:
@@ -468,9 +582,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--action-status-topic", default="/spacevln/action_status")
     parser.add_argument("--odom-topic", default="/odom")
     parser.add_argument("--cmd-vel-topic", default="/cmd_vel")
-    parser.add_argument("--control-rate-hz", type=float, default=20.0)
-    parser.add_argument("--position-tolerance-m", type=float, default=0.02)
-    parser.add_argument("--angle-tolerance-deg", type=float, default=3.0)
+    parser.add_argument(
+        "--control-mode",
+        choices=("odom", "timed", "auto"),
+        default="odom",
+        help="odom uses feedback; timed publishes speed for target/speed seconds; auto uses odom when available.",
+    )
+    parser.add_argument("--control-rate-hz", type=float, default=10.0)
+    parser.add_argument("--odom-timeout-s", type=float, default=0.5)
+    parser.add_argument("--position-tolerance-m", type=float, default=0.10)
+    parser.add_argument("--angle-tolerance-deg", type=float, default=10.0)
     parser.add_argument("--default-linear-speed-mps", type=float, default=0.15)
     parser.add_argument("--default-angular-speed-deg-s", type=float, default=45.0)
     parser.add_argument("--max-linear-speed-mps", type=float, default=0.25)
@@ -485,7 +606,9 @@ def config_from_args(args: argparse.Namespace) -> ExecutorConfig:
         action_status_topic=str(args.action_status_topic),
         odom_topic=str(args.odom_topic),
         cmd_vel_topic=str(args.cmd_vel_topic),
+        control_mode=str(args.control_mode),
         control_rate_hz=float(args.control_rate_hz),
+        odom_timeout_s=float(args.odom_timeout_s),
         position_tolerance_m=float(args.position_tolerance_m),
         angle_tolerance_deg=float(args.angle_tolerance_deg),
         default_linear_speed_mps=float(args.default_linear_speed_mps),

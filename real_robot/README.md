@@ -44,7 +44,20 @@ Prerequisites:
 3. The low-level robot controller listens on `/spacevln/action_cmd`
 4. The low-level robot controller publishes status on `/spacevln/action_status`
 
-Run:
+Simplest run, with the natural-language task filled directly in the command:
+
+```bash
+cd SpaceVLN
+bash real_robot/scripts/run_real_robot_simple.sh \
+  "Move forward through the doorway and approach the table on the left."
+```
+
+You can also edit `TASK_INSTRUCTION` at the top of
+`real_robot/scripts/run_real_robot_simple.sh`, or set `SPACEVLN_INSTRUCTION`.
+By default this simple launcher starts the reference `/cmd_vel` executor and
+then starts SpaceVLN.
+
+Equivalent explicit run:
 
 ```bash
 cd SpaceVLN
@@ -60,12 +73,27 @@ Run the reference ROS2 action executor:
 cd SpaceVLN
 bash real_robot/scripts/run_cmd_vel_executor.sh \
   --cmd-vel-topic /cmd_vel \
-  --odom-topic /odom
+  --odom-topic /odom \
+  --control-mode odom \
+  --control-rate-hz 10 \
+  --position-tolerance-m 0.10 \
+  --angle-tolerance-deg 10
 ```
 
-This executor subscribes to `/spacevln/action_cmd`, uses `/odom` as feedback,
-publishes base velocities on `/cmd_vel`, and reports terminal results on
-`/spacevln/action_status`.
+This executor subscribes to `/spacevln/action_cmd`, publishes base velocities on
+`/cmd_vel` at the configured control rate, and reports terminal results on
+`/spacevln/action_status`. By default it uses `/odom` as feedback. For an early
+bring-up without reliable odometry, run it with `--control-mode timed`; that
+publishes velocity for `target / speed` seconds and then sends zero velocity.
+
+Manual single-action tests:
+
+```bash
+bash real_robot/scripts/send_action_command.sh MOVE_FORWARD --meters 0.5
+bash real_robot/scripts/send_action_command.sh TURN_LEFT --degrees 30
+bash real_robot/scripts/send_action_command.sh LOOK_AROUND_360
+bash real_robot/scripts/send_action_command.sh STOP
+```
 
 ## Recommended Control Split
 
@@ -84,11 +112,11 @@ The high-level runtime should keep producing discrete actions:
 
 For `MOVE_FORWARD`, the runtime passes the VLM-selected target distance as one
 continuous command, usually 0.5m to 1.5m. The executor should translate each
-action into a closed-loop velocity sequence
+action into a velocity sequence
 using:
 
 - input: `/spacevln/action_cmd`
-- feedback: `/odom`
+- feedback: `/odom` in closed-loop mode
 - output: `/cmd_vel`
 - completion: `/spacevln/action_status`
 

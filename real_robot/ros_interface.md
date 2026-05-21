@@ -59,6 +59,22 @@ mapping pipeline:
 
 - `sensor_pose = [dx, dy, dtheta]`
 
+### 1.4 Stream Synchronization
+
+`SpaceVLN` uses RGB as the anchor stream for each observation. For every selected
+RGB frame, it chooses the closest depth frame and the closest pose frame within
+`sync_tolerance_s` from `real_robot/config/real_robot.yaml`:
+
+- default tolerance: `0.20s`
+- if no matching depth or pose frame is inside the tolerance, the runtime keeps
+  waiting until `observation_timeout_s`
+- if a ROS message has a valid `header.stamp`, that stamp is used
+- if `header.stamp` is zero or missing, receive time is used as a fallback
+
+For good alignment, publish RGB, depth, and odometry on the same ROS clock and
+with meaningful `header.stamp` values. If the camera and odometry clocks are not
+aligned, increase `sync_tolerance_s` only as a temporary bring-up workaround.
+
 ### 1.3 IMU Input
 
 - Topic: `/oak/imu/data`
@@ -211,7 +227,7 @@ Recommended split:
 1. `SpaceVLN` publishes one discrete action on `/spacevln/action_cmd`
 2. A ROS2 executor node subscribes to `/spacevln/action_cmd`
 3. That executor also subscribes to `/odom`
-4. The executor publishes `geometry_msgs/Twist` on `/cmd_vel`
+4. The executor publishes `geometry_msgs/Twist` on `/cmd_vel` at a fixed rate, 10Hz by default in the reference launcher
 5. When the target distance or angle is reached, the executor publishes `/spacevln/action_status`
 
 This keeps the high-level planner discrete and lets the low-level control stay
@@ -224,14 +240,40 @@ Reference implementation in this repository:
 
 Closed-loop behavior expected from the executor:
 
-- `MOVE_FORWARD`: keep publishing forward velocity until odometry shows the requested target distance was reached
-- `TURN_LEFT`: keep publishing positive angular velocity until odometry shows the target rotation was reached
-- `TURN_RIGHT`: keep publishing negative angular velocity until odometry shows the target rotation was reached
+- `MOVE_FORWARD`: keep publishing forward velocity until odometry shows the requested target distance was reached, or until the configured early-stop tolerance is reached
+- `TURN_LEFT`: keep publishing positive angular velocity until odometry shows the target rotation was reached, or until the configured early-stop tolerance is reached
+- `TURN_RIGHT`: keep publishing negative angular velocity until odometry shows the target rotation was reached, or until the configured early-stop tolerance is reached
 - `LOOK_AROUND_360`: keep publishing positive angular velocity and report unwrapped accumulated yaw, so a full 360 degree scan does not collapse to zero after angle normalization
 - `STOP`: publish zero velocity immediately and return a terminal status
 
+The reference executor defaults to conservative early stopping:
+
+- `--position-tolerance-m 0.10`
+- `--angle-tolerance-deg 10`
+
+At 10Hz and 45deg/s, one control tick is about 4.5 degrees, so a 10 degree
+window gives the executor room to stop before communication and base latency
+overshoot the target too much. Tune these values on the actual base.
+
 Avoid a pure time-based implementation such as "publish 0.15 m/s for 3.3 seconds
 and assume it moved 0.5 m". That will drift too much on real hardware.
+
+For first bring-up, the reference executor also supports:
+
+```bash
+bash real_robot/scripts/run_cmd_vel_executor.sh \
+  --control-mode timed \
+  --control-rate-hz 10
+```
+
+In `timed` mode it converts the high-level command to velocity plus duration:
+
+- forward duration: `target.meters / speed_hint.linear_mps`
+- turn duration: `target.degrees / speed_hint.angular_deg_s`
+- publish rate: `control_rate_hz`, normally 10Hz
+
+This mode is useful to validate topic wiring and basic base motion. Switch back
+to the default `--control-mode odom` for real evaluation runs.
 
 ## 4. Optional Capture Trigger
 
