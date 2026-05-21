@@ -1,6 +1,6 @@
-import attr
 import os
 import time
+from dataclasses import dataclass
 from typing import Any, Union, List, Tuple
 from abc import ABCMeta, abstractmethod
 
@@ -15,20 +15,23 @@ except ImportError:  # Habitat 0.2.x no longer exports Config
 
 import supervision as sv
 from groundingdino.util.inference import Model
-from segment_anything import sam_model_registry, SamPredictor
 
-from navigation_system.detection.vendor.repvit_sam.setup_repvit_sam import build_sam_repvit
+try:
+    from segment_anything import sam_model_registry, SamPredictor
+except Exception:
+    sam_model_registry = None
+    SamPredictor = None
 
 
 VisualObservation = Union[torch.Tensor, np.ndarray]
 
 
-@attr.s(auto_attribs=True)
+@dataclass
 class Segment(metaclass=ABCMeta):
     config: Config
     device: torch.device
     
-    def __attrs_post_init__(self):
+    def __post_init__(self):
         self._create_model(self.config, self.device)
     
     @abstractmethod
@@ -40,7 +43,7 @@ class Segment(metaclass=ABCMeta):
         pass
     
 
-@attr.s(auto_attribs=True)
+@dataclass
 class GroundedSAM(Segment):
     height: float = 480.
     width: float = 640.
@@ -131,15 +134,34 @@ class GroundedSAM(Segment):
                 )
                 return
 
-        if detection_model_cfg.USE_REPVIT_SAM:
-            sam = build_sam_repvit(checkpoint=repvit_sam_checkpoint_path)
-            sam.to(device=device)
+        self.sam_predictor = None
+        self._sam_disabled_reason = ""
+        self._sam_disabled_warned = False
+        if SamPredictor is None or sam_model_registry is None:
+            self._sam_disabled_reason = (
+                "segment_anything is not installed; using GroundingDINO boxes as coarse masks"
+            )
         else:
-            sam = sam_model_registry[sam_encoder_version](checkpoint=sam_checkpoint_path).to(device=device)
-        self.sam_predictor = SamPredictor(sam)
+            try:
+                if detection_model_cfg.USE_REPVIT_SAM:
+                    from navigation_system.detection.vendor.repvit_sam.setup_repvit_sam import (
+                        build_sam_repvit,
+                    )
+
+                    sam = build_sam_repvit(checkpoint=repvit_sam_checkpoint_path)
+                    sam.to(device=device)
+                else:
+                    sam = sam_model_registry[sam_encoder_version](checkpoint=sam_checkpoint_path).to(device=device)
+                self.sam_predictor = SamPredictor(sam)
+            except Exception as exc:
+                self.sam_predictor = None
+                self._sam_disabled_reason = (
+                    "SAM initialization failed; using GroundingDINO boxes as coarse masks. "
+                    f"Reason: {type(exc).__name__}: {exc}"
+                )
         self.grounding_dino_model.model.eval()
         
-    def _segment(self, sam_predictor: SamPredictor, image: np.ndarray, xyxy: np.ndarray) -> np.ndarray:
+    def _segment(self, sam_predictor: Any, image: np.ndarray, xyxy: np.ndarray) -> np.ndarray:
         sam_predictor.set_image(image)
         result_masks = []
         for box in xyxy:
@@ -150,6 +172,19 @@ class GroundedSAM(Segment):
             index = np.argmax(scores)
             result_masks.append(masks[index])
         return np.array(result_masks)
+
+    def _box_masks(self, image: np.ndarray, xyxy: np.ndarray) -> np.ndarray:
+        height, width = image.shape[:2]
+        masks = np.zeros((len(xyxy), height, width), dtype=np.float32)
+        for idx, box in enumerate(xyxy):
+            x1, y1, x2, y2 = box
+            left = max(0, min(width, int(np.floor(x1))))
+            top = max(0, min(height, int(np.floor(y1))))
+            right = max(0, min(width, int(np.ceil(x2))))
+            bottom = max(0, min(height, int(np.ceil(y2))))
+            if right > left and bottom > top:
+                masks[idx, top:bottom, left:right] = 1.0
+        return masks
     
     def _process_detections(self, detections: sv.Detections) -> sv.Detections:
         # 兼容旧版本 supervision：手动计算 box_area
@@ -261,11 +296,18 @@ class GroundedSAM(Segment):
                 class_name = str(classes[0])
             labels.append(f"{class_name or 'unknown'} {confidence:0.2f}")
         # t3 = time.time()
-        detections.mask = self._segment(
-            sam_predictor=self.sam_predictor,
-            image=cv2.cvtColor(image, cv2.COLOR_BGR2RGB),
-            xyxy=detections.xyxy
-        )
+        if self.sam_predictor is not None:
+            detections.mask = self._segment(
+                sam_predictor=self.sam_predictor,
+                image=cv2.cvtColor(image, cv2.COLOR_BGR2RGB),
+                xyxy=detections.xyxy
+            )
+        else:
+            if not bool(getattr(self, "_sam_disabled_warned", False)):
+                reason = str(getattr(self, "_sam_disabled_reason", "") or "SAM disabled")
+                print(f"[WARN] {reason}")
+                self._sam_disabled_warned = True
+            detections.mask = self._box_masks(image, detections.xyxy)
         # t4 = time.time()
         # print("grounding dino: ", t2 - t1)
         # print("process detections: ", t3 - t2)

@@ -118,6 +118,9 @@ class BaseNavigationController:
             self.segment_module = _NoOpSegmentModule("runtime disabled")
         
         # print("[Init] 初始化Semantic Mapping...")
+        self.config.defrost()
+        self.config.MAP.DEVICE = str(self.device)
+        self.config.freeze()
         mapping_module = Semantic_Mapping(self.config.MAP).to(self.device)
         mapping_module.eval()
         
@@ -1348,16 +1351,11 @@ class BaseNavigationController:
         )
     
     def finish_episode(self, success: bool = False, stop_action: bool = False) -> dict:
-        """
-        Episode结束总结
-        
-        重要：调用STOP动作以正确触发Habitat的Success判定
-        Success需要同时满足:
-        1. distance_to_goal < SUCCESS_DISTANCE (3米)
-        2. is_stop_called = True (必须调用STOP动作)
-        
-        Returns:
-            final_metrics: 调用STOP后的最终评估指标
+        """Finish the current episode/session and return final metrics.
+
+        Simulator environments use the final STOP action for their normal
+        success measurements. Real-robot environments can instead record the
+        model/planner completion flag through set_final_navigation_success().
         """
         final_metrics = {}
         self.final_stop_action_requested = bool(stop_action)

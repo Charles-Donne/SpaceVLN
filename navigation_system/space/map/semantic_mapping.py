@@ -22,8 +22,6 @@ import torch.nn as nn
 from torch import Tensor
 from torch.nn import functional as F
 
-import habitat_extensions.pose_utils as pu
-
 from navigation_system.config.core.constants import *
 from navigation_system.config.core.params.thresholds import SEM_MAP_LANDMARK_THRESH
 from navigation_system.space.map.map_utils import *

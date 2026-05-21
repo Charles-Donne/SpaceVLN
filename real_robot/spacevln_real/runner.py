@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import argparse
 import sys
-from types import SimpleNamespace
 import uuid
 
 from navigation_system.controller.agent.controller import NavigationAgentController
+from navigation_system.runtime.output_policy import (
+    add_output_artifact_args,
+    add_output_profile_arg,
+)
 from navigation_system.runtime.process_lifecycle import close_with_timeout
-from navigation_system.runtime.vlnce.r2r.execution import load_runtime_config
 from navigation_system.runtime.vlnce.profiles import (
     CONTEXT_CACHE_RUNTIME_PROFILE,
     STANDARD_RUNTIME_PROFILE,
@@ -19,6 +21,7 @@ from spacevln_real.command_bridge import ActionCommandBridge
 from spacevln_real.config import load_real_robot_config
 from spacevln_real.env_adapter import RealRobotVectorEnv
 from spacevln_real.observation_hub import ObservationHub
+from spacevln_real.runtime_config import build_real_runtime_config
 from spacevln_real.ros_runtime import build_ros_runtime
 
 
@@ -42,24 +45,6 @@ def _resolve_instruction(args: argparse.Namespace) -> str:
     return text
 
 
-def _apply_real_overrides(config, real_config) -> None:
-    config.defrost()
-    config.TASK_CONFIG.SIMULATOR.RGB_SENSOR.WIDTH = int(real_config.rgb_width)
-    config.TASK_CONFIG.SIMULATOR.RGB_SENSOR.HEIGHT = int(real_config.rgb_height)
-    config.TASK_CONFIG.SIMULATOR.RGB_SENSOR.HFOV = float(real_config.hfov_deg)
-    config.TASK_CONFIG.SIMULATOR.DEPTH_SENSOR.WIDTH = int(real_config.rgb_width)
-    config.TASK_CONFIG.SIMULATOR.DEPTH_SENSOR.HEIGHT = int(real_config.rgb_height)
-    config.TASK_CONFIG.SIMULATOR.DEPTH_SENSOR.HFOV = float(real_config.hfov_deg)
-    config.TASK_CONFIG.SIMULATOR.DEPTH_SENSOR.MIN_DEPTH = float(real_config.min_depth_m)
-    config.TASK_CONFIG.SIMULATOR.DEPTH_SENSOR.MAX_DEPTH = float(real_config.max_depth_m)
-    config.TASK_CONFIG.SIMULATOR.FORWARD_STEP_SIZE = float(real_config.forward_step_m)
-    config.TASK_CONFIG.SIMULATOR.TURN_ANGLE = float(real_config.turn_angle_deg)
-    config.SPACE.SENSOR.HFOV_DEG = float(real_config.hfov_deg)
-    config.SPACE.SENSOR.FRAME_WIDTH = int(real_config.rgb_width)
-    config.SPACE.SENSOR.FRAME_HEIGHT = int(real_config.rgb_height)
-    config.freeze()
-
-
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="SpaceVLN real-robot navigation entrypoint")
     parser.add_argument(
@@ -77,8 +62,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--exp-config",
         type=str,
-        default="navigation_system/config/experiments/vlnce/r2r_eval.yaml",
-        help="SpaceVLN experiment config",
+        default="",
+        help="Deprecated compatibility option; real-robot runtime now uses real-only config.",
     )
     parser.add_argument(
         "--real-config",
@@ -131,6 +116,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default="",
         help="Real-robot session id; auto-generated if omitted",
     )
+    add_output_profile_arg(parser)
+    add_output_artifact_args(parser)
     return parser
 
 
@@ -152,16 +139,12 @@ def main() -> int:
     ):
         args.vlm_api_config = CONTEXT_CACHE_RUNTIME_PROFILE.default_api_config_path
 
-    load_args = SimpleNamespace(
-        exp_config=args.exp_config,
-        results_dir=args.results_dir,
-        vlm_api_config=args.vlm_api_config,
-        max_steps=args.max_steps,
-        save_episode_stdout_log=False,
-    )
-    config = load_runtime_config(load_args, profile=runtime_profile)
     real_config = load_real_robot_config(args.real_config)
-    _apply_real_overrides(config, real_config)
+    config = build_real_runtime_config(
+        real_config=real_config,
+        args=args,
+        runtime_profile=runtime_profile,
+    )
 
     observation_hub = ObservationHub(real_config)
     command_bridge = ActionCommandBridge(real_config)

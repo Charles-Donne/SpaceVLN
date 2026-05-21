@@ -3583,6 +3583,33 @@ class NavigationAgentController(BaseNavigationController):
     
     def execute_rotation_sequence(self, action_sequence: List[Dict]) -> bool:
         """Execute a rotation sequence via the shared executor pipeline."""
+        if self._env_supports_continuous_action_targets() and action_sequence:
+            action_name = str(action_sequence[0].get('action', '') or '').upper()
+            if action_name in {'TURN_LEFT', 'TURN_RIGHT'} and all(
+                str(item.get('action', '') or '').upper() == action_name
+                for item in action_sequence
+            ):
+                total_degrees = sum(float(item.get('degrees', 0.0) or 0.0) for item in action_sequence)
+                action_id = (
+                    resolve_habitat_action("TURN_LEFT")
+                    if action_name == "TURN_LEFT"
+                    else resolve_habitat_action("TURN_RIGHT")
+                )
+                result = self.step_with_vlm(
+                    action_id,
+                    action_name,
+                    save_vis=True,
+                    enable_landmark_detection=False,
+                    env_action={
+                        "action": action_id,
+                        "target_degrees": float(total_degrees or self.turn_angle),
+                    },
+                )
+                if result.get('done', False):
+                    print("    [WARN] Episode ended during rotation")
+                    return False
+                return True
+
         for i, action_dict in enumerate(action_sequence):
             action_name = action_dict['action']
             

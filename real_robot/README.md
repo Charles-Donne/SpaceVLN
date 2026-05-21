@@ -37,12 +37,30 @@ pipeline without changing the simulator workflow.
 
 ## Quick Start
 
+The real-robot runtime uses a real-only config path and does not require
+Habitat-Lab or Habitat-Sim. Keep those dependencies for simulator evaluation
+only.
+
 Prerequisites:
 
 1. ROS2 is installed and sourced
 2. OAK-D Lite RGB, depth, and camera info topics are available
 3. The low-level robot controller listens on `/spacevln/action_cmd`
 4. The low-level robot controller publishes status on `/spacevln/action_status`
+5. Python dependencies for `GroundingDINO` plus optional `SAM`, SpaceVLN mapping,
+   VLM API calls, and `rclpy` are available
+
+Environment boundary:
+
+- Required for full real navigation: ROS2/rclpy message packages, PyTorch,
+  OpenCV, NumPy, Pillow/image tooling, `yacs`, `requests`, `PyYAML`,
+  GroundingDINO and its normal detection helpers such as `supervision`, plus a
+  valid VLM API config.
+- Optional: Segment Anything / RepViT-SAM. If SAM is not installed, detection
+  can fall back to GroundingDINO boxes as coarse masks.
+- Not required by the real-robot runtime: Habitat-Lab, Habitat-Sim,
+  habitat-baselines, and `numpy-quaternion`. Those remain simulator/evaluation
+  dependencies.
 
 Simplest run, with the natural-language task filled directly in the command:
 
@@ -63,8 +81,7 @@ Equivalent explicit run:
 cd SpaceVLN
 bash real_robot/scripts/run_real_navigation.sh \
   --instruction "Move forward through the doorway and approach the table on the left." \
-  --real-config real_robot/config/real_robot.yaml \
-  --exp-config navigation_system/config/experiments/vlnce/r2r_eval.yaml
+  --real-config real_robot/config/real_robot.yaml
 ```
 
 Run the reference ROS2 action executor:

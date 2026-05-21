@@ -17,7 +17,6 @@ CMD_VEL_TOPIC="${CMD_VEL_TOPIC:-/cmd_vel}"
 ODOM_TOPIC="${ODOM_TOPIC:-/odom}"
 
 REAL_CONFIG="${REAL_CONFIG:-real_robot/config/real_robot.yaml}"
-EXP_CONFIG="${EXP_CONFIG:-navigation_system/config/experiments/vlnce/r2r_eval.yaml}"
 RUNTIME="${RUNTIME:-standard}"
 MAX_SUBTASK_STEPS="${MAX_SUBTASK_STEPS:-5}"
 MAX_STEPS="${MAX_STEPS:-}"
@@ -72,7 +71,6 @@ fi
 NAV_ARGS=(
   --instruction "${TASK_INSTRUCTION}"
   --real-config "${REAL_CONFIG}"
-  --exp-config "${EXP_CONFIG}"
   --runtime "${RUNTIME}"
   --max-subtask-steps "${MAX_SUBTASK_STEPS}"
 )
