@@ -17,7 +17,7 @@ CMD_VEL_TOPIC="${CMD_VEL_TOPIC:-/cmd_vel}"
 ODOM_TOPIC="${ODOM_TOPIC:-/odom}"
 
 REAL_CONFIG="${REAL_CONFIG:-real_robot/config/real_robot.yaml}"
-RUNTIME="${RUNTIME:-standard}"
+RUNTIME="standard"
 MAX_SUBTASK_STEPS="${MAX_SUBTASK_STEPS:-5}"
 MAX_STEPS="${MAX_STEPS:-}"
 RESULTS_DIR="${RESULTS_DIR:-}"
@@ -26,6 +26,17 @@ VLM_API_CONFIG="${VLM_API_CONFIG:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REAL_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 SPACEVLN_DIR="$(cd "${REAL_DIR}/.." && pwd)"
+WORKSPACE_DIR="$(cd "${SPACEVLN_DIR}/.." && pwd)"
+
+# Real-robot runs always default to the workspace-level sibling result dir:
+#   <workspace>/SpaceVLN
+#   <workspace>/result/real_robot/...
+REAL_RESULTS_ROOT="${REAL_RESULTS_ROOT:-${WORKSPACE_DIR}/result}"
+export SPACEVLN_REAL_RESULTS_ROOT="${REAL_RESULTS_ROOT}"
+export SPACEVLN_RESULTS_ROOT="${REAL_RESULTS_ROOT}"
+export SPACEVLN_RESULTS_FAMILY="${SPACEVLN_RESULTS_FAMILY:-real_robot}"
+export SPACEVLN_OUTPUT_PROFILE="${SPACEVLN_OUTPUT_PROFILE:-debug}"
+export SPACEVLN_DISABLE_CONTEXT_CACHE=1
 
 if [[ -n "${SPACEVLN_ROS_SETUP:-}" && -f "${SPACEVLN_ROS_SETUP}" ]]; then
   # shellcheck disable=SC1090
@@ -45,6 +56,10 @@ if [[ -z "${TASK_INSTRUCTION// }" ]]; then
 fi
 
 cd "${SPACEVLN_DIR}"
+
+echo "[RealRobot] results_root=${SPACEVLN_RESULTS_ROOT}"
+echo "[RealRobot] output_profile=${SPACEVLN_OUTPUT_PROFILE}"
+echo "[RealRobot] runtime=standard (context cache disabled)"
 
 EXECUTOR_PID=""
 cleanup() {

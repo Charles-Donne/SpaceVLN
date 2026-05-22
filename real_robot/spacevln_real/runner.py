@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
-import sys
+import json
+import os
 import uuid
+from datetime import datetime
 
 from navigation_system.controller.agent.controller import NavigationAgentController
 from navigation_system.runtime.output_policy import (
@@ -13,7 +15,6 @@ from navigation_system.runtime.output_policy import (
 )
 from navigation_system.runtime.process_lifecycle import close_with_timeout
 from navigation_system.runtime.vlnce.profiles import (
-    CONTEXT_CACHE_RUNTIME_PROFILE,
     STANDARD_RUNTIME_PROFILE,
 )
 
@@ -28,7 +29,10 @@ from spacevln_real.ros_runtime import build_ros_runtime
 def _resolve_runtime_profile(runtime_name: str):
     normalized = str(runtime_name or "standard").strip().lower()
     if normalized == "context_cache":
-        return CONTEXT_CACHE_RUNTIME_PROFILE
+        print(
+            "[REAL] context_cache is disabled for real-robot runs; using standard runtime",
+            flush=True,
+        )
     return STANDARD_RUNTIME_PROFILE
 
 
@@ -43,6 +47,44 @@ def _resolve_instruction(args: argparse.Namespace) -> str:
     if not text:
         raise ValueError("provide --instruction or --instruction-file")
     return text
+
+
+def _write_real_session_status(
+    *,
+    results_dir: str,
+    session_id: str,
+    state: str,
+    instruction: str,
+    result: dict = None,
+    error: str = "",
+) -> str:
+    os.makedirs(results_dir, exist_ok=True)
+    payload = {
+        "session_id": str(session_id),
+        "state": str(state),
+        "instruction": str(instruction),
+        "timestamp": datetime.now().isoformat(),
+        "results_dir": str(results_dir),
+    }
+    if result is not None:
+        payload["result"] = dict(result)
+    if error:
+        payload["error"] = str(error)
+
+    status_path = os.path.join(results_dir, "real_session_latest.json")
+    tmp_path = f"{status_path}.tmp"
+    with open(tmp_path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, status_path)
+
+    session_dir = os.path.join(results_dir, "real_sessions")
+    os.makedirs(session_dir, exist_ok=True)
+    session_path = os.path.join(session_dir, f"{session_id}.json")
+    tmp_session_path = f"{session_path}.tmp"
+    with open(tmp_session_path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+    os.replace(tmp_session_path, session_path)
+    return status_path
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -90,7 +132,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=str,
         choices=("standard", "context_cache"),
         default="standard",
-        help="Runtime mode",
+        help="Runtime mode; real-robot runs always use standard mode and ignore context_cache",
     )
     parser.add_argument(
         "--max-subtask-steps",
@@ -127,31 +169,34 @@ def main() -> int:
     instruction_text = _resolve_instruction(args)
     runtime_profile = _resolve_runtime_profile(getattr(args, "runtime", "standard"))
 
-    if (
-        getattr(args, "runtime", "standard") == "context_cache"
-        and not any(
-            arg == "--vlm-api-config"
-            or arg.startswith("--vlm-api-config=")
-            or arg == "--config"
-            or arg.startswith("--config=")
-            for arg in sys.argv[1:]
-        )
-    ):
-        args.vlm_api_config = CONTEXT_CACHE_RUNTIME_PROFILE.default_api_config_path
-
     real_config = load_real_robot_config(args.real_config)
     config = build_real_runtime_config(
         real_config=real_config,
         args=args,
         runtime_profile=runtime_profile,
     )
+    os.makedirs(config.PATHS.RESULTS_DIR, exist_ok=True)
+    session_id = str(args.session_id or uuid.uuid4())
+    status_path = _write_real_session_status(
+        results_dir=config.PATHS.RESULTS_DIR,
+        session_id=session_id,
+        state="starting",
+        instruction=instruction_text,
+    )
+    print(f"[REAL] results_dir={config.PATHS.RESULTS_DIR}", flush=True)
+    print(f"[REAL] live_status={status_path}", flush=True)
 
     observation_hub = ObservationHub(real_config)
     command_bridge = ActionCommandBridge(real_config)
     ros_runtime = build_ros_runtime(real_config, observation_hub, command_bridge)
     ros_runtime.start()
 
-    session_id = str(args.session_id or uuid.uuid4())
+    _write_real_session_status(
+        results_dir=config.PATHS.RESULTS_DIR,
+        session_id=session_id,
+        state="running",
+        instruction=instruction_text,
+    )
     env = RealRobotVectorEnv(
         real_config,
         observation_hub,
@@ -175,6 +220,13 @@ def main() -> int:
         result = controller.run_navigation(
             max_subtask_steps=int(args.max_subtask_steps or 5),
         )
+        _write_real_session_status(
+            results_dir=config.PATHS.RESULTS_DIR,
+            session_id=session_id,
+            state="finished",
+            instruction=instruction_text,
+            result=result,
+        )
         print(
             "\n[REAL] session=%s success=%s total_steps=%s result_file=%s"
             % (
@@ -186,6 +238,15 @@ def main() -> int:
             flush=True,
         )
         return 0
+    except Exception as exc:
+        _write_real_session_status(
+            results_dir=config.PATHS.RESULTS_DIR,
+            session_id=session_id,
+            state="failed",
+            instruction=instruction_text,
+            error=repr(exc),
+        )
+        raise
     finally:
         if controller is not None and hasattr(controller, "envs") and controller.envs is not None:
             close_with_timeout(controller.envs.close, label="real-robot environment")

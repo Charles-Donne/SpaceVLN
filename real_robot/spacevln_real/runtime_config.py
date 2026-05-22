@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import os
-from typing import Optional
+import copy
+from typing import Any, Mapping, Optional
 
 import yaml
-from yacs.config import CfgNode as CN
 
 from navigation_system.config.core.setup import apply_runtime_derived_fields
 from navigation_system.config.core.params.detection import (
@@ -53,15 +53,91 @@ from navigation_system.runtime.storage.results_layout import (
 from spacevln_real.models import RealRobotConfig
 
 
+class CN(dict):
+    """Small yacs-compatible config node for the real-robot runtime."""
+
+    def __init__(
+        self,
+        init_dict: Optional[Mapping[str, Any]] = None,
+        key_list=None,
+        new_allowed: bool = True,
+    ) -> None:
+        del key_list, new_allowed
+        super().__init__()
+        if init_dict:
+            for key, value in init_dict.items():
+                self[key] = self._wrap(value)
+        self._frozen = False
+
+    @classmethod
+    def _wrap(cls, value: Any) -> Any:
+        if isinstance(value, CN):
+            return value
+        if isinstance(value, Mapping):
+            return cls(value)
+        if isinstance(value, list):
+            return [cls._wrap(item) for item in value]
+        return value
+
+    def __getattr__(self, name: str) -> Any:
+        try:
+            return self[name]
+        except KeyError as exc:
+            raise AttributeError(name) from exc
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name.startswith("_"):
+            super().__setattr__(name, value)
+        else:
+            self[name] = self._wrap(value)
+
+    def clone(self) -> "CN":
+        return copy.deepcopy(self)
+
+    def defrost(self) -> None:
+        self._frozen = False
+        for value in self.values():
+            if isinstance(value, CN):
+                value.defrost()
+
+    def freeze(self) -> None:
+        self._frozen = True
+        for value in self.values():
+            if isinstance(value, CN):
+                value.freeze()
+
+    def is_frozen(self) -> bool:
+        return bool(self._frozen)
+
+    def merge_from_file(self, path: str) -> None:
+        with open(path, "r", encoding="utf-8") as handle:
+            payload = yaml.safe_load(handle) or {}
+        if not isinstance(payload, Mapping):
+            raise ValueError(f"Config file must contain a YAML mapping: {path}")
+        self.merge_from_mapping(payload)
+
+    def merge_from_mapping(self, payload: Mapping[str, Any]) -> None:
+        for key, value in payload.items():
+            if (
+                key in self
+                and isinstance(self[key], CN)
+                and isinstance(value, Mapping)
+            ):
+                self[key].merge_from_mapping(value)
+            else:
+                self[key] = self._wrap(value)
+
+
 def _repo_root() -> str:
     return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 
-def _yaml_mapping(path: str) -> dict:
-    if not os.path.exists(path):
-        return {}
-    with open(path, "r", encoding="utf-8") as handle:
-        return dict(yaml.safe_load(handle) or {})
+def _workspace_root() -> str:
+    return os.path.abspath(os.path.join(_repo_root(), ".."))
+
+
+def _default_real_results_root() -> str:
+    return os.path.join(_workspace_root(), "result")
 
 
 def _merge_system_yaml(config: CN, relative_path: str) -> None:
@@ -219,10 +295,10 @@ def _build_base_config(real_config: RealRobotConfig, max_steps: Optional[int]) -
 
 
 def _resolve_results_root_setting() -> str:
-    runtime_yaml = _yaml_mapping(
-        os.path.join(_repo_root(), "navigation_system/config/system/00_runtime.yaml")
-    )
-    return str(((runtime_yaml.get("PATHS") or {}).get("RESULTS_ROOT")) or "").strip()
+    real_env_results_root = str(os.getenv("SPACEVLN_REAL_RESULTS_ROOT", "") or "").strip()
+    if real_env_results_root:
+        return real_env_results_root
+    return _default_real_results_root()
 
 
 def build_real_runtime_config(
@@ -232,13 +308,6 @@ def build_real_runtime_config(
     runtime_profile,
 ) -> CN:
     """Build the controller config for real-robot navigation without Habitat imports."""
-    if str(getattr(runtime_profile, "name", "") or "") == "context_cache":
-        from navigation_system.vlm.api.qwen_context_cache_client import (
-            validate_qwen_context_cache_api_config,
-        )
-
-        validate_qwen_context_cache_api_config(args.vlm_api_config)
-
     config = _build_base_config(real_config, getattr(args, "max_steps", None))
     _merge_system_yaml(config, "navigation_system/config/system/10_detection_models.yaml")
     _merge_system_yaml(config, "navigation_system/config/system/20_space_sensor.yaml")
@@ -260,9 +329,8 @@ def build_real_runtime_config(
         config.TASK_CONFIG.ENVIRONMENT.MAX_EPISODE_STEPS = int(args.max_steps)
 
     configured_results_root = str(getattr(config.PATHS, "RESULTS_ROOT", "") or "").strip()
-    env_results_root = str(os.getenv("SPACEVLN_RESULTS_ROOT", "") or "").strip()
     yaml_results_root = _resolve_results_root_setting()
-    selected_results_root = env_results_root or configured_results_root or yaml_results_root
+    selected_results_root = configured_results_root or yaml_results_root
     resolved_results_dir = resolve_results_dir_path(
         str(getattr(args, "results_dir", "") or "").strip()
     )
