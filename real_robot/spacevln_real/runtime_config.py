@@ -308,6 +308,13 @@ def build_real_runtime_config(
     runtime_profile,
 ) -> CN:
     """Build the controller config for real-robot navigation without Habitat imports."""
+    if str(getattr(runtime_profile, "name", "") or "") == "context_cache":
+        from navigation_system.vlm.api.qwen_context_cache_client import (
+            validate_qwen_context_cache_api_config,
+        )
+
+        validate_qwen_context_cache_api_config(args.vlm_api_config)
+
     config = _build_base_config(real_config, getattr(args, "max_steps", None))
     _merge_system_yaml(config, "navigation_system/config/system/10_detection_models.yaml")
     _merge_system_yaml(config, "navigation_system/config/system/20_space_sensor.yaml")
@@ -331,9 +338,19 @@ def build_real_runtime_config(
     configured_results_root = str(getattr(config.PATHS, "RESULTS_ROOT", "") or "").strip()
     yaml_results_root = _resolve_results_root_setting()
     selected_results_root = configured_results_root or yaml_results_root
-    resolved_results_dir = resolve_results_dir_path(
-        str(getattr(args, "results_dir", "") or "").strip()
-    )
+    raw_results_dir = str(getattr(args, "results_dir", "") or "").strip()
+    allow_results_dir_override = str(
+        os.getenv("SPACEVLN_ALLOW_REAL_RESULTS_DIR_OVERRIDE", "") or ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    if raw_results_dir and not allow_results_dir_override:
+        print(
+            "[REAL] ignoring --results-dir; real-robot runs write to the "
+            "SpaceVLN sibling result dir by default. Set "
+            "SPACEVLN_ALLOW_REAL_RESULTS_DIR_OVERRIDE=1 to override.",
+            flush=True,
+        )
+        raw_results_dir = ""
+    resolved_results_dir = resolve_results_dir_path(raw_results_dir)
     if not resolved_results_dir:
         previous_family = os.environ.get("SPACEVLN_RESULTS_FAMILY")
         os.environ["SPACEVLN_RESULTS_FAMILY"] = "real_robot"

@@ -17,7 +17,7 @@ CMD_VEL_TOPIC="${CMD_VEL_TOPIC:-/cmd_vel}"
 ODOM_TOPIC="${ODOM_TOPIC:-/odom}"
 
 REAL_CONFIG="${REAL_CONFIG:-real_robot/config/real_robot.yaml}"
-RUNTIME="standard"
+RUNTIME="${RUNTIME:-context_cache}"
 MAX_SUBTASK_STEPS="${MAX_SUBTASK_STEPS:-5}"
 MAX_STEPS="${MAX_STEPS:-}"
 RESULTS_DIR="${RESULTS_DIR:-}"
@@ -36,7 +36,7 @@ export SPACEVLN_REAL_RESULTS_ROOT="${REAL_RESULTS_ROOT}"
 export SPACEVLN_RESULTS_ROOT="${REAL_RESULTS_ROOT}"
 export SPACEVLN_RESULTS_FAMILY="${SPACEVLN_RESULTS_FAMILY:-real_robot}"
 export SPACEVLN_OUTPUT_PROFILE="${SPACEVLN_OUTPUT_PROFILE:-debug}"
-export SPACEVLN_DISABLE_CONTEXT_CACHE=1
+export PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"
 
 if [[ -n "${SPACEVLN_ROS_SETUP:-}" && -f "${SPACEVLN_ROS_SETUP}" ]]; then
   # shellcheck disable=SC1090
@@ -59,7 +59,7 @@ cd "${SPACEVLN_DIR}"
 
 echo "[RealRobot] results_root=${SPACEVLN_RESULTS_ROOT}"
 echo "[RealRobot] output_profile=${SPACEVLN_OUTPUT_PROFILE}"
-echo "[RealRobot] runtime=standard (context cache disabled)"
+echo "[RealRobot] runtime=${RUNTIME}"
 
 EXECUTOR_PID=""
 cleanup() {
@@ -71,7 +71,7 @@ cleanup() {
 trap cleanup EXIT
 
 if [[ "${START_EXECUTOR}" == "1" ]]; then
-  python3 "${REAL_DIR}/run_cmd_vel_executor.py" \
+  python3 -u "${REAL_DIR}/run_cmd_vel_executor.py" \
     --cmd-vel-topic "${CMD_VEL_TOPIC}" \
     --odom-topic "${ODOM_TOPIC}" \
     --control-mode "${CONTROL_MODE}" \
@@ -93,11 +93,13 @@ NAV_ARGS=(
 if [[ -n "${MAX_STEPS}" ]]; then
   NAV_ARGS+=(--max-steps "${MAX_STEPS}")
 fi
-if [[ -n "${RESULTS_DIR}" ]]; then
+if [[ -n "${RESULTS_DIR}" && "${SPACEVLN_ALLOW_REAL_RESULTS_DIR_OVERRIDE:-0}" == "1" ]]; then
   NAV_ARGS+=(--results-dir "${RESULTS_DIR}")
+elif [[ -n "${RESULTS_DIR}" ]]; then
+  echo "[RealRobot] ignoring RESULTS_DIR; set SPACEVLN_ALLOW_REAL_RESULTS_DIR_OVERRIDE=1 to override the sibling result dir" >&2
 fi
 if [[ -n "${VLM_API_CONFIG}" ]]; then
   NAV_ARGS+=(--vlm-api-config "${VLM_API_CONFIG}")
 fi
 
-python3 "${REAL_DIR}/run_real_navigation.py" "${NAV_ARGS[@]}"
+python3 -u "${REAL_DIR}/run_real_navigation.py" "${NAV_ARGS[@]}"

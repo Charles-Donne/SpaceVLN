@@ -5,16 +5,17 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import uuid
 from datetime import datetime
 
-from navigation_system.controller.agent.controller import NavigationAgentController
 from navigation_system.runtime.output_policy import (
     add_output_artifact_args,
     add_output_profile_arg,
 )
 from navigation_system.runtime.process_lifecycle import close_with_timeout
 from navigation_system.runtime.vlnce.profiles import (
+    CONTEXT_CACHE_RUNTIME_PROFILE,
     STANDARD_RUNTIME_PROFILE,
 )
 
@@ -22,6 +23,7 @@ from spacevln_real.command_bridge import ActionCommandBridge
 from spacevln_real.config import load_real_robot_config
 from spacevln_real.env_adapter import RealRobotVectorEnv
 from spacevln_real.observation_hub import ObservationHub
+from spacevln_real.real_controller import RealNavigationAgentController
 from spacevln_real.runtime_config import build_real_runtime_config
 from spacevln_real.ros_runtime import build_ros_runtime
 
@@ -29,10 +31,7 @@ from spacevln_real.ros_runtime import build_ros_runtime
 def _resolve_runtime_profile(runtime_name: str):
     normalized = str(runtime_name or "standard").strip().lower()
     if normalized == "context_cache":
-        print(
-            "[REAL] context_cache is disabled for real-robot runs; using standard runtime",
-            flush=True,
-        )
+        return CONTEXT_CACHE_RUNTIME_PROFILE
     return STANDARD_RUNTIME_PROFILE
 
 
@@ -131,8 +130,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--runtime",
         type=str,
         choices=("standard", "context_cache"),
-        default="standard",
-        help="Runtime mode; real-robot runs always use standard mode and ignore context_cache",
+        default="context_cache",
+        help="Runtime mode",
     )
     parser.add_argument(
         "--max-subtask-steps",
@@ -168,6 +167,17 @@ def main() -> int:
     args = parser.parse_args()
     instruction_text = _resolve_instruction(args)
     runtime_profile = _resolve_runtime_profile(getattr(args, "runtime", "standard"))
+    if (
+        getattr(args, "runtime", "standard") == "context_cache"
+        and not any(
+            arg == "--vlm-api-config"
+            or arg.startswith("--vlm-api-config=")
+            or arg == "--config"
+            or arg.startswith("--config=")
+            for arg in sys.argv[1:]
+        )
+    ):
+        args.vlm_api_config = CONTEXT_CACHE_RUNTIME_PROFILE.default_api_config_path
 
     real_config = load_real_robot_config(args.real_config)
     config = build_real_runtime_config(
@@ -210,15 +220,25 @@ def main() -> int:
 
     controller = None
     try:
-        controller = NavigationAgentController(
+        controller = RealNavigationAgentController(
             config,
             config_path=args.vlm_api_config,
             model_stack_builder=runtime_profile.model_stack_builder,
             envs=env,
         )
+        controller.configure_real_live_status(
+            session_id=session_id,
+            instruction=instruction_text,
+        )
         controller.reset_episode(episode_id=args.episode_id)
         result = controller.run_navigation(
             max_subtask_steps=int(args.max_subtask_steps or 5),
+        )
+        controller._write_real_live_status(
+            event="session_finished",
+            state="finished",
+            extra={"result": result},
+            append_step=False,
         )
         _write_real_session_status(
             results_dir=config.PATHS.RESULTS_DIR,
@@ -239,6 +259,13 @@ def main() -> int:
         )
         return 0
     except Exception as exc:
+        if controller is not None:
+            controller._write_real_live_status(
+                event="session_failed",
+                state="failed",
+                extra={"error": repr(exc)},
+                append_step=False,
+            )
         _write_real_session_status(
             results_dir=config.PATHS.RESULTS_DIR,
             session_id=session_id,
