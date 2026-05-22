@@ -61,6 +61,13 @@ class RealRobotConfig:
     observation_timeout_s: float = 3.0
     action_timeout_s: float = 20.0
     sync_tolerance_s: float = 0.2
+    lookaround_sample_count: int = 8
+    lookaround_angle_step_deg: float = 45.0
+    disable_depth_map_update: bool = False
+    depth_fusion_frames: int = 3
+    selective_dynamic_obstacle_update: bool = True
+    obstacle_evidence_threshold: float = 0.55
+    obstacle_evidence_max_observations: int = 8
     image_queue_size: int = 8
     pose_queue_size: int = 32
     rgb_width: int = 640
@@ -69,7 +76,7 @@ class RealRobotConfig:
     min_depth_m: float = 0.3
     max_depth_m: float = 3.0
     forward_step_m: float = 0.5
-    turn_angle_deg: float = 30.0
+    turn_angle_deg: float = 45.0
     linear_speed_mps: float = 0.5
     angular_speed_deg_s: float = 60.0
     topics: TopicConfig = field(default_factory=TopicConfig)
@@ -80,6 +87,8 @@ class RealRobotConfig:
         camera_cfg = dict(payload.get("camera", {}) or {})
         control_cfg = dict(payload.get("control", {}) or {})
         buffer_cfg = dict(payload.get("buffers", {}) or {})
+        lookaround_cfg = dict(payload.get("lookaround", {}) or {})
+        mapping_cfg = dict(payload.get("mapping", {}) or {})
         return cls(
             ros_version=str(payload.get("ros_version", "auto")).strip() or "auto",
             node_name=str(payload.get("node_name", "spacevln_real")).strip() or "spacevln_real",
@@ -97,6 +106,50 @@ class RealRobotConfig:
             observation_timeout_s=float(payload.get("observation_timeout_s", 3.0)),
             action_timeout_s=float(payload.get("action_timeout_s", 20.0)),
             sync_tolerance_s=float(payload.get("sync_tolerance_s", 0.2)),
+            lookaround_sample_count=max(
+                1,
+                int(lookaround_cfg.get("sample_count", payload.get("lookaround_sample_count", 8))),
+            ),
+            lookaround_angle_step_deg=float(
+                lookaround_cfg.get("angle_step_deg", payload.get("lookaround_angle_step_deg", 45.0))
+            ),
+            disable_depth_map_update=bool(
+                mapping_cfg.get(
+                    "disable_depth_map_update",
+                    payload.get("disable_depth_map_update", False),
+                )
+            ),
+            depth_fusion_frames=max(
+                1,
+                int(mapping_cfg.get("depth_fusion_frames", payload.get("depth_fusion_frames", 3))),
+            ),
+            selective_dynamic_obstacle_update=bool(
+                mapping_cfg.get(
+                    "selective_dynamic_obstacle_update",
+                    payload.get("selective_dynamic_obstacle_update", True),
+                )
+            ),
+            obstacle_evidence_threshold=min(
+                1.0,
+                max(
+                    0.0,
+                    float(
+                        mapping_cfg.get(
+                            "obstacle_evidence_threshold",
+                            payload.get("obstacle_evidence_threshold", 0.55),
+                        )
+                    ),
+                ),
+            ),
+            obstacle_evidence_max_observations=max(
+                0,
+                int(
+                    mapping_cfg.get(
+                        "obstacle_evidence_max_observations",
+                        payload.get("obstacle_evidence_max_observations", 8),
+                    )
+                ),
+            ),
             image_queue_size=max(2, int(buffer_cfg.get("image_queue_size", 8))),
             pose_queue_size=max(8, int(buffer_cfg.get("pose_queue_size", 32))),
             rgb_width=max(1, int(camera_cfg.get("rgb_width", 640))),
@@ -105,7 +158,7 @@ class RealRobotConfig:
             min_depth_m=float(camera_cfg.get("min_depth_m", 0.3)),
             max_depth_m=float(camera_cfg.get("max_depth_m", 3.0)),
             forward_step_m=float(control_cfg.get("forward_step_m", 0.5)),
-            turn_angle_deg=float(control_cfg.get("turn_angle_deg", 30.0)),
+            turn_angle_deg=float(control_cfg.get("turn_angle_deg", 45.0)),
             linear_speed_mps=float(control_cfg.get("linear_speed_mps", 0.5)),
             angular_speed_deg_s=float(control_cfg.get("angular_speed_deg_s", 60.0)),
             topics=TopicConfig.from_dict(payload.get("topics")),

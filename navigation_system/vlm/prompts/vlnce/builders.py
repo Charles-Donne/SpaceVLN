@@ -56,6 +56,119 @@ def _use_fast_prompt_profile(model_name=None, prompt_profile=None) -> bool:
     return profile in {"fast", "compressed", "compact"}
 
 
+def _read_positive_int_env(name: str, default: int) -> int:
+    raw_value = str(os.getenv(name, "") or "").strip()
+    if not raw_value:
+        return int(default)
+    try:
+        return max(1, int(float(raw_value)))
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _read_positive_float_env(name: str, default: float) -> float:
+    raw_value = str(os.getenv(name, "") or "").strip()
+    if not raw_value:
+        return float(default)
+    try:
+        parsed = float(raw_value)
+    except (TypeError, ValueError):
+        return float(default)
+    return parsed if parsed > 0.0 else float(default)
+
+
+def _fmt_degrees(value: float) -> str:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        numeric = 30.0
+    if abs(numeric - round(numeric)) < 1e-6:
+        return str(int(round(numeric)))
+    return f"{numeric:g}"
+
+
+def _apply_lookaround_prompt_overrides(prompt: str) -> str:
+    view_count = _read_positive_int_env("SPACEVLN_LOOKAROUND_VIEW_COUNT", 12)
+    step_deg = _read_positive_float_env("SPACEVLN_LOOKAROUND_STEP_DEG", 30.0)
+    allow_missing_map = str(os.getenv("SPACEVLN_ALLOW_MISSING_GLOBAL_MAP", "") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    allow_generic_waypoints = str(os.getenv("SPACEVLN_ALLOW_GENERIC_WAYPOINT_LABELS", "") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if (
+        view_count == 12
+        and abs(step_deg - 30.0) < 1e-6
+        and not allow_missing_map
+        and not allow_generic_waypoints
+    ):
+        return prompt
+
+    text = str(prompt or "")
+    step_text = _fmt_degrees(step_deg)
+    replacements = (
+        ("`12 Views`", f"`{view_count} Views`"),
+        ("12 Views", f"{view_count} Views"),
+        ("12 views", f"{view_count} views"),
+        ("12-View", f"{view_count}-View"),
+        ("12-view", f"{view_count}-view"),
+        ("12-IMAGE", f"{view_count}-IMAGE"),
+        ("12 IMAGE", f"{view_count} IMAGE"),
+        ("IMAGE 1-12", f"IMAGE 1-{view_count}"),
+        ("IMAGE1-12", f"IMAGE1-{view_count}"),
+        ("IMAGE 12", f"IMAGE {view_count}"),
+        ("IMAGE12", f"IMAGE{view_count}"),
+        ("all 12 views", f"all {view_count} views"),
+        ("all 12 Views", f"all {view_count} Views"),
+        ("current 12-view", f"current {view_count}-view"),
+        ("real 12-view", f"real {view_count}-view"),
+        ("sampled every 30°", f"sampled every {step_text}°"),
+        ("sampled every 30deg", f"sampled every {step_text}deg"),
+    )
+    for old, new in replacements:
+        text = text.replace(old, new)
+
+    if view_count == 8 and abs(step_deg - 45.0) < 1e-6:
+        label_replacements = (
+            ("IMAGE 2 (Left 30°)", "IMAGE 2 (Left 45°)"),
+            ("IMAGE 2 (Left 30deg)", "IMAGE 2 (Left 45deg)"),
+            ("IMAGE 3 (Left 60°)", "IMAGE 2 (Left 45°)"),
+            ("IMAGE 3 (Left 60deg)", "IMAGE 2 (Left 45deg)"),
+            ("IMAGE 4 (Left 90°)", "IMAGE 3 (Left 90°)"),
+            ("IMAGE 4 (Left 90deg)", "IMAGE 3 (Left 90deg)"),
+            ("IMAGE 5 (Left 120°)", "IMAGE 4 (Left 135°)"),
+            ("IMAGE 5 (Left 120deg)", "IMAGE 4 (Left 135deg)"),
+            ("IMAGE 6 (Left 150°)", "IMAGE 4 (Left 135°)"),
+            ("IMAGE 6 (Left 150deg)", "IMAGE 4 (Left 135deg)"),
+            ("IMAGE 7 (Back 180°)", "IMAGE 5 (Back 180°)"),
+            ("IMAGE 7 (Back 180deg)", "IMAGE 5 (Back 180deg)"),
+            ("IMAGE 8 (Right 150°)", "IMAGE 6 (Right 135°)"),
+            ("IMAGE 8 (Right 150deg)", "IMAGE 6 (Right 135deg)"),
+        )
+        for old, new in label_replacements:
+            text = text.replace(old, new)
+
+    if allow_missing_map and "Real-robot depth-map note" not in text:
+        text += (
+            "\n\n**Real-robot depth-map note**: if the Global Map image states that "
+            "depth mapping is disabled, do not infer route geometry from that map. "
+            "Use the stopped RGB views, their IMAGE labels, and per-view obstacle distances."
+        )
+    if allow_generic_waypoints and "Real-robot waypoint label note" not in text:
+        text += (
+            "\n\n**Real-robot waypoint label note**: prefer concrete space/landmark names, "
+            "but if the live scene is ambiguous, output the best useful area/room/space label "
+            "instead of failing or retrying only to avoid a generic word."
+        )
+    return text
+
+
 def _select_prompt_template(default_template: str, fast_template: str, *, model_name=None, prompt_profile=None) -> str:
     if _use_fast_prompt_profile(model_name=model_name, prompt_profile=prompt_profile):
         return fast_template
@@ -137,12 +250,12 @@ def _render_initial_planning_system_prompt(*, model_name=None, prompt_profile=No
         model_name=model_name,
         prompt_profile=prompt_profile,
     )
-    return _normalize_anchor_notation_text(template.format(
+    return _apply_lookaround_prompt_overrides(_normalize_anchor_notation_text(template.format(
         obs_blocked_m=_fmt_threshold_m(OBS_BLOCKED_M),
         obs_risky_m=_fmt_threshold_m(OBS_RISKY_M),
         obs_open_m=_fmt_threshold_m(OBS_OPEN_M),
         arrival_near_m=_fmt_threshold_m(ARRIVAL_NEAR_M),
-    ))
+    )))
 
 
 def build_initial_planner_prompt_bundle(
@@ -205,12 +318,12 @@ def _render_verify_planning_system_prompt(*, model_name=None, prompt_profile=Non
         model_name=model_name,
         prompt_profile=prompt_profile,
     )
-    return _normalize_anchor_notation_text(template.format(
+    return _apply_lookaround_prompt_overrides(_normalize_anchor_notation_text(template.format(
         obs_blocked_m=_fmt_threshold_m(OBS_BLOCKED_M),
         obs_risky_m=_fmt_threshold_m(OBS_RISKY_M),
         obs_open_m=_fmt_threshold_m(OBS_OPEN_M),
         arrival_near_m=_fmt_threshold_m(ARRIVAL_NEAR_M),
-    ))
+    )))
 
 
 def build_verify_planner_prompt_bundle(
@@ -315,13 +428,14 @@ def _format_obstacle_state(distance_text) -> str:
     return ""
 
 
-def _build_obstacle_perception_summary(obstacle_distances=None) -> str:
+def _build_obstacle_perception_summary(obstacle_distances=None, turn_angle: float = 30) -> str:
     distances = dict(obstacle_distances or {})
+    side_angle = _fmt_degrees(turn_angle)
     items = []
     for label, key in (
         ("FRONT", "front"),
-        ("Left 30deg", "left_30"),
-        ("Right 30deg", "right_30"),
+        (f"Left {side_angle}deg", "left_30"),
+        (f"Right {side_angle}deg", "right_30"),
     ):
         distance_text = distances.get(key, "Unknown")
         state_text = _format_obstacle_state(distance_text)
@@ -367,22 +481,24 @@ def _normalize_allowed_action_names(allowed_action_names=None):
     return ordered or list(DEFAULT_ALLOWED_ACTION_NAMES)
 
 
-def _build_allowed_action_output(allowed_action_names=None, move_distance: float = 0.25) -> str:
+def _build_allowed_action_output(allowed_action_names=None, move_distance: float = 0.25, turn_angle: float = 30) -> str:
     ordered = _normalize_allowed_action_names(allowed_action_names)
+    turn_text = _fmt_degrees(turn_angle)
     choices = []
     if "MOVE_FORWARD" in ordered:
         choices.extend(_move_action_choices(move_distance))
     if "TURN_LEFT" in ordered:
-        choices.extend(["TURN_LEFT_AVOID 30deg", "TURN_LEFT_ALIGN 30deg"])
+        choices.extend([f"TURN_LEFT_AVOID {turn_text}deg", f"TURN_LEFT_ALIGN {turn_text}deg"])
     if "TURN_RIGHT" in ordered:
-        choices.extend(["TURN_RIGHT_AVOID 30deg", "TURN_RIGHT_ALIGN 30deg"])
+        choices.extend([f"TURN_RIGHT_AVOID {turn_text}deg", f"TURN_RIGHT_ALIGN {turn_text}deg"])
     if "STOP" in ordered:
         choices.append("STOP")
     return " | ".join(choices)
 
 
-def _build_allowed_action_bullets(allowed_action_names=None, move_distance: float = 0.25) -> str:
+def _build_allowed_action_bullets(allowed_action_names=None, move_distance: float = 0.25, turn_angle: float = 30) -> str:
     ordered = _normalize_allowed_action_names(allowed_action_names)
+    turn_text = _fmt_degrees(turn_angle)
     lines = []
     if "MOVE_FORWARD" in ordered:
         lines.append(
@@ -390,13 +506,13 @@ def _build_allowed_action_bullets(allowed_action_names=None, move_distance: floa
         )
     if "TURN_LEFT" in ordered:
         lines.append(
-            f"- `TURN_LEFT_AVOID 30deg` to avoid obstacle only when FRONT <{_fmt_threshold_m(OBS_BLOCKED_M)}m or the current FRONT route is unusable | "
-            "`TURN_LEFT_ALIGN 30deg` to align destination landmark"
+            f"- `TURN_LEFT_AVOID {turn_text}deg` to avoid obstacle only when FRONT <{_fmt_threshold_m(OBS_BLOCKED_M)}m or the current FRONT route is unusable | "
+            f"`TURN_LEFT_ALIGN {turn_text}deg` to align destination landmark"
         )
     if "TURN_RIGHT" in ordered:
         lines.append(
-            f"- `TURN_RIGHT_AVOID 30deg` to avoid obstacle only when FRONT <{_fmt_threshold_m(OBS_BLOCKED_M)}m or the current FRONT route is unusable | "
-            "`TURN_RIGHT_ALIGN 30deg` to align destination landmark"
+            f"- `TURN_RIGHT_AVOID {turn_text}deg` to avoid obstacle only when FRONT <{_fmt_threshold_m(OBS_BLOCKED_M)}m or the current FRONT route is unusable | "
+            f"`TURN_RIGHT_ALIGN {turn_text}deg` to align destination landmark"
         )
     if "STOP" in ordered:
         lines.append("- `STOP`: stop only when the current destination is reached")
@@ -422,8 +538,9 @@ def _build_action_space_constraint_notice(allowed_action_names=None) -> str:
     )
 
 
-def _normalize_action_prompt_text(prompt: str, *, move_distance: float = 0.25) -> str:
+def _normalize_action_prompt_text(prompt: str, *, move_distance: float = 0.25, turn_angle: float = 30) -> str:
     normalized = str(prompt or "")
+    turn_text = _fmt_degrees(turn_angle)
     literal_replacements = (
         (
             "use nearby landmarks, valid detections, `Subtask Progress`, `Previous Step Analysis`, and current image content",
@@ -497,6 +614,28 @@ def _normalize_action_prompt_text(prompt: str, *, move_distance: float = 0.25) -
     for old, new in literal_replacements:
         normalized = normalized.replace(old, new)
 
+    if turn_text != "30":
+        normalized = normalized.replace(
+            "Left 30deg, FRONT, Right 30deg",
+            f"Left {turn_text}deg, FRONT, Right {turn_text}deg",
+        )
+        normalized = normalized.replace(
+            "FRONT / Left 30deg / Right 30deg",
+            f"FRONT / Left {turn_text}deg / Right {turn_text}deg",
+        )
+        for action_prefix in (
+            "TURN_LEFT_AVOID",
+            "TURN_LEFT_ALIGN",
+            "TURN_RIGHT_AVOID",
+            "TURN_RIGHT_ALIGN",
+            "TURN_LEFT",
+            "TURN_RIGHT",
+        ):
+            normalized = normalized.replace(
+                f"{action_prefix} 30deg",
+                f"{action_prefix} {turn_text}deg",
+            )
+
     normalized = re.sub(
         r"(?m)^- \*\*Current-stage only\*\*:.*$",
         "- **Focus**: rely on the current `Instruction`, current `Destination`, visible landmark/route cues, obstacle layout, and `Subtask Progress`.",
@@ -549,14 +688,13 @@ def build_executor_prompt_bundle(
 ) -> PromptBundle:
     """Render the executor system/user prompt bundle."""
     del waypoint_summary
-    del turn_angle
     if not progress_summary:
         progress_summary = "Just started"
 
     system_prompt = _normalize_action_prompt_text(_render_executor_system_prompt(
         model_name=model_name,
         prompt_profile=prompt_profile,
-    ), move_distance=move_distance)
+    ), move_distance=move_distance, turn_angle=turn_angle)
     user_template = _select_prompt_template(
         EXECUTOR_USER_PROMPT,
         FAST_EXECUTOR_USER_PROMPT,
@@ -569,15 +707,15 @@ def build_executor_prompt_bundle(
         subtask_instruction=subtask_instruction,
         progress_summary=progress_summary,
         detected_landmarks=detected_landmarks or "none",
-        obstacle_perception_summary=_build_obstacle_perception_summary(obstacle_distances),
+            obstacle_perception_summary=_build_obstacle_perception_summary(obstacle_distances, turn_angle),
         landmark_perception_summary=_build_landmark_perception_summary(
             detected_landmarks=detected_landmarks,
             landmark_map_info=landmark_map_info,
         ),
-        allowed_action_output=_build_allowed_action_output(allowed_action_names, move_distance),
-        allowed_action_bullets=_build_allowed_action_bullets(allowed_action_names, move_distance),
+        allowed_action_output=_build_allowed_action_output(allowed_action_names, move_distance, turn_angle),
+        allowed_action_bullets=_build_allowed_action_bullets(allowed_action_names, move_distance, turn_angle),
         action_space_constraint_notice=_build_action_space_constraint_notice(allowed_action_names),
-    ), move_distance=move_distance)
+    ), move_distance=move_distance, turn_angle=turn_angle)
     return PromptBundle(
         system_prompt=system_prompt,
         user_prompt=user_prompt,

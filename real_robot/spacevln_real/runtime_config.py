@@ -240,6 +240,15 @@ def _build_base_config(real_config: RealRobotConfig, max_steps: Optional[int]) -
     config.SPACE.MAP.OBSTACLE_MIN_HEIGHT_CM = DEFAULT_OBSTACLE_MIN_HEIGHT_CM
     config.SPACE.MAP.OBSTACLE_MAX_HEIGHT_CM = DEFAULT_OBSTACLE_MAX_HEIGHT_CM
     config.SPACE.MAP.EXPLORED_RAY_FILL = DEFAULT_MAP_EXPLORED_RAY_FILL
+    config.SPACE.MAP.SELECTIVE_DYNAMIC_OBSTACLE_UPDATE = bool(
+        real_config.selective_dynamic_obstacle_update
+    )
+    config.SPACE.MAP.OBSTACLE_EVIDENCE_THRESHOLD = float(
+        real_config.obstacle_evidence_threshold
+    )
+    config.SPACE.MAP.OBSTACLE_EVIDENCE_MAX_OBSERVATIONS = int(
+        real_config.obstacle_evidence_max_observations
+    )
     config.SPACE.MAP.VISUALIZE = False
     config.SPACE.MAP.PRINT_IMAGES = False
 
@@ -284,6 +293,13 @@ def _build_base_config(real_config: RealRobotConfig, max_steps: Optional[int]) -
     config.CONTROL.STOPPING.ENABLE_FINAL_DESTINATION_MATCH_AUTOSTOP = True
     config.CONTROL.STOPPING.FINAL_DESTINATION_MATCH_AUTOSTOP_STREAK = 3
     config.CONTROL.STOPPING.FINAL_DESTINATION_MATCH_AUTOSTOP_RADIUS_M = 1.0
+
+    config.REAL_ROBOT = CN(new_allowed=True)
+    config.REAL_ROBOT.ENABLED = True
+    config.REAL_ROBOT.LOOKAROUND_SAMPLE_COUNT = int(real_config.lookaround_sample_count)
+    config.REAL_ROBOT.LOOKAROUND_ANGLE_STEP_DEG = float(real_config.lookaround_angle_step_deg)
+    config.REAL_ROBOT.DISABLE_DEPTH_MAP_UPDATE = bool(real_config.disable_depth_map_update)
+    config.REAL_ROBOT.DEPTH_FUSION_FRAMES = int(real_config.depth_fusion_frames)
 
     config.EVAL = CN(new_allowed=True)
     config.EVAL.SPLIT = "real"

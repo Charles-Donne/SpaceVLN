@@ -180,6 +180,11 @@ def main() -> int:
         args.vlm_api_config = CONTEXT_CACHE_RUNTIME_PROFILE.default_api_config_path
 
     real_config = load_real_robot_config(args.real_config)
+    os.environ.setdefault("SPACEVLN_ALLOW_GENERIC_WAYPOINT_LABELS", "1")
+    os.environ.setdefault("SPACEVLN_LOOKAROUND_VIEW_COUNT", str(int(real_config.lookaround_sample_count)))
+    os.environ.setdefault("SPACEVLN_LOOKAROUND_STEP_DEG", str(float(real_config.lookaround_angle_step_deg)))
+    if bool(real_config.disable_depth_map_update):
+        os.environ.setdefault("SPACEVLN_ALLOW_MISSING_GLOBAL_MAP", "1")
     config = build_real_runtime_config(
         real_config=real_config,
         args=args,

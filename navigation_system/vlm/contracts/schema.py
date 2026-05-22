@@ -1,6 +1,6 @@
 """Shared navigation constants and canonical planner/executor payload helpers."""
 
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 
 DIRECTION_CONFIG = [
@@ -17,6 +17,52 @@ DIRECTION_CONFIG = [
     {"step": 10, "angle": 300, "name": "IMAGE 11: Right 60deg"},
     {"step": 11, "angle": 330, "name": "IMAGE 12: Right 30deg"},
 ]
+
+
+def _direction_name_for_angle(angle: float) -> str:
+    angle_int = int(round(float(angle))) % 360
+    if angle_int == 0:
+        return "Front 0deg"
+    if angle_int == 180:
+        return "Back 180deg"
+    if 0 < angle_int < 180:
+        return f"Left {angle_int}deg"
+    return f"Right {360 - angle_int}deg"
+
+
+def build_direction_config(sample_count: int = 12, angle_step_deg: float = 30.0) -> List[Dict[str, Any]]:
+    """Build the IMAGE-label mapping for a stopped or continuous lookaround scan.
+
+    The scan captures after left turns. To keep IMAGE 1 as the final front-facing
+    view, the front frame is the last captured sample, matching the historical
+    12x30deg ordering.
+    """
+    try:
+        count = max(1, int(sample_count))
+    except (TypeError, ValueError):
+        count = 12
+    try:
+        step_deg = float(angle_step_deg)
+    except (TypeError, ValueError):
+        step_deg = 30.0
+    if count == 12 and abs(step_deg - 30.0) < 1e-6:
+        return [dict(item) for item in DIRECTION_CONFIG]
+
+    configs: List[Dict[str, Any]] = []
+    configs.append({
+        "step": count,
+        "angle": 0,
+        "name": "IMAGE 1: Front 0deg",
+    })
+    for step_idx in range(1, count):
+        angle = (float(step_idx) * step_deg) % 360.0
+        angle_int = int(round(angle)) % 360
+        configs.append({
+            "step": step_idx,
+            "angle": angle_int,
+            "name": f"IMAGE {step_idx + 1}: {_direction_name_for_angle(angle_int)}",
+        })
+    return configs
 
 ACTION_MAPPING = {
     "STOP": 0,
@@ -100,6 +146,7 @@ __all__ = [
     "ACTION_MAPPING",
     "DIRECTION_CONFIG",
     "REQUIRED_SUBTASK_FIELDS",
+    "build_direction_config",
     "get_next_waypoint",
     "get_subtask_landmark",
     "normalize_objectnav_subtask_payload",

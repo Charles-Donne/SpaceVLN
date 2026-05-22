@@ -37,6 +37,7 @@ class Executor(BaseAPIClient):
         
         self.turn_angle = turn_angle
         self.move_distance = move_distance
+        self.VALID_TURN_VALUES = self._resolve_valid_turn_values(turn_angle)
         self.VALID_MOVE_VALUES = self._resolve_valid_move_values(move_distance)
         
         # 图片压缩配置（节省token）
@@ -82,6 +83,16 @@ class Executor(BaseAPIClient):
         if base_distance >= 0.5:
             return (0.5, 0.75, 1.0, 1.25, 1.5)
         return VALID_MOVE_METERS
+
+    @staticmethod
+    def _resolve_valid_turn_values(turn_angle: float):
+        try:
+            angle = float(turn_angle)
+        except (TypeError, ValueError):
+            angle = 30.0
+        if angle > 0.0 and not any(abs(angle - float(value)) <= 1e-6 for value in VALID_TURN_DEGREES):
+            return (angle,)
+        return VALID_TURN_DEGREES
 
     @staticmethod
     def _extract_action_variant(action_raw: Any) -> str:

@@ -40,7 +40,7 @@ ACTION_NAME_ALIASES = {
 }
 
 REAL_MOVE_TARGETS_M = (0.5, 0.75, 1.0, 1.25, 1.5)
-REAL_TURN_TARGET_DEG = 30.0
+REAL_TURN_TARGET_DEG = 45.0
 
 
 @dataclass
@@ -103,6 +103,16 @@ class RealRobotVectorEnv:
     def supports_continuous_lookaround_scan(self) -> bool:
         return True
 
+    def get_lookaround_sample_count(self) -> int:
+        return max(1, int(getattr(self.config, "lookaround_sample_count", 8) or 8))
+
+    def get_lookaround_angle_step_deg(self) -> float:
+        return float(
+            getattr(self.config, "lookaround_angle_step_deg", 0.0)
+            or getattr(self.config, "turn_angle_deg", 45.0)
+            or 45.0
+        )
+
     def _normalize_action(self, raw_action: Any) -> str:
         action = raw_action
         if isinstance(raw_action, dict) and "action" in raw_action:
@@ -164,7 +174,7 @@ class RealRobotVectorEnv:
             target_degrees = None
         if action_name == "MOVE_FORWARD":
             target_meters = self._quantize_move_target_meters(target_meters)
-        elif action_name in {"TURN_LEFT", "TURN_RIGHT"}:
+        elif action_name in {"TURN_LEFT", "TURN_RIGHT"} and target_degrees is None:
             target_degrees = REAL_TURN_TARGET_DEG
         return target_meters, target_degrees
 
@@ -366,10 +376,15 @@ class RealRobotVectorEnv:
         angle_step_deg: Optional[float] = None,
         timeout_s: Optional[float] = None,
     ) -> List[Tuple[Dict[str, Any], float, bool, Dict[str, Any]]]:
-        sample_total = max(1, int(sample_count or 12))
-        step_deg = float(angle_step_deg or self.config.turn_angle_deg or 30.0)
-        target_degrees = float(step_deg * sample_total)
-        command_timeout = float(timeout_s or max(self.config.action_timeout_s, target_degrees / 30.0 + 5.0))
+        sample_total = max(1, int(sample_count or self.get_lookaround_sample_count()))
+        step_deg = float(angle_step_deg or self.get_lookaround_angle_step_deg())
+        command_timeout = float(
+            timeout_s
+            or max(
+                self.config.action_timeout_s,
+                step_deg / max(float(self.config.angular_speed_deg_s or 1.0), 1.0) + 5.0,
+            )
+        )
 
         before_snapshot = self._latest_snapshot
         if before_snapshot is None:
@@ -378,50 +393,28 @@ class RealRobotVectorEnv:
         if before_snapshot is None:
             raise RuntimeError("real robot env has no initial observation")
 
-        command = self._build_command(
-            "LOOK_AROUND_360",
-            target_degrees=target_degrees,
-        )
-        command.timeout_s = command_timeout
-        payload = self.command_bridge.publish_action_command(command)
-        command_id = str(payload["command_id"])
-
         outputs: List[Tuple[Dict[str, Any], float, bool, Dict[str, Any]]] = []
         previous_snapshot = before_snapshot
-        previous_yaw = float(before_snapshot.pose.yaw_rad)
-        accumulated_yaw = 0.0
-        next_target_yaw = math.radians(step_deg)
-        after_stamp = float(before_snapshot.stamp)
-        deadline = payload.get("stamp", 0.0) + command_timeout
         scan_status: Optional[ActionStatus] = None
-
-        while len(outputs) < sample_total:
-            status = self.command_bridge.get_status(command_id)
-            if status is not None and status.is_terminal():
-                scan_status = status
-                if not status.success:
-                    break
-
-            remaining = float(deadline) - time.time()
-            if remaining <= 0.0:
+        for _sample_idx in range(sample_total):
+            command = self._build_command(
+                "TURN_LEFT",
+                target_degrees=step_deg,
+            )
+            command.timeout_s = command_timeout
+            status = self.command_bridge.send_action(command)
+            scan_status = status
+            if not status.success:
                 break
 
+            self._capture_if_needed("lookaround_step_%02d" % (_sample_idx + 1))
+            after_stamp = float(previous_snapshot.stamp)
+            if bool(self.config.require_fresh_frame_after_action):
+                after_stamp = max(after_stamp, float(status.stamp))
             snapshot = self.observation_hub.wait_for_snapshot(
                 after_stamp=after_stamp,
-                timeout_s=min(float(self.config.observation_timeout_s), max(remaining, 0.1)),
+                timeout_s=float(self.config.observation_timeout_s),
             )
-            after_stamp = float(snapshot.stamp)
-            yaw_delta = float(snapshot.pose.yaw_rad) - previous_yaw
-            while yaw_delta > math.pi:
-                yaw_delta -= 2.0 * math.pi
-            while yaw_delta < -math.pi:
-                yaw_delta += 2.0 * math.pi
-            previous_yaw = float(snapshot.pose.yaw_rad)
-            if yaw_delta > 0.0:
-                accumulated_yaw += yaw_delta
-
-            if accumulated_yaw + math.radians(2.0) < next_target_yaw:
-                continue
 
             sensor_pose = relative_pose_delta(previous_snapshot.pose, snapshot.pose)
             self._path_length_m += float(math.hypot(sensor_pose[0], sensor_pose[1]))
@@ -436,24 +429,15 @@ class RealRobotVectorEnv:
             self._latest_metrics = dict(metrics)
             outputs.append((obs, 0.0, False, dict(metrics)))
             previous_snapshot = snapshot
-            next_target_yaw = math.radians(step_deg * (len(outputs) + 1))
-
-        if scan_status is None:
-            scan_status = self.command_bridge.wait_for_status(
-                command_id,
-                timeout_s=max(float(deadline) - time.time(), 0.1),
-            )
-        else:
-            self.command_bridge.pop_status(command_id)
 
         if len(outputs) < sample_total:
             raise TimeoutError(
-                "continuous lookaround scan captured %d/%d samples; status=%s message=%s"
+                "stopped lookaround scan captured %d/%d samples; status=%s message=%s"
                 % (
                     len(outputs),
                     sample_total,
-                    str(scan_status.state),
-                    str(scan_status.message),
+                    str(getattr(scan_status, "state", "unknown")),
+                    str(getattr(scan_status, "message", "")),
                 )
             )
 

@@ -284,7 +284,11 @@ def normalize_depth_frame(
         float(max_depth_m) - float(min_depth_m),
         1e-6,
     )
-    return normalized.astype(np.float32)[..., np.newaxis]
+    normalized = normalized.astype(np.float32)
+    # The mapper treats non-finite normalized depth as unknown and does not
+    # fuse it into selective real-robot obstacle evidence.
+    normalized[~valid] = np.nan
+    return normalized[..., np.newaxis]
 
 
 def pick_pose_for_snapshot(

@@ -152,8 +152,20 @@ using:
 - output: `/cmd_vel`
 - completion: `/spacevln/action_status`
 
-For lookaround, the runtime sends one `LOOK_AROUND_360` command and samples 12
-camera frames from the live ROS stream while the base rotates continuously.
+For SpaceVLN lookaround, the real runtime sends eight closed-loop `TURN_LEFT`
+commands at 45 degrees each. It waits for each turn to finish, lets the base
+report stable completion, then captures the next RGB-D observation before the
+following turn. Normal actions capture once after the one requested action
+finishes; the runtime does not sample intermediate frames during a long forward
+move or an automatic rotation command.
+
+The real RGB-D adapter keeps depth mapping enabled by default. Each synchronized
+real snapshot averages the chosen depth frame with its immediate neighboring
+depth frames when the configured fusion window is available. Real obstacle
+fusion is selective: observed obstacle cells and explicitly observed free cells
+update bounded obstacle evidence, while unknown depth cells do not cast votes.
+The simulation map path keeps its existing fusion behavior unless a real runtime
+config enables this selective update.
 
 For deployment, final success is not judged online from `goal_reached` or
 `distance_to_goal_m`. The runtime ends the episode when the model/planner marks

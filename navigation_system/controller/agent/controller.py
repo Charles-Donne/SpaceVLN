@@ -525,9 +525,10 @@ class NavigationAgentController(BaseNavigationController):
 
     def _build_action_force_forward_after_turns_notice(self) -> str:
         limit = max(1, int(getattr(self, "ACTION_CONSECUTIVE_TURN_LIMIT", 3) or 3))
+        turn_deg = int(round(float(getattr(self, "turn_angle", 30.0) or 30.0)))
         return (
             f"The last {limit} action decisions were consecutive turns. "
-            "Do not output `TURN_LEFT 30deg` or `TURN_RIGHT 30deg` on this call. "
+            f"Do not output `TURN_LEFT {turn_deg}deg` or `TURN_RIGHT {turn_deg}deg` on this call. "
             "If arrival is already satisfied, output `STOP`; otherwise output one `MOVE_FORWARD` action only when FRONT is passable."
         )
 
@@ -607,7 +608,7 @@ class NavigationAgentController(BaseNavigationController):
             degree_text = (
                 f"{float(actual_degrees):.0f}deg"
                 if actual_degrees is not None
-                else "30deg"
+                else "turn"
             )
             if variant == "avoid_obstacle":
                 return (
@@ -740,14 +741,15 @@ class NavigationAgentController(BaseNavigationController):
     ) -> str:
         locked_side = self._get_active_avoidance_side_lock()
         locked_sentence = ""
+        turn_deg = int(round(float(getattr(self, "turn_angle", 30.0) or 30.0)))
         if locked_side == "LEFT":
             locked_sentence = (
-                "A same-subtask obstacle-bypass lock is active: choose `TURN_LEFT_AVOID 30deg` "
+                f"A same-subtask obstacle-bypass lock is active: choose `TURN_LEFT_AVOID {turn_deg}deg` "
                 "if a side turn is needed, and do not turn back right. "
             )
         elif locked_side == "RIGHT":
             locked_sentence = (
-                "A same-subtask obstacle-bypass lock is active: choose `TURN_RIGHT_AVOID 30deg` "
+                f"A same-subtask obstacle-bypass lock is active: choose `TURN_RIGHT_AVOID {turn_deg}deg` "
                 "if a side turn is needed, and do not turn back left. "
             )
         return (
@@ -757,7 +759,7 @@ class NavigationAgentController(BaseNavigationController):
             "For this call, do not output `MOVE_FORWARD` into the same front route. "
             f"{locked_sentence}"
             "Use the current view, obstacle lines, destination, and region structure to choose only "
-            "`TURN_LEFT_AVOID 30deg` or `TURN_RIGHT_AVOID 30deg` around the obstacle, unless the destination is already reached and `STOP` is valid. "
+            f"`TURN_LEFT_AVOID {turn_deg}deg` or `TURN_RIGHT_AVOID {turn_deg}deg` around the obstacle, unless the destination is already reached and `STOP` is valid. "
             "Choose the side that best matches the destination and avoids the obstacle. "
             "After one side turn, if FRONT becomes passable and still points toward the destination, prefer forward progress instead of turning back."
         )
@@ -1171,10 +1173,10 @@ class NavigationAgentController(BaseNavigationController):
             action_name=turn_action_name,
             reasoning=(
                 "A blocked-front retry is active, so straight movement into the current FRONT route is forbidden. "
-                f"{selected_side.title()} 30deg is the best controller-side recovery because it is "
+                f"{selected_side.title()} {int(round(float(self.turn_angle)))}deg is the best controller-side recovery because it is "
                 f"{selected_record.get('status', 'passable')} ({selected_distance_text})"
                 + (
-                    f", while {other_side.title()} 30deg is "
+                    f", while {other_side.title()} {int(round(float(self.turn_angle)))}deg is "
                     f"{other_record.get('status', 'unknown')} ({other_distance_text})"
                     if other_record
                     else ""
@@ -1223,7 +1225,7 @@ class NavigationAgentController(BaseNavigationController):
             action_name="MOVE_FORWARD",
             reasoning=(
                 f"The previous VLM-selected MOVE_FORWARD {retry_meters:.2f}m was blocked. "
-                f"The controller has just turned {locked_side} 30deg to continue the locked obstacle-bypass route, "
+                f"The controller has just turned {locked_side} {int(round(float(self.turn_angle)))}deg to continue the locked obstacle-bypass route, "
                 "so retry that same VLM-selected forward distance before asking for a new action."
             ),
         )
@@ -2931,12 +2933,15 @@ class NavigationAgentController(BaseNavigationController):
             instruction=self.current_instruction,
             current_subtask=subtask_text,
             distance=distance,
-            action=f"TURN_LEFT (360 scan {look_index}/12)",
+            action=(
+                f"TURN_LEFT ({int(round(float(getattr(self, 'latest_lookaround_angle_step_deg', 30.0) or 30.0)))}deg "
+                f"scan {look_index}/{int(getattr(self, 'latest_lookaround_sample_count', 12) or 12)})"
+            ),
             subtask_id=phase
         )
     
     def _collect_lookaround_direction_views(self, phase: str = "initial") -> Tuple[List[Any], List[str]]:
-        """Run the shared lookaround scan, then render the 12 thinking views for the VLM."""
+        """Run the shared lookaround scan, then render the thinking views for the VLM."""
         scan_state = self._capture_lookaround_scan(
             phase=phase,
             enable_landmark_detection=False,
@@ -2950,6 +2955,8 @@ class NavigationAgentController(BaseNavigationController):
         lookaround_detection_payloads = scan_state.get("lookaround_detection_payloads", []) or []
         final_map_state = scan_state.get("final_map_state")
         final_last_waypoint_angle = scan_state.get("final_last_waypoint_angle")
+        if self._depth_map_update_disabled():
+            final_map_state = None
 
         waypoint_info = None
         last_waypoint_angle_deg = None
@@ -3007,6 +3014,7 @@ class NavigationAgentController(BaseNavigationController):
             draw_waypoints_fn=self._draw_waypoints_on_view,
             current_floor_id=int((final_map_state or {}).get('current_floor_id', 0) or 0),
             initial_waypoint_index=waypoint_initial_index,
+            direction_config=self._lookaround_direction_config(),
         )
 
         direction_inputs: List[Any] = []
@@ -3026,11 +3034,14 @@ class NavigationAgentController(BaseNavigationController):
     def run_lookaround_and_update_state(self, phase: str) -> Dict[str, Any]:
         """Unified lookaround entry used by initial / verify thinking cycles."""
         direction_paths, direction_names = self._collect_lookaround_direction_views(phase)
+        global_map_input = getattr(self, 'latest_global_map_input', None)
+        if self._depth_map_update_disabled():
+            global_map_input = self._ensure_real_depth_map_disabled_input(phase)
         return {
             "phase": str(phase),
             "direction_paths": direction_paths,
             "direction_names": direction_names,
-            "global_map_input": getattr(self, 'latest_global_map_input', None),
+            "global_map_input": global_map_input,
             "local_map_path": getattr(self, 'latest_local_map', None),
         }
 
@@ -3077,7 +3088,8 @@ class NavigationAgentController(BaseNavigationController):
             attempt_letter = self._current_attempt_letter()
             phase = self._current_verify_phase()
             thinking_dir = self.save_manager.thinking_subtask_dir(self.subtask_count + 1)
-            print(f"\n[Verify] #{self.subtask_count}{attempt_letter} (lookaround step {self.current_step + 1}-{self.current_step + 12})")
+            lookaround_count = self._env_lookaround_sample_count(default=int(getattr(self, "THINKING_LOOKAROUND_STEPS", 12) or 12))
+            print(f"\n[Verify] #{self.subtask_count}{attempt_letter} (lookaround step {self.current_step + 1}-{self.current_step + lookaround_count})")
 
         lookaround_state = self.run_lookaround_and_update_state(phase)
         image_paths = lookaround_state.get("direction_paths", []) or []
@@ -3105,7 +3117,10 @@ class NavigationAgentController(BaseNavigationController):
             global_map_missing = (not global_map or not os.path.exists(global_map))
         else:
             global_map_missing = global_map is None
-        if global_map_missing:
+        allow_missing_global_map = str(
+            os.getenv("SPACEVLN_ALLOW_MISSING_GLOBAL_MAP", "") or ""
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        if global_map_missing and not allow_missing_global_map:
             print(f"[ERR] Global map not found: {global_map}")
             self.latest_thinking_cycle_info = {
                 "mode": mode_key,
@@ -3494,7 +3509,7 @@ class NavigationAgentController(BaseNavigationController):
         _ = phase
         _ = thinking_dir
         _ = refresh_direction_views
-        if self.mapper is None:
+        if self.mapper is None or self._depth_map_update_disabled():
             return None
 
         waypoint_desc = response.get('current_waypoint', 'Unknown location')
@@ -3511,7 +3526,7 @@ class NavigationAgentController(BaseNavigationController):
 
         Returns:
             `(success, action_sequence)` where each action entry looks like
-            `{"action": "TURN_LEFT/RIGHT", "degrees": 30}`.
+            `{"action": "TURN_LEFT/RIGHT", "degrees": self.turn_angle}`.
         """
         import re
 
@@ -3545,20 +3560,14 @@ class NavigationAgentController(BaseNavigationController):
                 except (TypeError, ValueError):
                     image_index = None
             if image_index is not None:
-                image_to_angle = {
-                    1: 0,
-                    2: 30,
-                    3: 60,
-                    4: 90,
-                    5: 120,
-                    6: 150,
-                    7: 180,
-                    8: -150,
-                    9: -120,
-                    10: -90,
-                    11: -60,
-                    12: -30,
-                }
+                image_to_angle = {}
+                for image_number, config in enumerate(self._lookaround_direction_config(), start=1):
+                    try:
+                        angle_norm = int(round(float(config.get("angle", 0)))) % 360
+                    except (TypeError, ValueError):
+                        continue
+                    signed_angle = angle_norm if angle_norm <= 180 else angle_norm - 360
+                    image_to_angle[int(image_number)] = int(signed_angle)
                 signed_angle = image_to_angle.get(image_index)
                 if signed_angle is not None:
                     if signed_angle == 0:
@@ -3570,13 +3579,14 @@ class NavigationAgentController(BaseNavigationController):
             print(f"  [WARN] Cannot parse waypoint_direction: {waypoint_direction}")
             return False, []
         
-        num_turns = angle // 30
+        turn_step = max(1.0, float(getattr(self, "turn_angle", 30.0) or 30.0))
+        num_turns = max(1, int(round(float(angle) / turn_step)))
         action_sequence = []
         
         for _ in range(num_turns):
             action_sequence.append({
                 'action': f'TURN_{direction}',
-                'degrees': 30
+                'degrees': int(round(turn_step))
             })
         
         return True, action_sequence
@@ -4472,7 +4482,7 @@ class NavigationAgentController(BaseNavigationController):
                     print(
                         "[ActionStagnation] "
                         f"Locked {locked_avoidance_side} bypass is active; after the automatic same-side "
-                        f"30deg turn, retry the VLM-selected MOVE_FORWARD {float(self.last_planned_meters or self.move_distance):.2f}m"
+                        f"{int(round(float(self.turn_angle)))}deg turn, retry the VLM-selected MOVE_FORWARD {float(self.last_planned_meters or self.move_distance):.2f}m"
                     )
                 self.action_stagnation_streak = 0
                 self.action_stagnation_retry_pending = True

@@ -17,6 +17,20 @@ observation_timeout_s: 3.0
 action_timeout_s: 20.0
 sync_tolerance_s: 0.20
 
+lookaround:
+  sample_count: 8
+  angle_step_deg: 45.0
+
+mapping:
+  disable_depth_map_update: false
+  # Fuse the synchronized depth frame with its immediate neighbors.
+  depth_fusion_frames: 3
+  # Unknown depth cells do not vote. Observed obstacle/free cells update
+  # bounded evidence so later real observations can correct the local map.
+  selective_dynamic_obstacle_update: true
+  obstacle_evidence_threshold: 0.55
+  obstacle_evidence_max_observations: 8
+
 buffers:
   image_queue_size: 8
   pose_queue_size: 32
@@ -31,7 +45,7 @@ camera:
 
 control:
   forward_step_m: 0.5
-  turn_angle_deg: 30.0
+  turn_angle_deg: 45.0
   linear_speed_mps: 0.5
   angular_speed_deg_s: 60.0
 

@@ -131,10 +131,21 @@ The low-level controller should execute each command as a closed-loop motion:
 
 - `MOVE_FORWARD`: drive toward the requested distance, typically 0.5m to 1.5m from the VLM action output
 - `TURN_LEFT` / `TURN_RIGHT`: rotate toward the requested angle
-- `LOOK_AROUND_360`: rotate continuously through the requested angle, normally 360 degrees; SpaceVLN samples the camera stream during the motion
+- `LOOK_AROUND_360`: supported for manual low-level tests; SpaceVLN real lookaround uses eight stopped `TURN_LEFT` commands at 45 degrees each and samples after each turn settles
 - `STOP`: stop immediately and publish a terminal status
 
 This should not be implemented as a single open-loop velocity pulse.
+
+The reference executor publishes terminal success only after it has sent zero
+velocity and the odometry heading stays stable for a short completion window.
+SpaceVLN real capture happens after that terminal action status: once for each
+stopped lookaround turn, and once after a normal action command finishes.
+
+The default real RGB-D config leaves depth mapping enabled. The observation hub
+averages the synchronized depth frame with immediate neighboring depth frames
+when the requested fusion window is present. Real map fusion then updates
+obstacle evidence only for observed obstacle or explicit free cells; unknown
+depth samples do not clear or reinforce the map.
 
 ## 3. Action Status Interface Published by the Low-Level Stack
 
@@ -253,6 +264,8 @@ The reference executor defaults to conservative early stopping:
 
 - `--position-tolerance-m 0.10`
 - `--angle-tolerance-deg 10`
+- `--completion-stability-s 0.20`
+- `--completion-yaw-tolerance-deg 0.50`
 
 At 10Hz and 45deg/s, one control tick is about 4.5 degrees, so a 10 degree
 window gives the executor room to stop before communication and base latency

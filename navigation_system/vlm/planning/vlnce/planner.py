@@ -218,7 +218,13 @@ class LLMPlanner(BaseAPIClient):
                     "Infer the current region from the nearby current scene first. Previous Spatial Waypoints only show visited history, not where you are now."
                 )
                 return False
-            if re.search(r"(?i)(^|->\s*)(?:area|room|space)(?:'s|\s*-)", field_text):
+            allow_generic_waypoint_labels = str(
+                os.getenv("SPACEVLN_ALLOW_GENERIC_WAYPOINT_LABELS", "") or ""
+            ).strip().lower() in {"1", "true", "yes", "on"}
+            if (
+                not allow_generic_waypoint_labels
+                and re.search(r"(?i)(^|->\s*)(?:area|room|space)(?:'s|\s*-)", field_text)
+            ):
                 print(f"  [WARN] Planner returned placeholder `{field_name}` with generic area label; reject and retry")
                 self._last_response_rejection_notice = (
                     f"Your previous response was rejected because `{field_name}` used a generic placeholder such as "
@@ -391,7 +397,10 @@ class LLMPlanner(BaseAPIClient):
         Returns:
             (LLM响应字典或None, prompt字符串)
         """
-        if not global_map_image:
+        allow_missing_global_map = str(
+            os.getenv("SPACEVLN_ALLOW_MISSING_GLOBAL_MAP", "") or ""
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        if not global_map_image and not allow_missing_global_map:
             print("✗ Error: global_map_image is required")
             return None, ""
         
@@ -413,8 +422,10 @@ class LLMPlanner(BaseAPIClient):
         
         # 组合图像：12方向观察 + 全局地图
         images = observation_images.copy()
-        images.append(global_map_image)
-        no_compress = {len(observation_images)}
+        no_compress = set()
+        if global_map_image:
+            images.append(global_map_image)
+            no_compress = {len(observation_images)}
 
         return self._call_planner_with_retry(
             prompt=prompt,
@@ -458,7 +469,10 @@ class LLMPlanner(BaseAPIClient):
         Returns:
             (response字典, prompt字符串)
         """
-        if not global_map_image:
+        allow_missing_global_map = str(
+            os.getenv("SPACEVLN_ALLOW_MISSING_GLOBAL_MAP", "") or ""
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        if not global_map_image and not allow_missing_global_map:
             print("✗ Error: global_map_image is required")
             return None, ""
         
@@ -490,8 +504,10 @@ class LLMPlanner(BaseAPIClient):
         
         # 组合图像：当前位置12方向 + 全局地图
         images = observation_images.copy()
-        images.append(global_map_image)
-        no_compress = {len(observation_images)}
+        no_compress = set()
+        if global_map_image:
+            images.append(global_map_image)
+            no_compress = {len(observation_images)}
 
         return self._call_planner_with_retry(
             prompt=prompt,

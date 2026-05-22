@@ -8,11 +8,65 @@ import math
 import os
 from typing import Any, Dict, Optional
 
+import cv2
+import numpy as np
+
 from navigation_system.controller.agent.controller import NavigationAgentController
 
 
 class RealNavigationAgentController(NavigationAgentController):
     """Navigation controller with real-only live result flushing."""
+
+    def _ensure_real_depth_map_disabled_input(self, phase: str) -> str:
+        save_manager = getattr(self, "save_manager", None)
+        if save_manager is not None:
+            map_dir = os.path.join(save_manager.episode_dir, "map")
+        else:
+            paths_config = getattr(getattr(self, "config", None), "PATHS", None)
+            map_dir = os.path.join(str(getattr(paths_config, "RESULTS_DIR", "") or ""), "map")
+        os.makedirs(map_dir, exist_ok=True)
+        path = os.path.join(map_dir, f"{str(phase or 'thinking')}_real_depth_map_disabled.png")
+        if os.path.exists(path):
+            self.latest_global_map = path
+            self.latest_global_map_input = path
+            return path
+
+        image = np.full((720, 960, 3), 245, dtype=np.uint8)
+        cv2.rectangle(image, (28, 28), (932, 692), (80, 80, 80), 2)
+        cv2.putText(
+            image,
+            "REAL ROBOT: DEPTH MAP DISABLED",
+            (70, 270),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1.35,
+            (0, 0, 180),
+            3,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            image,
+            "Use the 8 stopped RGB views and per-view depth obstacle labels.",
+            (70, 345),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.78,
+            (45, 45, 45),
+            2,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            image,
+            "Do not infer route geometry from this placeholder map.",
+            (70, 400),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.78,
+            (45, 45, 45),
+            2,
+            cv2.LINE_AA,
+        )
+        cv2.imwrite(path, image)
+        self.latest_global_map = path
+        self.latest_global_map_input = path
+        return path
 
     def configure_real_live_status(
         self,
@@ -257,7 +311,10 @@ class RealNavigationAgentController(NavigationAgentController):
         self._write_real_live_status(
             event="lookaround_step_processed",
             phase=phase,
-            action=f"LOOK_AROUND_360[{look_index}/12]",
+            action=(
+                f"TURN_LEFT_{int(round(float(getattr(self, 'latest_lookaround_angle_step_deg', 45.0) or 45.0)))}"
+                f"[{look_index}/{int(getattr(self, 'latest_lookaround_sample_count', 8) or 8)}]"
+            ),
         )
 
     def step_with_vlm(self, *args, **kwargs) -> Dict[str, Any]:

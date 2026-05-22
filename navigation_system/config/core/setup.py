@@ -115,6 +115,15 @@ def apply_runtime_derived_fields(config: Config) -> Config:
     map_cfg.OBSTACLE_MIN_HEIGHT_CM = float(space.MAP.OBSTACLE_MIN_HEIGHT_CM)
     map_cfg.OBSTACLE_MAX_HEIGHT_CM = float(space.MAP.OBSTACLE_MAX_HEIGHT_CM)
     map_cfg.EXPLORED_RAY_FILL = bool(getattr(space.MAP, "EXPLORED_RAY_FILL", False))
+    map_cfg.SELECTIVE_DYNAMIC_OBSTACLE_UPDATE = bool(
+        getattr(space.MAP, "SELECTIVE_DYNAMIC_OBSTACLE_UPDATE", False)
+    )
+    map_cfg.OBSTACLE_EVIDENCE_THRESHOLD = float(
+        getattr(space.MAP, "OBSTACLE_EVIDENCE_THRESHOLD", 0.5)
+    )
+    map_cfg.OBSTACLE_EVIDENCE_MAX_OBSERVATIONS = int(
+        getattr(space.MAP, "OBSTACLE_EVIDENCE_MAX_OBSERVATIONS", 0)
+    )
     map_cfg.VISUALIZE = bool(space.MAP.VISUALIZE)
     map_cfg.PRINT_IMAGES = bool(space.MAP.PRINT_IMAGES)
 

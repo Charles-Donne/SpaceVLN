@@ -7,6 +7,8 @@ import threading
 import time
 from typing import Deque, Optional
 
+import numpy as np
+
 from spacevln_real.models import (
     CameraInfoData,
     ImageFrame,
@@ -160,15 +162,11 @@ class ObservationHub:
         )
 
     @staticmethod
-    def _pick_latest_after(queue: Deque, after_stamp: Optional[float]):
-        if not queue:
-            return None
-        if after_stamp is None:
-            return queue[-1]
+    def _iter_latest_after(queue: Deque, after_stamp: Optional[float]):
         for item in reversed(queue):
-            if float(item.stamp) > float(after_stamp):
-                return item
-        return None
+            if after_stamp is not None and float(item.stamp) <= float(after_stamp):
+                continue
+            yield item
 
     def _pick_closest(self, queue: Deque, target_stamp: Optional[float]):
         if not queue:
@@ -190,6 +188,59 @@ class ObservationHub:
         if best_delta is not None and best_delta > tolerance_s:
             return None
         return best_item
+
+    def _fuse_depth_window_locked(
+        self,
+        depth: ImageFrame,
+    ) -> Optional[ImageFrame]:
+        frame_count = max(1, int(getattr(self.config, "depth_fusion_frames", 1) or 1))
+        if frame_count <= 1:
+            return depth
+        if len(self._depth_frames) < frame_count:
+            return None
+
+        ordered = list(self._depth_frames)
+        center_idx = next(
+            (idx for idx, item in enumerate(ordered) if item is depth),
+            None,
+        )
+        if center_idx is None:
+            return depth
+
+        before_count = frame_count // 2
+        after_count = frame_count - before_count - 1
+        start_idx = max(0, center_idx - before_count)
+        end_idx = min(len(ordered), center_idx + after_count + 1)
+        selected = ordered[start_idx:end_idx]
+        if len(selected) < frame_count:
+            return None
+
+        arrays = []
+        reference_shape = np.asarray(depth.image).shape
+        for item in selected:
+            array = np.asarray(item.image, dtype=np.float32)
+            if array.shape != reference_shape:
+                continue
+            arrays.append(array)
+        if len(arrays) < frame_count:
+            return None
+
+        stacked = np.stack(arrays, axis=0)
+        valid = np.isfinite(stacked)
+        sums = np.where(valid, stacked, 0.0).sum(axis=0)
+        counts = valid.sum(axis=0)
+        fused = np.divide(
+            sums,
+            np.maximum(counts, 1),
+            out=np.full(reference_shape, np.nan, dtype=np.float32),
+            where=counts > 0,
+        )
+        return ImageFrame(
+            stamp=float(depth.stamp),
+            frame_id=str(depth.frame_id),
+            encoding=str(depth.encoding),
+            image=fused.astype(np.float32, copy=False),
+        )
 
     def _pose_queue(self) -> Deque[PoseFrame]:
         pose_source = str(self.config.pose_source or "odometry").strip().lower()
@@ -244,13 +295,15 @@ class ObservationHub:
         deadline = time.time() + timeout
         with self._condition:
             while True:
-                rgb = self._pick_latest_after(self._rgb_frames, after_stamp)
-                if rgb is not None:
+                for rgb in self._iter_latest_after(self._rgb_frames, after_stamp):
                     target_stamp = float(rgb.stamp)
                     depth = self._pick_closest(self._depth_frames, target_stamp)
                     pose = self._pick_closest(self._pose_queue(), target_stamp)
                     imu = self._pick_closest(self._imu_frames, target_stamp)
                     if depth is not None and pose is not None:
+                        depth = self._fuse_depth_window_locked(depth)
+                        if depth is None:
+                            continue
                         pose = pick_pose_for_snapshot(
                             pose,
                             imu,

@@ -143,11 +143,23 @@ class Semantic_Mapping(nn.Module):
         self.exp_pred_threshold = args.EXP_PRED_THRESHOLD
         self.map_pred_threshold = args.MAP_PRED_THRESHOLD
         self.explored_ray_fill = bool(getattr(args, "EXPLORED_RAY_FILL", False))
+        self.selective_dynamic_obstacle_update = bool(
+            getattr(args, "SELECTIVE_DYNAMIC_OBSTACLE_UPDATE", False)
+        )
+        self.obstacle_evidence_threshold = min(
+            1.0,
+            max(0.0, float(getattr(args, "OBSTACLE_EVIDENCE_THRESHOLD", 0.5))),
+        )
+        self.obstacle_evidence_max_observations = max(
+            0,
+            int(getattr(args, "OBSTACLE_EVIDENCE_MAX_OBSERVATIONS", 0)),
+        )
         self.obstacle_clear_explored_threshold = 0.6
         
         # 分块地图：{(tile_x, tile_y): tensor[batch, C, 240, 240]}
         self.tiles = defaultdict(lambda: None)
         self.one_step_tiles = defaultdict(lambda: None)
+        self.obstacle_evidence_tiles = defaultdict(lambda: None)
         
         # 地图尺寸（用于兼容性）
         self.map_shape = (args.MAP_SIZE_CM // args.MAP_RESOLUTION, 
@@ -287,6 +299,9 @@ class Semantic_Mapping(nn.Module):
         return {
             "tiles": self._clone_tile_state(self.tiles),
             "one_step_tiles": self._clone_tile_state(self.one_step_tiles),
+            "obstacle_evidence_tiles": self._clone_tile_state(
+                self.obstacle_evidence_tiles
+            ),
             "local_map": self._clone_optional_tensor(self.local_map),
             "one_step_local_map": self._clone_optional_tensor(self.one_step_local_map),
             "full_map": self._clone_optional_tensor(self.full_map),
@@ -333,6 +348,9 @@ class Semantic_Mapping(nn.Module):
 
         self.tiles = _restore_tiles(state.get("tiles"))
         self.one_step_tiles = _restore_tiles(state.get("one_step_tiles"))
+        self.obstacle_evidence_tiles = _restore_tiles(
+            state.get("obstacle_evidence_tiles", state.get("obstacle_evidence_count_tiles"))
+        )
         self.local_map = self._clone_optional_tensor(state.get("local_map"))
         self.one_step_local_map = self._clone_optional_tensor(state.get("one_step_local_map"))
         self.full_map = self._clone_optional_tensor(state.get("full_map"))
@@ -458,6 +476,7 @@ class Semantic_Mapping(nn.Module):
         self.vis_classes = []
         self.tiles.clear()
         self.one_step_tiles.clear()
+        self.obstacle_evidence_tiles.clear()
 
         # 清空轨迹
         self.global_trajectory_points = []
@@ -721,6 +740,117 @@ class Semantic_Mapping(nn.Module):
                     0.0
                 ]
             return local_map
+
+    def _get_local_obstacle_evidence_channel(
+        self,
+        channel: int,
+        env_id: int = 0,
+    ) -> torch.Tensor:
+        """Load one persistent obstacle evidence channel for the current local window."""
+        count_map = torch.zeros(
+            1,
+            1,
+            self.TILE_SIZE,
+            self.TILE_SIZE,
+        ).float().to(self.device)
+        gx1, gx2, gy1, gy2 = self.lmb[env_id]
+        tile_y_min = gx1 // self.TILE_SIZE
+        tile_y_max = (gx2 - 1) // self.TILE_SIZE
+        tile_x_min = gy1 // self.TILE_SIZE
+        tile_x_max = (gy2 - 1) // self.TILE_SIZE
+
+        for tile_y in range(tile_y_min, tile_y_max + 1):
+            for tile_x in range(tile_x_min, tile_x_max + 1):
+                tile = self.obstacle_evidence_tiles.get((tile_x, tile_y))
+                if tile is None or tile.shape[1] <= int(channel):
+                    continue
+
+                tile_start_gx = tile_y * self.TILE_SIZE
+                tile_end_gx = tile_start_gx + self.TILE_SIZE
+                tile_start_gy = tile_x * self.TILE_SIZE
+                tile_end_gy = tile_start_gy + self.TILE_SIZE
+                copy_start_gx = max(gx1, tile_start_gx)
+                copy_end_gx = min(gx2, tile_end_gx)
+                copy_start_gy = max(gy1, tile_start_gy)
+                copy_end_gy = min(gy2, tile_end_gy)
+                if copy_start_gx >= copy_end_gx or copy_start_gy >= copy_end_gy:
+                    continue
+
+                tile_h_start = copy_start_gx - tile_start_gx
+                tile_h_end = copy_end_gx - tile_start_gx
+                tile_w_start = copy_start_gy - tile_start_gy
+                tile_w_end = copy_end_gy - tile_start_gy
+                local_h_start = copy_start_gx - gx1
+                local_h_end = copy_end_gx - gx1
+                local_w_start = copy_start_gy - gy1
+                local_w_end = copy_end_gy - gy1
+                count_map[0, 0, local_h_start:local_h_end, local_w_start:local_w_end] = (
+                    tile[env_id, channel, tile_h_start:tile_h_end, tile_w_start:tile_w_end]
+                )
+        return count_map
+
+    def _get_local_obstacle_evidence_counts(self, env_id: int = 0) -> torch.Tensor:
+        return self._get_local_obstacle_evidence_channel(0, env_id=env_id)
+
+    def _get_local_obstacle_evidence_scores(self, env_id: int = 0) -> torch.Tensor:
+        return self._get_local_obstacle_evidence_channel(1, env_id=env_id)
+
+    def _update_obstacle_evidence_tiles(
+        self,
+        local_counts: torch.Tensor,
+        local_scores: Optional[torch.Tensor] = None,
+        env_id: int = 0,
+    ) -> None:
+        """Persist local obstacle observation counts and scores beside the tiled map."""
+        gx1, gx2, gy1, gy2 = self.lmb[env_id]
+        tile_y_min = gx1 // self.TILE_SIZE
+        tile_y_max = (gx2 - 1) // self.TILE_SIZE
+        tile_x_min = gy1 // self.TILE_SIZE
+        tile_x_max = (gy2 - 1) // self.TILE_SIZE
+
+        for tile_y in range(tile_y_min, tile_y_max + 1):
+            for tile_x in range(tile_x_min, tile_x_max + 1):
+                key = (tile_x, tile_y)
+                tile = self.obstacle_evidence_tiles.get(key)
+                if tile is None:
+                    tile = self._create_empty_tile(2)
+                    self.obstacle_evidence_tiles[key] = tile
+                elif tile.shape[1] < 2:
+                    tile_pad = torch.zeros(
+                        tile.shape[0],
+                        2 - tile.shape[1],
+                        tile.shape[2],
+                        tile.shape[3],
+                    ).float().to(tile.device)
+                    tile = torch.cat([tile, tile_pad], axis=1)
+                    self.obstacle_evidence_tiles[key] = tile
+
+                tile_start_gx = tile_y * self.TILE_SIZE
+                tile_end_gx = tile_start_gx + self.TILE_SIZE
+                tile_start_gy = tile_x * self.TILE_SIZE
+                tile_end_gy = tile_start_gy + self.TILE_SIZE
+                copy_start_gx = max(gx1, tile_start_gx)
+                copy_end_gx = min(gx2, tile_end_gx)
+                copy_start_gy = max(gy1, tile_start_gy)
+                copy_end_gy = min(gy2, tile_end_gy)
+                if copy_start_gx >= copy_end_gx or copy_start_gy >= copy_end_gy:
+                    continue
+
+                tile_h_start = copy_start_gx - tile_start_gx
+                tile_h_end = copy_end_gx - tile_start_gx
+                tile_w_start = copy_start_gy - tile_start_gy
+                tile_w_end = copy_end_gy - tile_start_gy
+                local_h_start = copy_start_gx - gx1
+                local_h_end = copy_end_gx - gx1
+                local_w_start = copy_start_gy - gy1
+                local_w_end = copy_end_gy - gy1
+                tile[env_id, 0, tile_h_start:tile_h_end, tile_w_start:tile_w_end] = (
+                    local_counts[0, 0, local_h_start:local_h_end, local_w_start:local_w_end]
+                )
+                if local_scores is not None:
+                    tile[env_id, 1, tile_h_start:tile_h_end, tile_w_start:tile_w_end] = (
+                        local_scores[0, 0, local_h_start:local_h_end, local_w_start:local_w_end]
+                    )
     
     def update_tiles_from_local_map(self, local_map, env_id=0, is_one_step=False):
         """
@@ -1679,14 +1809,75 @@ class Semantic_Mapping(nn.Module):
 
         new_obstacle = translated[:, 0:1, :, :]
         new_explored = translated[:, 1:2, :, :]
-        clear_mask = (new_explored - new_obstacle) >= float(self.obstacle_clear_explored_threshold)
-        if torch.any(clear_mask):
-            map_pred[:, 0:1, :, :] = torch.where(clear_mask, new_obstacle, map_pred[:, 0:1, :, :])
-            one_step_map_pred[:, 0:1, :, :] = torch.where(
-                clear_mask,
-                new_obstacle,
-                one_step_map_pred[:, 0:1, :, :],
+        if self.selective_dynamic_obstacle_update:
+            obstacle_observed = new_obstacle > 0.0
+            free_observed = (
+                (new_explored - new_obstacle)
+                >= float(self.obstacle_clear_explored_threshold)
             )
+            evidence_mask = obstacle_observed | free_observed
+            if torch.any(evidence_mask):
+                current_counts = torch.cat(
+                    [
+                        self._get_local_obstacle_evidence_counts(env_id=env_id)
+                        for env_id in range(new_obstacle.shape[0])
+                    ],
+                    dim=0,
+                )
+                current_scores = torch.cat(
+                    [
+                        self._get_local_obstacle_evidence_scores(env_id=env_id)
+                        for env_id in range(new_obstacle.shape[0])
+                    ],
+                    dim=0,
+                )
+                evidence_value = torch.where(
+                    obstacle_observed,
+                    torch.ones_like(new_obstacle),
+                    torch.zeros_like(new_obstacle),
+                )
+                updated_counts = current_counts + evidence_mask.float()
+                updated_scores = current_scores + evidence_value
+                if self.obstacle_evidence_max_observations > 0:
+                    max_observations = float(self.obstacle_evidence_max_observations)
+                    scale = torch.where(
+                        updated_counts > max_observations,
+                        max_observations / torch.clamp(updated_counts, min=1.0),
+                        torch.ones_like(updated_counts),
+                    )
+                    updated_counts = updated_counts * scale
+                    updated_scores = updated_scores * scale
+                averaged_obstacle = updated_scores / torch.clamp(updated_counts, min=1.0)
+                thresholded_obstacle = torch.where(
+                    averaged_obstacle >= float(self.obstacle_evidence_threshold),
+                    averaged_obstacle,
+                    torch.zeros_like(averaged_obstacle),
+                )
+                map_pred[:, 0:1, :, :] = torch.where(
+                    evidence_mask,
+                    thresholded_obstacle,
+                    self.local_map[:, 0:1, :, :],
+                )
+                one_step_map_pred[:, 0:1, :, :] = torch.where(
+                    evidence_mask,
+                    thresholded_obstacle,
+                    one_step_map_pred[:, 0:1, :, :],
+                )
+                for env_id in range(updated_counts.shape[0]):
+                    self._update_obstacle_evidence_tiles(
+                        updated_counts[env_id:env_id + 1],
+                        updated_scores[env_id:env_id + 1],
+                        env_id=env_id,
+                    )
+        else:
+            clear_mask = (new_explored - new_obstacle) >= float(self.obstacle_clear_explored_threshold)
+            if torch.any(clear_mask):
+                map_pred[:, 0:1, :, :] = torch.where(clear_mask, new_obstacle, map_pred[:, 0:1, :, :])
+                one_step_map_pred[:, 0:1, :, :] = torch.where(
+                    clear_mask,
+                    new_obstacle,
+                    one_step_map_pred[:, 0:1, :, :],
+                )
 
         self.local_map = map_pred
         self.one_step_local_map = one_step_map_pred

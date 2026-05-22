@@ -46,6 +46,8 @@ class ExecutorConfig:
     max_angular_speed_deg_s: float = 60.0
     slowdown_distance_m: float = 0.08
     slowdown_angle_deg: float = 10.0
+    completion_stability_s: float = 0.20
+    completion_yaw_tolerance_deg: float = 0.50
     heading_gain: float = 1.8
     max_heading_correction_rad_s: float = 0.35
 
@@ -68,6 +70,8 @@ class ActiveCommand:
     control_mode: str
     timed_duration_s: float = 0.0
     turn_progress_rad: float = 0.0
+    completion_started_at: float = 0.0
+    completion_anchor_yaw_rad: Optional[float] = None
 
 
 class CmdVelActionExecutor(Node):
@@ -347,11 +351,7 @@ class CmdVelActionExecutor(Node):
     def control_timed(self, command: ActiveCommand) -> None:
         elapsed_s = max(0.0, self.now_s() - float(command.started_at))
         if elapsed_s >= float(command.timed_duration_s):
-            self.finish_active_command(
-                state="done",
-                success=True,
-                message="timed command complete",
-            )
+            self.finish_when_stable(command, message="timed command complete")
             return
 
         if command.action == "MOVE_FORWARD":
@@ -385,12 +385,9 @@ class CmdVelActionExecutor(Node):
         progress_m = self.measure_forward_progress(command)
         remaining_m = float(command.target_meters) - float(progress_m)
         if remaining_m <= float(self.config.position_tolerance_m):
-            self.finish_active_command(
-                state="done",
-                success=True,
-                message="forward motion complete",
-            )
+            self.finish_when_stable(command, message="forward motion complete")
             return
+        self.clear_completion_stability(command)
 
         yaw_error = normalize_angle_rad(
             float(self._latest_pose.yaw_rad) - float(command.start_pose.yaw_rad)
@@ -417,12 +414,9 @@ class CmdVelActionExecutor(Node):
         remaining_rad = max(0.0, target_rad - progress_rad)
 
         if math.degrees(remaining_rad) <= float(self.config.angle_tolerance_deg):
-            self.finish_active_command(
-                state="done",
-                success=True,
-                message="turn complete",
-            )
+            self.finish_when_stable(command, message="turn complete")
             return
+        self.clear_completion_stability(command)
 
         angular_speed_rad_s = math.radians(
             min(
@@ -496,6 +490,44 @@ class CmdVelActionExecutor(Node):
         )
         pending_progress = max(0.0, yaw_delta * self.turn_direction(command))
         return math.degrees(max(0.0, float(command.turn_progress_rad) + pending_progress))
+
+    @staticmethod
+    def clear_completion_stability(command: ActiveCommand) -> None:
+        command.completion_started_at = 0.0
+        command.completion_anchor_yaw_rad = None
+
+    def finish_when_stable(self, command: ActiveCommand, *, message: str) -> None:
+        """Stop first, then publish terminal success after a short stable heading window."""
+        self.stop_robot()
+        now_s = self.now_s()
+        stability_s = max(0.0, float(self.config.completion_stability_s))
+        current_yaw = (
+            float(self._latest_pose.yaw_rad)
+            if self._latest_pose is not None and command.control_mode == "odom"
+            else None
+        )
+        if stability_s <= 0.0:
+            self.finish_active_command(state="done", success=True, message=message)
+            return
+
+        if float(command.completion_started_at or 0.0) <= 0.0:
+            command.completion_started_at = now_s
+            command.completion_anchor_yaw_rad = current_yaw
+            return
+
+        if current_yaw is not None and command.completion_anchor_yaw_rad is not None:
+            yaw_delta_deg = abs(
+                math.degrees(
+                    normalize_angle_rad(current_yaw - float(command.completion_anchor_yaw_rad))
+                )
+            )
+            if yaw_delta_deg > max(0.0, float(self.config.completion_yaw_tolerance_deg)):
+                command.completion_started_at = now_s
+                command.completion_anchor_yaw_rad = current_yaw
+                return
+
+        if now_s - float(command.completion_started_at) >= stability_s:
+            self.finish_active_command(state="done", success=True, message=message)
 
     def finish_active_command(self, *, state: str, success: bool, message: str) -> None:
         command = self._active_command
@@ -597,6 +629,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--default-angular-speed-deg-s", type=float, default=60.0)
     parser.add_argument("--max-linear-speed-mps", type=float, default=0.5)
     parser.add_argument("--max-angular-speed-deg-s", type=float, default=60.0)
+    parser.add_argument("--completion-stability-s", type=float, default=0.20)
+    parser.add_argument("--completion-yaw-tolerance-deg", type=float, default=0.50)
     return parser
 
 
@@ -616,6 +650,8 @@ def config_from_args(args: argparse.Namespace) -> ExecutorConfig:
         default_angular_speed_deg_s=float(args.default_angular_speed_deg_s),
         max_linear_speed_mps=float(args.max_linear_speed_mps),
         max_angular_speed_deg_s=float(args.max_angular_speed_deg_s),
+        completion_stability_s=float(args.completion_stability_s),
+        completion_yaw_tolerance_deg=float(args.completion_yaw_tolerance_deg),
     )
 
 
@@ -630,6 +666,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
+    except Exception as exc:
+        if "context is not valid" not in str(exc):
+            raise
     finally:
         try:
             node.stop_robot()

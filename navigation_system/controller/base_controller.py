@@ -29,7 +29,7 @@ from navigation_system.space.map.obstacle_analysis import (
     merge_obstacle_distance_text,
     sample_depth_distance_from_region,
 )
-from navigation_system.vlm.contracts.schema import DIRECTION_CONFIG
+from navigation_system.vlm.contracts.schema import build_direction_config
 from navigation_system.runtime.storage.artifacts import get_episode_detail_dir
 from navigation_system.runtime.storage.naming import build_step_artifact_filename
 from navigation_system.config.core import ConfigHelper, create_category_config
@@ -180,6 +180,8 @@ class BaseNavigationController:
         self.latest_lookaround_depths: List[np.ndarray] = []
         self.latest_lookaround_detection_payloads: List[Any] = []
         self.latest_lookaround_phase = ""
+        self.latest_lookaround_sample_count = 12
+        self.latest_lookaround_angle_step_deg = 30.0
         self.latest_obstacle_distances_12 = {
             f'angle_{i}': 'Unknown' for i in range(0, 360, 30)
         }
@@ -812,6 +814,54 @@ class BaseNavigationController:
                 return False
         return bool(getattr(self.envs, "continuous_lookaround_scan", False))
 
+    def _env_lookaround_sample_count(self, default: int = 12) -> int:
+        getter = getattr(self.envs, "get_lookaround_sample_count", None)
+        if callable(getter):
+            try:
+                return max(1, int(getter()))
+            except Exception:
+                pass
+        call_at = getattr(self.envs, "call_at", None)
+        if callable(call_at):
+            try:
+                return max(1, int(call_at(0, "get_lookaround_sample_count")))
+            except Exception:
+                pass
+        return max(1, int(default or 12))
+
+    def _env_lookaround_angle_step_deg(self, default: float = 30.0) -> float:
+        getter = getattr(self.envs, "get_lookaround_angle_step_deg", None)
+        if callable(getter):
+            try:
+                return float(getter())
+            except Exception:
+                pass
+        call_at = getattr(self.envs, "call_at", None)
+        if callable(call_at):
+            try:
+                return float(call_at(0, "get_lookaround_angle_step_deg"))
+            except Exception:
+                pass
+        return float(default or 30.0)
+
+    def _lookaround_direction_config(self) -> List[Dict[str, Any]]:
+        sample_count = int(getattr(self, "latest_lookaround_sample_count", 12) or 12)
+        angle_step_deg = float(getattr(self, "latest_lookaround_angle_step_deg", 30.0) or 30.0)
+        if sample_count <= 1 and len(getattr(self, "latest_lookaround_images", []) or []) > 1:
+            sample_count = len(self.latest_lookaround_images)
+        return build_direction_config(
+            sample_count=sample_count,
+            angle_step_deg=angle_step_deg,
+        )
+
+    def _depth_map_update_disabled(self) -> bool:
+        real_cfg = getattr(self.config, "REAL_ROBOT", None)
+        return bool(getattr(real_cfg, "DISABLE_DEPTH_MAP_UPDATE", False))
+
+    def _ensure_real_depth_map_disabled_input(self, phase: str) -> Optional[str]:
+        del phase
+        return getattr(self, "latest_global_map_input", None)
+
     def _run_continuous_lookaround_env_scan(
         self,
         *,
@@ -840,7 +890,7 @@ class BaseNavigationController:
         enable_landmark_detection: bool = False,
         prepare_thinking_detection: bool = False,
     ) -> Optional[Dict[str, Any]]:
-        """Run the shared 12-step lookaround scan and cache the resulting map/render state."""
+        """Run the shared lookaround scan and cache the resulting render state."""
         debug_save_renderings = bool(self.render_map_config.DEBUG_SAVE_RENDERINGS)
         self.latest_lookaround_end_reason = ""
         lookaround_images: List[np.ndarray] = []
@@ -851,39 +901,44 @@ class BaseNavigationController:
         final_last_waypoint_angle = None
         look_step = self.current_step
         continuous_scan_steps = None
+        default_angle_step_deg = float(
+            getattr(
+                self,
+                "turn_angle",
+                getattr(getattr(self, "action_executor", None), "turn_angle", 30.0),
+            )
+            or 30.0
+        )
+        lookaround_sample_count = self._env_lookaround_sample_count(default=12)
+        angle_step_deg = self._env_lookaround_angle_step_deg(default=default_angle_step_deg)
+        self.latest_lookaround_sample_count = int(lookaround_sample_count)
+        self.latest_lookaround_angle_step_deg = float(angle_step_deg)
+        disable_depth_map_update = self._depth_map_update_disabled()
 
         if self._env_supports_continuous_lookaround_scan():
-            angle_step_deg = float(
-                getattr(
-                    self,
-                    "turn_angle",
-                    getattr(getattr(self, "action_executor", None), "turn_angle", 30.0),
-                )
-                or 30.0
-            )
             try:
                 continuous_scan_steps = self._run_continuous_lookaround_env_scan(
-                    sample_count=12,
+                    sample_count=lookaround_sample_count,
                     angle_step_deg=angle_step_deg,
                 )
             except Exception as exc:
                 self.latest_lookaround_end_reason = "incomplete"
-                print(f"[WARN] Continuous lookaround scan failed: {exc}")
+                print(f"[WARN] Lookaround scan failed: {exc}")
                 return None
 
-        for look_index in range(1, 13):
+        for look_index in range(1, lookaround_sample_count + 1):
             self.current_step += 1
             look_step = self.current_step
 
             if continuous_scan_steps is None:
                 step_data = self._safe_env_step(
                     [{"action": resolve_habitat_action("TURN_LEFT")}],
-                    context=f"lookaround step {look_index}/12",
+                    context=f"lookaround step {look_index}/{lookaround_sample_count}",
                 )
                 if step_data is None:
                     self.current_step = max(0, self.current_step - 1)
                     self.latest_lookaround_end_reason = "episode_done"
-                    print(f"[WARN] Episode ended at lookaround step {look_index}/12")
+                    print(f"[WARN] Episode ended at lookaround step {look_index}/{lookaround_sample_count}")
                     return None
                 obs, _, dones, infos = step_data
             else:
@@ -891,8 +946,8 @@ class BaseNavigationController:
                     self.current_step = max(0, self.current_step - 1)
                     self.latest_lookaround_end_reason = "incomplete"
                     print(
-                        f"[WARN] Continuous lookaround returned "
-                        f"{len(continuous_scan_steps)}/12 samples"
+                        f"[WARN] Lookaround returned "
+                        f"{len(continuous_scan_steps)}/{lookaround_sample_count} samples"
                     )
                     return None
                 obs_item, _reward, done, info = continuous_scan_steps[look_index - 1]
@@ -902,28 +957,40 @@ class BaseNavigationController:
 
             if dones[0]:
                 self.latest_lookaround_end_reason = "episode_done"
-                print(f"[WARN] Episode ended at lookaround step {look_index}/12")
+                print(f"[WARN] Episode ended at lookaround step {look_index}/{lookaround_sample_count}")
                 return None
 
-            preprocess_started = time.perf_counter()
-            batch_obs = self._batch_obs(obs, save_object_detection=enable_landmark_detection)
-            poses = torch.from_numpy(np.array([item['sensor_pose'] for item in obs])).float().to(self.device)
-            self._record_local_timing(
-                "preprocess_lookaround",
-                time.perf_counter() - preprocess_started,
-            )
+            map_state = None
+            if disable_depth_map_update:
+                preprocess_started = time.perf_counter()
+                if enable_landmark_detection:
+                    self._batch_obs(obs, save_object_detection=enable_landmark_detection)
+                else:
+                    self.latest_depth_meters = self._depth_to_meters(obs[0]['depth'])
+                self._record_local_timing(
+                    "preprocess_lookaround",
+                    time.perf_counter() - preprocess_started,
+                )
+            else:
+                preprocess_started = time.perf_counter()
+                batch_obs = self._batch_obs(obs, save_object_detection=enable_landmark_detection)
+                poses = torch.from_numpy(np.array([item['sensor_pose'] for item in obs])).float().to(self.device)
+                self._record_local_timing(
+                    "preprocess_lookaround",
+                    time.perf_counter() - preprocess_started,
+                )
 
-            map_started = time.perf_counter()
-            map_state = self.mapper.update_map(
-                batch_obs, poses, look_step,
-                list(self.detected_classes), self.current_episode_id,
-                observations=obs,
-            )
-            self._record_local_timing(
-                "map_update_lookaround",
-                time.perf_counter() - map_started,
-            )
-            final_map_state = map_state
+                map_started = time.perf_counter()
+                map_state = self.mapper.update_map(
+                    batch_obs, poses, look_step,
+                    list(self.detected_classes), self.current_episode_id,
+                    observations=obs,
+                )
+                self._record_local_timing(
+                    "map_update_lookaround",
+                    time.perf_counter() - map_started,
+                )
+                final_map_state = map_state
 
             rgb_bgr = cv2.cvtColor(obs[0]['rgb'], cv2.COLOR_RGB2BGR)
             lookaround_images.append(rgb_bgr.copy())
@@ -942,7 +1009,7 @@ class BaseNavigationController:
             else:
                 lookaround_detection_payloads.append((None, [], None))
 
-            if debug_save_renderings:
+            if debug_save_renderings and map_state is not None:
                 final_snapshot_paths, _detected_landmarks_step, final_last_waypoint_angle = self._save_visualization_snapshot(
                     map_state=map_state,
                     rgb_bgr=rgb_bgr,
@@ -974,9 +1041,9 @@ class BaseNavigationController:
         self.latest_obs = obs[0]
         self._update_obstacle_distances_12_directions(lookaround_depths)
 
-        if len(lookaround_images) < 12:
+        if len(lookaround_images) < lookaround_sample_count:
             self.latest_lookaround_end_reason = "incomplete"
-            print(f"[WARN] Lookaround incomplete: {len(lookaround_images)}/12 images")
+            print(f"[WARN] Lookaround incomplete: {len(lookaround_images)}/{lookaround_sample_count} images")
             return None
 
         self.latest_lookaround_images = [img.copy() for img in lookaround_images]
@@ -1043,33 +1110,42 @@ class BaseNavigationController:
             }
         
         prev_class_count = len(self.detected_classes)
+        map_state = None
+        disable_depth_map_update = self._depth_map_update_disabled()
         preprocess_started = time.perf_counter()
-        batch_obs = self._batch_obs(obs, save_object_detection=enable_landmark_detection)
-        poses = torch.from_numpy(
-            np.array([item['sensor_pose'] for item in obs])
-        ).float().to(self.device)
+        if disable_depth_map_update:
+            if enable_landmark_detection:
+                self._batch_obs(obs, save_object_detection=enable_landmark_detection)
+            else:
+                self.latest_depth_meters = self._depth_to_meters(obs[0]['depth'])
+        else:
+            batch_obs = self._batch_obs(obs, save_object_detection=enable_landmark_detection)
+            poses = torch.from_numpy(
+                np.array([item['sensor_pose'] for item in obs])
+            ).float().to(self.device)
         self._record_local_timing(
             "preprocess_action",
             time.perf_counter() - preprocess_started,
         )
         
-        map_started = time.perf_counter()
-        map_state = self.mapper.update_map(
-            batch_obs, poses, self.current_step,
-            list(self.detected_classes), self.current_episode_id,
-            observations=obs,
-        )
-        self._record_local_timing(
-            "map_update_action",
-            time.perf_counter() - map_started,
-        )
+        if not disable_depth_map_update:
+            map_started = time.perf_counter()
+            map_state = self.mapper.update_map(
+                batch_obs, poses, self.current_step,
+                list(self.detected_classes), self.current_episode_id,
+                observations=obs,
+            )
+            self._record_local_timing(
+                "map_update_action",
+                time.perf_counter() - map_started,
+            )
         
         # print(f"[Controller.step] 从mapper接收轨迹: 全局={len(map_state.get('global_trajectory_points', []))}, 子任务={len(map_state.get('subtask_trajectory_points', []))}")
         
         new_classes = len(self.detected_classes) - prev_class_count
 # print(f" +{new_classes}类" if new_classes > 0 else "")
         
-        if save_vis:
+        if save_vis and map_state is not None:
             render_policy = None
             if (
                 bool(getattr(self.output_maps_config, "SAVE_STEP_ARTIFACTS", False))
@@ -1193,11 +1269,46 @@ class BaseNavigationController:
                     return True
 
         preprocess_started = time.perf_counter()
-        self._batch_obs([self.latest_obs], save_object_detection=enable_landmark_detection)
+        if self._depth_map_update_disabled():
+            if enable_landmark_detection:
+                rgb_bgr_for_detection = cv2.cvtColor(self.latest_obs['rgb'], cv2.COLOR_RGB2BGR)
+                (
+                    self.latest_detections_full,
+                    self.latest_labels_full,
+                    self.latest_masks_full,
+                ) = self._detect_landmarks_for_visualization(
+                    rgb_bgr_for_detection,
+                    list(getattr(self, "landmark_classes", []) or []),
+                )
+                self.latest_depth_meters = self._depth_to_meters(self.latest_obs['depth'])
+            else:
+                self.latest_depth_meters = self._depth_to_meters(self.latest_obs['depth'])
+        else:
+            self._batch_obs([self.latest_obs], save_object_detection=enable_landmark_detection)
         self._record_local_timing(
             self._timing_section_for_phase(phase, prefix="preprocess_snapshot"),
             time.perf_counter() - preprocess_started,
         )
+        if self._depth_map_update_disabled():
+            if enable_landmark_detection and getattr(self, "visualizer", None) is not None:
+                rgb_bgr = cv2.cvtColor(self.latest_obs['rgb'], cv2.COLOR_RGB2BGR)
+                detection_vis, detected_landmarks_step, _classes, _strip, _visible_entries = self.visualizer.render_detection_bbox(
+                    rgb_bgr,
+                    getattr(self, "latest_detections_full", None),
+                    list(getattr(self, "latest_labels_full", []) or []),
+                    landmark_classes=list(getattr(self, "landmark_classes", []) or []),
+                    depth_meters=getattr(self, "latest_depth_meters", None),
+                    hfov=self.config.SPACE.SENSOR.HFOV_DEG,
+                    landmark_dist_map=None,
+                    landmark_dist_map_multi=None,
+                    append_bottom_strip=True,
+                    controller=self,
+                    return_visible_entries=True,
+                )
+                self.latest_action_detection_vis = detection_vis
+                self._record_landmark_detection_step(self.current_step, detected_landmarks_step)
+            return True
+
         map_state_started = time.perf_counter()
         map_state = self.mapper.get_map_state()
         self._record_local_timing(
@@ -1240,6 +1351,8 @@ class BaseNavigationController:
             return False
         if not getattr(self, "landmark_classes", None):
             return False
+        if self._depth_map_update_disabled():
+            return True
 
         map_state = self.mapper.get_map_state()
         rgb_bgr = cv2.cvtColor(self.latest_obs["rgb"], cv2.COLOR_RGB2BGR)
@@ -1264,13 +1377,17 @@ class BaseNavigationController:
         return True
 
     def _update_obstacle_distances_12_directions(self, lookaround_depths: Optional[List[np.ndarray]] = None):
-        """Update 12-view obstacle distances from current-heading map rays, guarded by nearer depth hits."""
+        """Update lookaround obstacle distances, using depth-only when real mapping is disabled."""
         timing_started = time.perf_counter()
         depth_views = list(lookaround_depths or [])
         try:
             map_fallback = {}
             try:
-                if self.mapper is not None and self.visualizer is not None:
+                if (
+                    not self._depth_map_update_disabled()
+                    and self.mapper is not None
+                    and self.visualizer is not None
+                ):
                     map_state = self.mapper.get_map_state()
                     map_fallback = self.visualizer.calculate_obstacle_distances_12_directions_from_full_map(
                         map_state.get('full_map'),
@@ -1278,11 +1395,12 @@ class BaseNavigationController:
             except Exception:
                 map_fallback = {}
             distances = {}
-            for config in DIRECTION_CONFIG:
+            for config in self._lookaround_direction_config():
                 step_idx = int(config["step"])
                 angle = int(config["angle"])
-                # Keep 12-view obstacle text aligned with the exact rendered IMAGE:
-                # IMAGE 1 (Front 0deg) uses the step-12 depth frame, IMAGE 2 uses step-1, etc.
+                # Keep obstacle text aligned with the exact rendered IMAGE:
+                # IMAGE 1 (Front 0deg) uses the final depth frame; other IMAGEs use
+                # the corresponding stopped-turn capture.
                 depth_meters = depth_views[step_idx - 1] if step_idx - 1 < len(depth_views) else None
                 try:
                     distance_m = sample_depth_distance_from_region(
@@ -1316,7 +1434,11 @@ class BaseNavigationController:
         timing_started = time.perf_counter()
         try:
             map_distances = {}
-            if self.mapper is not None and self.visualizer is not None:
+            if (
+                not self._depth_map_update_disabled()
+                and self.mapper is not None
+                and self.visualizer is not None
+            ):
                 map_state = self.mapper.get_map_state()
                 map_distances = self.visualizer.calculate_obstacle_distances_from_full_map(
                     map_state.get('full_map'),
@@ -1543,6 +1665,7 @@ class BaseNavigationController:
     def _preprocess_depth(self, depth: np.ndarray, min_depth: float, max_depth: float) -> np.ndarray:
         """预处理深度图"""
         depth = depth[:, :, 0] * 1
+        depth[~np.isfinite(depth)] = 1.0
         for i in range(depth.shape[1]):
             depth[:, i][depth[:, i] == 0.] = depth[:, i].max()
         mask2 = depth > 0.99

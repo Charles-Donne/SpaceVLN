@@ -37,7 +37,7 @@ def build_payload(args: argparse.Namespace) -> dict:
     if action == "MOVE_FORWARD" and target_meters <= 0.0:
         target_meters = 0.5
     if action in {"TURN_LEFT", "TURN_RIGHT"} and target_degrees <= 0.0:
-        target_degrees = 30.0
+        target_degrees = 45.0
     if action == "LOOK_AROUND_360" and target_degrees <= 0.0:
         target_degrees = 360.0
 
@@ -65,8 +65,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--topic", default="/spacevln/action_cmd")
     parser.add_argument("--meters", type=float, default=0.0)
     parser.add_argument("--degrees", type=float, default=0.0)
-    parser.add_argument("--linear-mps", type=float, default=0.15)
-    parser.add_argument("--angular-deg-s", type=float, default=45.0)
+    parser.add_argument("--linear-mps", type=float, default=0.5)
+    parser.add_argument("--angular-deg-s", type=float, default=60.0)
     parser.add_argument("--timeout-s", type=float, default=20.0)
     parser.add_argument("--session-id", default="manual")
     parser.add_argument("--command-id", default="")

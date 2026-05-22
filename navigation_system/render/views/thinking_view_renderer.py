@@ -1260,6 +1260,7 @@ class ThinkingViewRenderer:
         initial_waypoint_index: Optional[int] = 0,
         lookaround_detection_payloads: Optional[List[Tuple[Any, List[str], Any]]] = None,
         detection_topk: int = THINKING_DETECTION_TOPK,
+        direction_config: Optional[List[Dict[str, Any]]] = None,
     ) -> Tuple[List[str], List[str]]:
         os.makedirs(directions_dir, exist_ok=True)
         rendered_views = self.render_direction_views(
@@ -1285,6 +1286,7 @@ class ThinkingViewRenderer:
             current_floor_id=current_floor_id,
             initial_waypoint_index=initial_waypoint_index,
             detection_topk=detection_topk,
+            direction_config=direction_config,
         )
         direction_paths: List[str] = []
         direction_names: List[str] = []
@@ -1322,9 +1324,11 @@ class ThinkingViewRenderer:
         current_floor_id: int = 0,
         initial_waypoint_index: Optional[int] = 0,
         detection_topk: int = THINKING_DETECTION_TOPK,
+        direction_config: Optional[List[Dict[str, Any]]] = None,
     ) -> List[Dict[str, Any]]:
         rendered_views: List[Dict[str, Any]] = []
         view_payloads: List[Tuple[Any, List[str], np.ndarray, Optional[np.ndarray], float, str]] = []
+        configs = [dict(item) for item in (direction_config or DIRECTION_CONFIG)]
         waypoint_entries = self._build_waypoint_view_entries(
             waypoint_info=waypoint_info,
             waypoint_area_labels=waypoint_area_labels,
@@ -1337,7 +1341,7 @@ class ThinkingViewRenderer:
             current_floor_id=current_floor_id,
             initial_waypoint_index=initial_waypoint_index,
         )
-        view_angles = [float(config["angle"]) for config in DIRECTION_CONFIG]
+        view_angles = [float(config["angle"]) for config in configs]
         waypoint_entries = self._apply_waypoint_visibility(
             waypoint_entries=waypoint_entries,
             view_angles_deg=view_angles,
@@ -1351,7 +1355,7 @@ class ThinkingViewRenderer:
             view_angles_deg=view_angles,
         )
 
-        for config in DIRECTION_CONFIG:
+        for config in configs:
             step_idx = config["step"]
             angle = config["angle"]
             direction_name = config["name"]
