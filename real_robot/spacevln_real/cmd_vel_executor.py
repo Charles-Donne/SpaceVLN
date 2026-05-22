@@ -9,6 +9,7 @@ import math
 from typing import Optional
 
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
@@ -627,13 +628,22 @@ def main(argv: Optional[list[str]] = None) -> int:
     node = CmdVelActionExecutor(config)
     try:
         rclpy.spin(node)
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
     finally:
         try:
             node.stop_robot()
         except Exception:
             pass
-        node.destroy_node()
-        rclpy.shutdown()
+        try:
+            node.destroy_node()
+        except Exception:
+            pass
+        try:
+            if rclpy.ok():
+                rclpy.shutdown()
+        except Exception:
+            pass
     return 0
 
 
