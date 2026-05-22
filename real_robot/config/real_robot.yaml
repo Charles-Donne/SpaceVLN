@@ -33,8 +33,8 @@ control:
 topics:
   rgb: /camera/camera/color/image_raw
   rgb_camera_info: /camera/camera/color/camera_info
-  depth: /camera/camera/aligned_depth_to_color/image_raw
-  depth_camera_info: /camera/camera/aligned_depth_to_color/camera_info
+  depth: /camera/camera/depth/image_rect_raw
+  depth_camera_info: /camera/camera/depth/camera_info
   imu: /camera/camera/imu
   odom: /odom
   pose: ""

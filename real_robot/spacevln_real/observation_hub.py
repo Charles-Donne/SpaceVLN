@@ -145,6 +145,43 @@ class ObservationHub:
             return self._pose_frames
         return self._odom_frames
 
+    @staticmethod
+    def _latest_stamp(queue: Deque) -> Optional[float]:
+        if not queue:
+            return None
+        return float(queue[-1].stamp)
+
+    def _format_sync_debug_locked(
+        self,
+        *,
+        after_stamp: Optional[float],
+    ) -> str:
+        rgb_stamp = self._latest_stamp(self._rgb_frames)
+        depth_stamp = self._latest_stamp(self._depth_frames)
+        pose_queue = self._pose_queue()
+        pose_stamp = self._latest_stamp(pose_queue)
+        parts = [
+            f"rgb_count={len(self._rgb_frames)}",
+            f"depth_count={len(self._depth_frames)}",
+            f"pose_source={str(self.config.pose_source or 'odometry')}",
+            f"pose_count={len(pose_queue)}",
+            f"imu_count={len(self._imu_frames)}",
+            f"sync_tolerance_s={float(self.config.sync_tolerance_s):.3f}",
+        ]
+        if after_stamp is not None:
+            parts.append(f"after_stamp={float(after_stamp):.3f}")
+        if rgb_stamp is not None:
+            parts.append(f"latest_rgb_stamp={rgb_stamp:.3f}")
+        if depth_stamp is not None:
+            parts.append(f"latest_depth_stamp={depth_stamp:.3f}")
+        if pose_stamp is not None:
+            parts.append(f"latest_pose_stamp={pose_stamp:.3f}")
+        if rgb_stamp is not None and depth_stamp is not None:
+            parts.append(f"rgb_depth_dt_s={abs(rgb_stamp - depth_stamp):.3f}")
+        if rgb_stamp is not None and pose_stamp is not None:
+            parts.append(f"rgb_pose_dt_s={abs(rgb_stamp - pose_stamp):.3f}")
+        return ", ".join(parts)
+
     def wait_for_snapshot(
         self,
         *,
@@ -179,8 +216,9 @@ class ObservationHub:
 
                 remaining = deadline - time.time()
                 if remaining <= 0.0:
+                    debug_state = self._format_sync_debug_locked(after_stamp=after_stamp)
                     raise TimeoutError(
-                        "timed out waiting for synchronized real-robot snapshot"
+                        "timed out waiting for synchronized real-robot snapshot "
+                        f"({debug_state})"
                     )
                 self._condition.wait(timeout=min(0.1, remaining))
-
