@@ -177,6 +177,8 @@ def camera_info_from_message(
     timestamp_policy: str = "header",
     max_header_receive_time_delta_s: Optional[float] = None,
 ) -> CameraInfoData:
+    k_value = getattr(msg, "k", None)
+    d_value = getattr(msg, "d", None)
     return CameraInfoData(
         stamp=header_stamp(
             msg,
@@ -187,8 +189,8 @@ def camera_info_from_message(
         frame_id=header_frame_id(msg),
         width=int(getattr(msg, "width", 0) or 0),
         height=int(getattr(msg, "height", 0) or 0),
-        k=list(getattr(msg, "k", []) or []),
-        d=list(getattr(msg, "d", []) or []),
+        k=[float(item) for item in k_value] if k_value is not None else [],
+        d=[float(item) for item in d_value] if d_value is not None else [],
     )
 
 
