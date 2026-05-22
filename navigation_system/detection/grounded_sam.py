@@ -1,6 +1,7 @@
 import os
 import time
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any, Union, List, Tuple
 from abc import ABCMeta, abstractmethod
 
@@ -13,17 +14,45 @@ try:
 except ImportError:  # Habitat 0.2.x no longer exports Config
     from typing import Any as Config
 
-import supervision as sv
-from groundingdino.util.inference import Model
+try:
+    import supervision as sv
+except Exception as exc:
+    sv = None
+    _SUPERVISION_IMPORT_ERROR = exc
+else:
+    _SUPERVISION_IMPORT_ERROR = None
+
+try:
+    from groundingdino.util.inference import Model
+except Exception as exc:
+    Model = None
+    _GROUNDINGDINO_IMPORT_ERROR = exc
+else:
+    _GROUNDINGDINO_IMPORT_ERROR = None
 
 try:
     from segment_anything import sam_model_registry, SamPredictor
-except Exception:
+except Exception as exc:
     sam_model_registry = None
     SamPredictor = None
+    _SAM_IMPORT_ERROR = exc
+else:
+    _SAM_IMPORT_ERROR = None
 
 
 VisualObservation = Union[torch.Tensor, np.ndarray]
+
+
+class _FallbackDetections(SimpleNamespace):
+    def __len__(self) -> int:
+        return len(getattr(self, "xyxy", []) or [])
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = str(os.getenv(name, "") or "").strip().lower()
+    if not raw:
+        return bool(default)
+    return raw in {"1", "true", "yes", "on", "y"}
 
 
 @dataclass
@@ -63,6 +92,22 @@ class GroundedSAM(Segment):
         self._dino_disabled_reason = ""
         self._dino_disabled_warned = False
         self._dino_runtime_mode = "unknown"
+        self._sam_disabled_reason = ""
+        self._sam_disabled_warned = False
+        require_dino = _env_flag("SPACEVLN_REQUIRE_GROUNDINGDINO", False)
+        require_sam = _env_flag("SPACEVLN_REQUIRE_SAM", False)
+
+        if Model is None:
+            self.grounding_dino_model = None
+            self.sam_predictor = None
+            reason = (
+                "GroundingDINO is not installed or failed to import. "
+                f"Reason: {type(_GROUNDINGDINO_IMPORT_ERROR).__name__}: {_GROUNDINGDINO_IMPORT_ERROR}"
+            )
+            self._dino_disabled_reason = reason
+            if require_dino:
+                raise RuntimeError(reason)
+            return
 
         dino_device = device
         use_cpu_fallback = str(
@@ -123,6 +168,8 @@ class GroundedSAM(Segment):
                         f"CUDA error: {type(exc).__name__}: {exc}. "
                         f"CPU error: {type(cpu_exc).__name__}: {cpu_exc}"
                     )
+                    if require_dino:
+                        raise RuntimeError(self._dino_disabled_reason) from cpu_exc
                     return
             else:
                 self.grounding_dino_model = None
@@ -132,15 +179,21 @@ class GroundedSAM(Segment):
                     "Set SPACEVLN_GROUNDINGDINO_CPU_FALLBACK=1 to retry on CPU. "
                     f"Reason: {type(exc).__name__}: {exc}"
                 )
+                if require_dino:
+                    raise RuntimeError(self._dino_disabled_reason) from exc
                 return
 
         self.sam_predictor = None
-        self._sam_disabled_reason = ""
-        self._sam_disabled_warned = False
         if SamPredictor is None or sam_model_registry is None:
             self._sam_disabled_reason = (
-                "segment_anything is not installed; using GroundingDINO boxes as coarse masks"
+                "segment_anything is not installed or failed to import; "
+                "using GroundingDINO boxes as coarse masks"
             )
+            if require_sam:
+                raise RuntimeError(
+                    f"{self._sam_disabled_reason}. "
+                    f"Reason: {type(_SAM_IMPORT_ERROR).__name__}: {_SAM_IMPORT_ERROR}"
+                )
         else:
             try:
                 if detection_model_cfg.USE_REPVIT_SAM:
@@ -159,6 +212,8 @@ class GroundedSAM(Segment):
                     "SAM initialization failed; using GroundingDINO boxes as coarse masks. "
                     f"Reason: {type(exc).__name__}: {exc}"
                 )
+                if require_sam:
+                    raise RuntimeError(self._sam_disabled_reason) from exc
         self.grounding_dino_model.model.eval()
         
     def _segment(self, sam_predictor: Any, image: np.ndarray, xyxy: np.ndarray) -> np.ndarray:
@@ -186,7 +241,7 @@ class GroundedSAM(Segment):
                 masks[idx, top:bottom, left:right] = 1.0
         return masks
     
-    def _process_detections(self, detections: sv.Detections) -> sv.Detections:
+    def _process_detections(self, detections: Any) -> Any:
         # 兼容旧版本 supervision：手动计算 box_area
         if hasattr(detections, 'box_area'):
             box_areas = detections.box_area
@@ -224,13 +279,21 @@ class GroundedSAM(Segment):
         self,
         image: VisualObservation,
         reason: str = "",
-    ) -> Tuple[np.ndarray, List[str], np.ndarray, sv.Detections]:
+    ) -> Tuple[np.ndarray, List[str], np.ndarray, Any]:
         height, width = image.shape[:2]
-        detections = sv.Detections(
-            xyxy=np.empty((0, 4), dtype=np.float32),
-            confidence=np.empty((0,), dtype=np.float32),
-            class_id=np.empty((0,), dtype=int),
-        )
+        if sv is not None:
+            detections = sv.Detections(
+                xyxy=np.empty((0, 4), dtype=np.float32),
+                confidence=np.empty((0,), dtype=np.float32),
+                class_id=np.empty((0,), dtype=int),
+            )
+        else:
+            detections = _FallbackDetections(
+                xyxy=np.empty((0, 4), dtype=np.float32),
+                confidence=np.empty((0,), dtype=np.float32),
+                class_id=np.empty((0,), dtype=int),
+                tracker_id=None,
+            )
         detections.mask = np.empty((0, height, width), dtype=np.float32)
         if reason:
             print(f"[WARN] GroundedSAM detection skipped: {reason}")
@@ -248,12 +311,15 @@ class GroundedSAM(Segment):
         classes = kwargs.get("classes", [])
         box_threshold = float(kwargs.get("box_threshold", self.box_threshold))
         text_threshold = float(kwargs.get("text_threshold", self.text_threshold))
-        box_annotator = sv.BoxAnnotator()
-        # 兼容旧版本 supervision（没有 MaskAnnotator）
-        try:
-            mask_annotator = sv.MaskAnnotator()
-        except AttributeError:
+        box_annotator = sv.BoxAnnotator() if sv is not None else None
+        if sv is None:
             mask_annotator = None
+        else:
+            # 兼容旧版本 supervision（没有 MaskAnnotator）
+            try:
+                mask_annotator = sv.MaskAnnotator()
+            except AttributeError:
+                mask_annotator = None
         labels = []
         # t1 = time.time()
         try:
@@ -325,15 +391,22 @@ class GroundedSAM(Segment):
                     annotated_image[mask_bool] = annotated_image[mask_bool] * 0.5 + color_mask * 0.5
         
         # 兼容不同版本的 BoxAnnotator.annotate() API
-        try:
-            # 新版本：labels 参数
-            annotated_image = box_annotator.annotate(scene=annotated_image, detections=detections, labels=labels)
-        except TypeError:
-            # 旧版本：没有 labels 参数，手动绘制文本
-            annotated_image = box_annotator.annotate(scene=annotated_image, detections=detections)
-            # 手动添加标签（cv2 已在文件开头导入）
+        if box_annotator is not None:
+            try:
+                # 新版本：labels 参数
+                annotated_image = box_annotator.annotate(scene=annotated_image, detections=detections, labels=labels)
+            except TypeError:
+                # 旧版本：没有 labels 参数，手动绘制文本
+                annotated_image = box_annotator.annotate(scene=annotated_image, detections=detections)
+                # 手动添加标签（cv2 已在文件开头导入）
+                for i, (xyxy, label) in enumerate(zip(detections.xyxy, labels)):
+                    x1, y1, x2, y2 = map(int, xyxy)
+                    cv2.putText(annotated_image, label, (x1, y1 - 10), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        else:
             for i, (xyxy, label) in enumerate(zip(detections.xyxy, labels)):
                 x1, y1, x2, y2 = map(int, xyxy)
+                cv2.rectangle(annotated_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
                 cv2.putText(annotated_image, label, (x1, y1 - 10), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
         

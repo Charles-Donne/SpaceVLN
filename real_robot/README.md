@@ -66,9 +66,24 @@ Simplest run, with the natural-language task filled directly in the command:
 
 ```bash
 cd SpaceVLN
-bash real_robot/scripts/run_real_robot_simple.sh \
+bash real_robot/scripts/run_real_robot_lite.sh \
   "Move forward through the doorway and approach the table on the left."
 ```
+
+The lightweight launcher disables GroundingDINO/SAM so the robot workflow can
+run in a minimal ROS2 + SpaceVLN/VLM environment.
+
+Full perception run:
+
+```bash
+cd SpaceVLN
+bash real_robot/scripts/run_real_robot_full.sh \
+  "Move forward through the doorway and approach the table on the left."
+```
+
+The full launcher requires GroundingDINO and SAM / RepViT-SAM. Set
+`SPACEVLN_REQUIRE_SAM=0` only if you want to allow a GroundingDINO-box-mask
+fallback.
 
 You can also edit `TASK_INSTRUCTION` at the top of
 `real_robot/scripts/run_real_robot_simple.sh`, or set `SPACEVLN_INSTRUCTION`.

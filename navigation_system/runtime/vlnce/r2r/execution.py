@@ -6,6 +6,7 @@ import contextlib
 import copy
 import concurrent.futures
 import hashlib
+import json
 import multiprocessing
 import os
 import shutil
@@ -407,6 +408,62 @@ def _copy_file(src: str, dst: str) -> None:
     shutil.copy2(src, dst)
 
 
+def _rewrite_staging_paths_in_value(value: Any, staging_prefix: str, final_prefix: str) -> Any:
+    if isinstance(value, str):
+        if not value.strip():
+            return value
+        value_path = os.path.abspath(value)
+        if value_path.startswith(staging_prefix):
+            return final_prefix + value_path[len(staging_prefix):]
+        return value
+    if isinstance(value, dict):
+        return {
+            key: _rewrite_staging_paths_in_value(item, staging_prefix, final_prefix)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            _rewrite_staging_paths_in_value(item, staging_prefix, final_prefix)
+            for item in value
+        ]
+    return value
+
+
+def _rewrite_staging_paths_in_json_file(path: str, staging_results_dir: str, final_results_dir: str) -> None:
+    if not os.path.exists(path):
+        return
+    payload = SaveManager._load_json_if_exists(path)
+    if payload is None:
+        return
+    staging_prefix = os.path.abspath(staging_results_dir).rstrip(os.sep) + os.sep
+    final_prefix = os.path.abspath(final_results_dir).rstrip(os.sep) + os.sep
+    rewritten = _rewrite_staging_paths_in_value(payload, staging_prefix, final_prefix)
+    if rewritten == payload:
+        return
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(rewritten, f, indent=2, ensure_ascii=False)
+
+
+def _rewrite_staged_episode_json_paths(
+    *,
+    final_detail_dir: str,
+    final_log_path: str,
+    staging_results_dir: str,
+    final_results_dir: str,
+) -> None:
+    _rewrite_staging_paths_in_json_file(
+        final_log_path,
+        staging_results_dir,
+        final_results_dir,
+    )
+    records_result_path = os.path.join(final_detail_dir, "records", "result.json")
+    _rewrite_staging_paths_in_json_file(
+        records_result_path,
+        staging_results_dir,
+        final_results_dir,
+    )
+
+
 def _get_episode_result_path_no_create(
     results_dir: str,
     episode_id: int,
@@ -493,6 +550,14 @@ def _sync_episode_staging_outputs(
             or SaveManager.result_rank_key(staging_log) > SaveManager.result_rank_key(final_baseline)
         ):
             _copy_file(staging_log_path, final_log_path)
+
+    if detail_updated or os.path.exists(final_log_path):
+        _rewrite_staged_episode_json_paths(
+            final_detail_dir=final_detail_dir,
+            final_log_path=final_log_path,
+            staging_results_dir=staging_results_dir,
+            final_results_dir=final_results_dir,
+        )
 
     if detail_updated and save_stdout_log:
         _copy_file(

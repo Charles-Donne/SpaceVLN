@@ -81,6 +81,11 @@ class BaseNavigationController:
 
     def _should_initialize_segment_module(self) -> bool:
         disabled = str(os.getenv("SPACEVLN_DISABLE_GROUNDED_SAM", "") or "").strip().lower()
+        perception_mode = str(os.getenv("SPACEVLN_PERCEPTION_MODE", "") or "").strip().lower()
+        if perception_mode in {"off", "none", "lite", "disabled", "no_detection"}:
+            return False
+        if perception_mode in {"groundingdino", "grounded_sam", "groundedsam", "full"}:
+            return True
         return disabled not in {"1", "true", "yes", "on"}
     
     def __init__(self, config: Config, envs=None):
