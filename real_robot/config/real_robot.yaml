@@ -5,6 +5,11 @@ ros_version: ros2
 node_name: spacevln_real_d435i
 pose_source: odometry
 capture_mode: stream
+# RealSense depth headers can occasionally be stale or use a different clock.
+# In auto mode, real-robot sync falls back to receive time when a header stamp
+# is far from wall time; this does not affect simulation.
+timestamp_policy: auto
+max_header_receive_time_delta_s: 2.0
 use_imu_orientation: false
 require_fresh_frame_after_action: true
 action_status_required: true

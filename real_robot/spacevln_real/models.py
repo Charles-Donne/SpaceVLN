@@ -53,6 +53,8 @@ class RealRobotConfig:
     node_name: str = "spacevln_real"
     pose_source: str = "odometry"
     capture_mode: str = "stream"
+    timestamp_policy: str = "auto"
+    max_header_receive_time_delta_s: float = 2.0
     use_imu_orientation: bool = False
     require_fresh_frame_after_action: bool = True
     action_status_required: bool = True
@@ -83,6 +85,10 @@ class RealRobotConfig:
             node_name=str(payload.get("node_name", "spacevln_real")).strip() or "spacevln_real",
             pose_source=str(payload.get("pose_source", "odometry")).strip() or "odometry",
             capture_mode=str(payload.get("capture_mode", "stream")).strip() or "stream",
+            timestamp_policy=str(payload.get("timestamp_policy", "auto")).strip() or "auto",
+            max_header_receive_time_delta_s=float(
+                payload.get("max_header_receive_time_delta_s", 2.0)
+            ),
             use_imu_orientation=bool(payload.get("use_imu_orientation", False)),
             require_fresh_frame_after_action=bool(
                 payload.get("require_fresh_frame_after_action", True)

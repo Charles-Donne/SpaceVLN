@@ -36,12 +36,33 @@ def stamp_to_seconds(stamp: Any) -> float:
     return 0.0
 
 
-def header_stamp(msg: Any, fallback: float) -> float:
+def header_stamp(
+    msg: Any,
+    fallback: float,
+    *,
+    timestamp_policy: str = "header",
+    max_header_receive_time_delta_s: Optional[float] = None,
+) -> float:
+    policy = str(timestamp_policy or "header").strip().lower()
+    if policy in {"receive", "receive_time", "received", "wall", "wall_time"}:
+        return float(fallback)
+
     header = getattr(msg, "header", None)
     if header is None:
         return float(fallback)
     stamp = stamp_to_seconds(getattr(header, "stamp", None))
-    return float(stamp or fallback)
+    if not stamp:
+        return float(fallback)
+
+    if policy in {"auto", "fallback"} and fallback:
+        try:
+            max_delta = float(max_header_receive_time_delta_s)
+        except (TypeError, ValueError):
+            max_delta = 0.0
+        if max_delta > 0.0 and abs(float(stamp) - float(fallback)) > max_delta:
+            return float(fallback)
+
+    return float(stamp)
 
 
 def header_frame_id(msg: Any) -> str:
@@ -70,13 +91,24 @@ def yaw_from_quaternion(quaternion_msg: Any) -> float:
     return normalize_angle_rad(math.atan2(siny_cosp, cosy_cosp))
 
 
-def pose_from_odometry(msg: Any, *, fallback_stamp: float = 0.0) -> PoseFrame:
+def pose_from_odometry(
+    msg: Any,
+    *,
+    fallback_stamp: float = 0.0,
+    timestamp_policy: str = "header",
+    max_header_receive_time_delta_s: Optional[float] = None,
+) -> PoseFrame:
     pose_container = getattr(msg, "pose", None)
     pose = getattr(pose_container, "pose", pose_container)
     position = getattr(pose, "position", None)
     orientation = getattr(pose, "orientation", None)
     return PoseFrame(
-        stamp=header_stamp(msg, fallback_stamp),
+        stamp=header_stamp(
+            msg,
+            fallback_stamp,
+            timestamp_policy=timestamp_policy,
+            max_header_receive_time_delta_s=max_header_receive_time_delta_s,
+        ),
         frame_id=header_frame_id(msg),
         x=float(getattr(position, "x", 0.0) or 0.0),
         y=float(getattr(position, "y", 0.0) or 0.0),
@@ -85,12 +117,23 @@ def pose_from_odometry(msg: Any, *, fallback_stamp: float = 0.0) -> PoseFrame:
     )
 
 
-def pose_from_pose_stamped(msg: Any, *, fallback_stamp: float = 0.0) -> PoseFrame:
+def pose_from_pose_stamped(
+    msg: Any,
+    *,
+    fallback_stamp: float = 0.0,
+    timestamp_policy: str = "header",
+    max_header_receive_time_delta_s: Optional[float] = None,
+) -> PoseFrame:
     pose = getattr(msg, "pose", None)
     position = getattr(pose, "position", None)
     orientation = getattr(pose, "orientation", None)
     return PoseFrame(
-        stamp=header_stamp(msg, fallback_stamp),
+        stamp=header_stamp(
+            msg,
+            fallback_stamp,
+            timestamp_policy=timestamp_policy,
+            max_header_receive_time_delta_s=max_header_receive_time_delta_s,
+        ),
         frame_id=header_frame_id(msg),
         x=float(getattr(position, "x", 0.0) or 0.0),
         y=float(getattr(position, "y", 0.0) or 0.0),
@@ -99,7 +142,13 @@ def pose_from_pose_stamped(msg: Any, *, fallback_stamp: float = 0.0) -> PoseFram
     )
 
 
-def imu_from_message(msg: Any, *, fallback_stamp: float = 0.0) -> ImuFrame:
+def imu_from_message(
+    msg: Any,
+    *,
+    fallback_stamp: float = 0.0,
+    timestamp_policy: str = "header",
+    max_header_receive_time_delta_s: Optional[float] = None,
+) -> ImuFrame:
     orientation = getattr(msg, "orientation", None)
     yaw_rad = None
     if orientation is not None:
@@ -109,16 +158,32 @@ def imu_from_message(msg: Any, *, fallback_stamp: float = 0.0) -> ImuFrame:
             yaw_rad = None
     angular_velocity = getattr(msg, "angular_velocity", None)
     return ImuFrame(
-        stamp=header_stamp(msg, fallback_stamp),
+        stamp=header_stamp(
+            msg,
+            fallback_stamp,
+            timestamp_policy=timestamp_policy,
+            max_header_receive_time_delta_s=max_header_receive_time_delta_s,
+        ),
         frame_id=header_frame_id(msg),
         yaw_rad=yaw_rad,
         angular_velocity_z=float(getattr(angular_velocity, "z", 0.0) or 0.0),
     )
 
 
-def camera_info_from_message(msg: Any, *, fallback_stamp: float = 0.0) -> CameraInfoData:
+def camera_info_from_message(
+    msg: Any,
+    *,
+    fallback_stamp: float = 0.0,
+    timestamp_policy: str = "header",
+    max_header_receive_time_delta_s: Optional[float] = None,
+) -> CameraInfoData:
     return CameraInfoData(
-        stamp=header_stamp(msg, fallback_stamp),
+        stamp=header_stamp(
+            msg,
+            fallback_stamp,
+            timestamp_policy=timestamp_policy,
+            max_header_receive_time_delta_s=max_header_receive_time_delta_s,
+        ),
         frame_id=header_frame_id(msg),
         width=int(getattr(msg, "width", 0) or 0),
         height=int(getattr(msg, "height", 0) or 0),

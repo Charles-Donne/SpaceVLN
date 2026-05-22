@@ -47,13 +47,25 @@ class ObservationHub:
             queue.append(item)
             self._condition.notify_all()
 
+    def _message_stamp(self, msg, receive_time: float) -> float:
+        from spacevln_real.ros_common import header_stamp
+
+        return header_stamp(
+            msg,
+            receive_time,
+            timestamp_policy=str(self.config.timestamp_policy or "header"),
+            max_header_receive_time_delta_s=float(
+                self.config.max_header_receive_time_delta_s
+            ),
+        )
+
     def on_rgb(self, msg) -> None:
         receive_time = time.time()
         rgb = image_msg_to_numpy(msg)
         self._store(
             self._rgb_frames,
             ImageFrame(
-                stamp=header_stamp(msg, receive_time),
+                stamp=self._message_stamp(msg, receive_time),
                 frame_id=header_frame_id(msg),
                 encoding=str(getattr(msg, "encoding", "") or ""),
                 image=rgb,
@@ -72,7 +84,7 @@ class ObservationHub:
         self._store(
             self._depth_frames,
             ImageFrame(
-                stamp=header_stamp(msg, receive_time),
+                stamp=self._message_stamp(msg, receive_time),
                 frame_id=header_frame_id(msg),
                 encoding=str(getattr(msg, "encoding", "") or ""),
                 image=normalized_depth,
@@ -81,30 +93,70 @@ class ObservationHub:
 
     def on_rgb_camera_info(self, msg) -> None:
         with self._condition:
-            self._rgb_camera_info = camera_info_from_message(msg, fallback_stamp=time.time())
+            receive_time = time.time()
+            self._rgb_camera_info = camera_info_from_message(
+                msg,
+                fallback_stamp=receive_time,
+                timestamp_policy=str(self.config.timestamp_policy or "header"),
+                max_header_receive_time_delta_s=float(
+                    self.config.max_header_receive_time_delta_s
+                ),
+            )
             self._condition.notify_all()
 
     def on_depth_camera_info(self, msg) -> None:
         with self._condition:
-            self._depth_camera_info = camera_info_from_message(msg, fallback_stamp=time.time())
+            receive_time = time.time()
+            self._depth_camera_info = camera_info_from_message(
+                msg,
+                fallback_stamp=receive_time,
+                timestamp_policy=str(self.config.timestamp_policy or "header"),
+                max_header_receive_time_delta_s=float(
+                    self.config.max_header_receive_time_delta_s
+                ),
+            )
             self._condition.notify_all()
 
     def on_odom(self, msg) -> None:
+        receive_time = time.time()
         self._store(
             self._odom_frames,
-            pose_from_odometry(msg, fallback_stamp=time.time()),
+            pose_from_odometry(
+                msg,
+                fallback_stamp=receive_time,
+                timestamp_policy=str(self.config.timestamp_policy or "header"),
+                max_header_receive_time_delta_s=float(
+                    self.config.max_header_receive_time_delta_s
+                ),
+            ),
         )
 
     def on_pose(self, msg) -> None:
+        receive_time = time.time()
         self._store(
             self._pose_frames,
-            pose_from_pose_stamped(msg, fallback_stamp=time.time()),
+            pose_from_pose_stamped(
+                msg,
+                fallback_stamp=receive_time,
+                timestamp_policy=str(self.config.timestamp_policy or "header"),
+                max_header_receive_time_delta_s=float(
+                    self.config.max_header_receive_time_delta_s
+                ),
+            ),
         )
 
     def on_imu(self, msg) -> None:
+        receive_time = time.time()
         self._store(
             self._imu_frames,
-            imu_from_message(msg, fallback_stamp=time.time()),
+            imu_from_message(
+                msg,
+                fallback_stamp=receive_time,
+                timestamp_policy=str(self.config.timestamp_policy or "header"),
+                max_header_receive_time_delta_s=float(
+                    self.config.max_header_receive_time_delta_s
+                ),
+            ),
         )
 
     @staticmethod
