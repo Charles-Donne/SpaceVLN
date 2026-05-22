@@ -22,7 +22,7 @@ pipeline without changing the simulator workflow.
 
 - `run_real_navigation.py` — real-robot Python entrypoint
 - `run_cmd_vel_executor.py` — ROS2 `/cmd_vel` executor entrypoint
-- `config/real_robot.yaml` — default ROS and OAK-D Lite configuration
+- `config/real_robot.yaml` — Intel RealSense D435i real-robot configuration
 - `spacevln_real/` — runtime implementation
 - `scripts/run_real_navigation.sh` — shell launcher
 - `scripts/run_cmd_vel_executor.sh` — shell launcher for the `/cmd_vel` executor
@@ -44,7 +44,7 @@ only.
 Prerequisites:
 
 1. ROS2 is installed and sourced
-2. OAK-D Lite RGB, depth, and camera info topics are available
+2. RealSense D435i RGB, aligned depth, IMU, and camera info topics are available
 3. The low-level robot controller listens on `/spacevln/action_cmd`
 4. The low-level robot controller publishes status on `/spacevln/action_status`
 5. Python dependencies for `GroundingDINO` plus optional `SAM`, SpaceVLN mapping,
@@ -164,13 +164,13 @@ This is safer than sending one open-loop velocity pulse for a fixed duration.
 
 ## Default Topics
 
-Sensor topics:
+Sensor topics from `real_robot/config/real_robot.yaml`:
 
-- `/oak/rgb/image_raw`
-- `/oak/rgb/camera_info`
-- `/oak/stereo/image_raw`
-- `/oak/stereo/camera_info`
-- `/oak/imu/data`
+- `/camera/camera/color/image_raw`
+- `/camera/camera/color/camera_info`
+- `/camera/camera/aligned_depth_to_color/image_raw`
+- `/camera/camera/aligned_depth_to_color/camera_info`
+- `/camera/camera/imu`
 - `/odom`
 
 Action topics:

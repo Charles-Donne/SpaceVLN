@@ -19,11 +19,11 @@ TERMINAL_ACTION_STATES = {
 
 @dataclass
 class TopicConfig:
-    rgb: str = "/oak/rgb/image_raw"
-    rgb_camera_info: str = "/oak/rgb/camera_info"
-    depth: str = "/oak/stereo/image_raw"
-    depth_camera_info: str = "/oak/stereo/camera_info"
-    imu: str = "/oak/imu/data"
+    rgb: str = "/camera/camera/color/image_raw"
+    rgb_camera_info: str = "/camera/camera/color/camera_info"
+    depth: str = "/camera/camera/aligned_depth_to_color/image_raw"
+    depth_camera_info: str = "/camera/camera/aligned_depth_to_color/camera_info"
+    imu: str = "/camera/camera/imu"
     odom: str = "/odom"
     pose: str = ""
     action_cmd: str = "/spacevln/action_cmd"
@@ -63,9 +63,9 @@ class RealRobotConfig:
     pose_queue_size: int = 32
     rgb_width: int = 640
     rgb_height: int = 480
-    hfov_deg: float = 69.0
-    min_depth_m: float = 0.4
-    max_depth_m: float = 8.0
+    hfov_deg: float = 69.4
+    min_depth_m: float = 0.3
+    max_depth_m: float = 3.0
     forward_step_m: float = 0.5
     turn_angle_deg: float = 30.0
     linear_speed_mps: float = 0.15
@@ -95,9 +95,9 @@ class RealRobotConfig:
             pose_queue_size=max(8, int(buffer_cfg.get("pose_queue_size", 32))),
             rgb_width=max(1, int(camera_cfg.get("rgb_width", 640))),
             rgb_height=max(1, int(camera_cfg.get("rgb_height", 480))),
-            hfov_deg=float(camera_cfg.get("hfov_deg", 69.0)),
-            min_depth_m=float(camera_cfg.get("min_depth_m", 0.4)),
-            max_depth_m=float(camera_cfg.get("max_depth_m", 8.0)),
+            hfov_deg=float(camera_cfg.get("hfov_deg", 69.4)),
+            min_depth_m=float(camera_cfg.get("min_depth_m", 0.3)),
+            max_depth_m=float(camera_cfg.get("max_depth_m", 3.0)),
             forward_step_m=float(control_cfg.get("forward_step_m", 0.5)),
             turn_angle_deg=float(control_cfg.get("turn_angle_deg", 30.0)),
             linear_speed_mps=float(control_cfg.get("linear_speed_mps", 0.15)),

@@ -6,33 +6,36 @@ This document is the integration contract for the low-level robotics stack.
 
 ### 1.1 Camera Topics
 
-#### RGB image
+D435i default RGB image
 
-- Topic: `/oak/rgb/image_raw`
+- Topic: `/camera/color/image_raw`
+- Official realsense-ros default: `/camera/camera/color/image_raw`
 - Type: `sensor_msgs/Image`
 - Recommended encoding: `rgb8` or `bgr8`
 - Recommended resolution: `640x480`
 
-#### RGB camera info
+D435i default RGB camera info
 
-- Topic: `/oak/rgb/camera_info`
+- Topic: `/camera/color/camera_info`
+- Official realsense-ros default: `/camera/camera/color/camera_info`
 - Type: `sensor_msgs/CameraInfo`
 
-#### Depth image
+D435i default aligned depth image
 
-- Topic: `/oak/stereo/image_raw`
+- Topic: `/camera/aligned_depth_to_color/image_raw`
+- Official realsense-ros default: `/camera/camera/aligned_depth_to_color/image_raw`
 - Type: `sensor_msgs/Image`
 - Supported encodings:
   - `16UC1` in millimeters
   - `32FC1` in meters
 
-If the actual OAK-D Lite driver publishes a different aligned-depth topic, such as
-`/oak/stereo/depth` or `/oak/rgbd/depth/image`, update
-`real_robot/config/real_robot.yaml`.
+If the actual RealSense driver publishes a different namespace, such as
+`/camera/camera/color/image_raw`, update `real_robot/config/real_robot.yaml`.
 
-#### Depth camera info
+D435i default depth camera info
 
-- Topic: `/oak/stereo/camera_info`
+- Topic: `/camera/aligned_depth_to_color/camera_info`
+- Official realsense-ros default: `/camera/camera/aligned_depth_to_color/camera_info`
 - Type: `sensor_msgs/CameraInfo`
 
 ### 1.2 Pose Input
@@ -77,7 +80,7 @@ aligned, increase `sync_tolerance_s` only as a temporary bring-up workaround.
 
 ### 1.3 IMU Input
 
-- Topic: `/oak/imu/data`
+- Topic: `/camera/camera/imu`
 - Type: `sensor_msgs/Imu`
 
 Usage:
@@ -297,12 +300,12 @@ Example:
 The current runtime defaults to `capture_mode: stream`, which only consumes the
 existing camera stream. If needed, switch to `capture_mode: trigger`.
 
-## 5. Recommended OAK-D Lite Parameters
+## 5. Recommended D435i Parameters
 
 - RGB resolution: `640x480`
 - Depth aligned to the RGB frame
-- Horizontal FOV: approximately `69°`
-- Depth operating range: `0.4m ~ 8.0m`
+- RGB horizontal FOV: approximately `69.4°`
+- Depth operating range: approximately `0.3m ~ 3.0m`
 
 ## 6. Internal Observation Schema Used by SpaceVLN
 
@@ -323,14 +326,14 @@ obs = {
 
 Recommended first-stage integration:
 
-1. `/oak/rgb/image_raw`
-2. `/oak/stereo/image_raw`
+1. `/camera/camera/color/image_raw`
+2. `/camera/camera/aligned_depth_to_color/image_raw`
 3. `/odom`
 4. `/spacevln/action_cmd`
 5. `/spacevln/action_status`
 
 Second-stage additions:
 
-- `/oak/imu/data`
+- `/camera/camera/imu`
 - `/spacevln/capture/request`
 - optional offline-evaluation fields such as `distance_to_goal_m` and `goal_reached`

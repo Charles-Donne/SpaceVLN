@@ -69,7 +69,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--real-config",
         type=str,
         default="real_robot/config/real_robot.yaml",
-        help="Real-robot ROS/OAK-D Lite config",
+        help="Real-robot ROS/camera config",
     )
     parser.add_argument(
         "--vlm-api-config",

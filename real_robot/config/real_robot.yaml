@@ -1,8 +1,8 @@
-# Default SpaceVLN real-robot configuration
-# Tuned for OAK-D Lite plus a low-level odometry / orientation stream.
+# Default SpaceVLN real-robot configuration.
+# Tuned for Intel RealSense D435i plus a low-level odometry / orientation stream.
 
 ros_version: ros2
-node_name: spacevln_real
+node_name: spacevln_real_d435i
 pose_source: odometry
 capture_mode: stream
 use_imu_orientation: false
@@ -17,12 +17,12 @@ buffers:
   pose_queue_size: 32
 
 camera:
-  name: oak-d-lite
+  name: realsense-d435i
   rgb_width: 640
   rgb_height: 480
-  hfov_deg: 69.0
-  min_depth_m: 0.4
-  max_depth_m: 8.0
+  hfov_deg: 69.4
+  min_depth_m: 0.3
+  max_depth_m: 3.0
 
 control:
   forward_step_m: 0.5
@@ -31,11 +31,11 @@ control:
   angular_speed_deg_s: 45.0
 
 topics:
-  rgb: /oak/rgb/image_raw
-  rgb_camera_info: /oak/rgb/camera_info
-  depth: /oak/stereo/image_raw
-  depth_camera_info: /oak/stereo/camera_info
-  imu: /oak/imu/data
+  rgb: /camera/camera/color/image_raw
+  rgb_camera_info: /camera/camera/color/camera_info
+  depth: /camera/camera/aligned_depth_to_color/image_raw
+  depth_camera_info: /camera/camera/aligned_depth_to_color/camera_info
+  imu: /camera/camera/imu
   odom: /odom
   pose: ""
   action_cmd: /spacevln/action_cmd
