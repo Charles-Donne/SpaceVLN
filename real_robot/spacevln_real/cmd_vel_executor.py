@@ -40,9 +40,9 @@ class ExecutorConfig:
     odom_timeout_s: float = 0.5
     position_tolerance_m: float = 0.10
     angle_tolerance_deg: float = 10.0
-    default_linear_speed_mps: float = 0.15
-    default_angular_speed_deg_s: float = 45.0
-    max_linear_speed_mps: float = 0.25
+    default_linear_speed_mps: float = 0.5
+    default_angular_speed_deg_s: float = 60.0
+    max_linear_speed_mps: float = 0.5
     max_angular_speed_deg_s: float = 60.0
     slowdown_distance_m: float = 0.08
     slowdown_angle_deg: float = 10.0
@@ -593,9 +593,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--odom-timeout-s", type=float, default=0.5)
     parser.add_argument("--position-tolerance-m", type=float, default=0.10)
     parser.add_argument("--angle-tolerance-deg", type=float, default=10.0)
-    parser.add_argument("--default-linear-speed-mps", type=float, default=0.15)
-    parser.add_argument("--default-angular-speed-deg-s", type=float, default=45.0)
-    parser.add_argument("--max-linear-speed-mps", type=float, default=0.25)
+    parser.add_argument("--default-linear-speed-mps", type=float, default=0.5)
+    parser.add_argument("--default-angular-speed-deg-s", type=float, default=60.0)
+    parser.add_argument("--max-linear-speed-mps", type=float, default=0.5)
     parser.add_argument("--max-angular-speed-deg-s", type=float, default=60.0)
     return parser
 

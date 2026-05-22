@@ -70,8 +70,8 @@ class RealRobotConfig:
     max_depth_m: float = 3.0
     forward_step_m: float = 0.5
     turn_angle_deg: float = 30.0
-    linear_speed_mps: float = 0.15
-    angular_speed_deg_s: float = 45.0
+    linear_speed_mps: float = 0.5
+    angular_speed_deg_s: float = 60.0
     topics: TopicConfig = field(default_factory=TopicConfig)
 
     @classmethod
@@ -106,8 +106,8 @@ class RealRobotConfig:
             max_depth_m=float(camera_cfg.get("max_depth_m", 3.0)),
             forward_step_m=float(control_cfg.get("forward_step_m", 0.5)),
             turn_angle_deg=float(control_cfg.get("turn_angle_deg", 30.0)),
-            linear_speed_mps=float(control_cfg.get("linear_speed_mps", 0.15)),
-            angular_speed_deg_s=float(control_cfg.get("angular_speed_deg_s", 45.0)),
+            linear_speed_mps=float(control_cfg.get("linear_speed_mps", 0.5)),
+            angular_speed_deg_s=float(control_cfg.get("angular_speed_deg_s", 60.0)),
             topics=TopicConfig.from_dict(payload.get("topics")),
         )
 

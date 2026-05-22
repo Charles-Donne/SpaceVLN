@@ -32,8 +32,8 @@ camera:
 control:
   forward_step_m: 0.5
   turn_angle_deg: 30.0
-  linear_speed_mps: 0.15
-  angular_speed_deg_s: 45.0
+  linear_speed_mps: 0.5
+  angular_speed_deg_s: 60.0
 
 topics:
   rgb: /camera/camera/color/image_raw

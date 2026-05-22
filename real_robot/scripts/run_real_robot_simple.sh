@@ -13,6 +13,10 @@ CONTROL_RATE_HZ="${CONTROL_RATE_HZ:-10}"
 POSITION_TOLERANCE_M="${POSITION_TOLERANCE_M:-0.10}"
 ANGLE_TOLERANCE_DEG="${ANGLE_TOLERANCE_DEG:-10}"
 ODOM_TIMEOUT_S="${ODOM_TIMEOUT_S:-0.5}"
+DEFAULT_LINEAR_SPEED_MPS="${DEFAULT_LINEAR_SPEED_MPS:-0.5}"
+DEFAULT_ANGULAR_SPEED_DEG_S="${DEFAULT_ANGULAR_SPEED_DEG_S:-60}"
+MAX_LINEAR_SPEED_MPS="${MAX_LINEAR_SPEED_MPS:-0.5}"
+MAX_ANGULAR_SPEED_DEG_S="${MAX_ANGULAR_SPEED_DEG_S:-60}"
 CMD_VEL_TOPIC="${CMD_VEL_TOPIC:-/cmd_vel}"
 ODOM_TOPIC="${ODOM_TOPIC:-/odom}"
 
@@ -78,7 +82,11 @@ if [[ "${START_EXECUTOR}" == "1" ]]; then
     --control-rate-hz "${CONTROL_RATE_HZ}" \
     --position-tolerance-m "${POSITION_TOLERANCE_M}" \
     --angle-tolerance-deg "${ANGLE_TOLERANCE_DEG}" \
-    --odom-timeout-s "${ODOM_TIMEOUT_S}" &
+    --odom-timeout-s "${ODOM_TIMEOUT_S}" \
+    --default-linear-speed-mps "${DEFAULT_LINEAR_SPEED_MPS}" \
+    --default-angular-speed-deg-s "${DEFAULT_ANGULAR_SPEED_DEG_S}" \
+    --max-linear-speed-mps "${MAX_LINEAR_SPEED_MPS}" \
+    --max-angular-speed-deg-s "${MAX_ANGULAR_SPEED_DEG_S}" &
   EXECUTOR_PID="$!"
   sleep 1
 fi

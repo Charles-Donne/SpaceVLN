@@ -29,11 +29,18 @@ ACTION_NAME_ALIASES = {
     "FORWARD": "MOVE_FORWARD",
     "TURN_LEFT": "TURN_LEFT",
     "LEFT": "TURN_LEFT",
+    "TURN_LEFT_ALIGN": "TURN_LEFT",
+    "TURN_LEFT_AVOID": "TURN_LEFT",
     "TURN_RIGHT": "TURN_RIGHT",
     "RIGHT": "TURN_RIGHT",
+    "TURN_RIGHT_ALIGN": "TURN_RIGHT",
+    "TURN_RIGHT_AVOID": "TURN_RIGHT",
     "LOOK_AROUND_360": "LOOK_AROUND_360",
     "SCAN_360": "LOOK_AROUND_360",
 }
+
+REAL_MOVE_TARGETS_M = (0.5, 0.75, 1.0, 1.25, 1.5)
+REAL_TURN_TARGET_DEG = 30.0
 
 
 @dataclass
@@ -129,6 +136,13 @@ class RealRobotVectorEnv:
             return None
         return float(parsed)
 
+    @staticmethod
+    def _quantize_move_target_meters(value: Optional[float]) -> Optional[float]:
+        if value is None:
+            return None
+        parsed = float(value)
+        return min(REAL_MOVE_TARGETS_M, key=lambda allowed: abs(allowed - parsed))
+
     def _extract_action_targets(
         self,
         raw_action: Any,
@@ -148,6 +162,10 @@ class RealRobotVectorEnv:
             target_meters = None
         if action_name not in {"TURN_LEFT", "TURN_RIGHT", "LOOK_AROUND_360"}:
             target_degrees = None
+        if action_name == "MOVE_FORWARD":
+            target_meters = self._quantize_move_target_meters(target_meters)
+        elif action_name in {"TURN_LEFT", "TURN_RIGHT"}:
+            target_degrees = REAL_TURN_TARGET_DEG
         return target_meters, target_degrees
 
     def _capture_if_needed(self, reason: str) -> None:
