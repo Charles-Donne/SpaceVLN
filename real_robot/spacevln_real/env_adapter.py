@@ -7,6 +7,7 @@ import math
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+import cv2
 import numpy as np
 
 from spacevln_real.command_bridge import ActionCommandBridge
@@ -84,6 +85,7 @@ class RealRobotVectorEnv:
         self._min_distance_to_goal = float("inf")
         self._goal_seen = False
         self._final_navigation_success: Optional[bool] = None
+        self._reported_image_resize_shapes = set()
 
     def current_episodes(self):
         return [self._current_episode]
@@ -156,15 +158,85 @@ class RealRobotVectorEnv:
             reason=reason,
         )
 
+    @staticmethod
+    def _center_crop_to_aspect(image: np.ndarray, target_width: int, target_height: int) -> np.ndarray:
+        if image.ndim < 2:
+            return image
+        height, width = image.shape[:2]
+        if height <= 0 or width <= 0 or target_width <= 0 or target_height <= 0:
+            return image
+
+        source_aspect = float(width) / float(height)
+        target_aspect = float(target_width) / float(target_height)
+        if abs(source_aspect - target_aspect) < 1e-3:
+            return image
+
+        if source_aspect > target_aspect:
+            crop_width = max(1, int(round(height * target_aspect)))
+            x0 = max(0, (width - crop_width) // 2)
+            return image[:, x0 : x0 + crop_width, ...]
+
+        crop_height = max(1, int(round(width / target_aspect)))
+        y0 = max(0, (height - crop_height) // 2)
+        return image[y0 : y0 + crop_height, :, ...]
+
+    def _resize_frame_to_config(
+        self,
+        image: np.ndarray,
+        *,
+        name: str,
+        interpolation: int,
+    ) -> np.ndarray:
+        target_width = int(self.config.rgb_width)
+        target_height = int(self.config.rgb_height)
+        array = np.asarray(image)
+        if array.ndim < 2:
+            return array
+
+        source_shape = tuple(array.shape)
+        if array.shape[0] == target_height and array.shape[1] == target_width:
+            return array
+
+        cropped = self._center_crop_to_aspect(array, target_width, target_height)
+        resized = cv2.resize(
+            cropped,
+            (target_width, target_height),
+            interpolation=interpolation,
+        )
+        if array.ndim == 3 and array.shape[2] == 1 and resized.ndim == 2:
+            resized = resized[:, :, np.newaxis]
+
+        key = (str(name), source_shape, tuple(resized.shape))
+        if key not in self._reported_image_resize_shapes:
+            self._reported_image_resize_shapes.add(key)
+            print(
+                "[REAL] resized %s frame from %s to %s"
+                % (str(name), source_shape, tuple(resized.shape)),
+                flush=True,
+            )
+        return resized
+
     def _snapshot_to_obs(
         self,
         snapshot: RobotSnapshot,
         sensor_pose: Tuple[float, float, float],
     ) -> Dict[str, Any]:
         pose = snapshot.pose
+        rgb = self._resize_frame_to_config(
+            np.asarray(snapshot.rgb, dtype=np.uint8),
+            name="rgb",
+            interpolation=cv2.INTER_AREA,
+        ).astype(np.uint8, copy=False)
+        depth = self._resize_frame_to_config(
+            np.asarray(snapshot.depth, dtype=np.float32),
+            name="depth",
+            interpolation=cv2.INTER_NEAREST,
+        ).astype(np.float32, copy=False)
+        if depth.ndim == 2:
+            depth = depth[:, :, np.newaxis]
         return {
-            "rgb": np.asarray(snapshot.rgb, dtype=np.uint8),
-            "depth": np.asarray(snapshot.depth, dtype=np.float32),
+            "rgb": rgb,
+            "depth": depth,
             "sensor_pose": np.asarray(sensor_pose, dtype=np.float32),
             "position": np.asarray([pose.x, pose.z, pose.y], dtype=np.float32),
             "heading": np.asarray([pose.yaw_rad], dtype=np.float32),
