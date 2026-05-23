@@ -269,6 +269,31 @@ class RealRobotVectorEnv:
             "position": np.asarray([pose.x, pose.z, pose.y], dtype=np.float32),
             "heading": np.asarray([pose.yaw_rad], dtype=np.float32),
             "timestamp": float(snapshot.stamp),
+            "rgb_timestamp": float(getattr(snapshot, "rgb_stamp", 0.0) or snapshot.stamp),
+            "depth_timestamp": float(getattr(snapshot, "depth_stamp", 0.0) or snapshot.stamp),
+            "pose_timestamp": float(getattr(snapshot, "pose_stamp", 0.0) or pose.stamp),
+        }
+
+    @staticmethod
+    def _snapshot_sync_metrics(
+        snapshot: RobotSnapshot,
+        sensor_pose: Tuple[float, float, float],
+    ) -> Dict[str, Any]:
+        rgb_stamp = float(getattr(snapshot, "rgb_stamp", 0.0) or snapshot.stamp)
+        depth_stamp = float(getattr(snapshot, "depth_stamp", 0.0) or snapshot.stamp)
+        pose_stamp = float(getattr(snapshot, "pose_stamp", 0.0) or snapshot.pose.stamp)
+        sensor_pose_values = [float(value) for value in sensor_pose]
+        return {
+            "real_sensor_pose_delta": sensor_pose_values,
+            "real_sensor_pose_delta_deg": float(math.degrees(sensor_pose_values[2])),
+            "real_snapshot_sync": {
+                "sync_stamp": float(snapshot.stamp),
+                "rgb_stamp": rgb_stamp,
+                "depth_stamp": depth_stamp,
+                "pose_stamp": pose_stamp,
+                "rgb_depth_dt_s": float(abs(rgb_stamp - depth_stamp)),
+                "sync_pose_dt_s": float(abs(float(snapshot.stamp) - pose_stamp)),
+            },
         }
 
     def _build_metrics(
@@ -426,6 +451,7 @@ class RealRobotVectorEnv:
                 stop_called=False,
                 done=False,
             )
+            metrics.update(self._snapshot_sync_metrics(snapshot, sensor_pose))
             self._latest_metrics = dict(metrics)
             outputs.append((obs, 0.0, False, dict(metrics)))
             previous_snapshot = snapshot
@@ -493,6 +519,7 @@ class RealRobotVectorEnv:
             stop_called=bool(action_name == "STOP"),
             done=done,
         )
+        self._latest_metrics.update(self._snapshot_sync_metrics(after_snapshot, sensor_pose))
         obs = self._snapshot_to_obs(after_snapshot, sensor_pose)
         return [(obs, 0.0, done, dict(self._latest_metrics))]
 

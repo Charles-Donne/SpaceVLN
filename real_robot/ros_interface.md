@@ -64,11 +64,11 @@ mapping pipeline:
 
 ### 1.4 Stream Synchronization
 
-`SpaceVLN` uses RGB as the anchor stream for each observation. For every selected
-RGB frame, it chooses the closest depth frame and the closest pose frame within
+`SpaceVLN` pairs each selected RGB frame with the closest depth frame, then
+chooses the closest pose frame to the RGB-D pair's midpoint timestamp within
 `sync_tolerance_s` from `real_robot/config/real_robot.yaml`:
 
-- default tolerance: `0.20s`
+- default tolerance: `0.75s`
 - if no matching depth or pose frame is inside the tolerance, the runtime keeps
   waiting until `observation_timeout_s`
 - if a ROS message has a valid `header.stamp`, that stamp is used
@@ -263,11 +263,11 @@ Closed-loop behavior expected from the executor:
 The reference executor defaults to conservative early stopping:
 
 - `--position-tolerance-m 0.10`
-- `--angle-tolerance-deg 20`
+- `--angle-tolerance-deg 25`
 - `--completion-stability-s 0.20`
 - `--completion-yaw-tolerance-deg 0.50`
 
-At 10Hz and 60deg/s, one control tick is about 6 degrees, so a 20 degree
+At 10Hz and 60deg/s, one control tick is about 6 degrees, so a 25 degree
 window gives the executor room to stop before communication and base latency
 overshoot the target too much. Tune these values on the actual base.
 

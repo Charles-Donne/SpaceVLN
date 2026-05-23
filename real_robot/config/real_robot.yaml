@@ -15,7 +15,7 @@ require_fresh_frame_after_action: true
 action_status_required: true
 observation_timeout_s: 3.0
 action_timeout_s: 20.0
-sync_tolerance_s: 0.20
+sync_tolerance_s: 0.75
 
 lookaround:
   sample_count: 8
@@ -33,7 +33,7 @@ mapping:
 
 buffers:
   image_queue_size: 8
-  pose_queue_size: 32
+  pose_queue_size: 256
 
 camera:
   name: realsense-d435i

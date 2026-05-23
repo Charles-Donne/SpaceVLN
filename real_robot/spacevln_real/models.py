@@ -60,7 +60,7 @@ class RealRobotConfig:
     action_status_required: bool = True
     observation_timeout_s: float = 3.0
     action_timeout_s: float = 20.0
-    sync_tolerance_s: float = 0.2
+    sync_tolerance_s: float = 0.75
     lookaround_sample_count: int = 8
     lookaround_angle_step_deg: float = 45.0
     disable_depth_map_update: bool = False
@@ -69,7 +69,7 @@ class RealRobotConfig:
     obstacle_evidence_threshold: float = 0.55
     obstacle_evidence_max_observations: int = 8
     image_queue_size: int = 8
-    pose_queue_size: int = 32
+    pose_queue_size: int = 256
     rgb_width: int = 640
     rgb_height: int = 480
     agent_height_m: float = 1.3
@@ -108,7 +108,7 @@ class RealRobotConfig:
             action_status_required=bool(payload.get("action_status_required", True)),
             observation_timeout_s=float(payload.get("observation_timeout_s", 3.0)),
             action_timeout_s=float(payload.get("action_timeout_s", 20.0)),
-            sync_tolerance_s=float(payload.get("sync_tolerance_s", 0.2)),
+            sync_tolerance_s=float(payload.get("sync_tolerance_s", 0.75)),
             lookaround_sample_count=max(
                 1,
                 int(lookaround_cfg.get("sample_count", payload.get("lookaround_sample_count", 8))),
@@ -154,7 +154,7 @@ class RealRobotConfig:
                 ),
             ),
             image_queue_size=max(2, int(buffer_cfg.get("image_queue_size", 8))),
-            pose_queue_size=max(8, int(buffer_cfg.get("pose_queue_size", 32))),
+            pose_queue_size=max(8, int(buffer_cfg.get("pose_queue_size", 256))),
             rgb_width=max(1, int(camera_cfg.get("rgb_width", 640))),
             rgb_height=max(1, int(camera_cfg.get("rgb_height", 480))),
             agent_height_m=float(
@@ -228,6 +228,9 @@ class RobotSnapshot:
     rgb: Any
     depth: Any
     pose: PoseFrame
+    rgb_stamp: float = 0.0
+    depth_stamp: float = 0.0
+    pose_stamp: float = 0.0
     imu: Optional[ImuFrame] = None
     rgb_camera_info: Optional[CameraInfoData] = None
     depth_camera_info: Optional[CameraInfoData] = None

@@ -168,26 +168,41 @@ class ObservationHub:
                 continue
             yield item
 
-    def _pick_closest(self, queue: Deque, target_stamp: Optional[float]):
+    def _pick_closest(
+        self,
+        queue: Deque,
+        target_stamp: Optional[float],
+        *,
+        after_stamp: Optional[float] = None,
+    ):
         if not queue:
             return None
         if target_stamp is None:
-            return queue[-1]
+            if after_stamp is None:
+                return queue[-1]
+            for item in reversed(queue):
+                if float(item.stamp) > float(after_stamp):
+                    return item
+            return None
         best_item = None
         best_delta = None
         tolerance_s = float(self.config.sync_tolerance_s)
-        for item in reversed(queue):
+        for item in queue:
+            if after_stamp is not None and float(item.stamp) <= float(after_stamp):
+                continue
             delta = abs(float(item.stamp) - float(target_stamp))
             if best_delta is None or delta < best_delta:
                 best_item = item
                 best_delta = delta
-            if float(item.stamp) <= float(target_stamp):
-                break
         if best_item is None:
             return None
         if best_delta is not None and best_delta > tolerance_s:
             return None
         return best_item
+
+    @staticmethod
+    def _rgb_depth_sync_stamp(rgb: ImageFrame, depth: ImageFrame) -> float:
+        return 0.5 * (float(rgb.stamp) + float(depth.stamp))
 
     def _fuse_depth_window_locked(
         self,
@@ -296,10 +311,25 @@ class ObservationHub:
         with self._condition:
             while True:
                 for rgb in self._iter_latest_after(self._rgb_frames, after_stamp):
-                    target_stamp = float(rgb.stamp)
-                    depth = self._pick_closest(self._depth_frames, target_stamp)
-                    pose = self._pick_closest(self._pose_queue(), target_stamp)
-                    imu = self._pick_closest(self._imu_frames, target_stamp)
+                    depth = self._pick_closest(
+                        self._depth_frames,
+                        float(rgb.stamp),
+                        after_stamp=after_stamp,
+                    )
+                    if depth is None:
+                        continue
+
+                    target_stamp = self._rgb_depth_sync_stamp(rgb, depth)
+                    pose = self._pick_closest(
+                        self._pose_queue(),
+                        target_stamp,
+                        after_stamp=after_stamp,
+                    )
+                    imu = self._pick_closest(
+                        self._imu_frames,
+                        target_stamp,
+                        after_stamp=after_stamp,
+                    )
                     if depth is not None and pose is not None:
                         depth = self._fuse_depth_window_locked(depth)
                         if depth is None:
@@ -314,6 +344,9 @@ class ObservationHub:
                             rgb=rgb.image,
                             depth=depth.image,
                             pose=pose,
+                            rgb_stamp=float(rgb.stamp),
+                            depth_stamp=float(depth.stamp),
+                            pose_stamp=float(pose.stamp),
                             imu=imu,
                             rgb_camera_info=self._rgb_camera_info,
                             depth_camera_info=self._depth_camera_info,
