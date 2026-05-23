@@ -54,6 +54,9 @@ if [[ -n "${SPACEVLN_ROS_SETUP:-}" && -f "${SPACEVLN_ROS_SETUP}" ]]; then
   source "${SPACEVLN_ROS_SETUP}"
 fi
 
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/setup_real_accel_env.sh"
+
 if [[ -d "${GROUNDINGDINO_DIR}/groundingdino" ]]; then
   export PYTHONPATH="${GROUNDINGDINO_DIR}:${PYTHONPATH:-}"
 fi
@@ -82,6 +85,9 @@ echo "[RealRobot] output_profile=${SPACEVLN_OUTPUT_PROFILE}"
 echo "[RealRobot] runtime=${RUNTIME}"
 echo "[RealRobot] console=${REAL_CONSOLE}"
 echo "[RealRobot] logs=${RUN_LOG_DIR}"
+if [[ "${SPACEVLN_PERCEPTION_MODE:-lite}" =~ ^(full|grounded_sam|groundingdino|groundedsam)$ ]]; then
+  echo "[RealRobot] accel CUDA_HOME=${CUDA_HOME:-none} torch_lib=${SPACEVLN_TORCH_LIB_DIR:-none}"
+fi
 
 EXECUTOR_PID=""
 cleanup() {
