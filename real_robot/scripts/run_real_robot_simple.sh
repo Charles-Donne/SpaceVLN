@@ -33,6 +33,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REAL_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 SPACEVLN_DIR="$(cd "${REAL_DIR}/.." && pwd)"
 WORKSPACE_DIR="$(cd "${SPACEVLN_DIR}/.." && pwd)"
+GROUNDINGDINO_DIR="${GROUNDINGDINO_DIR:-${WORKSPACE_DIR}/GroundingDINO}"
 
 # Real-robot runs always default to the workspace-level sibling result dir:
 #   <workspace>/SpaceVLN
@@ -52,6 +53,9 @@ if [[ -n "${SPACEVLN_ROS_SETUP:-}" && -f "${SPACEVLN_ROS_SETUP}" ]]; then
   source "${SPACEVLN_ROS_SETUP}"
 fi
 
+if [[ -d "${GROUNDINGDINO_DIR}/groundingdino" ]]; then
+  export PYTHONPATH="${GROUNDINGDINO_DIR}:${PYTHONPATH:-}"
+fi
 export PYTHONPATH="${SPACEVLN_DIR}:${REAL_DIR}:${PYTHONPATH:-}"
 
 if [[ "$#" -gt 0 ]]; then
