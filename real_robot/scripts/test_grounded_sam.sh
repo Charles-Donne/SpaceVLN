@@ -16,16 +16,19 @@ if [[ -z "${OUTPUT_IMAGE:-}" ]]; then
   OUTPUT_IMAGE="${image_dir}/${image_base%.*}_grounded_sam.jpg"
 fi
 CLASSES="${CLASSES:-table,chair,door,sofa,person,cabinet}"
+CAPTION="${CAPTION:-}"
 BOX_THRESHOLD="${BOX_THRESHOLD:-0.25}"
 TEXT_THRESHOLD="${TEXT_THRESHOLD:-0.25}"
 QUIET="${QUIET:-1}"
 LOG_FILE="${LOG_FILE:-/tmp/grounded_sam_test.log}"
-GROUNDINGDINO_DEVICE="${GROUNDINGDINO_DEVICE:-cpu}"
+GROUNDINGDINO_DEVICE="${GROUNDINGDINO_DEVICE:-auto}"
 
 export PYTHONPATH="${GROUNDINGDINO_DIR}:${SPACEVLN_DIR}:${REAL_DIR}:${PYTHONPATH:-}"
-export MODEL_DIR TEST_IMAGE OUTPUT_IMAGE CLASSES BOX_THRESHOLD TEXT_THRESHOLD
+export MODEL_DIR TEST_IMAGE OUTPUT_IMAGE CLASSES CAPTION BOX_THRESHOLD TEXT_THRESHOLD
 export GROUNDINGDINO_DEVICE
-export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-}"
+if [[ -n "${CUDA_VISIBLE_DEVICES:-}" ]]; then
+  export CUDA_VISIBLE_DEVICES
+fi
 export SPACEVLN_GROUNDINGDINO_CPU_FALLBACK="${SPACEVLN_GROUNDINGDINO_CPU_FALLBACK:-1}"
 
 if [[ "${QUIET}" == "1" ]]; then
@@ -42,8 +45,10 @@ from types import SimpleNamespace
 import cv2
 import numpy as np
 import torch
+import supervision as sv
 
 from navigation_system.detection.grounded_sam import GroundedSAM
+from groundingdino.util.inference import Model
 
 model_dir = os.environ["MODEL_DIR"]
 test_image = os.environ["TEST_IMAGE"]
@@ -53,6 +58,7 @@ classes = [
     for item in os.environ.get("CLASSES", "").split(",")
     if item.strip()
 ]
+caption = os.environ.get("CAPTION", "").strip()
 box_threshold = float(os.environ.get("BOX_THRESHOLD", "0.25"))
 text_threshold = float(os.environ.get("TEXT_THRESHOLD", "0.25"))
 
@@ -86,11 +92,55 @@ cfg = SimpleNamespace(
     )
 )
 
-device_name = os.environ.get("GROUNDINGDINO_DEVICE", "cpu").strip().lower()
-if device_name.startswith("cuda"):
+device_name = os.environ.get("GROUNDINGDINO_DEVICE", "auto").strip().lower()
+if device_name in {"auto", ""}:
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+elif device_name.startswith("cuda"):
     device = torch.device(device_name)
 else:
     device = torch.device("cpu")
+
+print(f"device: {device}")
+print(f"classes: {classes}")
+if caption:
+    print(f"caption: {caption}")
+print(f"thresholds: box={box_threshold:.3f} text={text_threshold:.3f}")
+
+if caption:
+    dino = Model(
+        model_config_path=os.path.join(model_dir, "GroundingDINO_SwinT_OGC.py"),
+        model_checkpoint_path=os.path.join(model_dir, "groundingdino_swint_ogc.pth"),
+        device=str(device),
+    )
+    detections, phrases = dino.predict_with_caption(
+        image=image,
+        caption=caption,
+        box_threshold=box_threshold,
+        text_threshold=text_threshold,
+    )
+    labels = []
+    for phrase, confidence in zip(phrases, detections.confidence):
+        labels.append(f"{phrase} {float(confidence):0.2f}")
+    annotated = image.copy()
+    try:
+        annotated = sv.BoxAnnotator().annotate(
+            scene=annotated,
+            detections=detections,
+            labels=labels,
+        )
+    except TypeError:
+        annotated = sv.BoxAnnotator().annotate(
+            scene=annotated,
+            detections=detections,
+        )
+    cv2.imwrite(output_image, annotated)
+    print("GROUNDING_SAM_RESULT_START")
+    print("boxes:", len(detections.xyxy))
+    print("labels:", labels)
+    print("masks:", None)
+    print("saved:", output_image)
+    print("GROUNDING_SAM_RESULT_END")
+    raise SystemExit(0)
 
 model = GroundedSAM(cfg, device)
 masks, labels, annotated, detections = model.segment(
