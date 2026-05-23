@@ -154,20 +154,20 @@ def _build_task_config(real_config: RealRobotConfig, max_steps: Optional[int]) -
     task_cfg.SIMULATOR.RGB_SENSOR.WIDTH = int(real_config.rgb_width)
     task_cfg.SIMULATOR.RGB_SENSOR.HEIGHT = int(real_config.rgb_height)
     task_cfg.SIMULATOR.RGB_SENSOR.HFOV = float(real_config.hfov_deg)
-    task_cfg.SIMULATOR.RGB_SENSOR.POSITION = [0.0, 0.88, 0.0]
+    task_cfg.SIMULATOR.RGB_SENSOR.POSITION = [0.0, float(real_config.agent_height_m), 0.0]
 
     task_cfg.SIMULATOR.DEPTH_SENSOR = CN(new_allowed=True)
     task_cfg.SIMULATOR.DEPTH_SENSOR.WIDTH = int(real_config.rgb_width)
     task_cfg.SIMULATOR.DEPTH_SENSOR.HEIGHT = int(real_config.rgb_height)
-    task_cfg.SIMULATOR.DEPTH_SENSOR.HFOV = float(real_config.hfov_deg)
+    task_cfg.SIMULATOR.DEPTH_SENSOR.HFOV = float(real_config.depth_hfov_deg)
     task_cfg.SIMULATOR.DEPTH_SENSOR.MIN_DEPTH = float(real_config.min_depth_m)
     task_cfg.SIMULATOR.DEPTH_SENSOR.MAX_DEPTH = float(real_config.max_depth_m)
-    task_cfg.SIMULATOR.DEPTH_SENSOR.POSITION = [0.0, 0.88, 0.0]
+    task_cfg.SIMULATOR.DEPTH_SENSOR.POSITION = [0.0, float(real_config.agent_height_m), 0.0]
 
     task_cfg.SIMULATOR.FORWARD_STEP_SIZE = float(real_config.forward_step_m)
     task_cfg.SIMULATOR.TURN_ANGLE = float(real_config.turn_angle_deg)
     task_cfg.SIMULATOR.AGENT_0 = CN(new_allowed=True)
-    task_cfg.SIMULATOR.AGENT_0.HEIGHT = 0.88
+    task_cfg.SIMULATOR.AGENT_0.HEIGHT = float(real_config.agent_height_m)
     task_cfg.SIMULATOR.AGENT_0.SENSORS = ["RGB_SENSOR", "DEPTH_SENSOR"]
 
     task_cfg.ENVIRONMENT = CN(new_allowed=True)
@@ -219,9 +219,11 @@ def _build_base_config(real_config: RealRobotConfig, max_steps: Optional[int]) -
     config.SPACE = CN(new_allowed=True)
     config.SPACE.SENSOR = CN(new_allowed=True)
     config.SPACE.SENSOR.HFOV_DEG = float(real_config.hfov_deg)
+    config.SPACE.SENSOR.DEPTH_HFOV_DEG = float(real_config.depth_hfov_deg)
     config.SPACE.SENSOR.FRAME_WIDTH = int(real_config.rgb_width)
     config.SPACE.SENSOR.FRAME_HEIGHT = int(real_config.rgb_height)
-    config.SPACE.SENSOR.AGENT_HEIGHT_M = 0.88
+    config.SPACE.SENSOR.AGENT_HEIGHT_M = float(real_config.agent_height_m)
+    config.SPACE.SENSOR.CAMERA_ELEVATION_DEG = float(real_config.camera_pitch_deg)
     config.SPACE.SENSOR.DEVICE_ID = 0
     config.SPACE.SENSOR.NUM_ENVIRONMENTS = 1
 
@@ -336,16 +338,22 @@ def build_real_runtime_config(
     _merge_system_yaml(config, "navigation_system/config/system/20_space_sensor.yaml")
 
     config.SPACE.SENSOR.HFOV_DEG = float(real_config.hfov_deg)
+    config.SPACE.SENSOR.DEPTH_HFOV_DEG = float(real_config.depth_hfov_deg)
     config.SPACE.SENSOR.FRAME_WIDTH = int(real_config.rgb_width)
     config.SPACE.SENSOR.FRAME_HEIGHT = int(real_config.rgb_height)
+    config.SPACE.SENSOR.AGENT_HEIGHT_M = float(real_config.agent_height_m)
+    config.SPACE.SENSOR.CAMERA_ELEVATION_DEG = float(real_config.camera_pitch_deg)
     config.TASK_CONFIG.SIMULATOR.RGB_SENSOR.WIDTH = int(real_config.rgb_width)
     config.TASK_CONFIG.SIMULATOR.RGB_SENSOR.HEIGHT = int(real_config.rgb_height)
     config.TASK_CONFIG.SIMULATOR.RGB_SENSOR.HFOV = float(real_config.hfov_deg)
+    config.TASK_CONFIG.SIMULATOR.RGB_SENSOR.POSITION = [0.0, float(real_config.agent_height_m), 0.0]
     config.TASK_CONFIG.SIMULATOR.DEPTH_SENSOR.WIDTH = int(real_config.rgb_width)
     config.TASK_CONFIG.SIMULATOR.DEPTH_SENSOR.HEIGHT = int(real_config.rgb_height)
-    config.TASK_CONFIG.SIMULATOR.DEPTH_SENSOR.HFOV = float(real_config.hfov_deg)
+    config.TASK_CONFIG.SIMULATOR.DEPTH_SENSOR.HFOV = float(real_config.depth_hfov_deg)
     config.TASK_CONFIG.SIMULATOR.DEPTH_SENSOR.MIN_DEPTH = float(real_config.min_depth_m)
     config.TASK_CONFIG.SIMULATOR.DEPTH_SENSOR.MAX_DEPTH = float(real_config.max_depth_m)
+    config.TASK_CONFIG.SIMULATOR.DEPTH_SENSOR.POSITION = [0.0, float(real_config.agent_height_m), 0.0]
+    config.TASK_CONFIG.SIMULATOR.AGENT_0.HEIGHT = float(real_config.agent_height_m)
     config.TASK_CONFIG.SIMULATOR.FORWARD_STEP_SIZE = float(real_config.forward_step_m)
     config.TASK_CONFIG.SIMULATOR.TURN_ANGLE = float(real_config.turn_angle_deg)
     if getattr(args, "max_steps", None) is not None:

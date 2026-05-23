@@ -277,11 +277,16 @@ def normalize_depth_frame(
     else:
         raise ValueError("unsupported depth encoding: %s" % encoding)
 
-    valid = np.isfinite(depth_m) & (depth_m > 0.0)
-    clipped = np.where(valid, depth_m, float(max_depth_m))
-    clipped = np.clip(clipped, float(min_depth_m), float(max_depth_m))
-    normalized = (clipped - float(min_depth_m)) / max(
-        float(max_depth_m) - float(min_depth_m),
+    max_depth = float(max_depth_m)
+    min_depth = float(min_depth_m)
+    # D435i max-range/no-return pixels can appear as large finite depths. If
+    # they are clipped to max_depth and treated as real returns, the mapper can
+    # build a false obstacle ring at the configured range boundary.
+    valid = np.isfinite(depth_m) & (depth_m > 0.0) & (depth_m < max_depth)
+    clipped = np.where(valid, depth_m, max_depth)
+    clipped = np.clip(clipped, min_depth, max_depth)
+    normalized = (clipped - min_depth) / max(
+        max_depth - min_depth,
         1e-6,
     )
     normalized = normalized.astype(np.float32)

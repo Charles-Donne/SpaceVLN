@@ -214,6 +214,7 @@ class Semantic_Mapping(nn.Module):
         self.max_height = int(360 / self.z_resolution)  # 72
         self.min_height = int(-40 / self.z_resolution)  # -8
         self.agent_height = args.AGENT_HEIGHT * 100.  # 88cm
+        self.camera_elevation_degree = float(getattr(args, "CAMERA_ELEVATION_DEG", 0.0))
         self.obstacle_min_height_cm = float(getattr(args, "OBSTACLE_MIN_HEIGHT_CM", 15.0))
         self.obstacle_max_height_cm = float(getattr(args, "OBSTACLE_MAX_HEIGHT_CM", 130.0))
         if self.obstacle_max_height_cm <= self.obstacle_min_height_cm:
@@ -1681,7 +1682,12 @@ class Semantic_Mapping(nn.Module):
         # shape: [bs, h, w, 3] 3 is (x, y, z) for each point in (h, w)
         point_cloud_t = du.get_point_cloud_from_z_t(depth, self.camera_matrix, self.device, scale=self.du_scale)
         
-        agent_view_t = du.transform_camera_view_t(point_cloud_t, self.agent_height, 0, self.device)
+        agent_view_t = du.transform_camera_view_t(
+            point_cloud_t,
+            self.agent_height,
+            self.camera_elevation_degree,
+            self.device,
+        )
         
         # point cloud in world axis
         # self.shift_loc=[250, 0, pi/2] => heading is always 90(degree), change with turn left

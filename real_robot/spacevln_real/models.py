@@ -72,7 +72,10 @@ class RealRobotConfig:
     pose_queue_size: int = 32
     rgb_width: int = 640
     rgb_height: int = 480
-    hfov_deg: float = 69.4
+    agent_height_m: float = 1.3
+    camera_pitch_deg: float = -15.0
+    hfov_deg: float = 87.0
+    depth_hfov_deg: float = 87.0
     min_depth_m: float = 0.3
     max_depth_m: float = 3.0
     forward_step_m: float = 0.5
@@ -154,7 +157,25 @@ class RealRobotConfig:
             pose_queue_size=max(8, int(buffer_cfg.get("pose_queue_size", 32))),
             rgb_width=max(1, int(camera_cfg.get("rgb_width", 640))),
             rgb_height=max(1, int(camera_cfg.get("rgb_height", 480))),
-            hfov_deg=float(camera_cfg.get("hfov_deg", 69.4)),
+            agent_height_m=float(
+                camera_cfg.get(
+                    "agent_height_m",
+                    camera_cfg.get("sensor_height_m", payload.get("agent_height_m", 1.3)),
+                )
+            ),
+            camera_pitch_deg=float(
+                camera_cfg.get(
+                    "camera_pitch_deg",
+                    camera_cfg.get("camera_elevation_deg", payload.get("camera_pitch_deg", -15.0)),
+                )
+            ),
+            hfov_deg=float(camera_cfg.get("hfov_deg", 87.0)),
+            depth_hfov_deg=float(
+                camera_cfg.get(
+                    "depth_hfov_deg",
+                    payload.get("depth_hfov_deg", camera_cfg.get("hfov_deg", 87.0)),
+                )
+            ),
             min_depth_m=float(camera_cfg.get("min_depth_m", 0.3)),
             max_depth_m=float(camera_cfg.get("max_depth_m", 3.0)),
             forward_step_m=float(control_cfg.get("forward_step_m", 0.5)),

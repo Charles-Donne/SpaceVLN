@@ -59,7 +59,9 @@ def apply_runtime_derived_fields(config: Config) -> Config:
                 _sync_sensor_position_height(rgb_sensor)
             if depth_sensor is not None:
                 if hasattr(depth_sensor, "HFOV"):
-                    depth_sensor.HFOV = float(space.SENSOR.HFOV_DEG)
+                    depth_sensor.HFOV = float(
+                        getattr(space.SENSOR, "DEPTH_HFOV_DEG", space.SENSOR.HFOV_DEG)
+                    )
                 if hasattr(depth_sensor, "WIDTH"):
                     depth_sensor.WIDTH = int(space.SENSOR.FRAME_WIDTH)
                 if hasattr(depth_sensor, "HEIGHT"):
@@ -95,10 +97,13 @@ def apply_runtime_derived_fields(config: Config) -> Config:
     map_cfg.TEXT_THRESHOLD = float(detection.THRESHOLDS.TEXT)
 
     map_cfg.DEVICE = int(space.SENSOR.DEVICE_ID)
-    map_cfg.HFOV = float(space.SENSOR.HFOV_DEG)
+    map_cfg.HFOV = float(getattr(space.SENSOR, "DEPTH_HFOV_DEG", space.SENSOR.HFOV_DEG))
     map_cfg.FRAME_WIDTH = int(space.SENSOR.FRAME_WIDTH)
     map_cfg.FRAME_HEIGHT = int(space.SENSOR.FRAME_HEIGHT)
     map_cfg.AGENT_HEIGHT = float(space.SENSOR.AGENT_HEIGHT_M)
+    map_cfg.CAMERA_ELEVATION_DEG = float(
+        getattr(space.SENSOR, "CAMERA_ELEVATION_DEG", 0.0)
+    )
     map_cfg.NUM_ENVIRONMENTS = int(space.SENSOR.NUM_ENVIRONMENTS)
 
     map_cfg.MAP_RESOLUTION = int(space.MAP.RESOLUTION_CM)

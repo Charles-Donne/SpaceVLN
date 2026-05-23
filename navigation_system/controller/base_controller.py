@@ -858,6 +858,12 @@ class BaseNavigationController:
         real_cfg = getattr(self.config, "REAL_ROBOT", None)
         return bool(getattr(real_cfg, "DISABLE_DEPTH_MAP_UPDATE", False))
 
+    def _depth_hfov_deg(self) -> float:
+        sensor_cfg = getattr(self.config.SPACE, "SENSOR", None)
+        if sensor_cfg is None:
+            return float(getattr(self.space_sensor_config, "HFOV_DEG", 79.0))
+        return float(getattr(sensor_cfg, "DEPTH_HFOV_DEG", getattr(sensor_cfg, "HFOV_DEG", 79.0)))
+
     def _ensure_real_depth_map_disabled_input(self, phase: str) -> Optional[str]:
         del phase
         return getattr(self, "latest_global_map_input", None)
@@ -1446,7 +1452,7 @@ class BaseNavigationController:
             self.latest_obstacle_distances = calculate_obstacle_distances_from_map_and_depth(
                 getattr(self, 'latest_depth_meters', None),
                 map_distances=map_distances,
-                hfov_deg=float(self.space_sensor_config.HFOV_DEG),
+                hfov_deg=self._depth_hfov_deg(),
                 angle_band_deg=5.0,
                 sensor_min_depth_m=float(self.config.TASK_CONFIG.SIMULATOR.DEPTH_SENSOR.MIN_DEPTH),
             )
