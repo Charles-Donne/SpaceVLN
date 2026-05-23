@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from collections import deque
+import os
 import threading
 import time
 from typing import Deque, Optional
 
+import cv2
 import numpy as np
 
 from spacevln_real.models import (
@@ -43,6 +45,44 @@ class ObservationHub:
         self._imu_frames: Deque[ImuFrame] = deque(maxlen=max(8, config.pose_queue_size))
         self._rgb_camera_info: Optional[CameraInfoData] = None
         self._depth_camera_info: Optional[CameraInfoData] = None
+        self._rgb_record_dir = ""
+        self._rgb_record_interval_s = 1.0
+        self._rgb_record_last_saved_at = 0.0
+        self._rgb_record_index = 0
+
+    def configure_rgb_recording(
+        self,
+        *,
+        output_dir: str,
+        interval_s: float = 1.0,
+    ) -> None:
+        path = str(output_dir or "").strip()
+        if not path:
+            return
+        os.makedirs(path, exist_ok=True)
+        with self._condition:
+            self._rgb_record_dir = path
+            self._rgb_record_interval_s = max(0.1, float(interval_s or 1.0))
+            self._rgb_record_last_saved_at = 0.0
+            self._rgb_record_index = 0
+
+    def _record_rgb_frame(self, rgb: np.ndarray, *, receive_time: float, stamp: float) -> None:
+        with self._condition:
+            output_dir = str(self._rgb_record_dir or "")
+            interval_s = float(self._rgb_record_interval_s or 1.0)
+            last_saved_at = float(self._rgb_record_last_saved_at or 0.0)
+            if not output_dir or receive_time - last_saved_at < interval_s:
+                return
+            self._rgb_record_last_saved_at = float(receive_time)
+            self._rgb_record_index += 1
+            frame_index = int(self._rgb_record_index)
+
+        filename = "rgb_%06d_stamp_%.3f.jpg" % (frame_index, float(stamp))
+        path = os.path.join(output_dir, filename)
+        try:
+            cv2.imwrite(path, cv2.cvtColor(np.asarray(rgb, dtype=np.uint8), cv2.COLOR_RGB2BGR))
+        except Exception as exc:
+            print(f"[WARN] Failed to save real RGB frame {path}: {exc}", flush=True)
 
     def _store(self, queue: Deque, item) -> None:
         with self._condition:
@@ -71,10 +111,12 @@ class ObservationHub:
     def on_rgb(self, msg) -> None:
         receive_time = time.time()
         rgb = image_msg_to_numpy(msg)
+        stamp = self._message_stamp(msg, receive_time)
+        self._record_rgb_frame(rgb, receive_time=receive_time, stamp=stamp)
         self._store(
             self._rgb_frames,
             ImageFrame(
-                stamp=self._message_stamp(msg, receive_time),
+                stamp=stamp,
                 frame_id=header_frame_id(msg),
                 encoding=str(getattr(msg, "encoding", "") or ""),
                 image=rgb,

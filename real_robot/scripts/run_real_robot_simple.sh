@@ -28,6 +28,7 @@ MAX_SUBTASK_STEPS="${MAX_SUBTASK_STEPS:-7}"
 MAX_STEPS="${MAX_STEPS:-}"
 RESULTS_DIR="${RESULTS_DIR:-}"
 VLM_API_CONFIG="${VLM_API_CONFIG:-}"
+REAL_CONSOLE="${REAL_CONSOLE:-compact}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REAL_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -70,9 +71,17 @@ fi
 
 cd "${SPACEVLN_DIR}"
 
+REAL_LOG_ROOT="${REAL_LOG_ROOT:-${REAL_RESULTS_ROOT}/real_robot_console_logs}"
+RUN_LOG_DIR="${RUN_LOG_DIR:-${REAL_LOG_ROOT}/$(date +%Y%m%d_%H%M%S)_$$}"
+EXECUTOR_LOG="${RUN_LOG_DIR}/cmd_vel_executor.log"
+NAVIGATION_LOG="${RUN_LOG_DIR}/run_real_navigation.log"
+mkdir -p "${RUN_LOG_DIR}"
+
 echo "[RealRobot] results_root=${SPACEVLN_RESULTS_ROOT}"
 echo "[RealRobot] output_profile=${SPACEVLN_OUTPUT_PROFILE}"
 echo "[RealRobot] runtime=${RUNTIME}"
+echo "[RealRobot] console=${REAL_CONSOLE}"
+echo "[RealRobot] logs=${RUN_LOG_DIR}"
 
 EXECUTOR_PID=""
 cleanup() {
@@ -110,24 +119,33 @@ wait_for_ros2_topic_count() {
 }
 
 if [[ "${START_EXECUTOR}" == "1" ]]; then
-  python3 -u "${REAL_DIR}/run_cmd_vel_executor.py" \
-    --cmd-vel-topic "${CMD_VEL_TOPIC}" \
-    --odom-topic "${ODOM_TOPIC}" \
-    --control-mode "${CONTROL_MODE}" \
-    --control-rate-hz "${CONTROL_RATE_HZ}" \
-    --position-tolerance-m "${POSITION_TOLERANCE_M}" \
-    --angle-tolerance-deg "${ANGLE_TOLERANCE_DEG}" \
-    --odom-timeout-s "${ODOM_TIMEOUT_S}" \
-    --default-linear-speed-mps "${DEFAULT_LINEAR_SPEED_MPS}" \
-    --default-angular-speed-deg-s "${DEFAULT_ANGULAR_SPEED_DEG_S}" \
-    --max-linear-speed-mps "${MAX_LINEAR_SPEED_MPS}" \
-    --max-angular-speed-deg-s "${MAX_ANGULAR_SPEED_DEG_S}" \
-    --completion-stability-s "${COMPLETION_STABILITY_S}" \
-    --completion-yaw-tolerance-deg "${COMPLETION_YAW_TOLERANCE_DEG}" &
+  EXECUTOR_ARGS=(
+    --cmd-vel-topic "${CMD_VEL_TOPIC}"
+    --odom-topic "${ODOM_TOPIC}"
+    --control-mode "${CONTROL_MODE}"
+    --control-rate-hz "${CONTROL_RATE_HZ}"
+    --position-tolerance-m "${POSITION_TOLERANCE_M}"
+    --angle-tolerance-deg "${ANGLE_TOLERANCE_DEG}"
+    --odom-timeout-s "${ODOM_TIMEOUT_S}"
+    --default-linear-speed-mps "${DEFAULT_LINEAR_SPEED_MPS}"
+    --default-angular-speed-deg-s "${DEFAULT_ANGULAR_SPEED_DEG_S}"
+    --max-linear-speed-mps "${MAX_LINEAR_SPEED_MPS}"
+    --max-angular-speed-deg-s "${MAX_ANGULAR_SPEED_DEG_S}"
+    --completion-stability-s "${COMPLETION_STABILITY_S}"
+    --completion-yaw-tolerance-deg "${COMPLETION_YAW_TOLERANCE_DEG}"
+  )
+  if [[ "${REAL_CONSOLE}" == "full" ]]; then
+    python3 -u "${REAL_DIR}/run_cmd_vel_executor.py" "${EXECUTOR_ARGS[@]}" &
+  else
+    python3 -u "${REAL_DIR}/run_cmd_vel_executor.py" "${EXECUTOR_ARGS[@]}" >"${EXECUTOR_LOG}" 2>&1 &
+  fi
   EXECUTOR_PID="$!"
   sleep 1
   if ! kill -0 "${EXECUTOR_PID}" >/dev/null 2>&1; then
     echo "[RealRobot] cmd_vel executor exited before navigation started" >&2
+    if [[ -f "${EXECUTOR_LOG}" ]]; then
+      echo "[RealRobot] executor log=${EXECUTOR_LOG}" >&2
+    fi
     wait "${EXECUTOR_PID}" || true
     exit 1
   fi
@@ -155,4 +173,33 @@ if [[ -n "${VLM_API_CONFIG}" ]]; then
   NAV_ARGS+=(--vlm-api-config "${VLM_API_CONFIG}")
 fi
 
-python3 -u "${REAL_DIR}/run_real_navigation.py" "${NAV_ARGS[@]}"
+if [[ "${REAL_CONSOLE}" == "full" ]]; then
+  python3 -u "${REAL_DIR}/run_real_navigation.py" "${NAV_ARGS[@]}"
+else
+  set +e
+  python3 -u "${REAL_DIR}/run_real_navigation.py" "${NAV_ARGS[@]}" 2>&1 \
+    | tee "${NAVIGATION_LOG}" \
+    | awk '
+      /^\[REAL\]/ ||
+      /^\[REAL-LIVE\]/ ||
+      /^\[ERR\]/ ||
+      /^\[WARN\]/ ||
+      /^\[LLM\] Planning/ ||
+      /^Episode [0-9]+/ ||
+      /^Instruction:/ ||
+      /^Traceback/ ||
+      /^[A-Za-z_][A-Za-z0-9_]*(Error|Exception):/ {
+        print;
+        fflush();
+      }
+    '
+  nav_status=${PIPESTATUS[0]}
+  set -e
+  if [[ "${nav_status}" -ne 0 ]]; then
+    echo "[RealRobot] navigation failed exit=${nav_status}; log=${NAVIGATION_LOG}" >&2
+    if [[ -f "${EXECUTOR_LOG}" ]]; then
+      echo "[RealRobot] executor log=${EXECUTOR_LOG}" >&2
+    fi
+  fi
+  exit "${nav_status}"
+fi

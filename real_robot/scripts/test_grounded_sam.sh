@@ -14,8 +14,17 @@ OUTPUT_IMAGE="${OUTPUT_IMAGE:-/tmp/grounded_sam_test.jpg}"
 CLASSES="${CLASSES:-table,chair,door,sofa,person,cabinet}"
 BOX_THRESHOLD="${BOX_THRESHOLD:-0.25}"
 TEXT_THRESHOLD="${TEXT_THRESHOLD:-0.25}"
+QUIET="${QUIET:-1}"
+LOG_FILE="${LOG_FILE:-/tmp/grounded_sam_test.log}"
 
 export PYTHONPATH="${GROUNDINGDINO_DIR}:${SPACEVLN_DIR}:${REAL_DIR}:${PYTHONPATH:-}"
+
+if [[ "${QUIET}" == "1" ]]; then
+  exec 3>&1
+  exec >"${LOG_FILE}" 2>&1
+else
+  exec 3>&1
+fi
 
 "${PYTHON_BIN}" - <<'PY'
 import os
@@ -45,7 +54,6 @@ required = [
 ]
 for name in required:
     path = os.path.join(model_dir, name)
-    print(("OK " if os.path.exists(path) else "MISS "), path)
     if not os.path.exists(path):
         raise SystemExit(f"missing checkpoint/config: {path}")
 
@@ -70,8 +78,6 @@ cfg = SimpleNamespace(
 )
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-print("device:", device)
-print("classes:", classes)
 
 model = GroundedSAM(cfg, device)
 masks, labels, annotated, detections = model.segment(
@@ -82,8 +88,17 @@ masks, labels, annotated, detections = model.segment(
 )
 
 cv2.imwrite(output_image, annotated)
+xyxy = getattr(detections, "xyxy", None)
+print("GROUNDING_SAM_RESULT_START")
+print("boxes:", 0 if xyxy is None else len(xyxy))
 print("labels:", labels)
-print("boxes:", len(getattr(detections, "xyxy", []) or []))
 print("masks:", getattr(masks, "shape", None))
 print("saved:", output_image)
+print("GROUNDING_SAM_RESULT_END")
 PY
+
+if [[ "${QUIET}" == "1" ]]; then
+  sed -n '/GROUNDING_SAM_RESULT_START/,/GROUNDING_SAM_RESULT_END/p' "${LOG_FILE}" \
+    | sed '/GROUNDING_SAM_RESULT_/d' >&3
+  echo "log: ${LOG_FILE}" >&3
+fi
