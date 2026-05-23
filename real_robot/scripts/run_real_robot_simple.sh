@@ -79,6 +79,32 @@ cleanup() {
 }
 trap cleanup EXIT
 
+wait_for_ros2_topic_count() {
+  local topic="$1"
+  local field="$2"
+  local expected_min="$3"
+  local attempts="${4:-20}"
+  local count=""
+
+  if ! command -v ros2 >/dev/null 2>&1; then
+    return 0
+  fi
+
+  for _ in $(seq 1 "${attempts}"); do
+    count="$(
+      ros2 topic info "${topic}" 2>/dev/null \
+        | awk -F': ' -v field="${field}" '$1 == field {print $2; exit}'
+    )"
+    if [[ -n "${count}" && "${count}" =~ ^[0-9]+$ && "${count}" -ge "${expected_min}" ]]; then
+      return 0
+    fi
+    sleep 0.25
+  done
+
+  echo "[RealRobot] waiting for ${topic} ${field} >= ${expected_min} timed out (last=${count:-unknown})" >&2
+  return 1
+}
+
 if [[ "${START_EXECUTOR}" == "1" ]]; then
   python3 -u "${REAL_DIR}/run_cmd_vel_executor.py" \
     --cmd-vel-topic "${CMD_VEL_TOPIC}" \
@@ -96,6 +122,14 @@ if [[ "${START_EXECUTOR}" == "1" ]]; then
     --completion-yaw-tolerance-deg "${COMPLETION_YAW_TOLERANCE_DEG}" &
   EXECUTOR_PID="$!"
   sleep 1
+  if ! kill -0 "${EXECUTOR_PID}" >/dev/null 2>&1; then
+    echo "[RealRobot] cmd_vel executor exited before navigation started" >&2
+    wait "${EXECUTOR_PID}" || true
+    exit 1
+  fi
+  wait_for_ros2_topic_count "${CMD_VEL_TOPIC}" "Subscription count" 1 8 || true
+  wait_for_ros2_topic_count "/spacevln/action_cmd" "Subscription count" 1 20
+  wait_for_ros2_topic_count "/spacevln/action_status" "Publisher count" 1 20
 fi
 
 NAV_ARGS=(
