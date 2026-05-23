@@ -13,7 +13,7 @@ max_header_receive_time_delta_s: 2.0
 use_imu_orientation: false
 require_fresh_frame_after_action: true
 action_status_required: true
-observation_timeout_s: 3.0
+observation_timeout_s: 8.0
 action_timeout_s: 20.0
 sync_tolerance_s: 0.75
 

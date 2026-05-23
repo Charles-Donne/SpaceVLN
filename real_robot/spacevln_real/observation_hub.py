@@ -46,6 +46,13 @@ class ObservationHub:
 
     def _store(self, queue: Deque, item) -> None:
         with self._condition:
+            if queue:
+                last = queue[-1]
+                if (
+                    abs(float(getattr(last, "stamp", -1.0)) - float(getattr(item, "stamp", -2.0))) < 1e-9
+                    and str(getattr(last, "frame_id", "")) == str(getattr(item, "frame_id", ""))
+                ):
+                    return
             queue.append(item)
             self._condition.notify_all()
 

@@ -58,7 +58,7 @@ class RealRobotConfig:
     use_imu_orientation: bool = False
     require_fresh_frame_after_action: bool = True
     action_status_required: bool = True
-    observation_timeout_s: float = 3.0
+    observation_timeout_s: float = 8.0
     action_timeout_s: float = 20.0
     sync_tolerance_s: float = 0.75
     lookaround_sample_count: int = 8
@@ -106,7 +106,7 @@ class RealRobotConfig:
                 payload.get("require_fresh_frame_after_action", True)
             ),
             action_status_required=bool(payload.get("action_status_required", True)),
-            observation_timeout_s=float(payload.get("observation_timeout_s", 3.0)),
+            observation_timeout_s=float(payload.get("observation_timeout_s", 8.0)),
             action_timeout_s=float(payload.get("action_timeout_s", 20.0)),
             sync_tolerance_s=float(payload.get("sync_tolerance_s", 0.75)),
             lookaround_sample_count=max(

@@ -178,6 +178,7 @@ class Ros2Runtime:
         self._owns_init = False
         self._action_pub = None
         self._capture_pub = None
+        self._subscriptions = []
 
     def _publish_json(self, publisher, payload) -> None:
         if publisher is None:
@@ -191,7 +192,7 @@ class Ros2Runtime:
         from geometry_msgs.msg import PoseStamped
         from nav_msgs.msg import Odometry
         from rclpy.executors import MultiThreadedExecutor
-        from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
+        from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
         from sensor_msgs.msg import CameraInfo, Image, Imu
         from std_msgs.msg import String
 
@@ -209,7 +210,23 @@ class Ros2Runtime:
             history=HistoryPolicy.KEEP_LAST,
             reliability=ReliabilityPolicy.BEST_EFFORT,
         )
+        qos_reliable_camera = QoSProfile(
+            depth=10,
+            history=HistoryPolicy.KEEP_LAST,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
         qos_control = QoSProfile(depth=20)
+
+        def subscribe(message_type, topic, callback, qos_profile):
+            subscription = self._node.create_subscription(
+                message_type,
+                topic,
+                callback,
+                qos_profile,
+            )
+            self._subscriptions.append(subscription)
+            return subscription
 
         self._action_pub = self._node.create_publisher(
             String,
@@ -233,66 +250,28 @@ class Ros2Runtime:
         )
 
         if str(self.config.topics.rgb or "").strip():
-            self._node.create_subscription(
-                Image,
-                self.config.topics.rgb,
-                self.observation_hub.on_rgb,
-                qos_sensor,
-            )
+            subscribe(Image, self.config.topics.rgb, self.observation_hub.on_rgb, qos_sensor)
+            subscribe(Image, self.config.topics.rgb, self.observation_hub.on_rgb, qos_reliable_camera)
         if str(self.config.topics.depth or "").strip():
-            self._node.create_subscription(
-                Image,
-                self.config.topics.depth,
-                self.observation_hub.on_depth,
-                qos_sensor,
-            )
+            subscribe(Image, self.config.topics.depth, self.observation_hub.on_depth, qos_sensor)
+            subscribe(Image, self.config.topics.depth, self.observation_hub.on_depth, qos_reliable_camera)
         if str(self.config.topics.rgb_camera_info or "").strip():
-            self._node.create_subscription(
-                CameraInfo,
-                self.config.topics.rgb_camera_info,
-                self.observation_hub.on_rgb_camera_info,
-                qos_sensor,
-            )
+            subscribe(CameraInfo, self.config.topics.rgb_camera_info, self.observation_hub.on_rgb_camera_info, qos_reliable_camera)
         if str(self.config.topics.depth_camera_info or "").strip():
-            self._node.create_subscription(
-                CameraInfo,
-                self.config.topics.depth_camera_info,
-                self.observation_hub.on_depth_camera_info,
-                qos_sensor,
-            )
+            subscribe(CameraInfo, self.config.topics.depth_camera_info, self.observation_hub.on_depth_camera_info, qos_reliable_camera)
         if str(self.config.topics.imu or "").strip():
-            self._node.create_subscription(
-                Imu,
-                self.config.topics.imu,
-                self.observation_hub.on_imu,
-                qos_sensor,
-            )
+            subscribe(Imu, self.config.topics.imu, self.observation_hub.on_imu, qos_sensor)
 
         pose_source = str(self.config.pose_source or "odometry").strip().lower()
         if pose_source in {"pose", "pose_stamped"}:
             if not str(self.config.topics.pose or "").strip():
                 raise ValueError("pose_source=pose_stamped requires topics.pose")
-            self._node.create_subscription(
-                PoseStamped,
-                self.config.topics.pose,
-                self.observation_hub.on_pose,
-                qos_sensor,
-            )
+            subscribe(PoseStamped, self.config.topics.pose, self.observation_hub.on_pose, qos_sensor)
         else:
-            self._node.create_subscription(
-                Odometry,
-                self.config.topics.odom,
-                self.observation_hub.on_odom,
-                qos_sensor,
-            )
+            subscribe(Odometry, self.config.topics.odom, self.observation_hub.on_odom, qos_sensor)
 
         if str(self.config.topics.action_status or "").strip():
-            self._node.create_subscription(
-                String,
-                self.config.topics.action_status,
-                self.command_bridge.on_action_status,
-                qos_control,
-            )
+            subscribe(String, self.config.topics.action_status, self.command_bridge.on_action_status, qos_control)
 
         self._spin_thread = threading.Thread(target=self._executor.spin, daemon=True)
         self._spin_thread.start()
@@ -318,4 +297,3 @@ def build_ros_runtime(
     if ros_version == "ros1":
         return Ros1Runtime(config, observation_hub, command_bridge)
     return Ros2Runtime(config, observation_hub, command_bridge)
-
