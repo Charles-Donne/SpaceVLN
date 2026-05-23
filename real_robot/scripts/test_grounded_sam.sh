@@ -103,7 +103,15 @@ elif device_name.startswith("cuda"):
 else:
     device = torch.device("cpu")
 
-print(f"device: {device}")
+device_label = str(device)
+if device.type == "cuda":
+    try:
+        device_index = device.index if device.index is not None else torch.cuda.current_device()
+        device_label = f"{device} ({torch.cuda.get_device_name(device_index)})"
+    except Exception:
+        pass
+
+print(f"device: {device_label}")
 print(f"classes: {classes}")
 if caption:
     print(f"caption: {caption}")
@@ -138,6 +146,7 @@ if caption:
         )
     cv2.imwrite(output_image, annotated)
     print("GROUNDING_SAM_RESULT_START")
+    print("device:", device_label)
     print("boxes:", len(detections.xyxy))
     print("labels:", labels)
     print("masks:", None)
@@ -156,6 +165,8 @@ masks, labels, annotated, detections = model.segment(
 cv2.imwrite(output_image, annotated)
 xyxy = getattr(detections, "xyxy", None)
 print("GROUNDING_SAM_RESULT_START")
+print("device:", device_label)
+print("dino_runtime:", getattr(model, "_dino_runtime_mode", "unknown"))
 print("boxes:", 0 if xyxy is None else len(xyxy))
 print("labels:", labels)
 print("masks:", getattr(masks, "shape", None))
