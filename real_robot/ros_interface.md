@@ -263,11 +263,11 @@ Closed-loop behavior expected from the executor:
 The reference executor defaults to conservative early stopping:
 
 - `--position-tolerance-m 0.10`
-- `--angle-tolerance-deg 15`
+- `--angle-tolerance-deg 20`
 - `--completion-stability-s 0.20`
 - `--completion-yaw-tolerance-deg 0.50`
 
-At 10Hz and 60deg/s, one control tick is about 6 degrees, so a 15 degree
+At 10Hz and 60deg/s, one control tick is about 6 degrees, so a 20 degree
 window gives the executor room to stop before communication and base latency
 overshoot the target too much. Tune these values on the actual base.
 

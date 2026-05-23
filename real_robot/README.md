@@ -109,7 +109,7 @@ bash real_robot/scripts/run_cmd_vel_executor.sh \
   --control-mode odom \
   --control-rate-hz 10 \
   --position-tolerance-m 0.10 \
-  --angle-tolerance-deg 15
+  --angle-tolerance-deg 20
 ```
 
 This executor subscribes to `/spacevln/action_cmd`, publishes base velocities on
