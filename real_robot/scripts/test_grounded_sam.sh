@@ -10,14 +10,23 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 GROUNDINGDINO_DIR="${GROUNDINGDINO_DIR:-${WORKSPACE_DIR}/GroundingDINO}"
 MODEL_DIR="${MODEL_DIR:-${WORKSPACE_DIR}/data/model/grounded_sam}"
 TEST_IMAGE="${TEST_IMAGE:-/tmp/spacevln_rgb.jpg}"
-OUTPUT_IMAGE="${OUTPUT_IMAGE:-/tmp/grounded_sam_test.jpg}"
+if [[ -z "${OUTPUT_IMAGE:-}" ]]; then
+  image_dir="$(dirname "${TEST_IMAGE}")"
+  image_base="$(basename "${TEST_IMAGE}")"
+  OUTPUT_IMAGE="${image_dir}/${image_base%.*}_grounded_sam.jpg"
+fi
 CLASSES="${CLASSES:-table,chair,door,sofa,person,cabinet}"
 BOX_THRESHOLD="${BOX_THRESHOLD:-0.25}"
 TEXT_THRESHOLD="${TEXT_THRESHOLD:-0.25}"
 QUIET="${QUIET:-1}"
 LOG_FILE="${LOG_FILE:-/tmp/grounded_sam_test.log}"
+GROUNDINGDINO_DEVICE="${GROUNDINGDINO_DEVICE:-cpu}"
 
 export PYTHONPATH="${GROUNDINGDINO_DIR}:${SPACEVLN_DIR}:${REAL_DIR}:${PYTHONPATH:-}"
+export MODEL_DIR TEST_IMAGE OUTPUT_IMAGE CLASSES BOX_THRESHOLD TEXT_THRESHOLD
+export GROUNDINGDINO_DEVICE
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-}"
+export SPACEVLN_GROUNDINGDINO_CPU_FALLBACK="${SPACEVLN_GROUNDINGDINO_CPU_FALLBACK:-1}"
 
 if [[ "${QUIET}" == "1" ]]; then
   exec 3>&1
@@ -77,7 +86,11 @@ cfg = SimpleNamespace(
     )
 )
 
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+device_name = os.environ.get("GROUNDINGDINO_DEVICE", "cpu").strip().lower()
+if device_name.startswith("cuda"):
+    device = torch.device(device_name)
+else:
+    device = torch.device("cpu")
 
 model = GroundedSAM(cfg, device)
 masks, labels, annotated, detections = model.segment(
