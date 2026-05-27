@@ -10,6 +10,14 @@ if [[ -n "${SPACEVLN_ROS_SETUP:-}" && -f "${SPACEVLN_ROS_SETUP}" ]]; then
   source "${SPACEVLN_ROS_SETUP}"
 fi
 
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/setup_real_accel_env.sh"
+
+WORKSPACE_DIR="$(cd "${SPACEVLN_DIR}/.." && pwd)"
+GROUNDINGDINO_DIR="${GROUNDINGDINO_DIR:-${WORKSPACE_DIR}/GroundingDINO}"
+if [[ -d "${GROUNDINGDINO_DIR}/groundingdino" ]]; then
+  export PYTHONPATH="${GROUNDINGDINO_DIR}:${PYTHONPATH:-}"
+fi
 export PYTHONPATH="${SPACEVLN_DIR}:${REAL_DIR}:${PYTHONPATH:-}"
 
 cd "${SPACEVLN_DIR}"

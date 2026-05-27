@@ -23,7 +23,8 @@ D435i default RGB camera info
 D435i default aligned depth image
 
 - Topic: `/camera/aligned_depth_to_color/image_raw`
-- Official realsense-ros default: `/camera/camera/aligned_depth_to_color/image_raw`
+- Current SpaceVLN real config: `/camera/camera/depth/image_rect_raw`
+- Official realsense-ros aligned-depth default: `/camera/camera/aligned_depth_to_color/image_raw`
 - Type: `sensor_msgs/Image`
 - Supported encodings:
   - `16UC1` in millimeters
@@ -35,7 +36,8 @@ If the actual RealSense driver publishes a different namespace, such as
 D435i default depth camera info
 
 - Topic: `/camera/aligned_depth_to_color/camera_info`
-- Official realsense-ros default: `/camera/camera/aligned_depth_to_color/camera_info`
+- Current SpaceVLN real config: `/camera/camera/depth/camera_info`
+- Official realsense-ros aligned-depth default: `/camera/camera/aligned_depth_to_color/camera_info`
 - Type: `sensor_msgs/CameraInfo`
 
 ### 1.2 Pose Input
@@ -109,8 +111,8 @@ To keep ROS2 integration lightweight, the runtime uses:
     "degrees": 0.0
   },
   "speed_hint": {
-    "linear_mps": 0.15,
-    "angular_deg_s": 45.0
+    "linear_mps": 0.5,
+    "angular_deg_s": 60.0
   },
   "timeout_s": 20.0,
   "stamp": 1713091200.123
@@ -130,7 +132,7 @@ To keep ROS2 integration lightweight, the runtime uses:
 The low-level controller should execute each command as a closed-loop motion:
 
 - `MOVE_FORWARD`: drive toward the requested distance, typically 0.5m to 1.5m from the VLM action output
-- `TURN_LEFT` / `TURN_RIGHT`: rotate toward the requested angle
+- `TURN_LEFT` / `TURN_RIGHT`: rotate toward the requested angle, 45 degrees in the current real action space
 - `LOOK_AROUND_360`: supported for manual low-level tests; SpaceVLN real lookaround uses eight stopped `TURN_LEFT` commands at 45 degrees each and samples after each turn settles
 - `STOP`: stop immediately and publish a terminal status
 
@@ -140,6 +142,16 @@ The reference executor publishes terminal success only after it has sent zero
 velocity and the odometry heading stays stable for a short completion window.
 SpaceVLN real capture happens after that terminal action status: once for each
 stopped lookaround turn, and once after a normal action command finishes.
+
+Current reference executor defaults:
+
+- control mode: `odom`
+- linear speed: `0.5 m/s`
+- angular speed: `60 deg/s`
+- forward early-stop tolerance: `0.10 m`
+- turn early-stop tolerance: `24 deg`
+- completion stability window: `0.20 s`
+- yaw stability tolerance: `0.50 deg`
 
 The default real RGB-D config leaves depth mapping enabled. The observation hub
 averages the synchronized depth frame with immediate neighboring depth frames

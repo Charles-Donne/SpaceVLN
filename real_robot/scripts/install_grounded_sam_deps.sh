@@ -22,6 +22,9 @@ printf '%s\n' 'numpy==1.24.4' > "${constraints}"
 echo "[GroundedSAM] python=$("${PYTHON_BIN}" -c 'import sys; print(sys.executable)')"
 echo "[GroundedSAM] GroundingDINO=${GROUNDINGDINO_DIR}"
 
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/setup_real_accel_env.sh"
+
 "${PYTHON_BIN}" -m pip install --user --no-cache-dir -c "${constraints}" \
   "numpy==1.24.4" \
   "transformers==4.37.2" \
@@ -56,3 +59,6 @@ print("torch", torch.__version__, "cuda", torch.cuda.is_available())
 print("cv2", cv2.__version__)
 print("GroundingDINO/SAM imports OK")
 PY
+
+echo "[GroundedSAM] Optional CUDA op build:"
+echo "  bash real_robot/scripts/build_groundingdino_cuda_ext.sh"

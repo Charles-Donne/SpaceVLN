@@ -1,194 +1,324 @@
 # SpaceVLN Real-Robot Runtime
 
-This directory contains a standalone real-robot integration layer for `SpaceVLN`.
-It is designed to reuse the existing controller, VLM stack, mapping, and artifact
-pipeline without changing the simulator workflow.
+This directory contains the real-robot integration layer for SpaceVLN. It reuses
+the existing controller, VLM stack, mapping, and artifact writer while keeping
+the simulator workflow untouched.
 
-## Scope
+## What Runs On The Robot
 
-- Upstream modules reused as-is:
-  - `NavigationAgentController`
-  - `GroundedSAM`
-  - `SemanticMapper`
-  - artifact saving and visualization
-- New real-robot integration modules:
-  - ROS2 subscribers and publishers
-  - RGB / depth / pose / IMU synchronization
-  - action command bridge
-  - ROS2 closed-loop `/cmd_vel` action executor
-  - real-robot `VectorEnv` adapter
+- `run_real_robot_lite.sh`: default real-robot launcher. It starts the
+  `/cmd_vel` executor, runs navigation, and disables GroundingDINO/SAM.
+- `run_real_robot_full.sh`: full perception launcher. It enables
+  GroundingDINO/SAM and requires the model/runtime setup below.
+- `run_real_robot_simple.sh`: shared implementation used by both launchers.
+- `run_cmd_vel_executor.py`: reference ROS2 executor that converts
+  `/spacevln/action_cmd` into closed-loop `/cmd_vel`.
+- `config/real_robot.yaml`: D435i, odometry, sync, motion, and mapping defaults.
+- `ros_interface.md`: ROS topic and JSON payload contract.
 
-## Layout
+Older explicit wrappers such as `run_real_navigation.sh`,
+`run_cmd_vel_executor.sh`, and `send_action_command.sh` are kept for debugging
+and manual bring-up. Normal evaluation should use `run_real_robot_lite.sh` or
+`run_real_robot_full.sh`.
 
-- `run_real_navigation.py` — real-robot Python entrypoint
-- `run_cmd_vel_executor.py` — ROS2 `/cmd_vel` executor entrypoint
-- `config/real_robot.yaml` — Intel RealSense D435i real-robot configuration
-- `spacevln_real/` — runtime implementation
-- `scripts/run_real_navigation.sh` — shell launcher
-- `scripts/run_cmd_vel_executor.sh` — shell launcher for the `/cmd_vel` executor
-- `ros_interface.md` — integration contract for the low-level robotics team
+## Deployment Layout
 
-## Design Goals
+The scripts assume this workspace shape on the robot:
 
-- Keep the simulator runtime untouched
-- Restrict controller changes to a minimal environment-injection hook
-- Expose a clean real-robot boundary at the repository root
-- Use standard English naming throughout the integration layer
+```text
+/ros2_orin/
+├── SpaceVLN/
+├── GroundingDINO/
+├── data/model/grounded_sam/
+└── result/
+```
 
-## Quick Start
+Expected model files:
 
-The real-robot runtime uses a real-only config path and does not require
-Habitat-Lab or Habitat-Sim. Keep those dependencies for simulator evaluation
-only.
+```text
+/ros2_orin/data/model/grounded_sam/
+├── GroundingDINO_SwinT_OGC.py
+├── groundingdino_swint_ogc.pth
+└── sam_vit_h_4b8939.pth
+```
 
-Prerequisites:
+The real runtime writes results to the workspace sibling result directory by
+default:
 
-1. ROS2 is installed and sourced
-2. RealSense D435i RGB, aligned depth, IMU, and camera info topics are available
-3. The low-level robot controller listens on `/spacevln/action_cmd`
-4. The low-level robot controller publishes status on `/spacevln/action_status`
-5. Python dependencies for `GroundingDINO` plus optional `SAM`, SpaceVLN mapping,
-   VLM API calls, and `rclpy` are available
+```text
+/ros2_orin/result/real_robot/
+```
 
-Environment boundary:
+During a run, the terminal prints the detailed log directory:
 
-- Required for full real navigation: ROS2/rclpy message packages, PyTorch,
-  OpenCV, NumPy, Pillow/image tooling, `yacs`, `requests`, `PyYAML`,
-  GroundingDINO and its normal detection helpers such as `supervision`, plus a
-  valid VLM API config.
-- Optional: Segment Anything / RepViT-SAM. If SAM is not installed, detection
-  can fall back to GroundingDINO boxes as coarse masks.
-- Not required by the real-robot runtime: Habitat-Lab, Habitat-Sim,
-  habitat-baselines, and `numpy-quaternion`. Those remain simulator/evaluation
-  dependencies.
+```text
+[RealRobot] logs=/ros2_orin/result/real_robot_console_logs/...
+```
 
-Simplest run, with the natural-language task filled directly in the command:
+## Prerequisites
+
+Required:
+
+- ROS2 Humble environment with `rclpy`
+- RealSense RGB/depth topics and `/odom`
+- Python dependencies used by SpaceVLN, including PyTorch, OpenCV, NumPy,
+  Pillow, PyYAML, and the VLM API dependencies
+- A valid `navigation_system/config/vlm/vlm_api_config.yaml`
+
+Not required for real-robot runtime:
+
+- Habitat-Lab
+- Habitat-Sim
+- habitat-baselines
+- `numpy-quaternion`
+
+Jetson AGX Orin notes:
+
+- JetPack 6.2 / L4T R36.4.x works with CUDA 12.6.
+- `numpy==1.24.4` is recommended with the current SciPy/PyTorch stack.
+- If GroundingDINO/SAM is run with `sudo -E`, the scripts automatically expose
+  `/usr/local/cuda/lib64` and PyTorch's `torch/lib` through
+  `setup_real_accel_env.sh`, so `libc10.so` does not need to be exported by hand.
+
+## Sensor Topics
+
+Defaults from `config/real_robot.yaml`:
+
+- RGB image: `/camera/camera/color/image_raw`
+- RGB camera info: `/camera/camera/color/camera_info`
+- Depth image: `/camera/camera/depth/image_rect_raw`
+- Depth camera info: `/camera/camera/depth/camera_info`
+- IMU: `/camera/camera/imu`
+- Odometry: `/odom`
+- Action command: `/spacevln/action_cmd`
+- Action status: `/spacevln/action_status`
+- Base velocity: `/cmd_vel`
+
+The RGB and depth images should both be `640x480`. RGB encodings `rgb8` and
+`bgr8` are supported. Depth encodings `16UC1` in millimeters and `32FC1` in
+meters are supported.
+
+Useful checks:
 
 ```bash
-cd SpaceVLN
+ros2 topic echo --once --field height /camera/camera/color/image_raw
+ros2 topic echo --once --field width /camera/camera/color/image_raw
+ros2 topic echo --once --field encoding /camera/camera/color/image_raw
+
+ros2 topic echo --once --field height /camera/camera/depth/image_rect_raw
+ros2 topic echo --once --field width /camera/camera/depth/image_rect_raw
+ros2 topic echo --once --field encoding /camera/camera/depth/image_rect_raw
+
+timeout 5s ros2 topic hz /odom
+```
+
+## Control Defaults
+
+The reference executor uses odometry feedback by default:
+
+- mode: `odom`
+- linear speed: `0.5 m/s`
+- angular speed: `60 deg/s`
+- forward early-stop tolerance: `0.10 m`
+- turn early-stop tolerance: `24 deg`
+- completion stability window: `0.20 s`
+- yaw stability tolerance: `0.50 deg`
+- subtask action limit: `7`
+
+Lookaround is stopped and sampled:
+
+- 8 views total
+- 45 degrees per turn
+- after each turn's terminal action status, the runtime captures one new RGB-D
+  snapshot
+- normal navigation actions capture once after the action finishes; no
+  intermediate frames are sampled during a long forward move or rotation
+
+## Run Lite Navigation
+
+Lite mode is the default for bring-up and normal runs without GroundingDINO/SAM:
+
+```bash
+cd /ros2_orin/SpaceVLN
+
 bash real_robot/scripts/run_real_robot_lite.sh \
-  "Move forward through the doorway and approach the table on the left."
+  "enter through the door ahead and stop at the table."
 ```
 
-The lightweight launcher disables GroundingDINO/SAM so the robot workflow can
-run in a minimal ROS2 + SpaceVLN/VLM environment.
+Terminal output is compact by default. Full logs still go to
+`/ros2_orin/result/real_robot_console_logs/...`.
 
-Full perception run:
+For full terminal output:
 
 ```bash
-cd SpaceVLN
-bash real_robot/scripts/run_real_robot_full.sh \
-  "Move forward through the doorway and approach the table on the left."
+REAL_CONSOLE=full bash real_robot/scripts/run_real_robot_lite.sh \
+  "enter through the door ahead and stop at the table."
 ```
 
-The full launcher requires GroundingDINO and SAM / RepViT-SAM. Set
-`SPACEVLN_REQUIRE_SAM=0` only if you want to allow a GroundingDINO-box-mask
-fallback.
+## Run Full Perception
 
-You can also edit `TASK_INSTRUCTION` at the top of
-`real_robot/scripts/run_real_robot_simple.sh`, or set `SPACEVLN_INSTRUCTION`.
-By default this simple launcher starts the reference `/cmd_vel` executor and
-then starts SpaceVLN.
-
-Equivalent explicit run:
+Install Python dependencies:
 
 ```bash
-cd SpaceVLN
-bash real_robot/scripts/run_real_navigation.sh \
-  --instruction "Move forward through the doorway and approach the table on the left." \
-  --real-config real_robot/config/real_robot.yaml
+cd /ros2_orin/SpaceVLN
+bash real_robot/scripts/install_grounded_sam_deps.sh
 ```
 
-Run the reference ROS2 action executor:
+On Jetson, install CUDA compilation pieces once if GroundingDINO `_C` needs to
+be built:
 
 ```bash
-cd SpaceVLN
-bash real_robot/scripts/run_cmd_vel_executor.sh \
+sudo apt install -y \
+  cuda-nvcc-12-6 \
+  cuda-cudart-dev-12-6 \
+  cuda-cccl-12-6 \
+  cuda-command-line-tools-12-6 \
+  cuda-libraries-dev-12-6 \
+  libcusparse-dev-12-6 \
+  libcublas-dev-12-6 \
+  libcusolver-dev-12-6 \
+  libcurand-dev-12-6 \
+  ninja-build
+
+sudo ln -sfn /usr/local/cuda-12.6 /usr/local/cuda
+```
+
+Build GroundingDINO's CUDA extension:
+
+```bash
+cd /ros2_orin/SpaceVLN
+sudo -E bash real_robot/scripts/build_groundingdino_cuda_ext.sh
+```
+
+The build script applies the small PyTorch 2.8 compatibility patch needed by
+the upstream GroundingDINO CUDA source and checks that `groundingdino._C`
+imports.
+
+Then run full perception:
+
+```bash
+cd /ros2_orin/SpaceVLN
+
+sudo -E bash real_robot/scripts/run_real_robot_full.sh \
+  "enter through the door ahead and stop at the table."
+```
+
+Use `sudo -E` until ordinary `rosuser` CUDA access is fixed. You can verify
+ordinary-user CUDA with:
+
+```bash
+python3 - <<'PY'
+import torch
+print(torch.cuda.is_available())
+print(torch.cuda.device_count())
+if torch.cuda.is_available():
+    print(torch.cuda.get_device_name(0))
+PY
+```
+
+## Test GroundingDINO/SAM On One Image
+
+Capture or reuse a saved RGB frame, then test one class:
+
+```bash
+cd /ros2_orin/SpaceVLN
+
+sudo -E env \
+MODEL_DIR=/ros2_orin/data/model/grounded_sam \
+GROUNDINGDINO_DIR=/ros2_orin/GroundingDINO \
+TEST_IMAGE=../result/real_robot/grounded_sam_tests/shelf_rgb.jpg \
+CLASSES="shelving unit" \
+BOX_THRESHOLD=0.25 \
+TEXT_THRESHOLD=0.20 \
+bash real_robot/scripts/test_grounded_sam.sh
+```
+
+The concise output includes the device and runtime, for example:
+
+```text
+device: cuda (Orin)
+dino_runtime: cuda_custom_ops
+boxes: 1
+```
+
+For open-vocabulary debugging only, use `CAPTION=...` instead of `CLASSES=...`.
+This may return many candidate boxes:
+
+```bash
+sudo -E env \
+MODEL_DIR=/ros2_orin/data/model/grounded_sam \
+GROUNDINGDINO_DIR=/ros2_orin/GroundingDINO \
+TEST_IMAGE=../result/real_robot/grounded_sam_tests/shelf_rgb.jpg \
+CAPTION="shelving unit . storage rack . rack . shelf . bookcase ." \
+BOX_THRESHOLD=0.08 \
+TEXT_THRESHOLD=0.08 \
+bash real_robot/scripts/test_grounded_sam.sh
+```
+
+`BOX_THRESHOLD` and `TEXT_THRESHOLD` are confidence thresholds, not object
+sizes. Lower values produce more boxes and more false positives.
+
+## Manual Action Tests
+
+Start the executor manually in one terminal:
+
+```bash
+cd /ros2_orin/SpaceVLN
+
+python3 -u real_robot/run_cmd_vel_executor.py \
   --cmd-vel-topic /cmd_vel \
   --odom-topic /odom \
   --control-mode odom \
-  --control-rate-hz 10 \
-  --position-tolerance-m 0.10 \
   --angle-tolerance-deg 24
 ```
 
-This executor subscribes to `/spacevln/action_cmd`, publishes base velocities on
-`/cmd_vel` at the configured control rate, and reports terminal results on
-`/spacevln/action_status`. By default it uses `/odom` as feedback. For an early
-bring-up without reliable odometry, run it with `--control-mode timed`; that
-publishes velocity for `target / speed` seconds and then sends zero velocity.
-
-Manual single-action tests:
+Watch status in another terminal:
 
 ```bash
-bash real_robot/scripts/send_action_command.sh MOVE_FORWARD --meters 0.5
-bash real_robot/scripts/send_action_command.sh TURN_LEFT --degrees 30
-bash real_robot/scripts/send_action_command.sh LOOK_AROUND_360
-bash real_robot/scripts/send_action_command.sh STOP
+ros2 topic echo /spacevln/action_status
 ```
 
-## Recommended Control Split
+Send a command:
 
-Use two ROS2 processes:
+```bash
+cd /ros2_orin/SpaceVLN
 
-1. The `SpaceVLN` real-robot runtime
-2. The `/cmd_vel` action executor
+python3 real_robot/spacevln_real/send_action_command.py \
+  TURN_LEFT --degrees 45 --timeout-s 20
+```
 
-The high-level runtime should keep producing discrete actions:
+## Mapping And Synchronization
 
-- `MOVE_FORWARD`
-- `TURN_LEFT`
-- `TURN_RIGHT`
-- `LOOK_AROUND_360`
-- `STOP`
+The observation hub pairs each RGB frame with the nearest depth frame, then uses
+the RGB-D midpoint timestamp to select the nearest odometry pose within
+`sync_tolerance_s`. The default tolerance is `0.75s`.
 
-For `MOVE_FORWARD`, the runtime passes the VLM-selected target distance as one
-continuous command, usually 0.5m to 1.5m. The executor should translate each
-action into a velocity sequence
-using:
+Mapping uses the real odometry delta between snapshots, not the nominal
+lookaround image angle. D435i projection defaults:
 
-- input: `/spacevln/action_cmd`
-- feedback: `/odom` in closed-loop mode
-- output: `/cmd_vel`
-- completion: `/spacevln/action_status`
+- RGB/depth HFOV: `87 deg`
+- camera height: `1.3 m`
+- camera pitch: `-15 deg`
+- min depth: `0.3 m`
+- max depth: `3.0 m`
 
-For SpaceVLN lookaround, the real runtime sends eight closed-loop `TURN_LEFT`
-commands at 45 degrees each. It waits for each turn to finish, lets the base
-report stable completion, then captures the next RGB-D observation before the
-following turn. Normal actions capture once after the one requested action
-finishes; the runtime does not sample intermediate frames during a long forward
-move or an automatic rotation command.
+Depth mapping is enabled by default. The real path averages the selected depth
+frame with immediate neighboring frames when available, and uses selective
+dynamic obstacle evidence so unknown cells do not vote.
 
-The real RGB-D adapter keeps depth mapping enabled by default. Each synchronized
-real snapshot averages the chosen depth frame with its immediate neighboring
-depth frames when the configured fusion window is available. Real obstacle
-fusion is selective: observed obstacle cells and explicitly observed free cells
-update bounded obstacle evidence, while unknown depth cells do not cast votes.
-The simulation map path keeps its existing fusion behavior unless a real runtime
-config enables this selective update.
+## Artifacts
 
-For deployment, final success is not judged online from `goal_reached` or
-`distance_to_goal_m`. The runtime ends the episode when the model/planner marks
-`global_task_finish=true`, sends `STOP`, and records that model-level finish in
-the final metrics.
+Per-step prompt/response/images are saved under:
 
-This is safer than sending one open-loop velocity pulse for a fixed duration.
+```text
+/ros2_orin/result/real_robot/<model_stack>/detail/...
+```
 
-## Default Topics
+The runtime also records a 1Hz raw RGB stream from the camera topic:
 
-Sensor topics from `real_robot/config/real_robot.yaml`:
+```text
+[REAL] rgb_stream_dir=...
+```
 
-- `/camera/camera/color/image_raw`
-- `/camera/camera/color/camera_info`
-- `/camera/camera/aligned_depth_to_color/image_raw`
-- `/camera/camera/aligned_depth_to_color/camera_info`
-- `/camera/camera/imu`
-- `/odom`
-
-Action topics:
-
-- `/spacevln/action_cmd`
-- `/spacevln/action_status`
-- `/cmd_vel` if you use the reference executor
-
-See `real_robot/ros_interface.md` for the full payload specification.
+The top-down simulator map is not available on the real robot; use the saved
+view images and RGB stream for visual debugging.
