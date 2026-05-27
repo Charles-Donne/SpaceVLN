@@ -1815,11 +1815,89 @@ def build_action_landmark_map_info(
     landmark_instances_world: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> Optional[str]:
     """Build the executor prompt's landmark summary from the selected action top-k list."""
-    _ = landmark_dist_map
-    _ = landmark_dist_map_multi
-    _ = landmark_instances_world
     if not step_landmark_entries:
         return None
+
+    landmark_dist_map = dict(landmark_dist_map or {})
+    landmark_dist_map_multi = dict(landmark_dist_map_multi or {})
+    landmark_instances_world = [dict(item) for item in (landmark_instances_world or []) if isinstance(item, dict)]
+
+    def _resolve_metrics(entry: Dict[str, Any]) -> Tuple[Optional[float], Optional[float]]:
+        distance_m = _maybe_float(entry.get("distance_m"))
+        angle_deg = _maybe_float(entry.get("angle_deg"))
+        if distance_m is not None and angle_deg is not None:
+            return distance_m, angle_deg
+
+        name = str(entry.get("name") or "").strip()
+        if not name:
+            return distance_m, angle_deg
+
+        instance_uid = _maybe_int(entry.get("instance_uid"))
+        display_id = _maybe_int(entry.get("display_id"))
+        instance_idx = _maybe_int(entry.get("instance_idx"))
+
+        if instance_uid is not None:
+            for inst in landmark_instances_world:
+                if _maybe_int(inst.get("instance_uid")) == instance_uid:
+                    if distance_m is None:
+                        distance_m = _maybe_float(inst.get("distance_m"))
+                    if angle_deg is None:
+                        angle_deg = _maybe_float(inst.get("angle_deg"))
+                    if distance_m is not None and angle_deg is not None:
+                        return distance_m, angle_deg
+                    break
+
+        rows = list(landmark_dist_map_multi.get(name, []) or [])
+        candidate_rows: List[Tuple[int, float, float]] = []
+        for idx, row in enumerate(rows):
+            if not isinstance(row, (tuple, list)) or len(row) < 2:
+                continue
+            row_dist = _maybe_float(row[0])
+            row_angle = _maybe_float(row[1])
+            if row_dist is None and row_angle is None:
+                continue
+            candidate_rows.append((
+                int(idx),
+                float(row_dist) if row_dist is not None else float("inf"),
+                float(row_angle) if row_angle is not None else 0.0,
+            ))
+            if instance_idx is not None and idx == int(instance_idx):
+                if distance_m is None:
+                    distance_m = row_dist
+                if angle_deg is None:
+                    angle_deg = row_angle
+        if distance_m is None or angle_deg is None:
+            if name in landmark_dist_map:
+                map_dist, map_angle = landmark_dist_map.get(name, (None, None))
+                if distance_m is None:
+                    distance_m = _maybe_float(map_dist)
+                if angle_deg is None:
+                    angle_deg = _maybe_float(map_angle)
+        if (distance_m is None or angle_deg is None) and candidate_rows:
+            candidate_rows.sort(key=lambda item: item[1])
+            best_idx, best_dist, best_angle = candidate_rows[0]
+            _ = best_idx
+            if distance_m is None and np.isfinite(best_dist):
+                distance_m = float(best_dist)
+            if angle_deg is None:
+                angle_deg = float(best_angle)
+
+        if (distance_m is None or angle_deg is None) and display_id is not None:
+            # Keep a final exact-match fallback for prompt entries that were
+            # already numbered in display order but came from a stale cache.
+            if instance_idx is None:
+                instance_idx = max(display_id - 1, 0)
+            if name in landmark_dist_map_multi:
+                rows = landmark_dist_map_multi.get(name, []) or []
+                if 0 <= int(instance_idx) < len(rows):
+                    row = rows[int(instance_idx)]
+                    if isinstance(row, (tuple, list)) and len(row) >= 2:
+                        if distance_m is None:
+                            distance_m = _maybe_float(row[0])
+                        if angle_deg is None:
+                            angle_deg = _maybe_float(row[1])
+
+        return distance_m, angle_deg
 
     ordered_entries = [dict(entry) for entry in step_landmark_entries]
     ordered_entries.sort(
@@ -1862,9 +1940,10 @@ def build_action_landmark_map_info(
     parts: List[str] = []
     for entry in selected_entries:
         name = entry.get("name")
-        distance_m = entry.get("distance_m")
-        angle_deg = entry.get("angle_deg")
-        if name is None or distance_m is None:
+        if name is None:
+            continue
+        distance_m, angle_deg = _resolve_metrics(entry)
+        if distance_m is None:
             continue
         try:
             cls_name = str(name)

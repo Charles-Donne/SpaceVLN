@@ -4395,7 +4395,17 @@ class NavigationAgentController(BaseNavigationController):
                     return 'complete'
 
                 if result['done']:
-                    print('[WARN] Episode done (Habitat)')
+                    info = dict((result or {}).get("info", {}) or {})
+                    action_status = dict(info.get("action_status", {}) or {})
+                    status_state = str(action_status.get("state") or "").strip()
+                    status_message = str(action_status.get("message") or "").strip()
+                    if action_status:
+                        print(
+                            "[WARN] Real-robot action ended the episode "
+                            f"(state={status_state or 'unknown'}, message={status_message or '-'})"
+                        )
+                    else:
+                        print('[WARN] Episode done by environment')
                     return 'complete'
 
                 auto_completed_subtask = self._check_post_action_landmark_autocomplete(action_phase)

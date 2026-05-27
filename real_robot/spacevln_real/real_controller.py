@@ -254,9 +254,21 @@ class RealNavigationAgentController(NavigationAgentController):
                     if path:
                         self._append_jsonl(path, payload)
 
+            status_suffix = ""
+            action_status = None
+            extra_info = payload.get("extra", {}).get("info", {}) if isinstance(payload.get("extra"), dict) else {}
+            if isinstance(extra_info, dict):
+                action_status = extra_info.get("action_status")
+            if action_status is None:
+                action_status = payload.get("metrics", {}).get("action_status") if isinstance(payload.get("metrics"), dict) else None
+            if isinstance(action_status, dict) and action_status:
+                status_suffix = " action_state=%s action_msg=%s" % (
+                    str(action_status.get("state") or "unknown"),
+                    str(action_status.get("message") or "-"),
+                )
             print(
-                "[REAL-LIVE] event=%s step=%s action=%s status=%s"
-                % (event, payload["step"], action or "-", paths.get("latest", "")),
+                "[REAL-LIVE] event=%s step=%s action=%s%s status=%s"
+                % (event, payload["step"], action or "-", status_suffix, paths.get("latest", "")),
                 flush=True,
             )
         except Exception as exc:

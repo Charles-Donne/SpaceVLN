@@ -192,9 +192,40 @@ def render_detection_bbox(owner,
         try:
             if value is None:
                 return None
-            return float(value)
+            parsed = float(value)
+            return parsed if np.isfinite(parsed) else None
         except (TypeError, ValueError):
             return None
+
+    def _map_metrics_for_label(
+        cls_name: str,
+        instance_idx: Optional[int] = None,
+    ) -> Tuple[Optional[float], Optional[float]]:
+        def _pair_metrics(pair: Any) -> Tuple[Optional[float], Optional[float]]:
+            if not isinstance(pair, (tuple, list)) or len(pair) < 2:
+                return None, None
+            return _float_or_none(pair[0]), _float_or_none(pair[1])
+
+        exact_name = str(cls_name or "")
+        rows = list(landmark_dist_map_multi.get(exact_name, []) or [])
+        if instance_idx is not None and 0 <= int(instance_idx) < len(rows):
+            dist_m, angle_deg = _pair_metrics(rows[int(instance_idx)])
+            if dist_m is not None or angle_deg is not None:
+                return dist_m, angle_deg
+
+        dist_m, angle_deg = _pair_metrics(landmark_dist_map.get(exact_name))
+        if dist_m is not None or angle_deg is not None:
+            return dist_m, angle_deg
+
+        valid_rows: List[Tuple[float, Optional[float]]] = []
+        for row in rows:
+            row_dist_m, row_angle_deg = _pair_metrics(row)
+            if row_dist_m is not None:
+                valid_rows.append((float(row_dist_m), row_angle_deg))
+        if valid_rows:
+            valid_rows.sort(key=lambda item: item[0])
+            return valid_rows[0][0], valid_rows[0][1]
+        return None, None
 
     def _entry_display_id(entry: Optional[Dict[str, Any]], default: Optional[int] = None) -> Optional[int]:
         if not entry:
@@ -497,8 +528,20 @@ def render_detection_bbox(owner,
                     display_idx = None
 
             depth_dist_m, depth_angle_deg = _candidate_depth_distance_and_angle(candidate)
-            shown_dist_m = depth_dist_m
-            shown_angle_deg = depth_angle_deg
+            map_dist_m = _float_or_none(matched_inst.get("distance_m"))
+            if map_dist_m is None:
+                map_dist_m = _float_or_none(selected_inst.get("distance_m"))
+            map_angle_deg = _float_or_none(matched_inst.get("angle_deg"))
+            if map_angle_deg is None:
+                map_angle_deg = _float_or_none(selected_inst.get("angle_deg"))
+            if map_dist_m is None or map_angle_deg is None:
+                fallback_dist_m, fallback_angle_deg = _map_metrics_for_label(label_name, display_idx)
+                if map_dist_m is None:
+                    map_dist_m = fallback_dist_m
+                if map_angle_deg is None:
+                    map_angle_deg = fallback_angle_deg
+            shown_dist_m = depth_dist_m if depth_dist_m is not None else map_dist_m
+            shown_angle_deg = depth_angle_deg if depth_angle_deg is not None else map_angle_deg
 
             same_cls_total = int(world_class_totals.get(label_name, len(landmark_dist_map_multi.get(label_name, [])) or 1))
             display_id = _entry_display_id(selected_inst, default=_entry_display_id(matched_inst))
@@ -514,7 +557,10 @@ def render_detection_bbox(owner,
                 if fallback_angle_deg is None:
                     fallback_angle_deg = owner._candidate_angle_deg(candidate, hfov)
                 shown_angle_deg = fallback_angle_deg
-                row1 = f"{inst_prefix}{format_relative_direction(fallback_angle_deg)}"
+                if shown_dist_m is not None:
+                    row1 = f"{inst_prefix}{shown_dist_m:.1f}m {format_relative_direction(fallback_angle_deg)}"
+                else:
+                    row1 = f"{inst_prefix}{format_relative_direction(fallback_angle_deg)}"
 
             detected_landmarks.append((label_name, confidence))
             matched_in_view.add(label_name)
@@ -530,12 +576,8 @@ def render_detection_bbox(owner,
                 visible_entry["display_id"] = int(display_id)
             if shown_dist_m is not None:
                 visible_entry["distance_m"] = float(shown_dist_m)
-            else:
-                visible_entry.pop("distance_m", None)
             if shown_angle_deg is not None:
                 visible_entry["angle_deg"] = float(shown_angle_deg)
-            else:
-                visible_entry.pop("angle_deg", None)
             visible_entry["class_total"] = same_cls_total
             visible_entries_meta.append(visible_entry)
             selected_topk_entries.append(visible_entry)
@@ -583,8 +625,9 @@ def render_detection_bbox(owner,
             display_id = int(selection_rank) + 1
             inst_prefix = f"#{display_id} "
             depth_dist_m, depth_angle_deg = _candidate_depth_distance_and_angle(candidate)
-            shown_dist_m = depth_dist_m
-            shown_angle_deg = depth_angle_deg
+            map_dist_m, map_angle_deg = _map_metrics_for_label(label_name, class_instance_idx)
+            shown_dist_m = depth_dist_m if depth_dist_m is not None else map_dist_m
+            shown_angle_deg = depth_angle_deg if depth_angle_deg is not None else map_angle_deg
             if shown_dist_m is not None and shown_angle_deg is not None:
                 row1 = f"{inst_prefix}{shown_dist_m:.1f}m {format_relative_direction(shown_angle_deg)}"
             else:
@@ -594,7 +637,10 @@ def render_detection_bbox(owner,
                 if fallback_angle_deg is None:
                     fallback_angle_deg = owner._candidate_angle_deg(candidate, hfov)
                 shown_angle_deg = fallback_angle_deg
-                row1 = f"{inst_prefix}{format_relative_direction(fallback_angle_deg)}"
+                if shown_dist_m is not None:
+                    row1 = f"{inst_prefix}{shown_dist_m:.1f}m {format_relative_direction(fallback_angle_deg)}"
+                else:
+                    row1 = f"{inst_prefix}{format_relative_direction(fallback_angle_deg)}"
 
             visible_entry = {
                 "name": label_name,
