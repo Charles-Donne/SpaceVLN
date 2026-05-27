@@ -219,6 +219,21 @@ def build_landmark_strip_lines(
     landmark_dist_map_multi: Optional[Dict[str, List[Tuple[float, float]]]] = None,
     waypoint_entries: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> List[LandmarkStripLine]:
+    def _finite_float(value: Any, default: float = float("inf")) -> float:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return float(default)
+        return float(parsed) if np.isfinite(parsed) else float(default)
+
+    def _distance_text(value: Any) -> str:
+        parsed = _finite_float(value)
+        return f"{parsed:.1f}m" if np.isfinite(parsed) else "unknown"
+
+    def _direction_text(value: Any) -> str:
+        parsed = _finite_float(value, default=0.0)
+        return format_relative_direction(parsed) if np.isfinite(parsed) else "Unknown"
+
     def _short_text(text: str, max_len: int) -> str:
         text = str(text or "").strip()
         if len(text) <= max_len:
@@ -244,9 +259,10 @@ def build_landmark_strip_lines(
         )
 
     for entry in visible_entries_meta:
-        cls_name = str(entry["name"])
-        distance_m = float(entry["distance_m"])
-        angle_deg = float(entry["angle_deg"])
+        cls_name = str(entry.get("name") or "Unknown")
+        distance_m = _finite_float(entry.get("distance_m"))
+        angle_deg = _finite_float(entry.get("angle_deg"), default=0.0)
+        confidence = _finite_float(entry.get("confidence"), default=0.0)
         selection_rank = entry.get("selection_rank")
         display_name = cls_name
         display_id = entry.get("display_id")
@@ -261,20 +277,20 @@ def build_landmark_strip_lines(
         sort_key = (
             float(selection_rank) if selection_rank is not None else float(distance_m),
             0.0 if selection_rank is not None else 0.0,
-            0.0 if selection_rank is not None else -float(entry.get("confidence", 0.0)),
+            0.0 if selection_rank is not None else -float(confidence),
         )
         line_entries.append((
             sort_key,
             LandmarkStripLine(
                 distance_m=float(distance_m),
-                confidence=float(entry.get('confidence', 0.0)),
+                confidence=float(confidence),
                 priority=0,
                 sort_key=sort_key,
                 segments=(
                     LandmarkStripSegment(f"{display_prefix}{display_name}{suffix}", name_color),
-                    LandmarkStripSegment(f" {distance_m:.1f}m", value_color),
-                    LandmarkStripSegment(f" {format_relative_direction(angle_deg)}", value_color),
-                    LandmarkStripSegment(f" conf: {float(entry.get('confidence', 0.0)):.2f}", value_color),
+                    LandmarkStripSegment(f" {_distance_text(distance_m)}", value_color),
+                    LandmarkStripSegment(f" {_direction_text(angle_deg)}", value_color),
+                    LandmarkStripSegment(f" conf: {confidence:.2f}", value_color),
                 ),
             ),
         ))
@@ -289,11 +305,11 @@ def build_landmark_strip_lines(
         )
 
     for item in offscreen_items:
-        cls_name = str(item["name"])
+        cls_name = str(item.get("name") or "Unknown")
         inst_idx = int(item.get("instance_idx", 0) or 0)
-        distance_m = float(item["distance_m"])
-        angle_deg = float(item["angle_deg"])
-        confidence = float(item.get("confidence", 0.0))
+        distance_m = _finite_float(item.get("distance_m"))
+        angle_deg = _finite_float(item.get("angle_deg"), default=0.0)
+        confidence = _finite_float(item.get("confidence"), default=0.0)
         selection_rank = item.get("selection_rank")
         display_name = cls_name
         display_id = item.get("display_id")
@@ -319,8 +335,8 @@ def build_landmark_strip_lines(
                 segments=(
                     LandmarkStripSegment("mem ", status_color),
                     LandmarkStripSegment(f"{display_prefix}{display_name}{suffix}", name_color),
-                    LandmarkStripSegment(f" {float(distance_m):.1f}m", value_color),
-                    LandmarkStripSegment(f" {format_relative_direction(float(angle_deg))}", value_color),
+                    LandmarkStripSegment(f" {_distance_text(distance_m)}", value_color),
+                    LandmarkStripSegment(f" {_direction_text(angle_deg)}", value_color),
                     LandmarkStripSegment(f" conf: {confidence:.2f}", value_color),
                 ),
             ),
@@ -338,8 +354,8 @@ def build_landmark_strip_lines(
         waypoint_label = waypoint_label.replace("【", "[").replace("】", "]")
         waypoint_label = re.sub(r"\[\s*([^\[\]]+?)\s*\]", r"\1", waypoint_label)
         waypoint_label = re.sub(r"\s+", " ", waypoint_label).strip() or "Unknown"
-        distance_m = float(entry.get("distance_m", 1e9))
-        angle_deg = float(entry.get("relative_bearing_deg", entry.get("angle_deg", 0.0)))
+        distance_m = _finite_float(entry.get("distance_m"), default=1e9)
+        angle_deg = _finite_float(entry.get("relative_bearing_deg", entry.get("angle_deg", 0.0)), default=0.0)
         note_parts: List[str] = []
         if bool(entry.get("is_last_visited")) and not bool(entry.get("is_task_initial_position")):
             note_parts.append("LAST POSITION")
@@ -357,8 +373,8 @@ def build_landmark_strip_lines(
                 segments=(
                     LandmarkStripSegment("spatial waypoint: ", status_color),
                     LandmarkStripSegment(_short_text(waypoint_label, 34), value_color),
-                    LandmarkStripSegment(f"  {distance_m:.1f}m", value_color),
-                    LandmarkStripSegment(f"  {format_relative_direction(angle_deg)}", value_color),
+                    LandmarkStripSegment(f"  {_distance_text(distance_m)}", value_color),
+                    LandmarkStripSegment(f"  {_direction_text(angle_deg)}", value_color),
                     LandmarkStripSegment(note, status_color),
                 ),
             ),
