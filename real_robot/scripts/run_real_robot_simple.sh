@@ -52,6 +52,9 @@ export SPACEVLN_LOOKAROUND_STEP_DEG="${SPACEVLN_LOOKAROUND_STEP_DEG:-45}"
 if [[ -n "${SPACEVLN_ROS_SETUP:-}" && -f "${SPACEVLN_ROS_SETUP}" ]]; then
   # shellcheck disable=SC1090
   source "${SPACEVLN_ROS_SETUP}"
+elif [[ -f /opt/ros/humble/setup.bash ]]; then
+  # shellcheck disable=SC1091
+  source /opt/ros/humble/setup.bash
 fi
 
 # shellcheck disable=SC1091
@@ -151,6 +154,7 @@ if [[ "${START_EXECUTOR}" == "1" ]]; then
     echo "[RealRobot] cmd_vel executor exited before navigation started" >&2
     if [[ -f "${EXECUTOR_LOG}" ]]; then
       echo "[RealRobot] executor log=${EXECUTOR_LOG}" >&2
+      tail -n 80 "${EXECUTOR_LOG}" >&2 || true
     fi
     wait "${EXECUTOR_PID}" || true
     exit 1
