@@ -205,18 +205,33 @@ class Ros2Runtime:
         self._executor = MultiThreadedExecutor(num_threads=4)
         self._executor.add_node(self._node)
 
-        qos_sensor = QoSProfile(
+        qos_best_effort = QoSProfile(
             depth=10,
             history=HistoryPolicy.KEEP_LAST,
             reliability=ReliabilityPolicy.BEST_EFFORT,
         )
-        qos_reliable_camera = QoSProfile(
+        qos_reliable = QoSProfile(
+            depth=10,
+            history=HistoryPolicy.KEEP_LAST,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
+        )
+        qos_reliable_transient = QoSProfile(
             depth=10,
             history=HistoryPolicy.KEEP_LAST,
             reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
         )
         qos_control = QoSProfile(depth=20)
+        qos_camera_profiles = (
+            qos_best_effort,
+            qos_reliable,
+            qos_reliable_transient,
+        )
+        qos_pose_profiles = (
+            qos_best_effort,
+            qos_reliable,
+        )
 
         def subscribe(message_type, topic, callback, qos_profile):
             subscription = self._node.create_subscription(
@@ -227,6 +242,10 @@ class Ros2Runtime:
             )
             self._subscriptions.append(subscription)
             return subscription
+
+        def subscribe_many(message_type, topic, callback, qos_profiles):
+            for qos_profile in qos_profiles:
+                subscribe(message_type, topic, callback, qos_profile)
 
         self._action_pub = self._node.create_publisher(
             String,
@@ -250,25 +269,58 @@ class Ros2Runtime:
         )
 
         if str(self.config.topics.rgb or "").strip():
-            subscribe(Image, self.config.topics.rgb, self.observation_hub.on_rgb, qos_sensor)
-            subscribe(Image, self.config.topics.rgb, self.observation_hub.on_rgb, qos_reliable_camera)
+            subscribe_many(
+                Image,
+                self.config.topics.rgb,
+                self.observation_hub.on_rgb,
+                qos_camera_profiles,
+            )
         if str(self.config.topics.depth or "").strip():
-            subscribe(Image, self.config.topics.depth, self.observation_hub.on_depth, qos_sensor)
-            subscribe(Image, self.config.topics.depth, self.observation_hub.on_depth, qos_reliable_camera)
+            subscribe_many(
+                Image,
+                self.config.topics.depth,
+                self.observation_hub.on_depth,
+                qos_camera_profiles,
+            )
         if str(self.config.topics.rgb_camera_info or "").strip():
-            subscribe(CameraInfo, self.config.topics.rgb_camera_info, self.observation_hub.on_rgb_camera_info, qos_reliable_camera)
+            subscribe_many(
+                CameraInfo,
+                self.config.topics.rgb_camera_info,
+                self.observation_hub.on_rgb_camera_info,
+                qos_camera_profiles,
+            )
         if str(self.config.topics.depth_camera_info or "").strip():
-            subscribe(CameraInfo, self.config.topics.depth_camera_info, self.observation_hub.on_depth_camera_info, qos_reliable_camera)
+            subscribe_many(
+                CameraInfo,
+                self.config.topics.depth_camera_info,
+                self.observation_hub.on_depth_camera_info,
+                qos_camera_profiles,
+            )
         if str(self.config.topics.imu or "").strip():
-            subscribe(Imu, self.config.topics.imu, self.observation_hub.on_imu, qos_sensor)
+            subscribe_many(
+                Imu,
+                self.config.topics.imu,
+                self.observation_hub.on_imu,
+                qos_pose_profiles,
+            )
 
         pose_source = str(self.config.pose_source or "odometry").strip().lower()
         if pose_source in {"pose", "pose_stamped"}:
             if not str(self.config.topics.pose or "").strip():
                 raise ValueError("pose_source=pose_stamped requires topics.pose")
-            subscribe(PoseStamped, self.config.topics.pose, self.observation_hub.on_pose, qos_sensor)
+            subscribe_many(
+                PoseStamped,
+                self.config.topics.pose,
+                self.observation_hub.on_pose,
+                qos_pose_profiles,
+            )
         else:
-            subscribe(Odometry, self.config.topics.odom, self.observation_hub.on_odom, qos_sensor)
+            subscribe_many(
+                Odometry,
+                self.config.topics.odom,
+                self.observation_hub.on_odom,
+                qos_pose_profiles,
+            )
 
         if str(self.config.topics.action_status or "").strip():
             subscribe(String, self.config.topics.action_status, self.command_bridge.on_action_status, qos_control)
