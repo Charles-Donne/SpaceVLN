@@ -24,7 +24,7 @@ ODOM_TOPIC="${ODOM_TOPIC:-/odom}"
 
 REAL_CONFIG="${REAL_CONFIG:-real_robot/config/real_robot.yaml}"
 RUNTIME="${RUNTIME:-context_cache}"
-MAX_SUBTASK_STEPS="${MAX_SUBTASK_STEPS:-7}"
+MAX_SUBTASK_STEPS="${MAX_SUBTASK_STEPS:-5}"
 MAX_STEPS="${MAX_STEPS:-}"
 RESULTS_DIR="${RESULTS_DIR:-}"
 VLM_API_CONFIG="${VLM_API_CONFIG:-}"
@@ -211,6 +211,20 @@ else
   python3 -u "${REAL_DIR}/run_real_navigation.py" "${NAV_ARGS[@]}" 2>&1 \
     | tee "${NAVIGATION_LOG}" \
     | awk '
+      /^Traceback/ {
+        in_traceback = 1;
+        print;
+        fflush();
+        next;
+      }
+      in_traceback {
+        print;
+        fflush();
+        if ($0 ~ /^[A-Za-z_][A-Za-z0-9_]*(Error|Exception|Warning|Interrupt|Exit):/) {
+          in_traceback = 0;
+        }
+        next;
+      }
       /^\[REAL\]/ ||
       /^\[REAL-LIVE\]/ ||
       /^\[ERR\]/ ||
@@ -218,7 +232,6 @@ else
       /^\[LLM\] Planning/ ||
       /^Episode [0-9]+/ ||
       /^Instruction:/ ||
-      /^Traceback/ ||
       /^[A-Za-z_][A-Za-z0-9_]*(Error|Exception):/ {
         print;
         fflush();

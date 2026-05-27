@@ -1116,18 +1116,19 @@ class NavigationAgentController(BaseNavigationController):
         if auto_completed_subtask is not None:
             self._record_previous_subtask_autocomplete_landmark(auto_completed_subtask)
             landmark_kind = "opening-like" if auto_completed_subtask.get("is_opening_like") else "solid"
-            distance_m = float(auto_completed_subtask.get("distance_m", 0.0) or 0.0)
+            distance_m = self._safe_float(auto_completed_subtask.get("distance_m"))
             threshold_m = float(
                 auto_completed_subtask.get(
                     "stop_distance_m",
                     self.ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M,
                 )
             )
+            distance_text = f"{distance_m:.2f}m" if distance_m is not None else "Unknown distance"
             response = self._build_controller_forced_action_response(
                 action_name="STOP",
                 reasoning=(
                     f"The destination landmark {auto_completed_subtask['name']} is already within "
-                    f"{distance_m:.2f}m, which satisfies the auto-stop threshold {threshold_m:.2f}m, "
+                    f"{distance_text}, which satisfies the auto-stop threshold {threshold_m:.2f}m, "
                     "so stop instead of forcing another obstacle-recovery move."
                 ),
             )
@@ -3920,10 +3921,12 @@ class NavigationAgentController(BaseNavigationController):
         landmark_source = "vis" if str(auto_completed_subtask.get("source", "mem") or "mem") == "vis" else "mem"
         landmark_display_id = self._safe_int(auto_completed_subtask.get("display_id"))
         landmark_id_text = f" #{landmark_display_id}" if landmark_display_id is not None and landmark_display_id > 0 else ""
+        distance_m = self._safe_float(auto_completed_subtask.get("distance_m"))
+        distance_text = f"{distance_m:.2f}m" if distance_m is not None else "Unknown distance"
         print(
             "[AutoSubtaskComplete] "
             f"{landmark_source} {auto_completed_subtask['name']}{landmark_id_text} ({landmark_kind}) reached within "
-            f"{auto_completed_subtask['distance_m']:.2f}m "
+            f"{distance_text} "
             f"(threshold {float(auto_completed_subtask.get('stop_distance_m', self.ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M)):.2f}m) "
             f"on action step {self.current_step}; "
             "return control to the thinking controller."
@@ -4459,9 +4462,11 @@ class NavigationAgentController(BaseNavigationController):
 
             if auto_completed_subtask is not None:
                 landmark_kind = 'opening-like' if auto_completed_subtask.get('is_opening_like') else 'solid'
+                distance_m = self._safe_float(auto_completed_subtask.get('distance_m'))
+                distance_text = f"{distance_m:.2f}m" if distance_m is not None else "Unknown distance"
                 self._append_progress_note(
                     f"had reached {auto_completed_subtask['name']} ({landmark_kind}) within "
-                    f"{auto_completed_subtask['distance_m']:.2f}m "
+                    f"{distance_text} "
                     f"(auto-stop threshold {float(auto_completed_subtask.get('stop_distance_m', self.ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M)):.2f}m), "
                     'so ended the current subtask and triggered replan'
                 )

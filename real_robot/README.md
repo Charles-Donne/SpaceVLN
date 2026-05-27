@@ -125,7 +125,7 @@ The reference executor uses odometry feedback by default:
 - turn early-stop tolerance: `24 deg`
 - completion stability window: `0.20 s`
 - yaw stability tolerance: `0.50 deg`
-- subtask action limit: `7`
+- subtask action limit: `5`
 
 Lookaround is stopped and sampled:
 
@@ -246,6 +246,8 @@ device: cuda (Orin)
 dino_runtime: cuda_custom_ops
 boxes: 1
 ```
+
+The annotated image and default log are written beside `TEST_IMAGE`.
 
 For open-vocabulary debugging only, use `CAPTION=...` instead of `CLASSES=...`.
 This may return many candidate boxes:
