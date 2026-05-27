@@ -36,6 +36,21 @@ SPACEVLN_DIR="$(cd "${REAL_DIR}/.." && pwd)"
 WORKSPACE_DIR="$(cd "${SPACEVLN_DIR}/.." && pwd)"
 GROUNDINGDINO_DIR="${GROUNDINGDINO_DIR:-${WORKSPACE_DIR}/GroundingDINO}"
 
+source_setup_bash_safely() {
+  local setup_file="$1"
+  [[ -f "${setup_file}" ]] || return 0
+  local had_nounset=0
+  case $- in
+    *u*) had_nounset=1 ;;
+  esac
+  set +u
+  # shellcheck disable=SC1090
+  source "${setup_file}"
+  if [[ "${had_nounset}" -eq 1 ]]; then
+    set -u
+  fi
+}
+
 # Real-robot runs always default to the workspace-level sibling result dir:
 #   <workspace>/SpaceVLN
 #   <workspace>/result/real_robot/...
@@ -49,12 +64,10 @@ export SPACEVLN_ALLOW_GENERIC_WAYPOINT_LABELS="${SPACEVLN_ALLOW_GENERIC_WAYPOINT
 export SPACEVLN_LOOKAROUND_VIEW_COUNT="${SPACEVLN_LOOKAROUND_VIEW_COUNT:-8}"
 export SPACEVLN_LOOKAROUND_STEP_DEG="${SPACEVLN_LOOKAROUND_STEP_DEG:-45}"
 
-if [[ -n "${SPACEVLN_ROS_SETUP:-}" && -f "${SPACEVLN_ROS_SETUP}" ]]; then
-  # shellcheck disable=SC1090
-  source "${SPACEVLN_ROS_SETUP}"
+if [[ -n "${SPACEVLN_ROS_SETUP:-}" ]]; then
+  source_setup_bash_safely "${SPACEVLN_ROS_SETUP}"
 elif [[ -f /opt/ros/humble/setup.bash ]]; then
-  # shellcheck disable=SC1091
-  source /opt/ros/humble/setup.bash
+  source_setup_bash_safely /opt/ros/humble/setup.bash
 fi
 
 # shellcheck disable=SC1091
