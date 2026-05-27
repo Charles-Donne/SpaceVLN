@@ -655,7 +655,10 @@ class ThinkingViewRenderer:
 
         for angle in assignments:
             assignments[angle].sort(
-                key=lambda item: (float(item["distance_m"]), int(item["id"]))
+                key=lambda item: (
+                    cls._distance_sort_value(item.get("distance_m")),
+                    int(item.get("id", 0) or 0),
+                )
             )
         return assignments
 
