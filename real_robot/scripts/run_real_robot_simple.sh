@@ -27,6 +27,7 @@ REAL_CONFIG="${REAL_CONFIG:-real_robot/config/real_robot.yaml}"
 RUNTIME="${RUNTIME:-context_cache}"
 MAX_SUBTASK_STEPS="${MAX_SUBTASK_STEPS:-5}"
 MAX_STEPS="${MAX_STEPS:-}"
+EPISODE_ID="${EPISODE_ID:-}"
 RESULTS_DIR="${RESULTS_DIR:-}"
 VLM_API_CONFIG="${VLM_API_CONFIG:-}"
 REAL_CONSOLE="${REAL_CONSOLE:-compact}"
@@ -211,6 +212,9 @@ NAV_ARGS=(
 
 if [[ -n "${MAX_STEPS}" ]]; then
   NAV_ARGS+=(--max-steps "${MAX_STEPS}")
+fi
+if [[ -n "${EPISODE_ID}" ]]; then
+  NAV_ARGS+=(--episode-id "${EPISODE_ID}")
 fi
 if [[ -n "${RESULTS_DIR}" && "${SPACEVLN_ALLOW_REAL_RESULTS_DIR_OVERRIDE:-0}" == "1" ]]; then
   NAV_ARGS+=(--results-dir "${RESULTS_DIR}")

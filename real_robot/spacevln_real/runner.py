@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import uuid
 from datetime import datetime
@@ -48,12 +49,93 @@ def _resolve_instruction(args: argparse.Namespace) -> str:
     return text
 
 
+_EPISODE_ARTIFACT_RE = re.compile(r"^episode_(\d+)(?:\.json)?$")
+
+
+def _safe_episode_id(value) -> int | None:
+    try:
+        episode_id = int(value)
+    except (TypeError, ValueError):
+        return None
+    if episode_id < 0:
+        return None
+    return episode_id
+
+
+def _episode_id_from_artifact_name(path: str) -> int | None:
+    name = os.path.basename(str(path or "").rstrip(os.sep))
+    match = _EPISODE_ARTIFACT_RE.match(name)
+    if not match:
+        return None
+    return _safe_episode_id(match.group(1))
+
+
+def _collect_used_episode_ids(results_dir: str) -> set[int]:
+    used_ids: set[int] = set()
+    results_dir = str(results_dir or "").strip()
+    if not results_dir:
+        return used_ids
+
+    for section in ("log", "detail"):
+        root = os.path.join(results_dir, section)
+        if not os.path.isdir(root):
+            continue
+        for current_root, dirnames, filenames in os.walk(root):
+            dirnames.sort()
+            for dirname in dirnames:
+                episode_id = _episode_id_from_artifact_name(dirname)
+                if episode_id is not None:
+                    used_ids.add(episode_id)
+            for filename in sorted(filenames):
+                episode_id = _episode_id_from_artifact_name(filename)
+                if episode_id is not None:
+                    used_ids.add(episode_id)
+
+    session_dir = os.path.join(results_dir, "real_sessions")
+    if os.path.isdir(session_dir):
+        for filename in sorted(os.listdir(session_dir)):
+            if not filename.endswith(".json"):
+                continue
+            path = os.path.join(session_dir, filename)
+            try:
+                with open(path, "r", encoding="utf-8") as handle:
+                    payload = json.load(handle)
+            except Exception:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            for value in (
+                payload.get("episode_id"),
+                (payload.get("result") or {}).get("episode_id")
+                if isinstance(payload.get("result"), dict)
+                else None,
+            ):
+                episode_id = _safe_episode_id(value)
+                if episode_id is not None:
+                    used_ids.add(episode_id)
+    return used_ids
+
+
+def _resolve_real_episode_id(requested_episode_id, results_dir: str) -> int:
+    explicit_episode_id = _safe_episode_id(requested_episode_id)
+    if requested_episode_id is not None:
+        if explicit_episode_id is None:
+            raise ValueError(f"--episode-id must be a non-negative integer, got {requested_episode_id!r}")
+        return explicit_episode_id
+
+    used_ids = _collect_used_episode_ids(results_dir)
+    if not used_ids:
+        return 0
+    return max(used_ids) + 1
+
+
 def _write_real_session_status(
     *,
     results_dir: str,
     session_id: str,
     state: str,
     instruction: str,
+    episode_id: int | None = None,
     result: dict = None,
     error: str = "",
 ) -> str:
@@ -65,6 +147,8 @@ def _write_real_session_status(
         "timestamp": datetime.now().isoformat(),
         "results_dir": str(results_dir),
     }
+    if episode_id is not None:
+        payload["episode_id"] = int(episode_id)
     if result is not None:
         payload["result"] = dict(result)
     if error:
@@ -148,8 +232,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--episode-id",
         type=int,
-        default=0,
-        help="Episode id used for result files",
+        default=None,
+        help="Episode id used for result files; omitted means auto-increment",
     )
     parser.add_argument(
         "--session-id",
@@ -191,14 +275,17 @@ def main() -> int:
         runtime_profile=runtime_profile,
     )
     os.makedirs(config.PATHS.RESULTS_DIR, exist_ok=True)
+    episode_id = _resolve_real_episode_id(args.episode_id, config.PATHS.RESULTS_DIR)
     session_id = str(args.session_id or uuid.uuid4())
     status_path = _write_real_session_status(
         results_dir=config.PATHS.RESULTS_DIR,
         session_id=session_id,
         state="starting",
         instruction=instruction_text,
+        episode_id=episode_id,
     )
     print(f"[REAL] results_dir={config.PATHS.RESULTS_DIR}", flush=True)
+    print(f"[REAL] episode_id={episode_id}", flush=True)
     print(f"[REAL] live_status={status_path}", flush=True)
 
     observation_hub = ObservationHub(real_config)
@@ -217,6 +304,7 @@ def main() -> int:
         session_id=session_id,
         state="running",
         instruction=instruction_text,
+        episode_id=episode_id,
     )
     env = RealRobotVectorEnv(
         real_config,
@@ -225,7 +313,7 @@ def main() -> int:
         ros_runtime,
         instruction_text=instruction_text,
         session_id=session_id,
-        episode_id=args.episode_id,
+        episode_id=episode_id,
         success_distance_m=float(getattr(config.EVAL, "SUCCESS_DISTANCE_M", 3.0)),
     )
 
@@ -241,7 +329,7 @@ def main() -> int:
             session_id=session_id,
             instruction=instruction_text,
         )
-        controller.reset_episode(episode_id=args.episode_id)
+        controller.reset_episode(episode_id=episode_id)
         result = controller.run_navigation(
             max_subtask_steps=int(args.max_subtask_steps or 5),
         )
@@ -256,6 +344,7 @@ def main() -> int:
             session_id=session_id,
             state="finished",
             instruction=instruction_text,
+            episode_id=episode_id,
             result=result,
         )
         print(
@@ -282,6 +371,7 @@ def main() -> int:
             session_id=session_id,
             state="failed",
             instruction=instruction_text,
+            episode_id=episode_id,
             error=repr(exc),
         )
         raise

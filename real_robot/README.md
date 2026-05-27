@@ -55,6 +55,22 @@ default:
 /ros2_orin/result/real_robot/
 ```
 
+Each launcher run automatically chooses the next unused episode id under that
+results directory, so separate instructions are saved as `episode_0`,
+`episode_1`, `episode_2`, and so on instead of overwriting `episode_0`.
+The selected id is printed at startup:
+
+```text
+[REAL] episode_id=3
+```
+
+To reproduce or overwrite a specific episode intentionally, set `EPISODE_ID`:
+
+```bash
+sudo -E env EPISODE_ID=12 bash real_robot/scripts/run_real_robot_full.sh \
+  "enter through the door ahead and stop at the table."
+```
+
 During a run, the terminal prints the detailed log directory:
 
 ```text
