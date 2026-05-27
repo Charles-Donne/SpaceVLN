@@ -8,6 +8,7 @@ TASK_INSTRUCTION="${SPACEVLN_INSTRUCTION:-}"
 # Common bring-up knobs. Override any of them from the shell if needed, e.g.
 #   START_EXECUTOR=0 REAL_CONFIG=real_robot/config/my_robot.yaml bash ...
 START_EXECUTOR="${START_EXECUTOR:-1}"
+REAL_ACTION_EXECUTOR="${REAL_ACTION_EXECUTOR:-cmd_vel}"
 CONTROL_MODE="${CONTROL_MODE:-odom}"
 CONTROL_RATE_HZ="${CONTROL_RATE_HZ:-10}"
 POSITION_TOLERANCE_M="${POSITION_TOLERANCE_M:-0.10}"
@@ -99,6 +100,7 @@ cd "${SPACEVLN_DIR}"
 REAL_LOG_ROOT="${REAL_LOG_ROOT:-${REAL_RESULTS_ROOT}/real_robot_console_logs}"
 RUN_LOG_DIR="${RUN_LOG_DIR:-${REAL_LOG_ROOT}/$(date +%Y%m%d_%H%M%S)_$$}"
 EXECUTOR_LOG="${RUN_LOG_DIR}/cmd_vel_executor.log"
+MANUAL_EXECUTOR_LOG="${RUN_LOG_DIR}/manual_action_executor.log"
 NAVIGATION_LOG="${RUN_LOG_DIR}/run_real_navigation.log"
 mkdir -p "${RUN_LOG_DIR}"
 
@@ -149,38 +151,53 @@ wait_for_ros2_topic_count() {
 }
 
 if [[ "${START_EXECUTOR}" == "1" ]]; then
-  EXECUTOR_ARGS=(
-    --cmd-vel-topic "${CMD_VEL_TOPIC}"
-    --odom-topic "${ODOM_TOPIC}"
-    --control-mode "${CONTROL_MODE}"
-    --control-rate-hz "${CONTROL_RATE_HZ}"
-    --position-tolerance-m "${POSITION_TOLERANCE_M}"
-    --angle-tolerance-deg "${ANGLE_TOLERANCE_DEG}"
-    --odom-timeout-s "${ODOM_TIMEOUT_S}"
-    --default-linear-speed-mps "${DEFAULT_LINEAR_SPEED_MPS}"
-    --default-angular-speed-deg-s "${DEFAULT_ANGULAR_SPEED_DEG_S}"
-    --max-linear-speed-mps "${MAX_LINEAR_SPEED_MPS}"
-    --max-angular-speed-deg-s "${MAX_ANGULAR_SPEED_DEG_S}"
-    --completion-stability-s "${COMPLETION_STABILITY_S}"
-    --completion-yaw-tolerance-deg "${COMPLETION_YAW_TOLERANCE_DEG}"
-  )
-  if [[ "${REAL_CONSOLE}" == "full" ]]; then
-    python3 -u "${REAL_DIR}/run_cmd_vel_executor.py" "${EXECUTOR_ARGS[@]}" &
+  if [[ "${REAL_ACTION_EXECUTOR}" == "manual" ]]; then
+    if [[ "${REAL_CONSOLE}" == "full" ]]; then
+      python3 -u "${REAL_DIR}/run_manual_action_executor.py" &
+    else
+      python3 -u "${REAL_DIR}/run_manual_action_executor.py" >"${MANUAL_EXECUTOR_LOG}" 2>&1 &
+    fi
   else
-    python3 -u "${REAL_DIR}/run_cmd_vel_executor.py" "${EXECUTOR_ARGS[@]}" >"${EXECUTOR_LOG}" 2>&1 &
+    EXECUTOR_ARGS=(
+      --cmd-vel-topic "${CMD_VEL_TOPIC}"
+      --odom-topic "${ODOM_TOPIC}"
+      --control-mode "${CONTROL_MODE}"
+      --control-rate-hz "${CONTROL_RATE_HZ}"
+      --position-tolerance-m "${POSITION_TOLERANCE_M}"
+      --angle-tolerance-deg "${ANGLE_TOLERANCE_DEG}"
+      --odom-timeout-s "${ODOM_TIMEOUT_S}"
+      --default-linear-speed-mps "${DEFAULT_LINEAR_SPEED_MPS}"
+      --default-angular-speed-deg-s "${DEFAULT_ANGULAR_SPEED_DEG_S}"
+      --max-linear-speed-mps "${MAX_LINEAR_SPEED_MPS}"
+      --max-angular-speed-deg-s "${MAX_ANGULAR_SPEED_DEG_S}"
+      --completion-stability-s "${COMPLETION_STABILITY_S}"
+      --completion-yaw-tolerance-deg "${COMPLETION_YAW_TOLERANCE_DEG}"
+    )
+    if [[ "${REAL_CONSOLE}" == "full" ]]; then
+      python3 -u "${REAL_DIR}/run_cmd_vel_executor.py" "${EXECUTOR_ARGS[@]}" &
+    else
+      python3 -u "${REAL_DIR}/run_cmd_vel_executor.py" "${EXECUTOR_ARGS[@]}" >"${EXECUTOR_LOG}" 2>&1 &
+    fi
   fi
   EXECUTOR_PID="$!"
   sleep 1
   if ! kill -0 "${EXECUTOR_PID}" >/dev/null 2>&1; then
-    echo "[RealRobot] cmd_vel executor exited before navigation started" >&2
-    if [[ -f "${EXECUTOR_LOG}" ]]; then
+    echo "[RealRobot] action executor exited before navigation started" >&2
+    if [[ "${REAL_ACTION_EXECUTOR}" == "manual" ]]; then
+      if [[ -f "${MANUAL_EXECUTOR_LOG}" ]]; then
+        echo "[RealRobot] executor log=${MANUAL_EXECUTOR_LOG}" >&2
+        tail -n 80 "${MANUAL_EXECUTOR_LOG}" >&2 || true
+      fi
+    elif [[ -f "${EXECUTOR_LOG}" ]]; then
       echo "[RealRobot] executor log=${EXECUTOR_LOG}" >&2
       tail -n 80 "${EXECUTOR_LOG}" >&2 || true
     fi
     wait "${EXECUTOR_PID}" || true
     exit 1
   fi
-  wait_for_ros2_topic_count "${CMD_VEL_TOPIC}" "Subscription count" 1 8 || true
+  if [[ "${REAL_ACTION_EXECUTOR}" != "manual" ]]; then
+    wait_for_ros2_topic_count "${CMD_VEL_TOPIC}" "Subscription count" 1 8 || true
+  fi
   wait_for_ros2_topic_count "/spacevln/action_cmd" "Subscription count" 1 20
   wait_for_ros2_topic_count "/spacevln/action_status" "Publisher count" 1 20
 fi

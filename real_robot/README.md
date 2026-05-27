@@ -10,16 +10,22 @@ the simulator workflow untouched.
   `/cmd_vel` executor, runs navigation, and disables GroundingDINO/SAM.
 - `run_real_robot_full.sh`: full perception launcher. It reuses the same
   bring-up as lite and only enables GroundingDINO/SAM.
+- `run_real_robot_full_manual.sh`: full perception launcher with manual motion
+  handoff. It keeps the agent loop running but waits for operator confirmation
+  instead of publishing `/cmd_vel`.
 - `run_real_robot_simple.sh`: shared implementation used by both launchers.
 - `run_cmd_vel_executor.py`: reference ROS2 executor that converts
   `/spacevln/action_cmd` into closed-loop `/cmd_vel`.
+- `run_manual_action_executor.py`: interactive executor that prints each
+  requested action and waits for Enter before publishing a successful status.
 - `config/real_robot.yaml`: D435i, odometry, sync, motion, and mapping defaults.
 - `ros_interface.md`: ROS topic and JSON payload contract.
 
 Older explicit wrappers such as `run_real_navigation.sh`,
 `run_cmd_vel_executor.sh`, and `send_action_command.sh` are kept for debugging
-and manual bring-up. Normal evaluation should use `run_real_robot_lite.sh` or
-`run_real_robot_full.sh`.
+and manual bring-up. Normal evaluation should use `run_real_robot_lite.sh`,
+`run_real_robot_full.sh`, or `run_real_robot_full_manual.sh` depending on
+whether you want autonomous or hand-driven motion.
 
 ## Deployment Layout
 
@@ -221,6 +227,26 @@ PY
 `run_real_robot_full.sh` shares the same ROS topics, executor, and observation
 sync as lite. The only difference is that it requires the GroundingDINO/SAM
 runtime and model files.
+
+## Manual Motion Mode
+
+Use the manual variant when you want to test the agent while driving the robot
+yourself:
+
+```bash
+cd /ros2_orin/SpaceVLN
+sudo -E bash real_robot/scripts/run_real_robot_full_manual.sh \
+  "Move forward, then turn right to enter the corridor. Continue to the exhibition room at the end of the corridor, and stop at the cabinet in the exhibition room."
+```
+
+The terminal will print the requested action, for example:
+
+- `请手动左转 45.0 deg`
+- `请手动向前走 0.50 m`
+- `请手动停止机器人`
+
+After you complete the motion, press Enter and the agent will continue with
+the next step.
 
 ## Test GroundingDINO/SAM On One Image
 
