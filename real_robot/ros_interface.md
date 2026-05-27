@@ -1,6 +1,8 @@
 # SpaceVLN Real-Robot ROS Interface
 
 This document is the integration contract for the low-level robotics stack.
+The lite and full real-robot launchers use this same ROS contract; full only
+enables the GroundingDINO/SAM perception stack.
 
 ## 1. Sensor Inputs Consumed by SpaceVLN
 
@@ -79,6 +81,9 @@ chooses the closest pose frame to the RGB-D pair's midpoint timestamp within
 For good alignment, publish RGB, depth, and odometry on the same ROS clock and
 with meaningful `header.stamp` values. If the camera and odometry clocks are not
 aligned, increase `sync_tolerance_s` only as a temporary bring-up workaround.
+During startup the runtime prints the subscribed topics and the first received
+RGB, depth, and odometry callbacks. If those first-frame lines do not appear,
+the issue is transport/QoS/topic wiring rather than planner logic.
 
 ### 1.3 IMU Input
 

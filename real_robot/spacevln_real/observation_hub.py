@@ -49,6 +49,13 @@ class ObservationHub:
         self._rgb_record_interval_s = 1.0
         self._rgb_record_last_saved_at = 0.0
         self._rgb_record_index = 0
+        self._first_rgb_logged = False
+        self._first_depth_logged = False
+        self._first_rgb_camera_info_logged = False
+        self._first_depth_camera_info_logged = False
+        self._first_odom_logged = False
+        self._first_pose_logged = False
+        self._first_imu_logged = False
 
     def configure_rgb_recording(
         self,
@@ -109,38 +116,69 @@ class ObservationHub:
         )
 
     def on_rgb(self, msg) -> None:
-        receive_time = time.time()
-        rgb = image_msg_to_numpy(msg)
-        stamp = self._message_stamp(msg, receive_time)
-        self._record_rgb_frame(rgb, receive_time=receive_time, stamp=stamp)
-        self._store(
-            self._rgb_frames,
-            ImageFrame(
-                stamp=stamp,
-                frame_id=header_frame_id(msg),
-                encoding=str(getattr(msg, "encoding", "") or ""),
-                image=rgb,
-            ),
-        )
+        try:
+            receive_time = time.time()
+            rgb = image_msg_to_numpy(msg)
+            stamp = self._message_stamp(msg, receive_time)
+            if not self._first_rgb_logged:
+                self._first_rgb_logged = True
+                print(
+                    "[REAL] first rgb frame stamp=%.3f frame_id=%s encoding=%s shape=%s"
+                    % (
+                        float(stamp),
+                        header_frame_id(msg),
+                        str(getattr(msg, "encoding", "") or ""),
+                        tuple(np.asarray(rgb).shape),
+                    ),
+                    flush=True,
+                )
+            self._record_rgb_frame(rgb, receive_time=receive_time, stamp=stamp)
+            self._store(
+                self._rgb_frames,
+                ImageFrame(
+                    stamp=stamp,
+                    frame_id=header_frame_id(msg),
+                    encoding=str(getattr(msg, "encoding", "") or ""),
+                    image=rgb,
+                ),
+            )
+        except Exception as exc:
+            print(f"[ERR] rgb callback failed: {exc}", flush=True)
 
     def on_depth(self, msg) -> None:
-        receive_time = time.time()
-        raw_depth = image_msg_to_numpy(msg)
-        normalized_depth = normalize_depth_frame(
-            raw_depth,
-            encoding=str(getattr(msg, "encoding", "") or ""),
-            min_depth_m=float(self.config.min_depth_m),
-            max_depth_m=float(self.config.max_depth_m),
-        )
-        self._store(
-            self._depth_frames,
-            ImageFrame(
-                stamp=self._message_stamp(msg, receive_time),
-                frame_id=header_frame_id(msg),
+        try:
+            receive_time = time.time()
+            raw_depth = image_msg_to_numpy(msg)
+            stamp = self._message_stamp(msg, receive_time)
+            if not self._first_depth_logged:
+                self._first_depth_logged = True
+                print(
+                    "[REAL] first depth frame stamp=%.3f frame_id=%s encoding=%s shape=%s"
+                    % (
+                        float(stamp),
+                        header_frame_id(msg),
+                        str(getattr(msg, "encoding", "") or ""),
+                        tuple(np.asarray(raw_depth).shape),
+                    ),
+                    flush=True,
+                )
+            normalized_depth = normalize_depth_frame(
+                raw_depth,
                 encoding=str(getattr(msg, "encoding", "") or ""),
-                image=normalized_depth,
-            ),
-        )
+                min_depth_m=float(self.config.min_depth_m),
+                max_depth_m=float(self.config.max_depth_m),
+            )
+            self._store(
+                self._depth_frames,
+                ImageFrame(
+                    stamp=stamp,
+                    frame_id=header_frame_id(msg),
+                    encoding=str(getattr(msg, "encoding", "") or ""),
+                    image=normalized_depth,
+                ),
+            )
+        except Exception as exc:
+            print(f"[ERR] depth callback failed: {exc}", flush=True)
 
     def on_rgb_camera_info(self, msg) -> None:
         with self._condition:
@@ -153,6 +191,18 @@ class ObservationHub:
                     self.config.max_header_receive_time_delta_s
                 ),
             )
+            if not self._first_rgb_camera_info_logged:
+                self._first_rgb_camera_info_logged = True
+                print(
+                    "[REAL] first rgb camera_info stamp=%.3f frame_id=%s size=%dx%d"
+                    % (
+                        float(self._rgb_camera_info.stamp),
+                        str(self._rgb_camera_info.frame_id or ""),
+                        int(self._rgb_camera_info.width),
+                        int(self._rgb_camera_info.height),
+                    ),
+                    flush=True,
+                )
             self._condition.notify_all()
 
     def on_depth_camera_info(self, msg) -> None:
@@ -166,49 +216,103 @@ class ObservationHub:
                     self.config.max_header_receive_time_delta_s
                 ),
             )
+            if not self._first_depth_camera_info_logged:
+                self._first_depth_camera_info_logged = True
+                print(
+                    "[REAL] first depth camera_info stamp=%.3f frame_id=%s size=%dx%d"
+                    % (
+                        float(self._depth_camera_info.stamp),
+                        str(self._depth_camera_info.frame_id or ""),
+                        int(self._depth_camera_info.width),
+                        int(self._depth_camera_info.height),
+                    ),
+                    flush=True,
+                )
             self._condition.notify_all()
 
     def on_odom(self, msg) -> None:
-        receive_time = time.time()
-        self._store(
-            self._odom_frames,
-            pose_from_odometry(
+        try:
+            receive_time = time.time()
+            pose = pose_from_odometry(
                 msg,
                 fallback_stamp=receive_time,
                 timestamp_policy=str(self.config.timestamp_policy or "header"),
                 max_header_receive_time_delta_s=float(
                     self.config.max_header_receive_time_delta_s
                 ),
-            ),
-        )
+            )
+            if not self._first_odom_logged:
+                self._first_odom_logged = True
+                print(
+                    "[REAL] first odom pose stamp=%.3f frame_id=%s pose=(%.3f, %.3f, %.3f) yaw_deg=%.1f"
+                    % (
+                        float(pose.stamp),
+                        str(pose.frame_id or ""),
+                        float(pose.x),
+                        float(pose.y),
+                        float(pose.z),
+                        float(np.degrees(pose.yaw_rad)),
+                    ),
+                    flush=True,
+                )
+            self._store(self._odom_frames, pose)
+        except Exception as exc:
+            print(f"[ERR] odom callback failed: {exc}", flush=True)
 
     def on_pose(self, msg) -> None:
-        receive_time = time.time()
-        self._store(
-            self._pose_frames,
-            pose_from_pose_stamped(
+        try:
+            receive_time = time.time()
+            pose = pose_from_pose_stamped(
                 msg,
                 fallback_stamp=receive_time,
                 timestamp_policy=str(self.config.timestamp_policy or "header"),
                 max_header_receive_time_delta_s=float(
                     self.config.max_header_receive_time_delta_s
                 ),
-            ),
-        )
+            )
+            if not self._first_pose_logged:
+                self._first_pose_logged = True
+                print(
+                    "[REAL] first pose frame stamp=%.3f frame_id=%s pose=(%.3f, %.3f, %.3f) yaw_deg=%.1f"
+                    % (
+                        float(pose.stamp),
+                        str(pose.frame_id or ""),
+                        float(pose.x),
+                        float(pose.y),
+                        float(pose.z),
+                        float(np.degrees(pose.yaw_rad)),
+                    ),
+                    flush=True,
+                )
+            self._store(self._pose_frames, pose)
+        except Exception as exc:
+            print(f"[ERR] pose callback failed: {exc}", flush=True)
 
     def on_imu(self, msg) -> None:
-        receive_time = time.time()
-        self._store(
-            self._imu_frames,
-            imu_from_message(
+        try:
+            receive_time = time.time()
+            imu = imu_from_message(
                 msg,
                 fallback_stamp=receive_time,
                 timestamp_policy=str(self.config.timestamp_policy or "header"),
                 max_header_receive_time_delta_s=float(
                     self.config.max_header_receive_time_delta_s
                 ),
-            ),
-        )
+            )
+            if not self._first_imu_logged:
+                self._first_imu_logged = True
+                print(
+                    "[REAL] first imu frame stamp=%.3f frame_id=%s yaw_deg=%s"
+                    % (
+                        float(imu.stamp),
+                        str(imu.frame_id or ""),
+                        "nan" if imu.yaw_rad is None else f"{float(np.degrees(imu.yaw_rad)):.1f}",
+                    ),
+                    flush=True,
+                )
+            self._store(self._imu_frames, imu)
+        except Exception as exc:
+            print(f"[ERR] imu callback failed: {exc}", flush=True)
 
     @staticmethod
     def _iter_latest_after(queue: Deque, after_stamp: Optional[float]):

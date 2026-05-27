@@ -26,6 +26,10 @@ elif [[ -f /opt/ros/humble/setup.bash ]]; then
   source_setup_bash_safely /opt/ros/humble/setup.bash
 fi
 
+# Keep the ROS2 transport consistent with the main real-robot launcher.
+export RMW_FASTRTPS_USE_SHM="${RMW_FASTRTPS_USE_SHM:-0}"
+export FASTDDS_BUILTIN_TRANSPORTS="${FASTDDS_BUILTIN_TRANSPORTS:-UDPv4}"
+
 # shellcheck disable=SC1091
 source "${SCRIPT_DIR}/setup_real_accel_env.sh"
 

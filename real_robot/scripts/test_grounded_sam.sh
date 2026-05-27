@@ -15,12 +15,14 @@ if [[ -z "${OUTPUT_IMAGE:-}" ]]; then
   image_base="$(basename "${TEST_IMAGE}")"
   OUTPUT_IMAGE="${image_dir}/${image_base%.*}_grounded_sam.jpg"
 fi
+output_dir="$(dirname "${OUTPUT_IMAGE}")"
+output_base="$(basename "${OUTPUT_IMAGE}")"
 CLASSES="${CLASSES:-table,chair,door,sofa,person,cabinet}"
 CAPTION="${CAPTION:-}"
 BOX_THRESHOLD="${BOX_THRESHOLD:-0.25}"
 TEXT_THRESHOLD="${TEXT_THRESHOLD:-0.25}"
 QUIET="${QUIET:-1}"
-LOG_FILE="${LOG_FILE:-/tmp/grounded_sam_test.log}"
+LOG_FILE="${LOG_FILE:-${output_dir}/${output_base%.*}.log}"
 GROUNDINGDINO_DEVICE="${GROUNDINGDINO_DEVICE:-auto}"
 
 # shellcheck disable=SC1091

@@ -325,6 +325,23 @@ class Ros2Runtime:
         if str(self.config.topics.action_status or "").strip():
             subscribe(String, self.config.topics.action_status, self.command_bridge.on_action_status, qos_control)
 
+        pose_topic = self.config.topics.pose if pose_source in {"pose", "pose_stamped"} else self.config.topics.odom
+        print(
+            "[REAL] ros2 subscriptions rgb=%s depth=%s rgb_info=%s depth_info=%s imu=%s pose_source=%s pose_topic=%s action_cmd=%s action_status=%s"
+            % (
+                str(self.config.topics.rgb or ""),
+                str(self.config.topics.depth or ""),
+                str(self.config.topics.rgb_camera_info or ""),
+                str(self.config.topics.depth_camera_info or ""),
+                str(self.config.topics.imu or ""),
+                str(self.config.pose_source or "odometry"),
+                str(pose_topic or ""),
+                str(self.config.topics.action_cmd or ""),
+                str(self.config.topics.action_status or ""),
+            ),
+            flush=True,
+        )
+
         self._spin_thread = threading.Thread(target=self._executor.spin, daemon=True)
         self._spin_thread.start()
 

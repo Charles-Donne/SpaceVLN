@@ -8,8 +8,8 @@ the simulator workflow untouched.
 
 - `run_real_robot_lite.sh`: default real-robot launcher. It starts the
   `/cmd_vel` executor, runs navigation, and disables GroundingDINO/SAM.
-- `run_real_robot_full.sh`: full perception launcher. It enables
-  GroundingDINO/SAM and requires the model/runtime setup below.
+- `run_real_robot_full.sh`: full perception launcher. It reuses the same
+  bring-up as lite and only enables GroundingDINO/SAM.
 - `run_real_robot_simple.sh`: shared implementation used by both launchers.
 - `run_cmd_vel_executor.py`: reference ROS2 executor that converts
   `/spacevln/action_cmd` into closed-loop `/cmd_vel`.
@@ -79,6 +79,8 @@ Jetson AGX Orin notes:
 - If GroundingDINO/SAM is run with `sudo -E`, the scripts automatically expose
   `/usr/local/cuda/lib64` and PyTorch's `torch/lib` through
   `setup_real_accel_env.sh`, so `libc10.so` does not need to be exported by hand.
+- The launchers also force UDP transport for ROS2 so same-host `sudo` and
+  container runs do not silently lose samples.
 
 ## Sensor Topics
 
@@ -216,6 +218,10 @@ if torch.cuda.is_available():
 PY
 ```
 
+`run_real_robot_full.sh` shares the same ROS topics, executor, and observation
+sync as lite. The only difference is that it requires the GroundingDINO/SAM
+runtime and model files.
+
 ## Test GroundingDINO/SAM On One Image
 
 Capture or reuse a saved RGB frame, then test one class:
@@ -257,6 +263,10 @@ bash real_robot/scripts/test_grounded_sam.sh
 
 `BOX_THRESHOLD` and `TEXT_THRESHOLD` are confidence thresholds, not object
 sizes. Lower values produce more boxes and more false positives.
+
+For a single target class, prefer `CLASSES="shelf"` or another one-item class
+list. Use `CAPTION=...` only when you want open-vocabulary debugging and are
+okay with many candidate boxes.
 
 ## Manual Action Tests
 
