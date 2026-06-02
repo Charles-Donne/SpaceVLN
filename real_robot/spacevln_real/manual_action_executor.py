@@ -24,6 +24,7 @@ class ManualExecutorConfig:
     node_name: str = "spacevln_manual_action_executor"
     action_cmd_topic: str = "/spacevln/action_cmd"
     action_status_topic: str = "/spacevln/action_status"
+    session_id: str = ""
 
 
 class ManualActionExecutor(Node):
@@ -47,6 +48,8 @@ class ManualActionExecutor(Node):
         )
         self._println("")
         self._println("[ManualExecutor] 手摇模式已启动：不会发布 /cmd_vel。")
+        if str(config.session_id or "").strip():
+            self._println(f"[ManualExecutor] 只接收 session_id={config.session_id} 的动作命令。")
         self._println("[ManualExecutor] 每次看到动作提示后，手动操作机器人；完成后按 Enter，agent 会继续下一步。")
         self._println("[ManualExecutor] 输入 f 后回车可把当前动作标记为 failed；输入 q 后回车标记 emergency_stop。")
         self._println("")
@@ -137,6 +140,10 @@ class ManualActionExecutor(Node):
         speed_hint = dict(payload.get("speed_hint", {}) or {})
         meters = self._float_value(target.get("meters"), 0.0)
         degrees = self._float_value(target.get("degrees"), 0.0)
+        session_filter = str(self.config.session_id or "").strip()
+
+        if session_filter and session_id != session_filter:
+            return
 
         if not command_id:
             self.get_logger().warning("ignoring action command without command_id")
@@ -223,6 +230,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--node-name", default="spacevln_manual_action_executor")
     parser.add_argument("--action-cmd-topic", default="/spacevln/action_cmd")
     parser.add_argument("--action-status-topic", default="/spacevln/action_status")
+    parser.add_argument(
+        "--session-id",
+        default="",
+        help="Only handle action commands from this real-robot session id",
+    )
     return parser
 
 
@@ -233,6 +245,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         node_name=str(args.node_name),
         action_cmd_topic=str(args.action_cmd_topic),
         action_status_topic=str(args.action_status_topic),
+        session_id=str(args.session_id or ""),
     )
 
     rclpy.init(args=None)

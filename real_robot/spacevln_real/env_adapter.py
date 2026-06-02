@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import math
+import os
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -14,6 +15,7 @@ from spacevln_real.command_bridge import ActionCommandBridge
 from spacevln_real.models import ActionCommand, ActionStatus, RealRobotConfig, RobotSnapshot
 from spacevln_real.observation_hub import ObservationHub
 from spacevln_real.ros_common import relative_pose_delta
+from navigation_system.space.map.obstacle_analysis import sample_depth_distance_from_region
 
 
 ACTION_ID_TO_NAME = {
@@ -41,6 +43,7 @@ ACTION_NAME_ALIASES = {
 
 REAL_MOVE_TARGETS_M = (0.5, 0.75, 1.0, 1.25, 1.5)
 REAL_TURN_TARGET_DEG = 45.0
+REAL_FORWARD_MIN_CLEARANCE_M = 0.5
 
 
 @dataclass
@@ -96,6 +99,11 @@ class RealRobotVectorEnv:
 
     def current_episodes(self):
         return [self._current_episode]
+
+    def get_latest_observation(self) -> Optional[Dict[str, Any]]:
+        if self._latest_snapshot is None:
+            return None
+        return self._snapshot_to_obs(self._latest_snapshot, (0.0, 0.0, 0.0))
 
     def supports_continuous_action_targets(self) -> bool:
         return True
@@ -184,6 +192,71 @@ class RealRobotVectorEnv:
         self.command_bridge.publish_capture_request(
             session_id=self.session_id,
             reason=reason,
+        )
+
+    @staticmethod
+    def _forward_min_clearance_m() -> float:
+        raw_value = str(os.getenv("SPACEVLN_REAL_FORWARD_MIN_CLEARANCE_M", "") or "").strip()
+        if raw_value:
+            try:
+                return max(0.0, float(raw_value))
+            except (TypeError, ValueError):
+                pass
+        return float(REAL_FORWARD_MIN_CLEARANCE_M)
+
+    def _front_clearance_m_from_depth(self, depth_meters: Any) -> Optional[float]:
+        try:
+            return sample_depth_distance_from_region(
+                np.asarray(depth_meters, dtype=np.float32),
+                center_x_ratio=0.5,
+                width_ratio=0.26,
+                row_start_ratio=0.38,
+                row_end_ratio=0.92,
+                max_distance_m=5.0,
+                sensor_min_depth_m=float(self.config.min_depth_m),
+                sample_count=128,
+                sample_percentile=20.0,
+            )
+        except Exception:
+            return None
+
+    def _front_clearance_m_from_snapshot(self, snapshot: Optional[RobotSnapshot]) -> Optional[float]:
+        if snapshot is None:
+            return None
+        return self._front_clearance_m_from_depth(getattr(snapshot, "depth", None))
+
+    def _blocked_forward_status(self, clearance_m: float, threshold_m: float) -> ActionStatus:
+        return ActionStatus(
+            command_id="real_forward_safety_block",
+            session_id=self.session_id,
+            state="blocked",
+            success=False,
+            stamp=time.time(),
+            message=(
+                "real forward safety blocked MOVE_FORWARD: "
+                f"front clearance {float(clearance_m):.2f}m < {float(threshold_m):.2f}m"
+            ),
+            done=True,
+            blocked=True,
+            collision=False,
+            raw_payload={
+                "session_id": self.session_id,
+                "command_id": "real_forward_safety_block",
+                "state": "blocked",
+                "success": False,
+                "done": True,
+                "blocked": True,
+                "message": (
+                    "real forward safety blocked MOVE_FORWARD: "
+                    f"front clearance {float(clearance_m):.2f}m < {float(threshold_m):.2f}m"
+                ),
+                "front_clearance_m": float(clearance_m),
+                "threshold_m": float(threshold_m),
+                "executed": {
+                    "meters": 0.0,
+                    "degrees": 0.0,
+                },
+            },
         )
 
     @staticmethod
@@ -486,23 +559,44 @@ class RealRobotVectorEnv:
         if before_snapshot is None:
             raise RuntimeError("real robot env has no initial observation")
 
-        command = self._build_command(
-            action_name,
-            target_meters=target_meters,
-            target_degrees=target_degrees,
-        )
-        status = self.command_bridge.send_action(command)
+        safety_blocked_forward = False
+        front_clearance_m = None
+        if action_name == "MOVE_FORWARD":
+            front_clearance_m = self._front_clearance_m_from_snapshot(before_snapshot)
+            min_clearance_m = self._forward_min_clearance_m()
+            safety_blocked_forward = (
+                front_clearance_m is not None
+                and float(front_clearance_m) < float(min_clearance_m)
+            )
 
-        self._capture_if_needed("post_%s" % action_name.lower())
-        after_stamp = float(before_snapshot.stamp)
-        if bool(self.config.require_fresh_frame_after_action):
-            after_stamp = max(after_stamp, float(status.stamp))
-        after_snapshot = self.observation_hub.wait_for_snapshot(
-            after_stamp=after_stamp,
-            timeout_s=float(self.config.observation_timeout_s),
-        )
+        if safety_blocked_forward:
+            status = self._blocked_forward_status(front_clearance_m, self._forward_min_clearance_m())
+            after_snapshot = before_snapshot
+            sensor_pose = (0.0, 0.0, 0.0)
+            print(
+                "[REAL-SAFETY] blocked MOVE_FORWARD: front_clearance=%.2fm < %.2fm"
+                % (float(front_clearance_m), float(self._forward_min_clearance_m())),
+                flush=True,
+            )
+        else:
+            command = self._build_command(
+                action_name,
+                target_meters=target_meters,
+                target_degrees=target_degrees,
+            )
+            status = self.command_bridge.send_action(command)
 
-        sensor_pose = relative_pose_delta(before_snapshot.pose, after_snapshot.pose)
+            self._capture_if_needed("post_%s" % action_name.lower())
+            after_stamp = float(before_snapshot.stamp)
+            if bool(self.config.require_fresh_frame_after_action):
+                after_stamp = max(after_stamp, float(status.stamp))
+            after_snapshot = self.observation_hub.wait_for_snapshot(
+                after_stamp=after_stamp,
+                timeout_s=float(self.config.observation_timeout_s),
+            )
+
+            sensor_pose = relative_pose_delta(before_snapshot.pose, after_snapshot.pose)
+
         self._path_length_m += float(math.hypot(sensor_pose[0], sensor_pose[1]))
         self._steps_taken += 1
         self._latest_snapshot = after_snapshot

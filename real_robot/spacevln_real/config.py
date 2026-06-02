@@ -18,5 +18,11 @@ def load_real_robot_config(config_path: str) -> RealRobotConfig:
         raise FileNotFoundError("real robot config not found: %s" % resolved)
     with open(resolved, "r", encoding="utf-8") as handle:
         payload: Dict[str, Any] = yaml.safe_load(handle) or {}
-    return RealRobotConfig.from_dict(payload)
-
+    config = RealRobotConfig.from_dict(payload)
+    action_timeout = str(os.getenv("SPACEVLN_REAL_ACTION_TIMEOUT_S", "") or "").strip()
+    if action_timeout:
+        config.action_timeout_s = float(action_timeout)
+    observation_timeout = str(os.getenv("SPACEVLN_REAL_OBSERVATION_TIMEOUT_S", "") or "").strip()
+    if observation_timeout:
+        config.observation_timeout_s = float(observation_timeout)
+    return config

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Fill the task instruction here, or pass it as command-line text:
-#   bash real_robot/scripts/run_real_robot_simple.sh "Go to the table near the sofa."
+# Internal implementation used by run_real_robot_auto.sh and
+# run_real_robot_manual.sh. Pass the task instruction as command-line text:
+#   bash real_robot/scripts/run_real_robot_auto.sh "Go to the table near the sofa."
 TASK_INSTRUCTION="${SPACEVLN_INSTRUCTION:-}"
 
 # Common bring-up knobs. Override any of them from the shell if needed, e.g.
@@ -31,6 +32,8 @@ EPISODE_ID="${EPISODE_ID:-}"
 RESULTS_DIR="${RESULTS_DIR:-}"
 VLM_API_CONFIG="${VLM_API_CONFIG:-}"
 REAL_CONSOLE="${REAL_CONSOLE:-compact}"
+REAL_SESSION_ID="${REAL_SESSION_ID:-$(date +%Y%m%d_%H%M%S)_$$}"
+REAL_SESSION_NODE_SUFFIX="$(printf '%s' "${REAL_SESSION_ID}" | tr -c '[:alnum:]_' '_')"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REAL_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -65,6 +68,9 @@ export PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"
 export SPACEVLN_ALLOW_GENERIC_WAYPOINT_LABELS="${SPACEVLN_ALLOW_GENERIC_WAYPOINT_LABELS:-1}"
 export SPACEVLN_LOOKAROUND_VIEW_COUNT="${SPACEVLN_LOOKAROUND_VIEW_COUNT:-8}"
 export SPACEVLN_LOOKAROUND_STEP_DEG="${SPACEVLN_LOOKAROUND_STEP_DEG:-45}"
+if [[ "${REAL_ACTION_EXECUTOR}" == "manual" ]]; then
+  export SPACEVLN_REAL_ACTION_TIMEOUT_S="${SPACEVLN_REAL_ACTION_TIMEOUT_S:-3600}"
+fi
 
 if [[ -n "${SPACEVLN_ROS_SETUP:-}" ]]; then
   source_setup_bash_safely "${SPACEVLN_ROS_SETUP}"
@@ -92,7 +98,7 @@ fi
 
 if [[ -z "${TASK_INSTRUCTION// }" ]]; then
   echo "ERROR: no task instruction provided." >&2
-  echo "Fill TASK_INSTRUCTION in this script, set SPACEVLN_INSTRUCTION, or pass the instruction as an argument." >&2
+  echo "Set SPACEVLN_INSTRUCTION or pass the instruction as an argument." >&2
   exit 2
 fi
 
@@ -111,9 +117,13 @@ echo "[RealRobot] runtime=${RUNTIME}"
 echo "[RealRobot] console=${REAL_CONSOLE}"
 echo "[RealRobot] logs=${RUN_LOG_DIR}"
 echo "[RealRobot] perception=${SPACEVLN_PERCEPTION_MODE:-lite}"
+echo "[RealRobot] session_id=${REAL_SESSION_ID}"
 echo "[RealRobot] ros user=$(id -un) euid=${EUID} ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0} RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-default} RMW_FASTRTPS_USE_SHM=${RMW_FASTRTPS_USE_SHM:-unset} FASTDDS_BUILTIN_TRANSPORTS=${FASTDDS_BUILTIN_TRANSPORTS:-unset}"
 if [[ "${SPACEVLN_PERCEPTION_MODE:-lite}" =~ ^(full|grounded_sam|groundingdino|groundedsam)$ ]]; then
   echo "[RealRobot] accel CUDA_HOME=${CUDA_HOME:-none} torch_lib=${SPACEVLN_TORCH_LIB_DIR:-none}"
+fi
+if [[ "${REAL_ACTION_EXECUTOR}" == "manual" ]]; then
+  echo "[RealRobot] manual_action_timeout_s=${SPACEVLN_REAL_ACTION_TIMEOUT_S}"
 fi
 
 EXECUTOR_PID=""
@@ -153,10 +163,14 @@ wait_for_ros2_topic_count() {
 
 if [[ "${START_EXECUTOR}" == "1" ]]; then
   if [[ "${REAL_ACTION_EXECUTOR}" == "manual" ]]; then
+    MANUAL_EXECUTOR_ARGS=(
+      --session-id "${REAL_SESSION_ID}"
+      --node-name "spacevln_manual_action_executor_${REAL_SESSION_NODE_SUFFIX}"
+    )
     if [[ "${REAL_CONSOLE}" == "full" ]]; then
-      python3 -u "${REAL_DIR}/run_manual_action_executor.py" &
+      python3 -u "${REAL_DIR}/run_manual_action_executor.py" "${MANUAL_EXECUTOR_ARGS[@]}" &
     else
-      python3 -u "${REAL_DIR}/run_manual_action_executor.py" >"${MANUAL_EXECUTOR_LOG}" 2>&1 &
+      python3 -u "${REAL_DIR}/run_manual_action_executor.py" "${MANUAL_EXECUTOR_ARGS[@]}" >"${MANUAL_EXECUTOR_LOG}" 2>&1 &
     fi
   else
     EXECUTOR_ARGS=(
@@ -208,6 +222,7 @@ NAV_ARGS=(
   --real-config "${REAL_CONFIG}"
   --runtime "${RUNTIME}"
   --max-subtask-steps "${MAX_SUBTASK_STEPS}"
+  --session-id "${REAL_SESSION_ID}"
 )
 
 if [[ -n "${MAX_STEPS}" ]]; then

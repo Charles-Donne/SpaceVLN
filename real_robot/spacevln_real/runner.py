@@ -80,7 +80,7 @@ def _collect_used_episode_ids(results_dir: str) -> set[int]:
         root = os.path.join(results_dir, section)
         if not os.path.isdir(root):
             continue
-        for current_root, dirnames, filenames in os.walk(root):
+        for _current_root, dirnames, filenames in os.walk(root):
             dirnames.sort()
             for dirname in dirnames:
                 episode_id = _episode_id_from_artifact_name(dirname)

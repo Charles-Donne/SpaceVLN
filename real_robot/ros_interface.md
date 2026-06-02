@@ -267,7 +267,7 @@ closed-loop and robot-specific.
 Reference implementation in this repository:
 
 - `real_robot/spacevln_real/cmd_vel_executor.py`
-- `real_robot/scripts/run_cmd_vel_executor.sh`
+- `real_robot/scripts/run_real_robot_auto.sh` starts the executor automatically
 
 Closed-loop behavior expected from the executor:
 
@@ -276,6 +276,11 @@ Closed-loop behavior expected from the executor:
 - `TURN_RIGHT`: keep publishing negative angular velocity until odometry shows the target rotation was reached, or until the configured early-stop tolerance is reached
 - `LOOK_AROUND_360`: keep publishing positive angular velocity and report unwrapped accumulated yaw, so a full 360 degree scan does not collapse to zero after angle normalization
 - `STOP`: publish zero velocity immediately and return a terminal status
+
+For the built-in real-robot runtime, `MOVE_FORWARD` has an additional upstream
+safety gate: when the current front depth clearance is below `0.50m`, SpaceVLN
+removes `MOVE_FORWARD` from the action prompt and hard-blocks any leaked forward
+command before publishing `/spacevln/action_cmd`.
 
 The reference executor defaults to conservative early stopping:
 
@@ -291,12 +296,12 @@ overshoot the target too much. Tune these values on the actual base.
 Avoid a pure time-based implementation such as "publish 0.15 m/s for 3.3 seconds
 and assume it moved 0.5 m". That will drift too much on real hardware.
 
-For first bring-up, the reference executor also supports:
+For first bring-up, the reference executor also supports `CONTROL_MODE=timed`
+through the auto launcher:
 
 ```bash
-bash real_robot/scripts/run_cmd_vel_executor.sh \
-  --control-mode timed \
-  --control-rate-hz 10
+CONTROL_MODE=timed bash real_robot/scripts/run_real_robot_auto.sh \
+  "move forward and stop"
 ```
 
 In `timed` mode it converts the high-level command to velocity plus duration:

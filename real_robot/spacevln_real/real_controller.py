@@ -6,16 +6,137 @@ from datetime import datetime
 import json
 import math
 import os
-from typing import Any, Dict, Optional
+import re
+from typing import Any, Dict, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
 
+from navigation_system.config.core.params.thresholds import OBS_BLOCKED_M
 from navigation_system.controller.agent.controller import NavigationAgentController
+from navigation_system.space.map.obstacle_analysis import sample_depth_distance_from_region
 
 
 class RealNavigationAgentController(NavigationAgentController):
     """Navigation controller with real-only live result flushing."""
+
+    @staticmethod
+    def _safe_artifact_token(text: str, default: str = "step") -> str:
+        token = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(text or "").strip())
+        token = token.strip("._-")
+        return token or str(default)
+
+    def _save_real_step_rgb(
+        self,
+        *,
+        event: str,
+        step: Optional[int] = None,
+        obs: Optional[Dict[str, Any]] = None,
+        action: str = "",
+    ) -> str:
+        save_manager = getattr(self, "save_manager", None)
+        if save_manager is None:
+            return ""
+        obs_payload = obs if isinstance(obs, dict) else getattr(self, "latest_obs", None)
+        if not isinstance(obs_payload, dict) or "rgb" not in obs_payload:
+            return ""
+
+        try:
+            rgb = np.asarray(obs_payload["rgb"], dtype=np.uint8)
+            if rgb.ndim != 3 or rgb.shape[2] < 3:
+                return ""
+            rgb = rgb[:, :, :3]
+            step_idx = int(self.current_step if step is None else step)
+            event_token = self._safe_artifact_token(event, default="step")
+            action_token = self._safe_artifact_token(action, default="rgb")
+            output_dir = os.path.join(save_manager.records_dir, "step_rgb")
+            os.makedirs(output_dir, exist_ok=True)
+            if not bool(getattr(self, "_real_step_rgb_dir_reported", False)):
+                self._real_step_rgb_dir_reported = True
+                print(f"[REAL] step_rgb_dir={output_dir}", flush=True)
+            filename = f"step_{step_idx:04d}_{event_token}_{action_token}.jpg"
+            path = os.path.join(output_dir, filename)
+            if not cv2.imwrite(path, cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)):
+                print(f"[WARN] Failed to save real step RGB: {path}", flush=True)
+                return ""
+            return path
+        except Exception as exc:
+            print(f"[WARN] Failed to save real step RGB: {exc}", flush=True)
+            return ""
+
+    @staticmethod
+    def _real_forward_min_clearance_m() -> float:
+        raw_value = str(os.getenv("SPACEVLN_REAL_FORWARD_MIN_CLEARANCE_M", "") or "").strip()
+        if raw_value:
+            try:
+                return max(0.0, float(raw_value))
+            except (TypeError, ValueError):
+                pass
+        return float(OBS_BLOCKED_M)
+
+    def _estimate_real_front_clearance_m(self, obs: Optional[Dict[str, Any]] = None) -> Optional[float]:
+        obs_payload = obs if isinstance(obs, dict) else getattr(self, "latest_obs", None)
+        if not isinstance(obs_payload, dict) or "depth" not in obs_payload:
+            return None
+        try:
+            return sample_depth_distance_from_region(
+                np.asarray(obs_payload["depth"], dtype=np.float32),
+                center_x_ratio=0.5,
+                width_ratio=0.26,
+                row_start_ratio=0.38,
+                row_end_ratio=0.92,
+                max_distance_m=5.0,
+                sensor_min_depth_m=float(self.config.TASK_CONFIG.SIMULATOR.DEPTH_SENSOR.MIN_DEPTH),
+                sample_count=128,
+                sample_percentile=20.0,
+            )
+        except Exception:
+            return None
+
+    def _is_real_forward_safety_blocked(
+        self,
+        action_context: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[bool, Optional[float], float]:
+        threshold_m = self._real_forward_min_clearance_m()
+        clearance_m = None
+        if isinstance(action_context, dict):
+            clearance_m = action_context.get("real_front_clearance_m")
+        if clearance_m is None:
+            clearance_m = self._estimate_real_front_clearance_m()
+        try:
+            clearance_m = float(clearance_m) if clearance_m is not None else None
+        except (TypeError, ValueError):
+            clearance_m = None
+        blocked = clearance_m is not None and clearance_m < threshold_m
+        return blocked, clearance_m, threshold_m
+
+    def _filter_real_forward_safety_actions(
+        self,
+        allowed_action_names: Optional[Sequence[str]],
+        action_context: Optional[Dict[str, Any]],
+    ) -> Optional[Tuple[str, ...]]:
+        blocked, clearance_m, threshold_m = self._is_real_forward_safety_blocked(action_context)
+        if not blocked:
+            return tuple(allowed_action_names) if allowed_action_names else None
+
+        base_actions = (
+            list(allowed_action_names)
+            if allowed_action_names
+            else ["MOVE_FORWARD", "TURN_LEFT", "TURN_RIGHT", "STOP"]
+        )
+        filtered = [
+            str(name).strip().upper()
+            for name in base_actions
+            if str(name).strip().upper() != "MOVE_FORWARD"
+        ]
+        if not filtered:
+            filtered = ["STOP"]
+        print(
+            "[REAL-SAFETY] removed MOVE_FORWARD from action space: "
+            f"front_clearance={float(clearance_m):.2f}m < {float(threshold_m):.2f}m",
+            flush=True,
+        )
+        return tuple(filtered)
 
     def _ensure_real_depth_map_disabled_input(self, phase: str) -> str:
         save_manager = getattr(self, "save_manager", None)
@@ -202,6 +323,52 @@ class RealNavigationAgentController(NavigationAgentController):
         )
         return self._json_safe({key: subtask.get(key) for key in keys if key in subtask})
 
+    def _build_action_decision_context(self) -> Optional[Dict[str, Any]]:
+        context = super()._build_action_decision_context()
+        if not isinstance(context, dict):
+            return context
+
+        clearance_m = self._estimate_real_front_clearance_m()
+        if clearance_m is None:
+            return context
+
+        threshold_m = self._real_forward_min_clearance_m()
+        context["real_front_clearance_m"] = float(clearance_m)
+        context["real_forward_min_clearance_m"] = float(threshold_m)
+        context["real_forward_blocked"] = bool(float(clearance_m) < float(threshold_m))
+
+        obstacle_distances = dict(context.get("obstacle_distances") or {})
+        existing_front_m = self._parse_distance_text_m(obstacle_distances.get("front"))
+        should_update_front = existing_front_m is None or float(clearance_m) < float(existing_front_m)
+        if should_update_front:
+            if float(clearance_m) < float(threshold_m):
+                obstacle_distances["front"] = (
+                    f"{float(clearance_m):.2f}m BLOCKED(real safety <{float(threshold_m):.2f}m)"
+                )
+            else:
+                obstacle_distances["front"] = f"{float(clearance_m):.2f}m"
+            context["obstacle_distances"] = obstacle_distances
+            self.latest_obstacle_distances = dict(obstacle_distances)
+        return context
+
+    def _request_vlm_action(
+        self,
+        action_context: Dict[str, Any],
+        action_subtask_instruction: str,
+        progress_summary_for_prompt: str,
+        allowed_action_names: Optional[Sequence[str]],
+    ):
+        allowed_action_names = self._filter_real_forward_safety_actions(
+            allowed_action_names,
+            action_context,
+        )
+        return super()._request_vlm_action(
+            action_context=action_context,
+            action_subtask_instruction=action_subtask_instruction,
+            progress_summary_for_prompt=progress_summary_for_prompt,
+            allowed_action_names=allowed_action_names,
+        )
+
     def _write_real_live_status(
         self,
         *,
@@ -276,6 +443,21 @@ class RealNavigationAgentController(NavigationAgentController):
 
     def reset_episode(self, *args, **kwargs):
         result = super().reset_episode(*args, **kwargs)
+        self._real_step_rgb_dir_reported = False
+        reset_obs = None
+        try:
+            call_at = getattr(self.envs, "call_at", None)
+            if callable(call_at):
+                reset_obs = call_at(0, "get_latest_observation")
+            else:
+                getter = getattr(self.envs, "get_latest_observation", None)
+                if callable(getter):
+                    reset_obs = getter()
+        except Exception:
+            reset_obs = None
+        if isinstance(reset_obs, dict):
+            self.latest_obs = reset_obs
+            self._save_real_step_rgb(event="episode_reset", step=0, obs=reset_obs)
         self._write_real_live_status(event="episode_reset", append_step=False)
         return result
 
@@ -320,13 +502,21 @@ class RealNavigationAgentController(NavigationAgentController):
             info=info,
         )
         self.latest_info = dict(info or {})
+        action_text = (
+            f"TURN_LEFT_{int(round(float(getattr(self, 'latest_lookaround_angle_step_deg', 45.0) or 45.0)))}"
+            f"[{look_index}/{int(getattr(self, 'latest_lookaround_sample_count', 8) or 8)}]"
+        )
+        step_rgb = self._save_real_step_rgb(
+            event="lookaround",
+            step=look_step,
+            obs=obs,
+            action=action_text,
+        )
         self._write_real_live_status(
             event="lookaround_step_processed",
             phase=phase,
-            action=(
-                f"TURN_LEFT_{int(round(float(getattr(self, 'latest_lookaround_angle_step_deg', 45.0) or 45.0)))}"
-                f"[{look_index}/{int(getattr(self, 'latest_lookaround_sample_count', 8) or 8)}]"
-            ),
+            action=action_text,
+            extra={"step_rgb": step_rgb} if step_rgb else None,
         )
 
     def step_with_vlm(self, *args, **kwargs) -> Dict[str, Any]:
@@ -334,13 +524,22 @@ class RealNavigationAgentController(NavigationAgentController):
         result = super().step_with_vlm(*args, **kwargs)
         if not action_name and len(args) >= 2:
             action_name = str(args[1] or "")
+        step_rgb = self._save_real_step_rgb(
+            event="action",
+            step=int(getattr(self, "current_step", 0) or 0),
+            obs=(result or {}).get("obs") if isinstance(result, dict) else None,
+            action=action_name,
+        )
+        extra = {
+            "done": bool((result or {}).get("done", False)),
+            "info": (result or {}).get("info", {}),
+        }
+        if step_rgb:
+            extra["step_rgb"] = step_rgb
         self._write_real_live_status(
             event="action_step_processed",
             phase=str(self._current_action_phase()),
             action=action_name,
-            extra={
-                "done": bool((result or {}).get("done", False)),
-                "info": (result or {}).get("info", {}),
-            },
+            extra=extra,
         )
         return result
