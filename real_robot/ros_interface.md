@@ -138,7 +138,7 @@ The low-level controller should execute each command as a closed-loop motion:
 
 - `MOVE_FORWARD`: drive toward the requested distance, typically 0.5m to 1.5m from the VLM action output
 - `TURN_LEFT` / `TURN_RIGHT`: rotate toward the requested angle, 45 degrees in the current real action space
-- `LOOK_AROUND_360`: supported for manual low-level tests; SpaceVLN real lookaround uses twelve stopped `TURN_LEFT` commands at 30 degrees each and samples after each turn settles
+- `LOOK_AROUND_360`: supported for manual low-level tests; SpaceVLN real lookaround uses eight stopped `TURN_LEFT` commands at 45 degrees each and samples after each turn settles
 - `STOP`: stop immediately and publish a terminal status
 
 This should not be implemented as a single open-loop velocity pulse.
@@ -165,6 +165,14 @@ averages the synchronized depth frame with immediate neighboring depth frames
 when the requested fusion window is present. Real map fusion then updates
 obstacle evidence only for observed obstacle or explicit free cells; unknown
 depth samples do not clear or reinforce the map.
+
+RGB video export samples are separate from map fusion. Only synchronized
+low-level step endpoint observations update the accumulated map, trajectory,
+and obstacle evidence.
+
+The requested turn angle is not used as the map angle. The real env computes
+`sensor_pose=[dx, dy, dtheta]` from odometry/pose before and after the settled
+action, then the mapper fuses depth using that measured delta.
 
 ## 3. Action Status Interface Published by the Low-Level Stack
 

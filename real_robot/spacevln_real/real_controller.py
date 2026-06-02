@@ -185,6 +185,88 @@ class RealNavigationAgentController(NavigationAgentController):
         self._real_last_low_level_rgb_step = int(step)
         self._real_last_low_level_rgb_stamp = float(rgb_stamp)
 
+    def _real_map_alignment_snapshot(
+        self,
+        *,
+        obs: Optional[Dict[str, Any]] = None,
+        info: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        mapper = getattr(self, "mapper", None)
+        if mapper is None:
+            return {}
+        try:
+            map_state = mapper.get_map_state()
+        except Exception:
+            map_state = {}
+
+        full_map = map_state.get("full_map") if isinstance(map_state, dict) else None
+        full_pose = map_state.get("full_pose") if isinstance(map_state, dict) else None
+        global_traj = map_state.get("global_trajectory_points", []) if isinstance(map_state, dict) else []
+        subtask_traj = map_state.get("subtask_trajectory_points", []) if isinstance(map_state, dict) else []
+        floor = map_state.get("floor") if isinstance(map_state, dict) else None
+
+        pose_delta = None
+        if isinstance(info, dict):
+            pose_delta = info.get("real_sensor_pose_delta")
+        if pose_delta is None and isinstance(obs, dict):
+            pose_delta = obs.get("sensor_pose")
+        try:
+            pose_delta_values = [float(value) for value in list(pose_delta)[:3]]
+        except Exception:
+            pose_delta_values = []
+
+        pose_delta_m = 0.0
+        pose_delta_yaw_deg = 0.0
+        if len(pose_delta_values) >= 3:
+            pose_delta_m = float(math.hypot(pose_delta_values[0], pose_delta_values[1]))
+            pose_delta_yaw_deg = float(math.degrees(pose_delta_values[2]))
+
+        obstacle_cells = explored_cells = 0
+        map_shape = None
+        if full_map is not None:
+            try:
+                full_map_array = np.asarray(full_map)
+                map_shape = list(full_map_array.shape)
+                if full_map_array.ndim >= 3 and full_map_array.shape[0] >= 2:
+                    obstacle_cells = int(np.count_nonzero(full_map_array[0] > 0.5))
+                    explored_cells = int(np.count_nonzero(full_map_array[1] > 0.5))
+            except Exception:
+                map_shape = None
+
+        floor_cells = 0
+        if floor is not None:
+            try:
+                floor_cells = int(np.count_nonzero(np.asarray(floor) > 0))
+            except Exception:
+                floor_cells = 0
+
+        pose_values = []
+        try:
+            pose_values = [float(value) for value in list(full_pose)[:3]]
+        except Exception:
+            pose_values = []
+
+        if pose_delta_m > 2.0 or abs(pose_delta_yaw_deg) > 120.0:
+            print(
+                "[REAL-MAP] large measured pose delta in map update: "
+                f"delta_m={pose_delta_m:.2f} yaw_deg={pose_delta_yaw_deg:.1f}",
+                flush=True,
+            )
+
+        return {
+            "pose_delta": pose_delta_values,
+            "pose_delta_m": pose_delta_m,
+            "pose_delta_yaw_deg": pose_delta_yaw_deg,
+            "full_pose": pose_values,
+            "global_traj_points": len(global_traj or []),
+            "subtask_traj_points": len(subtask_traj or []),
+            "obstacle_cells": obstacle_cells,
+            "explored_cells": explored_cells,
+            "floor_cells": floor_cells,
+            "map_shape": map_shape,
+            "depth_map_update_disabled": bool(self._depth_map_update_disabled()),
+        }
+
     @staticmethod
     def _real_forward_min_clearance_m() -> float:
         raw_value = str(os.getenv("SPACEVLN_REAL_FORWARD_MIN_CLEARANCE_M", "") or "").strip()
@@ -644,8 +726,8 @@ class RealNavigationAgentController(NavigationAgentController):
         )
         self.latest_info = dict(info or {})
         action_text = (
-            f"TURN_LEFT_{int(round(float(getattr(self, 'latest_lookaround_angle_step_deg', 30.0) or 30.0)))}"
-            f"[{look_index}/{int(getattr(self, 'latest_lookaround_sample_count', 12) or 12)}]"
+            f"TURN_LEFT_{int(round(float(getattr(self, 'latest_lookaround_angle_step_deg', 45.0) or 45.0)))}"
+            f"[{look_index}/{int(getattr(self, 'latest_lookaround_sample_count', 8) or 8)}]"
         )
         transition_rgb = self._save_real_transition_rgb_samples(
             current_step=look_step,
@@ -663,6 +745,9 @@ class RealNavigationAgentController(NavigationAgentController):
         extra = {"step_rgb": step_rgb} if step_rgb else {}
         if transition_rgb:
             extra["transition_rgb"] = list(transition_rgb)
+        map_alignment = self._real_map_alignment_snapshot(obs=obs, info=info)
+        if map_alignment:
+            extra["map_alignment"] = map_alignment
         self._write_real_live_status(
             event="lookaround_step_processed",
             phase=phase,
@@ -701,6 +786,12 @@ class RealNavigationAgentController(NavigationAgentController):
             extra["transition_rgb"] = list(transition_rgb)
         if step_rgb:
             extra["step_rgb"] = step_rgb
+        map_alignment = self._real_map_alignment_snapshot(
+            obs=result_obs if isinstance(result_obs, dict) else None,
+            info=(result or {}).get("info", {}) if isinstance(result, dict) else None,
+        )
+        if map_alignment:
+            extra["map_alignment"] = map_alignment
         self._write_real_live_status(
             event="action_step_processed",
             phase=str(self._current_action_phase()),

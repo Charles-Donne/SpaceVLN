@@ -74,7 +74,7 @@ sudo -E bash real_robot/scripts/run_real_robot_manual.sh \
 ```
 
 Manual mode still starts the automatic cmd_vel executor for the initial
-12-view lookaround scan and refresh turns. Only action-stage commands marked
+8-view lookaround scan and refresh turns. Only action-stage commands marked
 `manual_required=true` are handed to the manual executor. It prints prompts
 such as:
 
@@ -113,8 +113,24 @@ SPACEVLN_REAL_RGB_TRANSITION_SAMPLES=6
 SPACEVLN_REAL_RGB_SAMPLE_BUFFER_SIZE=180
 ```
 
-`SPACEVLN_REAL_RGB_SAMPLE_BUFFER_SIZE` defaults to `360` frames so the 12-view
+`SPACEVLN_REAL_RGB_SAMPLE_BUFFER_SIZE` defaults to `360` frames so the 8-view
 lookaround can still be sampled after the scan completes.
+
+## Map Alignment
+
+Real map fusion uses only synchronized RGB-D observations at low-level step
+endpoints. The extra `between_steps` RGB samples are for video export only and
+are not fed into the mapper, so they cannot shift the accumulated map.
+
+The configured 45-degree turn is only the command target and display label. The
+mapper receives `sensor_pose=[dx, dy, dtheta]` computed from the actual
+odometry/pose before and after each settled low-level action, so a real turn of
+43deg or 47deg is fused with that measured angle.
+
+Each live status step includes a compact `map_alignment` summary with the latest
+pose delta, `full_pose`, global/subtask trajectory counts, and obstacle/explored
+cell counts. If a real pose jump is unusually large, the runtime also prints a
+`[REAL-MAP] large measured pose delta...` warning.
 
 ## Real-Robot Forward Safety
 
