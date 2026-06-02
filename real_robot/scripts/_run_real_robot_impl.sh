@@ -284,6 +284,17 @@ else
     '
   nav_status=${PIPESTATUS[0]}
   set -e
+  if [[ -f "${NAVIGATION_LOG}" ]] && grep -Eq "action status timeout|Lookaround scan failed|Initial lookaround failed" "${NAVIGATION_LOG}"; then
+    echo "[RealRobot] navigation reported low-level action/status failure; log=${NAVIGATION_LOG}" >&2
+    if [[ -f "${EXECUTOR_LOG}" ]]; then
+      echo "[RealRobot] executor log=${EXECUTOR_LOG}" >&2
+      tail -n 120 "${EXECUTOR_LOG}" >&2 || true
+    fi
+    if [[ -f "${MANUAL_EXECUTOR_LOG}" ]]; then
+      echo "[RealRobot] manual executor log=${MANUAL_EXECUTOR_LOG}" >&2
+      tail -n 80 "${MANUAL_EXECUTOR_LOG}" >&2 || true
+    fi
+  fi
   if [[ "${nav_status}" -ne 0 ]]; then
     echo "[RealRobot] navigation failed exit=${nav_status}; log=${NAVIGATION_LOG}" >&2
     if [[ -f "${EXECUTOR_LOG}" ]]; then

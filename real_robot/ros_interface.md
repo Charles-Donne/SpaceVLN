@@ -166,6 +166,10 @@ when the requested fusion window is present. Real map fusion then updates
 obstacle evidence only for observed obstacle or explicit free cells; unknown
 depth samples do not clear or reinforce the map.
 
+ROS2 RealSense `camera_info` subscriptions use `RELIABLE + VOLATILE` QoS. Do not
+request `TRANSIENT_LOCAL` durability for these topics; RealSense publishes
+`camera_info` as volatile and will report a durability incompatibility.
+
 RGB video export samples are separate from map fusion. Only synchronized
 low-level step endpoint observations update the accumulated map, trajectory,
 and obstacle evidence.

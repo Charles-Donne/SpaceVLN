@@ -216,17 +216,13 @@ class Ros2Runtime:
             reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.VOLATILE,
         )
-        qos_reliable_transient = QoSProfile(
-            depth=10,
-            history=HistoryPolicy.KEEP_LAST,
-            reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL,
-        )
         qos_control = QoSProfile(depth=20)
-        qos_camera_profiles = (
+        qos_image_profiles = (
             qos_best_effort,
             qos_reliable,
-            qos_reliable_transient,
+        )
+        qos_camera_info_profiles = (
+            qos_reliable,
         )
         qos_pose_profiles = (
             qos_best_effort,
@@ -273,28 +269,28 @@ class Ros2Runtime:
                 Image,
                 self.config.topics.rgb,
                 self.observation_hub.on_rgb,
-                qos_camera_profiles,
+                qos_image_profiles,
             )
         if str(self.config.topics.depth or "").strip():
             subscribe_many(
                 Image,
                 self.config.topics.depth,
                 self.observation_hub.on_depth,
-                qos_camera_profiles,
+                qos_image_profiles,
             )
         if str(self.config.topics.rgb_camera_info or "").strip():
             subscribe_many(
                 CameraInfo,
                 self.config.topics.rgb_camera_info,
                 self.observation_hub.on_rgb_camera_info,
-                qos_camera_profiles,
+                qos_camera_info_profiles,
             )
         if str(self.config.topics.depth_camera_info or "").strip():
             subscribe_many(
                 CameraInfo,
                 self.config.topics.depth_camera_info,
                 self.observation_hub.on_depth_camera_info,
-                qos_camera_profiles,
+                qos_camera_info_profiles,
             )
         if str(self.config.topics.imu or "").strip():
             subscribe_many(
