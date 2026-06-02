@@ -101,16 +101,20 @@ The runtime prints the exact directory once per episode:
 ```
 
 This directory contains `step_0000_episode_reset_*.jpg`, every lookaround view,
-every low-level action step RGB, and one `between_steps` RGB before the next
-low-level action. The old global 1Hz `real_rgb_stream` recording is disabled to
-avoid writing unnecessary frames.
+every low-level action step RGB, and uniformly sampled `between_steps` RGB
+frames between adjacent low-level steps. The old global 1Hz `real_rgb_stream`
+recording is disabled to avoid writing unnecessary frames.
 
-The `between_steps` frame waits up to `0.5s` for a fresh synchronized camera
-snapshot. Override only if the camera stream is slower:
+By default, each step interval saves up to `4` transition samples, chosen evenly
+by RGB timestamp. Tune this for video export:
 
 ```bash
-SPACEVLN_REAL_BETWEEN_RGB_TIMEOUT_S=0.8
+SPACEVLN_REAL_RGB_TRANSITION_SAMPLES=6
+SPACEVLN_REAL_RGB_SAMPLE_BUFFER_SIZE=180
 ```
+
+`SPACEVLN_REAL_RGB_SAMPLE_BUFFER_SIZE` defaults to `360` frames so the 12-view
+lookaround can still be sampled after the scan completes.
 
 ## Real-Robot Forward Safety
 

@@ -147,8 +147,8 @@ The reference executor publishes terminal success only after it has sent zero
 velocity and the odometry heading stays stable for a short completion window.
 SpaceVLN real RGB artifacts are saved under the current episode's
 `records/step_rgb/`: once for each stopped lookaround turn, once after each
-normal low-level action command finishes, and once between adjacent action
-steps before the next command starts.
+normal low-level action command finishes, and several uniformly sampled
+`between_steps` frames between adjacent low-level step timestamps.
 
 Current reference executor defaults:
 

@@ -38,7 +38,15 @@ class ObservationHub:
     def __init__(self, config: RealRobotConfig):
         self.config = config
         self._condition = threading.Condition()
-        self._rgb_frames: Deque[ImageFrame] = deque(maxlen=max(2, config.image_queue_size))
+        default_rgb_queue_size = max(360, int(config.image_queue_size))
+        try:
+            rgb_queue_size = int(
+                os.getenv("SPACEVLN_REAL_RGB_SAMPLE_BUFFER_SIZE", "")
+                or default_rgb_queue_size
+            )
+        except (TypeError, ValueError):
+            rgb_queue_size = default_rgb_queue_size
+        self._rgb_frames: Deque[ImageFrame] = deque(maxlen=max(64, rgb_queue_size))
         self._depth_frames: Deque[ImageFrame] = deque(maxlen=max(2, config.image_queue_size))
         self._odom_frames: Deque[PoseFrame] = deque(maxlen=max(8, config.pose_queue_size))
         self._pose_frames: Deque[PoseFrame] = deque(maxlen=max(8, config.pose_queue_size))
@@ -102,6 +110,64 @@ class ObservationHub:
                     return
             queue.append(item)
             self._condition.notify_all()
+
+    def sample_rgb_frames_between(
+        self,
+        *,
+        start_stamp: float,
+        end_stamp: float,
+        sample_count: int,
+    ) -> list[ImageFrame]:
+        try:
+            start_value = float(start_stamp)
+            end_value = float(end_stamp)
+        except (TypeError, ValueError):
+            return []
+        if not np.isfinite(start_value) or not np.isfinite(end_value) or end_value <= start_value:
+            return []
+        count = max(0, int(sample_count or 0))
+        if count <= 0:
+            return []
+
+        with self._condition:
+            candidates = [
+                frame
+                for frame in self._rgb_frames
+                if start_value < float(frame.stamp) < end_value
+            ]
+            if not candidates:
+                return []
+
+            targets = np.linspace(start_value, end_value, count + 2, dtype=np.float64)[1:-1]
+            selected_indices = []
+            used_indices = set()
+            for target in targets:
+                best_index = None
+                best_delta = None
+                for index, frame in enumerate(candidates):
+                    if index in used_indices:
+                        continue
+                    delta = abs(float(frame.stamp) - float(target))
+                    if best_delta is None or delta < best_delta:
+                        best_delta = delta
+                        best_index = index
+                if best_index is None:
+                    break
+                used_indices.add(best_index)
+                selected_indices.append(best_index)
+
+            selected_frames = [candidates[index] for index in selected_indices]
+
+        selected_frames.sort(key=lambda frame: float(frame.stamp))
+        return [
+            ImageFrame(
+                stamp=float(frame.stamp),
+                frame_id=str(frame.frame_id),
+                encoding=str(frame.encoding),
+                image=np.array(frame.image, copy=True),
+            )
+            for frame in selected_frames
+        ]
 
     def _message_stamp(self, msg, receive_time: float) -> float:
         from spacevln_real.ros_common import header_stamp

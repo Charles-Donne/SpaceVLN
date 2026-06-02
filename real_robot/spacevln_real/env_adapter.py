@@ -105,19 +105,33 @@ class RealRobotVectorEnv:
             return None
         return self._snapshot_to_obs(self._latest_snapshot, (0.0, 0.0, 0.0))
 
-    def get_fresh_observation(self, timeout_s: float = 0.5) -> Optional[Dict[str, Any]]:
-        before_snapshot = self._latest_snapshot
-        after_stamp = float(before_snapshot.stamp) if before_snapshot is not None else None
-        snapshot = self.observation_hub.wait_for_snapshot(
-            after_stamp=after_stamp,
-            timeout_s=max(0.05, float(timeout_s or 0.5)),
+    def get_rgb_samples_between(
+        self,
+        start_stamp: float,
+        end_stamp: float,
+        sample_count: int = 4,
+    ) -> List[Dict[str, Any]]:
+        frames = self.observation_hub.sample_rgb_frames_between(
+            start_stamp=float(start_stamp),
+            end_stamp=float(end_stamp),
+            sample_count=int(sample_count or 0),
         )
-        if before_snapshot is None:
-            sensor_pose = (0.0, 0.0, 0.0)
-        else:
-            sensor_pose = relative_pose_delta(before_snapshot.pose, snapshot.pose)
-        self._latest_snapshot = snapshot
-        return self._snapshot_to_obs(snapshot, sensor_pose)
+        samples: List[Dict[str, Any]] = []
+        for frame in frames:
+            rgb = self._resize_frame_to_config(
+                np.asarray(frame.image, dtype=np.uint8),
+                name="rgb_sample",
+                interpolation=cv2.INTER_AREA,
+            ).astype(np.uint8, copy=False)
+            samples.append(
+                {
+                    "rgb": rgb,
+                    "timestamp": float(frame.stamp),
+                    "rgb_timestamp": float(frame.stamp),
+                    "frame_id": str(frame.frame_id),
+                }
+            )
+        return samples
 
     def supports_continuous_action_targets(self) -> bool:
         return True
