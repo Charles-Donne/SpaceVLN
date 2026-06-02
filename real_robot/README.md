@@ -73,21 +73,22 @@ sudo -E bash real_robot/scripts/run_real_robot_manual.sh \
   "Move forward, then turn right to enter the corridor. Continue to the exhibition room at the end of the corridor, and stop at the cabinet in the exhibition room."
 ```
 
-Manual mode prints prompts such as:
+Manual mode still starts the automatic cmd_vel executor for the initial
+12-view lookaround scan and refresh turns. Only action-stage commands marked
+`manual_required=true` are handed to the manual executor. It prints prompts
+such as:
 
 - `请手动左转 45.0 deg`
 - `请手动向前走 0.50 m`
 - `请手动停止机器人`
 
-After completing the motion, press Enter. Manual mode defaults
+After completing the motion, input `a` and press Enter. Manual mode defaults
 `SPACEVLN_REAL_ACTION_TIMEOUT_S=3600`, so the agent waits for operator
 confirmation instead of timing out after the normal autonomous-control timeout.
 
 ## RGB Artifacts
 
-There are two RGB outputs:
-
-- Per-step raw RGB:
+RGB frames are saved inside the current episode directory:
 
 ```text
 <episode_dir>/records/step_rgb/
@@ -100,17 +101,16 @@ The runtime prints the exact directory once per episode:
 ```
 
 This directory contains `step_0000_episode_reset_*.jpg`, every lookaround view,
-and every action step RGB. Use this for agent-step debugging.
+every low-level action step RGB, and one `between_steps` RGB before the next
+low-level action. The old global 1Hz `real_rgb_stream` recording is disabled to
+avoid writing unnecessary frames.
 
-- Raw camera stream:
+The `between_steps` frame waits up to `0.5s` for a fresh synchronized camera
+snapshot. Override only if the camera stream is slower:
 
-```text
-[REAL] rgb_stream_dir=/ros2_orin/result/real_robot/.../real_rgb_stream
+```bash
+SPACEVLN_REAL_BETWEEN_RGB_TIMEOUT_S=0.8
 ```
-
-This is a time-sampled stream from the RGB topic. The default interval is 1s and
-can be changed with `SPACEVLN_REAL_RGB_RECORD_INTERVAL_S`. It is not the same as
-per-step saving.
 
 ## Real-Robot Forward Safety
 

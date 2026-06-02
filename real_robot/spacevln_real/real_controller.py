@@ -64,6 +64,53 @@ class RealNavigationAgentController(NavigationAgentController):
             print(f"[WARN] Failed to save real step RGB: {exc}", flush=True)
             return ""
 
+    def _get_latest_real_observation(self, *, fresh: bool = False) -> Optional[Dict[str, Any]]:
+        method_name = "get_fresh_observation" if fresh else "get_latest_observation"
+        timeout_s = max(
+            0.05,
+            float(os.getenv("SPACEVLN_REAL_BETWEEN_RGB_TIMEOUT_S", "0.5") or 0.5),
+        )
+        try:
+            call_at = getattr(self.envs, "call_at", None)
+            if callable(call_at):
+                if fresh:
+                    obs = call_at(0, method_name, timeout_s=timeout_s)
+                else:
+                    obs = call_at(0, method_name)
+            else:
+                getter = getattr(self.envs, method_name, None)
+                if callable(getter):
+                    obs = getter(timeout_s=timeout_s) if fresh else getter()
+                else:
+                    obs = None
+            return obs if isinstance(obs, dict) else None
+        except Exception:
+            return None
+
+    def _save_real_between_step_rgb(self, *, next_action: str = "") -> str:
+        current_step = int(getattr(self, "current_step", 0) or 0)
+        last_low_level_step = getattr(self, "_real_last_low_level_rgb_step", None)
+        if last_low_level_step is None or current_step <= 0:
+            return ""
+        if getattr(self, "_real_between_rgb_saved_after_step", None) == current_step:
+            return ""
+
+        obs = self._get_latest_real_observation(fresh=True)
+        if obs is None:
+            obs = getattr(self, "latest_obs", None)
+        elif isinstance(obs, dict):
+            self.latest_obs = obs
+        action_token = "before_%s" % (str(next_action or "next_action").strip() or "next_action")
+        path = self._save_real_step_rgb(
+            event="between_steps",
+            step=current_step,
+            obs=obs if isinstance(obs, dict) else None,
+            action=action_token,
+        )
+        if path:
+            self._real_between_rgb_saved_after_step = current_step
+        return path
+
     @staticmethod
     def _real_forward_min_clearance_m() -> float:
         raw_value = str(os.getenv("SPACEVLN_REAL_FORWARD_MIN_CLEARANCE_M", "") or "").strip()
@@ -138,6 +185,32 @@ class RealNavigationAgentController(NavigationAgentController):
         )
         return tuple(filtered)
 
+    @staticmethod
+    def _real_manual_motion_mode() -> bool:
+        mode = str(os.getenv("SPACEVLN_REAL_MOTION_MODE", "") or "").strip().lower()
+        executor = str(os.getenv("REAL_ACTION_EXECUTOR", "") or "").strip().lower()
+        return mode == "manual" or executor == "manual"
+
+    @staticmethod
+    def _manual_required_for_action_name(action_name: str) -> bool:
+        action = str(action_name or "").strip().upper()
+        return action in {"MOVE_FORWARD", "TURN_LEFT", "TURN_RIGHT", "STOP"}
+
+    def _build_env_action_payload(
+        self,
+        action_id: int,
+        action_name: Optional[str],
+    ) -> Any:
+        payload = super()._build_env_action_payload(action_id, action_name)
+        if not isinstance(payload, dict):
+            return payload
+        payload["phase"] = str(self._current_action_phase())
+        payload["manual_required"] = bool(
+            self._real_manual_motion_mode()
+            and self._manual_required_for_action_name(str(action_name or ""))
+        )
+        return payload
+
     def _ensure_real_depth_map_disabled_input(self, phase: str) -> str:
         save_manager = getattr(self, "save_manager", None)
         if save_manager is not None:
@@ -166,7 +239,7 @@ class RealNavigationAgentController(NavigationAgentController):
         )
         cv2.putText(
             image,
-            "Use the 8 stopped RGB views and per-view depth obstacle labels.",
+            "Use the stopped RGB views and per-view depth obstacle labels.",
             (70, 345),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.78,
@@ -444,17 +517,9 @@ class RealNavigationAgentController(NavigationAgentController):
     def reset_episode(self, *args, **kwargs):
         result = super().reset_episode(*args, **kwargs)
         self._real_step_rgb_dir_reported = False
-        reset_obs = None
-        try:
-            call_at = getattr(self.envs, "call_at", None)
-            if callable(call_at):
-                reset_obs = call_at(0, "get_latest_observation")
-            else:
-                getter = getattr(self.envs, "get_latest_observation", None)
-                if callable(getter):
-                    reset_obs = getter()
-        except Exception:
-            reset_obs = None
+        self._real_last_low_level_rgb_step = None
+        self._real_between_rgb_saved_after_step = None
+        reset_obs = self._get_latest_real_observation()
         if isinstance(reset_obs, dict):
             self.latest_obs = reset_obs
             self._save_real_step_rgb(event="episode_reset", step=0, obs=reset_obs)
@@ -503,8 +568,8 @@ class RealNavigationAgentController(NavigationAgentController):
         )
         self.latest_info = dict(info or {})
         action_text = (
-            f"TURN_LEFT_{int(round(float(getattr(self, 'latest_lookaround_angle_step_deg', 45.0) or 45.0)))}"
-            f"[{look_index}/{int(getattr(self, 'latest_lookaround_sample_count', 8) or 8)}]"
+            f"TURN_LEFT_{int(round(float(getattr(self, 'latest_lookaround_angle_step_deg', 30.0) or 30.0)))}"
+            f"[{look_index}/{int(getattr(self, 'latest_lookaround_sample_count', 12) or 12)}]"
         )
         step_rgb = self._save_real_step_rgb(
             event="lookaround",
@@ -512,6 +577,8 @@ class RealNavigationAgentController(NavigationAgentController):
             obs=obs,
             action=action_text,
         )
+        if step_rgb:
+            self._real_last_low_level_rgb_step = int(look_step)
         self._write_real_live_status(
             event="lookaround_step_processed",
             phase=phase,
@@ -521,19 +588,24 @@ class RealNavigationAgentController(NavigationAgentController):
 
     def step_with_vlm(self, *args, **kwargs) -> Dict[str, Any]:
         action_name = str(kwargs.get("action_name", "") or "")
-        result = super().step_with_vlm(*args, **kwargs)
         if not action_name and len(args) >= 2:
             action_name = str(args[1] or "")
+        between_rgb = self._save_real_between_step_rgb(next_action=action_name)
+        result = super().step_with_vlm(*args, **kwargs)
         step_rgb = self._save_real_step_rgb(
             event="action",
             step=int(getattr(self, "current_step", 0) or 0),
             obs=(result or {}).get("obs") if isinstance(result, dict) else None,
             action=action_name,
         )
+        if step_rgb:
+            self._real_last_low_level_rgb_step = int(getattr(self, "current_step", 0) or 0)
         extra = {
             "done": bool((result or {}).get("done", False)),
             "info": (result or {}).get("info", {}),
         }
+        if between_rgb:
+            extra["between_step_rgb"] = between_rgb
         if step_rgb:
             extra["step_rgb"] = step_rgb
         self._write_real_live_status(

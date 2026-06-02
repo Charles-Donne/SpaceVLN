@@ -105,6 +105,20 @@ class RealRobotVectorEnv:
             return None
         return self._snapshot_to_obs(self._latest_snapshot, (0.0, 0.0, 0.0))
 
+    def get_fresh_observation(self, timeout_s: float = 0.5) -> Optional[Dict[str, Any]]:
+        before_snapshot = self._latest_snapshot
+        after_stamp = float(before_snapshot.stamp) if before_snapshot is not None else None
+        snapshot = self.observation_hub.wait_for_snapshot(
+            after_stamp=after_stamp,
+            timeout_s=max(0.05, float(timeout_s or 0.5)),
+        )
+        if before_snapshot is None:
+            sensor_pose = (0.0, 0.0, 0.0)
+        else:
+            sensor_pose = relative_pose_delta(before_snapshot.pose, snapshot.pose)
+        self._latest_snapshot = snapshot
+        return self._snapshot_to_obs(snapshot, sensor_pose)
+
     def supports_continuous_action_targets(self) -> bool:
         return True
 
@@ -448,6 +462,8 @@ class RealRobotVectorEnv:
         *,
         target_meters: Optional[float] = None,
         target_degrees: Optional[float] = None,
+        manual_required: bool = False,
+        phase: str = "",
     ) -> ActionCommand:
         command = ActionCommand(
             action=str(action_name),
@@ -456,6 +472,8 @@ class RealRobotVectorEnv:
             angular_speed_deg_s=float(self.config.angular_speed_deg_s),
             session_id=self.session_id,
             step_id=self._steps_taken + 1,
+            manual_required=bool(manual_required),
+            phase=str(phase or ""),
         )
         if action_name == "MOVE_FORWARD":
             command.forward_m = float(target_meters or self.config.forward_step_m)
@@ -498,6 +516,8 @@ class RealRobotVectorEnv:
             command = self._build_command(
                 "TURN_LEFT",
                 target_degrees=step_deg,
+                manual_required=False,
+                phase="lookaround",
             )
             command.timeout_s = command_timeout
             status = self.command_bridge.send_action(command)
@@ -552,6 +572,8 @@ class RealRobotVectorEnv:
             raw_action,
             action_name,
         )
+        manual_required = bool(raw_action.get("manual_required", False)) if isinstance(raw_action, dict) else False
+        phase = str(raw_action.get("phase", "") or "") if isinstance(raw_action, dict) else ""
         before_snapshot = self._latest_snapshot
         if before_snapshot is None:
             self.reset()
@@ -583,6 +605,8 @@ class RealRobotVectorEnv:
                 action_name,
                 target_meters=target_meters,
                 target_degrees=target_degrees,
+                manual_required=manual_required,
+                phase=phase,
             )
             status = self.command_bridge.send_action(command)
 

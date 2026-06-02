@@ -289,12 +289,6 @@ def main() -> int:
     print(f"[REAL] live_status={status_path}", flush=True)
 
     observation_hub = ObservationHub(real_config)
-    rgb_record_dir = os.path.join(config.PATHS.RESULTS_DIR, "real_rgb_stream")
-    observation_hub.configure_rgb_recording(
-        output_dir=rgb_record_dir,
-        interval_s=float(os.getenv("SPACEVLN_REAL_RGB_RECORD_INTERVAL_S", "1.0")),
-    )
-    print(f"[REAL] rgb_stream_dir={rgb_record_dir}", flush=True)
     command_bridge = ActionCommandBridge(real_config)
     ros_runtime = build_ros_runtime(real_config, observation_hub, command_bridge)
     ros_runtime.start()

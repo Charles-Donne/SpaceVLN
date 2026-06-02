@@ -247,6 +247,8 @@ class ActionCommand:
     session_id: str = ""
     step_id: int = 0
     command_id: str = ""
+    manual_required: bool = False
+    phase: str = ""
 
     def ensure_command_id(self) -> str:
         if not self.command_id:
@@ -269,6 +271,8 @@ class ActionCommand:
                 "angular_deg_s": float(self.angular_speed_deg_s or 0.0),
             },
             "timeout_s": float(self.timeout_s or 0.0),
+            "manual_required": bool(self.manual_required),
+            "phase": str(self.phase or ""),
             "stamp": time.time(),
         }
 

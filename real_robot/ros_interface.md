@@ -138,15 +138,17 @@ The low-level controller should execute each command as a closed-loop motion:
 
 - `MOVE_FORWARD`: drive toward the requested distance, typically 0.5m to 1.5m from the VLM action output
 - `TURN_LEFT` / `TURN_RIGHT`: rotate toward the requested angle, 45 degrees in the current real action space
-- `LOOK_AROUND_360`: supported for manual low-level tests; SpaceVLN real lookaround uses eight stopped `TURN_LEFT` commands at 45 degrees each and samples after each turn settles
+- `LOOK_AROUND_360`: supported for manual low-level tests; SpaceVLN real lookaround uses twelve stopped `TURN_LEFT` commands at 30 degrees each and samples after each turn settles
 - `STOP`: stop immediately and publish a terminal status
 
 This should not be implemented as a single open-loop velocity pulse.
 
 The reference executor publishes terminal success only after it has sent zero
 velocity and the odometry heading stays stable for a short completion window.
-SpaceVLN real capture happens after that terminal action status: once for each
-stopped lookaround turn, and once after a normal action command finishes.
+SpaceVLN real RGB artifacts are saved under the current episode's
+`records/step_rgb/`: once for each stopped lookaround turn, once after each
+normal low-level action command finishes, and once between adjacent action
+steps before the next command starts.
 
 Current reference executor defaults:
 
@@ -332,8 +334,9 @@ Example:
 }
 ```
 
-The current runtime defaults to `capture_mode: stream`, which only consumes the
-existing camera stream. If needed, switch to `capture_mode: trigger`.
+The current runtime defaults to `capture_mode: stream`, which consumes the
+existing camera stream without writing a global time-sampled RGB stream. If
+needed, switch to `capture_mode: trigger`.
 
 ## 5. Recommended D435i Parameters
 

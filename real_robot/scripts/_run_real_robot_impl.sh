@@ -66,8 +66,8 @@ export SPACEVLN_RESULTS_FAMILY="${SPACEVLN_RESULTS_FAMILY:-real_robot}"
 export SPACEVLN_OUTPUT_PROFILE="${SPACEVLN_OUTPUT_PROFILE:-debug}"
 export PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"
 export SPACEVLN_ALLOW_GENERIC_WAYPOINT_LABELS="${SPACEVLN_ALLOW_GENERIC_WAYPOINT_LABELS:-1}"
-export SPACEVLN_LOOKAROUND_VIEW_COUNT="${SPACEVLN_LOOKAROUND_VIEW_COUNT:-8}"
-export SPACEVLN_LOOKAROUND_STEP_DEG="${SPACEVLN_LOOKAROUND_STEP_DEG:-45}"
+export SPACEVLN_LOOKAROUND_VIEW_COUNT="${SPACEVLN_LOOKAROUND_VIEW_COUNT:-12}"
+export SPACEVLN_LOOKAROUND_STEP_DEG="${SPACEVLN_LOOKAROUND_STEP_DEG:-30}"
 if [[ "${REAL_ACTION_EXECUTOR}" == "manual" ]]; then
   export SPACEVLN_REAL_ACTION_TIMEOUT_S="${SPACEVLN_REAL_ACTION_TIMEOUT_S:-3600}"
 fi
@@ -126,12 +126,15 @@ if [[ "${REAL_ACTION_EXECUTOR}" == "manual" ]]; then
   echo "[RealRobot] manual_action_timeout_s=${SPACEVLN_REAL_ACTION_TIMEOUT_S}"
 fi
 
-EXECUTOR_PID=""
+EXECUTOR_PIDS=()
 cleanup() {
-  if [[ -n "${EXECUTOR_PID}" ]]; then
-    kill "${EXECUTOR_PID}" >/dev/null 2>&1 || true
-    wait "${EXECUTOR_PID}" >/dev/null 2>&1 || true
-  fi
+  local pid
+  for pid in "${EXECUTOR_PIDS[@]}"; do
+    kill "${pid}" >/dev/null 2>&1 || true
+  done
+  for pid in "${EXECUTOR_PIDS[@]}"; do
+    wait "${pid}" >/dev/null 2>&1 || true
+  done
 }
 trap cleanup EXIT
 
@@ -162,59 +165,65 @@ wait_for_ros2_topic_count() {
 }
 
 if [[ "${START_EXECUTOR}" == "1" ]]; then
+  EXECUTOR_ARGS=(
+    --cmd-vel-topic "${CMD_VEL_TOPIC}"
+    --odom-topic "${ODOM_TOPIC}"
+    --control-mode "${CONTROL_MODE}"
+    --control-rate-hz "${CONTROL_RATE_HZ}"
+    --position-tolerance-m "${POSITION_TOLERANCE_M}"
+    --angle-tolerance-deg "${ANGLE_TOLERANCE_DEG}"
+    --odom-timeout-s "${ODOM_TIMEOUT_S}"
+    --default-linear-speed-mps "${DEFAULT_LINEAR_SPEED_MPS}"
+    --default-angular-speed-deg-s "${DEFAULT_ANGULAR_SPEED_DEG_S}"
+    --max-linear-speed-mps "${MAX_LINEAR_SPEED_MPS}"
+    --max-angular-speed-deg-s "${MAX_ANGULAR_SPEED_DEG_S}"
+    --completion-stability-s "${COMPLETION_STABILITY_S}"
+    --completion-yaw-tolerance-deg "${COMPLETION_YAW_TOLERANCE_DEG}"
+  )
+  if [[ "${REAL_CONSOLE}" == "full" ]]; then
+    python3 -u "${REAL_DIR}/run_cmd_vel_executor.py" "${EXECUTOR_ARGS[@]}" &
+  else
+    python3 -u "${REAL_DIR}/run_cmd_vel_executor.py" "${EXECUTOR_ARGS[@]}" >"${EXECUTOR_LOG}" 2>&1 &
+  fi
+  EXECUTOR_PIDS+=("$!")
+
   if [[ "${REAL_ACTION_EXECUTOR}" == "manual" ]]; then
     MANUAL_EXECUTOR_ARGS=(
       --session-id "${REAL_SESSION_ID}"
       --node-name "spacevln_manual_action_executor_${REAL_SESSION_NODE_SUFFIX}"
+      --manual-required-only
     )
-    if [[ "${REAL_CONSOLE}" == "full" ]]; then
-      python3 -u "${REAL_DIR}/run_manual_action_executor.py" "${MANUAL_EXECUTOR_ARGS[@]}" &
-    else
-      python3 -u "${REAL_DIR}/run_manual_action_executor.py" "${MANUAL_EXECUTOR_ARGS[@]}" >"${MANUAL_EXECUTOR_LOG}" 2>&1 &
-    fi
-  else
-    EXECUTOR_ARGS=(
-      --cmd-vel-topic "${CMD_VEL_TOPIC}"
-      --odom-topic "${ODOM_TOPIC}"
-      --control-mode "${CONTROL_MODE}"
-      --control-rate-hz "${CONTROL_RATE_HZ}"
-      --position-tolerance-m "${POSITION_TOLERANCE_M}"
-      --angle-tolerance-deg "${ANGLE_TOLERANCE_DEG}"
-      --odom-timeout-s "${ODOM_TIMEOUT_S}"
-      --default-linear-speed-mps "${DEFAULT_LINEAR_SPEED_MPS}"
-      --default-angular-speed-deg-s "${DEFAULT_ANGULAR_SPEED_DEG_S}"
-      --max-linear-speed-mps "${MAX_LINEAR_SPEED_MPS}"
-      --max-angular-speed-deg-s "${MAX_ANGULAR_SPEED_DEG_S}"
-      --completion-stability-s "${COMPLETION_STABILITY_S}"
-      --completion-yaw-tolerance-deg "${COMPLETION_YAW_TOLERANCE_DEG}"
-    )
-    if [[ "${REAL_CONSOLE}" == "full" ]]; then
-      python3 -u "${REAL_DIR}/run_cmd_vel_executor.py" "${EXECUTOR_ARGS[@]}" &
-    else
-      python3 -u "${REAL_DIR}/run_cmd_vel_executor.py" "${EXECUTOR_ARGS[@]}" >"${EXECUTOR_LOG}" 2>&1 &
-    fi
+    echo "[RealRobot] manual executor is interactive; type a + Enter after each manual action"
+    python3 -u "${REAL_DIR}/run_manual_action_executor.py" "${MANUAL_EXECUTOR_ARGS[@]}" &
+    EXECUTOR_PIDS+=("$!")
   fi
-  EXECUTOR_PID="$!"
   sleep 1
-  if ! kill -0 "${EXECUTOR_PID}" >/dev/null 2>&1; then
-    echo "[RealRobot] action executor exited before navigation started" >&2
-    if [[ "${REAL_ACTION_EXECUTOR}" == "manual" ]]; then
+  for pid in "${EXECUTOR_PIDS[@]}"; do
+    if ! kill -0 "${pid}" >/dev/null 2>&1; then
+      echo "[RealRobot] action executor exited before navigation started pid=${pid}" >&2
+      if [[ -f "${EXECUTOR_LOG}" ]]; then
+        echo "[RealRobot] executor log=${EXECUTOR_LOG}" >&2
+        tail -n 80 "${EXECUTOR_LOG}" >&2 || true
+      fi
       if [[ -f "${MANUAL_EXECUTOR_LOG}" ]]; then
-        echo "[RealRobot] executor log=${MANUAL_EXECUTOR_LOG}" >&2
+        echo "[RealRobot] manual executor log=${MANUAL_EXECUTOR_LOG}" >&2
         tail -n 80 "${MANUAL_EXECUTOR_LOG}" >&2 || true
       fi
-    elif [[ -f "${EXECUTOR_LOG}" ]]; then
-      echo "[RealRobot] executor log=${EXECUTOR_LOG}" >&2
-      tail -n 80 "${EXECUTOR_LOG}" >&2 || true
+      wait "${pid}" || true
+      exit 1
     fi
-    wait "${EXECUTOR_PID}" || true
-    exit 1
+  done
+  wait_for_ros2_topic_count "${CMD_VEL_TOPIC}" "Subscription count" 1 8 || true
+  if [[ "${REAL_ACTION_EXECUTOR}" == "manual" ]]; then
+    wait_for_ros2_topic_count "/spacevln/action_cmd" "Subscription count" 2 20
+  else
+    wait_for_ros2_topic_count "/spacevln/action_cmd" "Subscription count" 1 20
   fi
-  if [[ "${REAL_ACTION_EXECUTOR}" != "manual" ]]; then
-    wait_for_ros2_topic_count "${CMD_VEL_TOPIC}" "Subscription count" 1 8 || true
+  if [[ "${REAL_ACTION_EXECUTOR}" == "manual" ]]; then
+    wait_for_ros2_topic_count "/spacevln/action_status" "Publisher count" 2 20
+  else
+    wait_for_ros2_topic_count "/spacevln/action_status" "Publisher count" 1 20
   fi
-  wait_for_ros2_topic_count "/spacevln/action_cmd" "Subscription count" 1 20
-  wait_for_ros2_topic_count "/spacevln/action_status" "Publisher count" 1 20
 fi
 
 NAV_ARGS=(

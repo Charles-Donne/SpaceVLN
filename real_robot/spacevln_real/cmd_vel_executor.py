@@ -138,6 +138,13 @@ class CmdVelActionExecutor(Node):
         target = dict(payload.get("target", {}) or {})
         speed_hint = dict(payload.get("speed_hint", {}) or {})
 
+        if bool(payload.get("manual_required", False)):
+            self.get_logger().info(
+                "ignoring manual-required action command_id=%s action=%s"
+                % (command_id or "-", action or "-")
+            )
+            return
+
         if not command_id:
             self.get_logger().warning("ignoring action command without command_id")
             return

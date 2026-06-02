@@ -25,6 +25,7 @@ class ManualExecutorConfig:
     action_cmd_topic: str = "/spacevln/action_cmd"
     action_status_topic: str = "/spacevln/action_status"
     session_id: str = ""
+    manual_required_only: bool = False
 
 
 class ManualActionExecutor(Node):
@@ -50,8 +51,10 @@ class ManualActionExecutor(Node):
         self._println("[ManualExecutor] 手摇模式已启动：不会发布 /cmd_vel。")
         if str(config.session_id or "").strip():
             self._println(f"[ManualExecutor] 只接收 session_id={config.session_id} 的动作命令。")
-        self._println("[ManualExecutor] 每次看到动作提示后，手动操作机器人；完成后按 Enter，agent 会继续下一步。")
-        self._println("[ManualExecutor] 输入 f 后回车可把当前动作标记为 failed；输入 q 后回车标记 emergency_stop。")
+        if bool(config.manual_required_only):
+            self._println("[ManualExecutor] 只处理 manual_required=true 的 action 阶段命令。")
+        self._println("[ManualExecutor] 每次看到动作提示后，手动操作机器人；完成后输入 a 回车，agent 会继续下一步。")
+        self._println("[ManualExecutor] 输入 a 后回车确认完成；输入 f 标记 failed；输入 q 标记 emergency_stop。")
         self._println("")
 
     @staticmethod
@@ -144,6 +147,8 @@ class ManualActionExecutor(Node):
 
         if session_filter and session_id != session_filter:
             return
+        if bool(self.config.manual_required_only) and not bool(payload.get("manual_required", False)):
+            return
 
         if not command_id:
             self.get_logger().warning("ignoring action command without command_id")
@@ -191,21 +196,26 @@ class ManualActionExecutor(Node):
             )
         )
         self._println(f"[ManualExecutor] >>> {self._format_motion(action, target)}")
-        reply = self._readline(
-            "[ManualExecutor] 手动完成后按 Enter 继续；输入 f=failed, q=emergency_stop: "
-        )
-
         state = "done"
         success = True
         message = "operator confirmed manual action complete"
-        if reply.lower() in {"f", "fail", "failed"}:
-            state = "failed"
-            success = False
-            message = "operator marked manual action failed"
-        elif reply.lower() in {"q", "quit", "stop", "emergency", "emergency_stop"}:
-            state = "emergency_stop"
-            success = False
-            message = "operator requested emergency stop"
+        while True:
+            reply = self._readline(
+                "[ManualExecutor] 手动完成后输入 a 回车继续；输入 f=failed, q=emergency_stop: "
+            ).lower()
+            if reply == "a":
+                break
+            if reply in {"f", "fail", "failed"}:
+                state = "failed"
+                success = False
+                message = "operator marked manual action failed"
+                break
+            if reply in {"q", "quit", "stop", "emergency", "emergency_stop"}:
+                state = "emergency_stop"
+                success = False
+                message = "operator requested emergency stop"
+                break
+            self._println("[ManualExecutor] 未确认：请输入 a 继续，或 f/q。")
 
         self._publish_status(
             session_id=session_id,
@@ -235,6 +245,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default="",
         help="Only handle action commands from this real-robot session id",
     )
+    parser.add_argument(
+        "--manual-required-only",
+        action="store_true",
+        help="Ignore commands unless their payload has manual_required=true",
+    )
     return parser
 
 
@@ -246,6 +261,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         action_cmd_topic=str(args.action_cmd_topic),
         action_status_topic=str(args.action_status_topic),
         session_id=str(args.session_id or ""),
+        manual_required_only=bool(args.manual_required_only),
     )
 
     rclpy.init(args=None)
