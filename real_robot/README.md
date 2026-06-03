@@ -154,6 +154,10 @@ bash real_robot/scripts/run_real_robot_auto.sh \
   "enter through the door ahead and stop at the table."
 ```
 
+Real-robot launchers also default `SPACEVLN_DISABLE_CORRIDOR_AUTOSTOP=1`.
+This prevents hallway/corridor/passage/walkway landmarks from ending an action
+stage early. Doorway and solid-object autocomplete are left enabled.
+
 ## Perception Setup
 
 Install Python dependencies:

@@ -388,6 +388,32 @@ class NavigationAgentController(BaseNavigationController):
             "on",
         }
 
+    @staticmethod
+    def _disable_corridor_autostop() -> bool:
+        return str(os.getenv("SPACEVLN_DISABLE_OPENING_AUTOSTOP", "") or "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        } or str(os.getenv("SPACEVLN_DISABLE_CORRIDOR_AUTOSTOP", "") or "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+
+    @staticmethod
+    def _is_corridor_like_autostop_entry(entry: Optional[Dict[str, Any]]) -> bool:
+        if not entry:
+            return False
+        name_text = str(entry.get("name", "") or "").strip().lower()
+        if not name_text:
+            return False
+        return any(
+            keyword in name_text
+            for keyword in ("hallway", "corridor", "passage", "passageway", "walkway")
+        )
+
     def _get_last_effective_turn_action_name(self) -> str:
         action_name_upper = str(
             getattr(self, "last_action_effective_name", "") or getattr(self, "last_action_name", "") or ""
@@ -1615,6 +1641,12 @@ class NavigationAgentController(BaseNavigationController):
             for entry in self._sort_action_landmark_entries(step_landmark_entries or [])
         ]
         for entry in ordered_entries[: int(self.ACTION_SUBTASK_AUTOCOMPLETE_TOPK)]:
+            is_opening_like = bool(self._is_opening_like_landmark_entry(entry))
+            if (
+                self._disable_corridor_autostop()
+                and self._is_corridor_like_autostop_entry(entry)
+            ):
+                continue
             if not self._entry_reaches_action_arrival_threshold(
                 entry,
                 landmark_match_terms=landmark_match_terms,
@@ -1625,7 +1657,7 @@ class NavigationAgentController(BaseNavigationController):
                 "distance_m": float(entry.get('distance_m')),
                 "confidence": float(entry.get('confidence', 0.0) or 0.0),
                 "angle_deg": entry.get('angle_deg'),
-                "is_opening_like": bool(self._is_opening_like_landmark_entry(entry)),
+                "is_opening_like": is_opening_like,
                 "stop_distance_m": float(self._autocomplete_stop_distance_m(entry)),
                 "source": "vis" if str(entry.get("source", "mem") or "mem") == "vis" else "mem",
                 "display_id": self._safe_int(entry.get("display_id")),
