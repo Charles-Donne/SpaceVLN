@@ -791,6 +791,62 @@ class RealNavigationAgentController(NavigationAgentController):
         print(f"\n[ManualPromptOnly] Force replan after {max_subtask_steps} prompt-only steps", flush=True)
         return "thinking"
 
+    def execute_rotation_sequence(self, action_sequence: Sequence[Dict]) -> bool:
+        if not (self._real_manual_motion_mode() and self._real_manual_prompt_only_mode()):
+            return super().execute_rotation_sequence(action_sequence)
+
+        sequence = list(action_sequence or [])
+        if not sequence:
+            return True
+
+        first_action = str(sequence[0].get("action", "") or "").strip().upper()
+        if first_action not in {"TURN_LEFT", "TURN_RIGHT"}:
+            return super().execute_rotation_sequence(action_sequence)
+        if not all(str(item.get("action", "") or "").strip().upper() == first_action for item in sequence):
+            return super().execute_rotation_sequence(action_sequence)
+
+        total_degrees = sum(float(item.get("degrees", 0.0) or 0.0) for item in sequence)
+        direction_text = "左转" if first_action == "TURN_LEFT" else "右转"
+        print(
+            "\n[ManualAlignTurn] planner 要先自动对准方向，但手动模式不会发布 /cmd_vel。",
+            flush=True,
+        )
+        print(
+            f"[ManualAlignTurn] >>> 请手动{direction_text} {float(total_degrees):.1f} deg",
+            flush=True,
+        )
+        while True:
+            reply = self._read_real_operator_line(
+                "[ManualAlignTurn] 手动转向完成后输入 a 回车继续；输入 f 跳过本次对准并回到后续流程: "
+            ).strip().lower()
+            if reply in {"a", "f"}:
+                break
+            print("[ManualAlignTurn] 未确认：请输入 a 继续，或 f。", flush=True)
+        if reply == "f":
+            print("[ManualAlignTurn] operator skipped manual alignment turn", flush=True)
+            return False
+
+        action_id = (
+            resolve_habitat_action("TURN_LEFT")
+            if first_action == "TURN_LEFT"
+            else resolve_habitat_action("TURN_RIGHT")
+        )
+        result = self.step_with_vlm(
+            action_id,
+            f"MANUAL_ALIGN_{first_action}",
+            save_vis=True,
+            enable_landmark_detection=False,
+            env_action={
+                "action": action_id,
+                "manual_observation_only": True,
+                "phase": str(self._current_action_phase()),
+            },
+        )
+        if bool((result or {}).get("done", False)):
+            print("[ManualAlignTurn] Episode ended while refreshing observation after manual turn", flush=True)
+            return False
+        return True
+
     def _run_action_controller(self, max_subtask_steps: int = 8) -> str:
         if self._real_manual_motion_mode() and self._real_manual_prompt_only_mode():
             return self._run_manual_prompt_only_action_controller(

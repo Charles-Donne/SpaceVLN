@@ -103,9 +103,29 @@ Manual mode defaults `SPACEVLN_MANUAL_PROMPT_ONLY=1` and
 `SPACEVLN_DISABLE_LANDMARK_AUTOSTOP=1`, so landmark proximity will not
 automatically finish an action stage.
 
+When the planner requests a pre-action alignment turn, manual mode also keeps it
+manual. It prints the requested turn angle and waits for the operator:
+
+```text
+[ManualAlignTurn] >>> 请手动右转 45.0 deg
+[ManualAlignTurn] 手动转向完成后输入 a 回车继续；输入 f 跳过本次对准并回到后续流程:
+```
+
+After `a`, the runtime captures a fresh RGB-D/pose observation and updates the
+map from the measured real pose. No `/cmd_vel` is published for this alignment
+turn in manual prompt-only mode.
+
 Real-robot launchers default `SPACEVLN_SPACE_AREA_REGION_RADIUS_M=3.0`, so each
 parsed space/area covers a larger local region than the simulation default
 `2.0m`. Override this variable if you need a tighter or looser real map.
+Same-type region connection/merge distances default to `4.0m` on the real robot:
+
+```text
+[RealRobot] space_area_connection_m=4.0 same_type_merge_m=4.0
+```
+
+The merge still requires matching normalized space type; a hallway and lab will
+not be merged just because they are nearby.
 
 ## Finish Gate
 
@@ -160,8 +180,18 @@ lookaround can still be sampled after the scan completes.
 ## Map Alignment
 
 Real map fusion uses only synchronized RGB-D observations at low-level step
-endpoints. The extra `between_steps` RGB samples are for video export only and
-are not fed into the mapper, so they cannot shift the accumulated map.
+endpoints. Every real low-level action endpoint, including the final `STOP`
+observation, is fused into the mapper before the step visualization is saved.
+The extra `between_steps` RGB samples are for video export only and are not fed
+into the mapper, so they cannot shift the accumulated map.
+
+Real launchers default `SPACEVLN_REAL_SAVE_ACTION_MAPS=1`, so each action step
+saves the updated global/local map artifacts with the latest obstacles,
+trajectory, region labels, and boundaries. The launcher prints:
+
+```text
+[RealRobot] save_action_maps=1
+```
 
 The configured 45-degree value is the stopped lookaround target and fallback
 display label, not the map angle. Action-stage turns can use any concrete

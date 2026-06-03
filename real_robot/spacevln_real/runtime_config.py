@@ -271,7 +271,10 @@ def _build_base_config(real_config: RealRobotConfig, max_steps: Optional[int]) -
     config.OUTPUT.REQUESTS = CN(new_allowed=True)
     config.OUTPUT.REQUESTS.SAVE_VLM_ARTIFACTS = True
     config.OUTPUT.MAPS = CN(new_allowed=True)
-    config.OUTPUT.MAPS.SAVE_STEP_ARTIFACTS = False
+    config.OUTPUT.MAPS.SAVE_STEP_ARTIFACTS = bool(
+        str(os.getenv("SPACEVLN_REAL_SAVE_ACTION_MAPS", "1") or "1").strip().lower()
+        in {"1", "true", "yes", "on"}
+    )
     config.OUTPUT.REPLAY = CN(new_allowed=True)
     config.OUTPUT.REPLAY.SAVE_STEP_IMAGES = False
     config.OUTPUT.REPLAY.SAVE_GIF = True

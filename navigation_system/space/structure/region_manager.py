@@ -56,17 +56,32 @@ class RegionManager:
         self.map_shape = map_shape
         self.resolution = resolution
         self.region_radius_m = self._resolve_region_radius_m()
+        self.MAX_CONNECTION_DISTANCE_M = self._resolve_positive_float_env(
+            "SPACEVLN_SPACE_AREA_MAX_CONNECTION_DISTANCE_M",
+            self.MAX_CONNECTION_DISTANCE_M,
+        )
+        self.MAX_SAME_TYPE_WAYPOINT_MERGE_DISTANCE_M = self._resolve_positive_float_env(
+            "SPACEVLN_SPACE_AREA_MAX_SAME_TYPE_WAYPOINT_MERGE_DISTANCE_M",
+            self.MAX_SAME_TYPE_WAYPOINT_MERGE_DISTANCE_M,
+        )
         self.reset()
 
     @classmethod
-    def _resolve_region_radius_m(cls) -> float:
-        raw_value = str(os.getenv("SPACEVLN_SPACE_AREA_REGION_RADIUS_M", "") or "").strip()
+    def _resolve_positive_float_env(cls, name: str, default: float, *, min_value: float = 0.1) -> float:
+        raw_value = str(os.getenv(name, "") or "").strip()
         if raw_value:
             try:
-                return max(0.1, float(raw_value))
+                return max(float(min_value), float(raw_value))
             except ValueError:
                 pass
-        return float(cls.REGION_RADIUS_M)
+        return float(default)
+
+    @classmethod
+    def _resolve_region_radius_m(cls) -> float:
+        return cls._resolve_positive_float_env(
+            "SPACEVLN_SPACE_AREA_REGION_RADIUS_M",
+            cls.REGION_RADIUS_M,
+        )
 
     def reset(self) -> None:
         self.region_records: List[Dict[str, Any]] = []

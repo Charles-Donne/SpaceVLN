@@ -1104,16 +1104,7 @@ class BaseNavigationController:
             print(" → Episode已结束，跳过")
             return self._terminal_step_result()
         obs, rewards, dones, infos = step_data
-        
-        if dones[0]:
-            print(" → Episode结束")
-            return {
-                'obs': obs[0],
-                'reward': rewards[0],
-                'done': dones[0],
-                'info': infos[0],
-                'detected_classes': list(self.detected_classes)
-            }
+        episode_done_after_step = bool(dones[0])
         
         prev_class_count = len(self.detected_classes)
         map_state = None
@@ -1155,6 +1146,7 @@ class BaseNavigationController:
             render_policy = None
             if (
                 bool(getattr(self.output_maps_config, "SAVE_STEP_ARTIFACTS", False))
+                and not bool(getattr(getattr(self.config, "REAL_ROBOT", None), "ENABLED", False))
                 and not enable_landmark_detection
             ):
                 render_policy = {
@@ -1191,6 +1183,8 @@ class BaseNavigationController:
                 self._record_landmark_detection_step(self.current_step, detected_landmarks_step)
 
         self._print_custom_landmark_status(enable_landmark_detection)
+        if episode_done_after_step:
+            print(" → Episode结束")
         
         return {
             'obs': obs[0],
