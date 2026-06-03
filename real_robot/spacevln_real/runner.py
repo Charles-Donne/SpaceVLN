@@ -220,7 +220,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--max-subtask-steps",
         type=int,
-        default=5,
+        default=8,
         help="Maximum low-level steps per subtask",
     )
     parser.add_argument(
@@ -325,7 +325,7 @@ def main() -> int:
         )
         controller.reset_episode(episode_id=episode_id)
         result = controller.run_navigation(
-            max_subtask_steps=int(args.max_subtask_steps or 5),
+            max_subtask_steps=int(args.max_subtask_steps or 8),
         )
         controller._write_real_live_status(
             event="session_finished",

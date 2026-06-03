@@ -7,12 +7,14 @@ import json
 import math
 import os
 import re
+import time
 from typing import Any, Dict, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
 
 from navigation_system.config.core.params.thresholds import OBS_BLOCKED_M
+from navigation_system.controller.action_compat import resolve_habitat_action
 from navigation_system.controller.agent.controller import NavigationAgentController
 from navigation_system.space.map.obstacle_analysis import sample_depth_distance_from_region
 
@@ -348,6 +350,15 @@ class RealNavigationAgentController(NavigationAgentController):
         return mode == "manual" or executor == "manual"
 
     @staticmethod
+    def _real_manual_prompt_only_mode() -> bool:
+        return str(os.getenv("SPACEVLN_MANUAL_PROMPT_ONLY", "") or "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+
+    @staticmethod
     def _manual_required_for_action_name(action_name: str) -> bool:
         action = str(action_name or "").strip().upper()
         return action in {"MOVE_FORWARD", "TURN_LEFT", "TURN_RIGHT", "STOP"}
@@ -546,8 +557,11 @@ class RealNavigationAgentController(NavigationAgentController):
         keys = (
             "subtask_instruction",
             "current_waypoint",
+            "task_progress",
+            "waypoint_chain",
             "next_waypoint",
             "next_waypoint_direction",
+            "subtask_landmark",
             "global_task_finish",
         )
         return self._json_safe({key: subtask.get(key) for key in keys if key in subtask})
@@ -597,6 +611,174 @@ class RealNavigationAgentController(NavigationAgentController):
             progress_summary_for_prompt=progress_summary_for_prompt,
             allowed_action_names=allowed_action_names,
         )
+
+    @staticmethod
+    def _read_real_operator_line(prompt: str) -> str:
+        try:
+            with open("/dev/tty", "r", encoding="utf-8", errors="ignore") as tty_in, open(
+                "/dev/tty", "w", encoding="utf-8", errors="ignore"
+            ) as tty_out:
+                tty_out.write(prompt)
+                tty_out.flush()
+                return str(tty_in.readline() or "").strip()
+        except Exception:
+            try:
+                return str(input(prompt) or "").strip()
+            except EOFError:
+                return ""
+
+    def _prepare_manual_prompt_only_artifacts(
+        self,
+        action_context: Dict[str, Any],
+        *,
+        allowed_action_names: Optional[Sequence[str]],
+    ) -> Dict[str, Any]:
+        action_subtask_instruction = self._sanitize_subtask_instruction_text(
+            self.current_subtask.get("subtask_instruction", ""),
+            self._get_next_waypoint_field(self.current_subtask),
+            self.current_subtask.get("next_waypoint_direction", ""),
+            keep_view_prefix=False,
+        )
+        progress_summary_for_prompt = self._get_action_progress_summary_for_prompt()
+        allowed_action_names = self._filter_real_forward_safety_actions(
+            allowed_action_names,
+            action_context,
+        )
+        preparer = getattr(self.action_executor, "prepare_action_request_artifacts", None)
+        if not callable(preparer):
+            raise RuntimeError("action executor does not support prompt-only artifact preparation")
+        return dict(
+            preparer(
+                next_waypoint=self._get_next_waypoint_field(self.current_subtask),
+                subtask_instruction=action_subtask_instruction,
+                subtask_landmark=self._get_subtask_landmark_field(self.current_subtask),
+                first_person_image=action_context.get("detection_image") or "",
+                progress_summary=progress_summary_for_prompt,
+                waypoint_summary=action_context.get("waypoint_summary", ""),
+                detection_image=action_context.get("detection_image"),
+                detected_landmarks=action_context.get("detected_landmarks"),
+                obstacle_distances=action_context.get("obstacle_distances"),
+                landmark_map_info=action_context.get("action_landmark_map_info"),
+                allowed_action_names=allowed_action_names,
+                save_dir=action_context.get("action_save_dir"),
+            )
+            or {}
+        )
+
+    def _print_manual_prompt_only_artifacts(self, prepared: Dict[str, Any]) -> None:
+        save_dir = str(prepared.get("save_dir") or "").strip()
+        print("\n[ManualPromptOnly] 已保存本步 action VLM 输入，但不会调用 VLM。", flush=True)
+        if save_dir:
+            print(f"[ManualPromptOnly] dir={save_dir}", flush=True)
+            for filename in ("system_prompt.md", "user_prompt.md", "action_view.jpg", "vlm_info.json"):
+                path = os.path.join(save_dir, filename)
+                if os.path.exists(path):
+                    print(f"[ManualPromptOnly] {filename}={path}", flush=True)
+        for record in list(prepared.get("artifact_records") or []):
+            path = str(record.get("artifact_path") or "").strip()
+            if path:
+                print(f"[ManualPromptOnly] artifact={path}", flush=True)
+
+    def _print_manual_prompt_only_subtask(self) -> None:
+        subtask = self._compact_subtask()
+        print("[ManualPromptOnly] 当前 thinking VLM 子任务:", flush=True)
+        if not subtask:
+            print("[ManualPromptOnly]   <empty>", flush=True)
+            return
+        for key in (
+            "current_waypoint",
+            "task_progress",
+            "waypoint_chain",
+            "next_waypoint",
+            "next_waypoint_direction",
+            "subtask_landmark",
+            "subtask_instruction",
+            "global_task_finish",
+        ):
+            if key in subtask:
+                value = subtask.get(key)
+                print(f"[ManualPromptOnly]   {key}: {value}", flush=True)
+
+    def _run_manual_prompt_only_action_controller(self, max_subtask_steps: int = 8) -> str:
+        subtask_steps = 0
+        while subtask_steps < int(max_subtask_steps or 8):
+            if self._episode_done_cached():
+                print("[WARN] Episode already done before manual prompt-only step", flush=True)
+                return "complete"
+
+            action_context = self._build_action_decision_context()
+            if action_context is None:
+                print("[ERR] Manual prompt-only failed to build action context", flush=True)
+                return "thinking"
+
+            force_forward_after_turns_pending = bool(
+                getattr(self, "action_force_forward_after_turns_pending", False)
+            ) and (not self.action_stagnation_retry_pending)
+            allowed_action_names = (
+                ("TURN_LEFT", "TURN_RIGHT", "STOP")
+                if self.action_stagnation_retry_pending
+                else ("MOVE_FORWARD", "STOP")
+                if force_forward_after_turns_pending
+                else None
+            )
+            allowed_action_names = self._apply_immediate_reverse_turn_guard(allowed_action_names)
+            allowed_action_names = self._apply_subtask_avoidance_side_lock_guard(allowed_action_names)
+
+            prepared = self._prepare_manual_prompt_only_artifacts(
+                action_context,
+                allowed_action_names=allowed_action_names,
+            )
+            self._print_manual_prompt_only_artifacts(prepared)
+            self._print_manual_prompt_only_subtask()
+            self._write_real_live_status(
+                event="manual_prompt_ready",
+                phase=str(self._current_action_phase()),
+                action="MANUAL_PROMPT_ONLY",
+                extra={
+                    "action_prompt_dir": str(prepared.get("save_dir") or ""),
+                    "manual_prompt_only": True,
+                },
+            )
+
+            while True:
+                reply = self._read_real_operator_line(
+                    "[ManualPromptOnly] 请根据 prompt/image 手动操作机器人；完成后输入 a 回车继续，f=重规划，q=结束: "
+                ).strip().lower()
+                if reply in {"a", "f", "q"}:
+                    break
+                print("[ManualPromptOnly] 未确认：请输入 a 继续，或 f/q。", flush=True)
+
+            if reply == "q":
+                print("[ManualPromptOnly] operator requested finish", flush=True)
+                return "complete"
+            if reply == "f":
+                print("[ManualPromptOnly] operator requested replan", flush=True)
+                return "thinking"
+
+            result = self.step_with_vlm(
+                resolve_habitat_action("MOVE_FORWARD"),
+                "MANUAL_PROMPT_ONLY",
+                save_vis=True,
+                enable_landmark_detection=False,
+                env_action={
+                    "action": resolve_habitat_action("MOVE_FORWARD"),
+                    "manual_observation_only": True,
+                    "phase": str(self._current_action_phase()),
+                },
+            )
+            if bool((result or {}).get("done", False)):
+                return "complete"
+            subtask_steps += 1
+
+        print(f"\n[ManualPromptOnly] Force replan after {max_subtask_steps} prompt-only steps", flush=True)
+        return "thinking"
+
+    def _run_action_controller(self, max_subtask_steps: int = 8) -> str:
+        if self._real_manual_motion_mode() and self._real_manual_prompt_only_mode():
+            return self._run_manual_prompt_only_action_controller(
+                max_subtask_steps=max_subtask_steps,
+            )
+        return super()._run_action_controller(max_subtask_steps=max_subtask_steps)
 
     def _write_real_live_status(
         self,

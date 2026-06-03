@@ -580,6 +580,11 @@ class RealRobotVectorEnv:
             raise ValueError("real robot env expects one action in a list")
 
         raw_action = actions[0]
+        if isinstance(raw_action, dict) and bool(raw_action.get("manual_observation_only", False)):
+            return self.manual_observation_step(
+                phase=str(raw_action.get("phase", "") or "manual_prompt_only"),
+            )
+
         action_name = self._normalize_action(raw_action)
         target_meters, target_degrees = self._extract_action_targets(
             raw_action,
@@ -653,6 +658,47 @@ class RealRobotVectorEnv:
         self._latest_metrics.update(self._snapshot_sync_metrics(after_snapshot, sensor_pose))
         obs = self._snapshot_to_obs(after_snapshot, sensor_pose)
         return [(obs, 0.0, done, dict(self._latest_metrics))]
+
+    def manual_observation_step(self, *, phase: str = "manual_prompt_only"):
+        before_snapshot = self._latest_snapshot
+        if before_snapshot is None:
+            self.reset()
+            before_snapshot = self._latest_snapshot
+        if before_snapshot is None:
+            raise RuntimeError("real robot env has no initial observation")
+
+        after_snapshot = self.observation_hub.wait_for_snapshot(
+            after_stamp=float(before_snapshot.stamp),
+            timeout_s=float(self.config.observation_timeout_s),
+        )
+        sensor_pose = relative_pose_delta(before_snapshot.pose, after_snapshot.pose)
+        self._path_length_m += float(math.hypot(sensor_pose[0], sensor_pose[1]))
+        self._steps_taken += 1
+        self._latest_snapshot = after_snapshot
+
+        status_payload = {
+            "command_id": "",
+            "session_id": self.session_id,
+            "state": "done",
+            "success": True,
+            "stamp": float(after_snapshot.stamp),
+            "message": "manual prompt-only observation step",
+            "manual_observation_only": True,
+            "phase": str(phase or ""),
+            "executed": {
+                "meters": float(math.hypot(sensor_pose[0], sensor_pose[1])),
+                "degrees": float(abs(math.degrees(sensor_pose[2]))),
+            },
+        }
+        status = ActionStatus.from_payload(status_payload)
+        self._latest_metrics = self._build_metrics(
+            status=status,
+            stop_called=False,
+            done=False,
+        )
+        self._latest_metrics.update(self._snapshot_sync_metrics(after_snapshot, sensor_pose))
+        obs = self._snapshot_to_obs(after_snapshot, sensor_pose)
+        return [(obs, 0.0, False, dict(self._latest_metrics))]
 
     def get_metrics(self) -> Dict[str, Any]:
         return dict(self._latest_metrics)

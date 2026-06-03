@@ -5,9 +5,10 @@ operator-facing runtime now has only two modes:
 
 - `scripts/run_real_robot_auto.sh`: full automatic mode. The agent sends
   `/spacevln/action_cmd` commands and the cmd_vel executor drives `/cmd_vel`.
-- `scripts/run_real_robot_manual.sh`: manual motion mode. The agent prints each
-  requested action and waits for operator confirmation instead of publishing
-  `/cmd_vel`.
+- `scripts/run_real_robot_manual.sh`: manual prompt-only mode. The agent saves
+  the action VLM prompt/image for each step and waits for the operator to move
+  the robot manually; it does not call the action VLM or publish `/cmd_vel` for
+  action-stage motion.
 
 `scripts/_run_real_robot_impl.sh` is the shared internal launcher used by both
 entrypoints. Perception defaults to full GroundingDINO/SAM for both modes; use
@@ -64,6 +65,9 @@ sudo -E bash real_robot/scripts/run_real_robot_auto.sh \
   "enter through the door ahead and stop at the table."
 ```
 
+Each subtask defaults to at most `8` low-level action steps before returning to
+the thinking/planning stage. Override with `MAX_SUBTASK_STEPS=<n>` if needed.
+
 ## Run Manual
 
 ```bash
@@ -73,20 +77,29 @@ sudo -E bash real_robot/scripts/run_real_robot_manual.sh \
   "Move forward, then turn right to enter the corridor. Continue to the exhibition room at the end of the corridor, and stop at the cabinet in the exhibition room."
 ```
 
-Manual mode still starts the automatic cmd_vel executor for the initial
-8-view lookaround scan and refresh turns. Only action-stage commands marked
-`manual_required=true` are handed to the manual executor. Action-stage turns may
-be any VLM-selected angle from 1deg to 180deg, and the action-stage controller
-does not lock turns to one side; left/right can alternate while the total
-consecutive-turn limit remains 3. It prints prompts such as:
+Manual mode still runs the automatic 8-view lookaround scan. After thinking, it
+builds the next action-step context, saves the exact action VLM input artifacts,
+prints the current thinking subtask, and waits for the operator:
 
-- `请手动左转 45.0 deg`
-- `请手动向前走 0.50 m`
-- `请手动停止机器人`
+```text
+[ManualPromptOnly] dir=.../action_step_0001
+[ManualPromptOnly] user_prompt.md=.../user_prompt.md
+[ManualPromptOnly] action_view.jpg=.../action_view.jpg
+[ManualPromptOnly] 当前 thinking VLM 子任务:
+[ManualPromptOnly]   next_waypoint: ...
+[ManualPromptOnly]   subtask_instruction: ...
+[ManualPromptOnly] 请根据 prompt/image 手动操作机器人；完成后输入 a 回车继续，f=重规划，q=结束:
+```
 
-After completing the motion, input `a` and press Enter. Manual mode defaults
-`SPACEVLN_REAL_ACTION_TIMEOUT_S=3600`, so the agent waits for operator
-confirmation instead of timing out after the normal autonomous-control timeout.
+In this mode the action VLM request is not sent, and no VLM result is parsed.
+Move the robot manually after inspecting the prompt/image, then input `a` and
+press Enter. The runtime captures a fresh synchronized RGB-D/pose observation
+and continues from that real pose. Input `f` to return to thinking/replanning,
+or `q` to end the episode.
+
+Manual mode defaults `SPACEVLN_MANUAL_PROMPT_ONLY=1` and
+`SPACEVLN_DISABLE_LANDMARK_AUTOSTOP=1`, so landmark proximity will not
+automatically finish an action stage.
 
 ## RGB Artifacts
 

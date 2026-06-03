@@ -403,6 +403,15 @@ class NavigationAgentController(BaseNavigationController):
         }
 
     @staticmethod
+    def _disable_landmark_autostop() -> bool:
+        return str(os.getenv("SPACEVLN_DISABLE_LANDMARK_AUTOSTOP", "") or "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+
+    @staticmethod
     def _is_corridor_like_autostop_entry(entry: Optional[Dict[str, Any]]) -> bool:
         if not entry:
             return False
@@ -1105,6 +1114,34 @@ class NavigationAgentController(BaseNavigationController):
         payload = getattr(executor, "last_parsed_response_payload", None)
         return self._copy_response_payload(payload, fallback)
 
+    def _format_action_vlm_failure_detail(self) -> str:
+        executor = getattr(self, "action_executor", None)
+        if executor is None:
+            return "action_executor unavailable"
+
+        parts: List[str] = []
+        api_error = str(getattr(executor, "last_call_error", "") or "").strip()
+        if api_error:
+            parts.append(f"api_error={api_error}")
+
+        payload = getattr(executor, "last_parsed_response_payload", None)
+        if isinstance(payload, dict):
+            action_text = str(payload.get("action", "") or "").strip()
+            if action_text:
+                parts.append(f"parsed_action={action_text}")
+            if payload.get("_forbidden_action_name"):
+                parts.append(f"forbidden_action={payload.get('_forbidden_action_name')}")
+            if payload.get("_allowed_action_names"):
+                parts.append(f"allowed={payload.get('_allowed_action_names')}")
+            parts.append(f"fields={sorted(payload.keys())}")
+        else:
+            response_text = str(getattr(executor, "last_response_text", "") or "").strip()
+            if response_text:
+                compact = " ".join(response_text.split())
+                parts.append(f"raw_response={compact[:240]}")
+
+        return "; ".join(parts) if parts else "no response detail available"
+
     def _persist_response_artifacts(
         self,
         *,
@@ -1631,6 +1668,9 @@ class NavigationAgentController(BaseNavigationController):
         self,
         step_landmark_entries: Sequence[Dict[str, Any]],
     ) -> Optional[Dict[str, Any]]:
+        if self._disable_landmark_autostop():
+            return None
+
         landmark_match_terms = self._get_current_subtask_autocomplete_match_terms()
         if not landmark_match_terms:
             return None
@@ -4166,7 +4206,7 @@ class NavigationAgentController(BaseNavigationController):
                 )
 
         if action_id is None:
-            print("[ERR] VLM decision failed")
+            print(f"[ERR] VLM decision failed | {self._format_action_vlm_failure_detail()}")
             return None, None, True, 1, None
 
         if controller_no_vlm_call and isinstance(response, dict):
@@ -4311,7 +4351,7 @@ class NavigationAgentController(BaseNavigationController):
         
         return result
     
-    def _run_action_controller(self, max_subtask_steps: int = 5) -> str:
+    def _run_action_controller(self, max_subtask_steps: int = 8) -> str:
         """Run action decisions until control should return to thinking or the episode ends."""
         subtask_steps = 0
 
@@ -4378,8 +4418,15 @@ class NavigationAgentController(BaseNavigationController):
                         self._clear_action_stagnation_prompt_state()
                     return 'thinking'
 
-                print('[ERR] VLM Action failed after all retries, skipping step')
-                continue
+                print(
+                    "[ERR] VLM Action failed after all retries; "
+                    "return to thinking/replan instead of retrying the same view forever | "
+                    f"{self._format_action_vlm_failure_detail()}"
+                )
+                self._append_progress_note(
+                    "action VLM failed after all retries, so returned to thinking for a fresh replan"
+                )
+                return 'thinking'
 
             if vlm_response and self._is_task_finished(vlm_response):
                 print(f"[DONE] Task complete (action) | steps={self.current_step}")
@@ -4572,7 +4619,7 @@ class NavigationAgentController(BaseNavigationController):
                 print(f'\n[Replan] Force replan after {max_subtask_steps} steps')
                 return 'thinking'
 
-    def run_navigation(self, max_subtask_steps: int = 5) -> Dict[str, Any]:
+    def run_navigation(self, max_subtask_steps: int = 8) -> Dict[str, Any]:
         """Run the top-level scheduler over the thinking controller and action controller."""
         max_steps = self.config.TASK_CONFIG.ENVIRONMENT.MAX_EPISODE_STEPS
         self.timing_tracker.reset()

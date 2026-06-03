@@ -458,6 +458,101 @@ class Executor(BaseAPIClient):
 
         return action_id, action_name, response, degrees, meters, prompt.full_prompt
 
+    def prepare_action_request_artifacts(
+        self,
+        next_waypoint: str,
+        subtask_instruction: str,
+        first_person_image: Any,
+        progress_summary: str = "",
+        waypoint_summary: str = "",
+        subtask_landmark: str = "",
+        detection_image: Any = None,
+        detected_landmarks: str = None,
+        obstacle_distances: Dict[str, str] = None,
+        landmark_map_info: str = None,
+        allowed_action_names: Optional[Sequence[str]] = None,
+        save_dir: str = None,
+    ) -> Dict[str, Any]:
+        """Build and save the action VLM request without calling the VLM API."""
+        if not obstacle_distances:
+            obstacle_distances = {
+                'front': 'Unknown',
+                'left_30': 'Unknown',
+                'right_30': 'Unknown',
+            }
+
+        prompt = build_executor_prompt_bundle(
+            next_waypoint=next_waypoint,
+            subtask_instruction=subtask_instruction,
+            subtask_landmark=subtask_landmark,
+            progress_summary=progress_summary,
+            waypoint_summary=waypoint_summary,
+            detected_landmarks=detected_landmarks,
+            obstacle_distances=obstacle_distances,
+            landmark_map_info=landmark_map_info,
+            allowed_action_names=allowed_action_names,
+            move_distance=float(self.move_distance),
+            turn_angle=int(self.turn_angle),
+            model_name=self.config.model,
+        )
+
+        images = []
+        action_image_input = detection_image if detection_image is not None else first_person_image
+        if isinstance(action_image_input, str):
+            if action_image_input and os.path.exists(action_image_input):
+                images.append(action_image_input)
+            else:
+                print(f"  [WARN] No detection image found")
+        elif action_image_input is not None:
+            images.append(action_image_input)
+        else:
+            print(f"  [WARN] No detection image found")
+
+        artifact_records = []
+        self._set_last_response_artifacts(response_text="", parsed_payload=None)
+        if save_dir and bool(getattr(self, "save_request_artifacts", False)):
+            if getattr(self.config, "wire_api", "chat") == "responses":
+                self.build_responses_input_content(
+                    prompt.user_prompt,
+                    images,
+                    save_dir=save_dir,
+                    no_compress_indices=None,
+                    prompt_artifact_filename="user_prompt.md",
+                    artifact_records=artifact_records,
+                )
+            else:
+                self.build_message_content(
+                    prompt.user_prompt,
+                    images,
+                    save_dir=save_dir,
+                    no_compress_indices=None,
+                    prompt_artifact_filename="user_prompt.md",
+                    artifact_records=artifact_records,
+                )
+            if getattr(prompt, "system_prompt", ""):
+                self._save_text_artifact(save_dir, "system_prompt.md", prompt.system_prompt)
+            self._save_vlm_info_artifact(
+                save_dir,
+                self._build_vlm_info_payload(
+                    usage={},
+                    latency_s=0.0,
+                    success=True,
+                    extra={
+                        "manual_prompt_only": True,
+                        "request_artifacts": artifact_records,
+                    },
+                ),
+            )
+
+        return {
+            "prompt": prompt.full_prompt,
+            "system_prompt": prompt.system_prompt,
+            "user_prompt": prompt.user_prompt,
+            "images": images,
+            "save_dir": save_dir,
+            "artifact_records": artifact_records,
+        }
+
     def _decide_action_from_prompt(
         self,
         *,
