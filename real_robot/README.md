@@ -88,18 +88,24 @@ prints the current thinking subtask, and waits for the operator:
 [ManualPromptOnly] 当前 thinking VLM 子任务:
 [ManualPromptOnly]   next_waypoint: ...
 [ManualPromptOnly]   subtask_instruction: ...
-[ManualPromptOnly] 请根据 prompt/image 手动操作机器人；完成后输入 a 回车继续，f=重规划，q=结束:
+[ManualPromptOnly] 当前子任务指令: ...
+[ManualPromptOnly] 请根据 prompt/image 手动操作机器人；完成后输入 a 回车继续；输入 f 结束当前 subtask 并回 planner:
 ```
 
 In this mode the action VLM request is not sent, and no VLM result is parsed.
 Move the robot manually after inspecting the prompt/image, then input `a` and
 press Enter. The runtime captures a fresh synchronized RGB-D/pose observation
-and continues from that real pose. Input `f` to return to thinking/replanning,
-or `q` to end the episode.
+and continues from that real pose. Input `f` to finish the current subtask and
+return to thinking/replanning; the planner can then choose a new subtask or end
+the task.
 
 Manual mode defaults `SPACEVLN_MANUAL_PROMPT_ONLY=1` and
 `SPACEVLN_DISABLE_LANDMARK_AUTOSTOP=1`, so landmark proximity will not
 automatically finish an action stage.
+
+Real-robot launchers default `SPACEVLN_SPACE_AREA_REGION_RADIUS_M=3.0`, so each
+parsed space/area covers a larger local region than the simulation default
+`2.0m`. Override this variable if you need a tighter or looser real map.
 
 ## RGB Artifacts
 

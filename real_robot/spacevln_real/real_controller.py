@@ -699,6 +699,27 @@ class RealNavigationAgentController(NavigationAgentController):
                 value = subtask.get(key)
                 print(f"[ManualPromptOnly]   {key}: {value}", flush=True)
 
+    def _manual_prompt_only_operator_prompt(self) -> str:
+        subtask = self._compact_subtask()
+        instruction = str(subtask.get("subtask_instruction") or "").strip()
+        next_waypoint = str(subtask.get("next_waypoint") or "").strip()
+        direction = str(subtask.get("next_waypoint_direction") or "").strip()
+        landmark = str(subtask.get("subtask_landmark") or "").strip()
+        if not instruction:
+            instruction = "<empty>"
+        parts = [f"\n[ManualPromptOnly] 当前子任务指令: {instruction}"]
+        if next_waypoint:
+            parts.append(f"[ManualPromptOnly] next_waypoint: {next_waypoint}")
+        if direction:
+            parts.append(f"[ManualPromptOnly] direction: {direction}")
+        if landmark:
+            parts.append(f"[ManualPromptOnly] landmark: {landmark}")
+        parts.append(
+            "[ManualPromptOnly] 请根据 prompt/image 手动操作机器人；"
+            "完成后输入 a 回车继续；输入 f 结束当前 subtask 并回 planner: "
+        )
+        return "\n".join(parts)
+
     def _run_manual_prompt_only_action_controller(self, max_subtask_steps: int = 8) -> str:
         subtask_steps = 0
         while subtask_steps < int(max_subtask_steps or 8):
@@ -742,17 +763,14 @@ class RealNavigationAgentController(NavigationAgentController):
 
             while True:
                 reply = self._read_real_operator_line(
-                    "[ManualPromptOnly] 请根据 prompt/image 手动操作机器人；完成后输入 a 回车继续，f=重规划，q=结束: "
+                    self._manual_prompt_only_operator_prompt()
                 ).strip().lower()
-                if reply in {"a", "f", "q"}:
+                if reply in {"a", "f"}:
                     break
-                print("[ManualPromptOnly] 未确认：请输入 a 继续，或 f/q。", flush=True)
+                print("[ManualPromptOnly] 未确认：请输入 a 继续，或 f。", flush=True)
 
-            if reply == "q":
-                print("[ManualPromptOnly] operator requested finish", flush=True)
-                return "complete"
             if reply == "f":
-                print("[ManualPromptOnly] operator requested replan", flush=True)
+                print("[ManualPromptOnly] operator finished current subtask; return to planner", flush=True)
                 return "thinking"
 
             result = self.step_with_vlm(

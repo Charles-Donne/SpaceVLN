@@ -3,6 +3,7 @@ Persistent region manager built on top of the world semantic map.
 """
 
 from collections import deque
+import os
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 import cv2
@@ -15,6 +16,7 @@ from navigation_system.config.core.params.spatial import (
     SPACE_AREA_MAX_CONNECTED_AREAS,
     SPACE_AREA_MAX_CONNECTION_DISTANCE_M,
     SPACE_AREA_NARROW_PASSAGE_CLEARANCE_M,
+    SPACE_AREA_REGION_RADIUS_M,
     SPACE_AREA_MAX_SAME_TYPE_WAYPOINT_MERGE_DISTANCE_M,
     SPACE_AREA_SAME_TYPE_CONNECTOR_SPLIT_DISTANCE_M,
     SPACE_AREA_SAME_TYPE_MERGE_MIN_CLEARANCE_M,
@@ -48,11 +50,23 @@ class RegionManager:
     SAME_TYPE_MERGE_MIN_CLEARANCE_M = SPACE_AREA_SAME_TYPE_MERGE_MIN_CLEARANCE_M
     MIN_RENDERABLE_AREA_PIXELS = 24
     MIN_SEED_AREA_RADIUS_M = 0.60
+    REGION_RADIUS_M = SPACE_AREA_REGION_RADIUS_M
 
     def __init__(self, map_shape: Tuple[int, int], resolution: int = 5):
         self.map_shape = map_shape
         self.resolution = resolution
+        self.region_radius_m = self._resolve_region_radius_m()
         self.reset()
+
+    @classmethod
+    def _resolve_region_radius_m(cls) -> float:
+        raw_value = str(os.getenv("SPACEVLN_SPACE_AREA_REGION_RADIUS_M", "") or "").strip()
+        if raw_value:
+            try:
+                return max(0.1, float(raw_value))
+            except ValueError:
+                pass
+        return float(cls.REGION_RADIUS_M)
 
     def reset(self) -> None:
         self.region_records: List[Dict[str, Any]] = []
@@ -148,6 +162,7 @@ class RegionManager:
             full_map=full_map,
             full_pose=full_pose,
             crop_offset=crop_offset,
+            max_radius_m=float(self.region_radius_m),
         )
         if not world_pixels:
             # Keep a minimal seed area at the waypoint pose so the parsed label
