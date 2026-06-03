@@ -107,6 +107,26 @@ Real-robot launchers default `SPACEVLN_SPACE_AREA_REGION_RADIUS_M=3.0`, so each
 parsed space/area covers a larger local region than the simulation default
 `2.0m`. Override this variable if you need a tighter or looser real map.
 
+## Finish Gate
+
+Real-robot runs stop only when the planner returns `global_task_finish=true`.
+The simulation-style final-destination streak autostop is disabled for real
+runs. The launcher also enables a strict finish guard:
+
+```text
+[RealRobot] strict_planner_finish_guard=1 planner_finish_near_m=1.0
+```
+
+With this guard, a planner finish is rejected if the final task waypoint does
+not match the planner destination. If the current goal landmark has distance
+evidence, it must be within `1.0m`; visible-but-far or unknown-distance
+landmarks should not finish the task. Override only for debugging:
+
+```bash
+SPACEVLN_PLANNER_FINISH_NEAR_M=0.8
+SPACEVLN_STRICT_PLANNER_FINISH_GUARD=0
+```
+
 ## RGB Artifacts
 
 RGB frames are saved inside the current episode directory:

@@ -33,7 +33,7 @@
 - `task_progress` must be task-ordered natural language pieces, comma-separated, not waypoint arrows.
 - `waypoint_chain` must be task-defined full `space's landmark` nodes; start/current node has `(Current)`, then later task nodes to goal.
 - Do not advance from the start because a later room or landmark is visible.
-- Arrival requires the correct localized space plus the goal landmark/local anchor near/current within about {arrival_near_m}m; obstacle distance is not arrival proof.
+- Arrival requires the correct localized space plus the goal landmark/local anchor current and within <= {arrival_near_m}m; obstacle distance, unknown distance, and merely visible/far cues are not arrival proof.
 - Initial planning must keep `global_task_finish=false`.
 
 **3) Destination + Direction + Instruction + Landmark**

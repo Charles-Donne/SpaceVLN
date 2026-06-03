@@ -44,7 +44,7 @@
 - Mark a stage complete only when the strict current anchor proves its endpoint: correct space plus destination anchor near/current within about {arrival_near_m}m, or exact entrance/outside/stair anchor.
 - `waypoint_chain` must be task-defined full `space's landmark` nodes; nodes before current `(✓)`, current `(Current)`, future unmarked.
 - Do not copy executed Spatial Waypoint Chain into `waypoint_chain`.
-- Arrival requires exact goal space/place and all earlier stages satisfied; landmark goals need correct space plus goal landmark/local anchor near/current within about {arrival_near_m}m.
+- Arrival requires exact goal space/place and all earlier stages satisfied; landmark goals need correct space plus goal landmark/local anchor current and within <= {arrival_near_m}m. Unknown-distance or merely visible/far landmarks are not enough for `global_task_finish=true`.
 - Set `global_task_finish=true` only when the exact goal anchor is proved; otherwise false.
 
 **4) Destination + Direction + Instruction + Landmark**
@@ -83,7 +83,7 @@ Return exactly one JSON object. Keep all reasoning inside `"reasoning"`; no extr
     "next_waypoint_direction": "<one provided IMAGE label only>",
     "subtask_instruction": "<one short executable sentence for the nearest unfinished stage, or stop form if goal reached>",
     "subtask_landmark": "<one visible concrete cue, or empty string>",
-    "global_task_finish": "<true only if exact goal anchor is proved and no earlier piece remains; otherwise false>"
+    "global_task_finish": "<true only if exact goal anchor is proved, no earlier piece remains, and landmark goals are current within <= {arrival_near_m}m; otherwise false>"
 }}
 
 **Example note**: output shape only; never copy content.

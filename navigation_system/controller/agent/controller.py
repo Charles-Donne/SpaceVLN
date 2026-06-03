@@ -74,6 +74,7 @@ from navigation_system.config.core.params.actions import (
 )
 from navigation_system.config.core.params.landmarks import LANDMARK_STRIP_TOPK
 from navigation_system.config.core.params.thresholds import (
+    ARRIVAL_NEAR_M,
     EVAL_SUCCESS_DISTANCE_M,
     LOW_LEVEL_STAGNATION_CAP_M as CFG_LOW_LEVEL_STAGNATION_CAP_M,
     LOW_LEVEL_STAGNATION_RATIO as CFG_LOW_LEVEL_STAGNATION_RATIO,
@@ -1190,6 +1191,89 @@ class NavigationAgentController(BaseNavigationController):
     def _set_response_task_finished(response: Dict[str, Any], value: bool) -> None:
         response["global_task_finish"] = bool(value)
         response.pop("global_landmark_arrival", None)
+
+    def _strict_planner_finish_guard_enabled(self) -> bool:
+        raw_value = str(os.getenv("SPACEVLN_STRICT_PLANNER_FINISH_GUARD", "") or "").strip().lower()
+        if raw_value:
+            return raw_value in {"1", "true", "yes", "on"}
+        try:
+            return bool(getattr(getattr(self.config, "REAL_ROBOT", None), "ENABLED", False))
+        except Exception:
+            return False
+
+    def _planner_finish_near_m(self) -> float:
+        raw_value = str(os.getenv("SPACEVLN_PLANNER_FINISH_NEAR_M", "") or "").strip()
+        if raw_value:
+            try:
+                return max(0.1, float(raw_value))
+            except ValueError:
+                pass
+        return float(ARRIVAL_NEAR_M)
+
+    @classmethod
+    def _extract_finish_landmark_requirement(cls, response: Dict[str, Any]) -> str:
+        landmark = str(cls._get_subtask_landmark_field(response) or "").strip()
+        if not landmark:
+            destination = str(cls._get_next_waypoint_field(response) or "").strip()
+            if "'s " in destination:
+                landmark = destination.rsplit("'s ", 1)[-1].strip()
+        landmark_norm = cls._normalize_landmark_text(landmark)
+        non_object_terms = {
+            "area",
+            "corridor",
+            "door",
+            "doorway",
+            "entrance",
+            "exhibition room",
+            "hall",
+            "hallway",
+            "inside",
+            "lab",
+            "landing",
+            "opening",
+            "outside",
+            "passage",
+            "passageway",
+            "room",
+            "space",
+            "stairs",
+            "threshold",
+            "walkway",
+        }
+        if not landmark_norm or landmark_norm in non_object_terms:
+            return ""
+        return landmark
+
+    def _planner_finish_guard_failure_reason(
+        self,
+        *,
+        response: Dict[str, Any],
+        match_hit: bool,
+    ) -> str:
+        if not self._strict_planner_finish_guard_enabled():
+            return ""
+        if not match_hit:
+            return (
+                "final waypoint-chain goal does not match the planner next_waypoint; "
+                "reject global_task_finish=true"
+            )
+
+        final_info = dict(getattr(self, "previous_subtask_landmark_final_info", {}) or {})
+        distance_m = self._safe_float(final_info.get("final_distance_m"))
+        near_m = self._planner_finish_near_m()
+        required_landmark = self._extract_finish_landmark_requirement(response)
+        if required_landmark and distance_m is None:
+            return (
+                f"final landmark '{required_landmark}' has no current distance evidence; "
+                f"strict finish requires <= {near_m:.2f}m"
+            )
+        if distance_m is not None and distance_m > near_m:
+            name = str(final_info.get("name") or final_info.get("raw_name") or "goal landmark").strip()
+            return (
+                f"final landmark '{name}' is {distance_m:.2f}m away, "
+                f"which is outside strict finish radius {near_m:.2f}m"
+            )
+        return ""
 
     def _build_forced_blocked_front_recovery_action(
         self,
@@ -3501,6 +3585,22 @@ class NavigationAgentController(BaseNavigationController):
             )
         elif previous_match_streak > 0 and self.final_goal_destination_match_streak == 0:
             print("[GoalRegionMatch] streak reset (final waypoint tail no longer matches destination)")
+
+        if task_finished:
+            finish_guard_reason = self._planner_finish_guard_failure_reason(
+                response=response,
+                match_hit=bool(match_hit),
+            )
+            if finish_guard_reason:
+                print(
+                    "[StrictPlannerFinish] "
+                    f"{finish_guard_reason}; force global_task_finish=false"
+                )
+                response = dict(response)
+                self._set_response_task_finished(response, False)
+                response["strict_planner_finish_rejected"] = True
+                response["strict_planner_finish_reject_reason"] = finish_guard_reason
+                task_finished = False
 
         auto_finish_by_streak = (
             self.runtime_options.enable_final_destination_match_autostop and
