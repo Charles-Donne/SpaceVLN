@@ -379,6 +379,15 @@ class NavigationAgentController(BaseNavigationController):
         self.action_force_forward_after_turns_pending = False
         self.action_force_forward_after_turns_notice_text = ""
 
+    @staticmethod
+    def _allow_alternating_turns() -> bool:
+        return str(os.getenv("SPACEVLN_ALLOW_ALTERNATING_TURNS", "") or "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+
     def _get_last_effective_turn_action_name(self) -> str:
         action_name_upper = str(
             getattr(self, "last_action_effective_name", "") or getattr(self, "last_action_name", "") or ""
@@ -388,6 +397,8 @@ class NavigationAgentController(BaseNavigationController):
         return ""
 
     def _build_reverse_turn_guard_progress_notice(self) -> str:
+        if self._allow_alternating_turns():
+            return ""
         last_turn_action = self._get_last_effective_turn_action_name()
         if last_turn_action == "TURN_LEFT":
             return "(constraint: last step turned left; do not immediately turn back right)"
@@ -399,6 +410,8 @@ class NavigationAgentController(BaseNavigationController):
         self,
         allowed_action_names: Optional[Sequence[str]],
     ) -> Optional[Tuple[str, ...]]:
+        if self._allow_alternating_turns():
+            return tuple(allowed_action_names) if allowed_action_names else None
         last_turn_action = self._get_last_effective_turn_action_name()
         if not last_turn_action:
             return tuple(allowed_action_names) if allowed_action_names else None
@@ -446,6 +459,9 @@ class NavigationAgentController(BaseNavigationController):
         self.action_avoidance_forward_retry_subtask_id = self._current_subtask_run_id()
 
     def _get_pending_avoidance_forward_retry_meters(self) -> Optional[float]:
+        if self._allow_alternating_turns():
+            self._clear_subtask_avoidance_forward_retry()
+            return None
         if not bool(getattr(self, "action_avoidance_forward_retry_pending", False)):
             return None
         subtask_id = str(getattr(self, "action_avoidance_forward_retry_subtask_id", "") or "")
@@ -466,6 +482,8 @@ class NavigationAgentController(BaseNavigationController):
         return retry_meters
 
     def _get_active_avoidance_side_lock(self) -> Optional[str]:
+        if self._allow_alternating_turns():
+            return None
         side = str(getattr(self, "action_avoidance_side_lock", "") or "").strip().upper()
         if side not in ("LEFT", "RIGHT"):
             return None
@@ -477,6 +495,8 @@ class NavigationAgentController(BaseNavigationController):
         return side
 
     def _set_subtask_avoidance_side_lock(self, side: Optional[str]) -> None:
+        if self._allow_alternating_turns():
+            return
         side_norm = str(side or "").strip().upper()
         if side_norm not in ("LEFT", "RIGHT"):
             return
@@ -494,6 +514,8 @@ class NavigationAgentController(BaseNavigationController):
             )
 
     def _build_subtask_avoidance_lock_progress_notice(self) -> str:
+        if self._allow_alternating_turns():
+            return ""
         locked_side = self._get_active_avoidance_side_lock()
         if locked_side == "LEFT":
             return "(constraint: obstacle-bypass side is locked to LEFT for this subtask; do not turn back right)"
@@ -505,6 +527,8 @@ class NavigationAgentController(BaseNavigationController):
         self,
         allowed_action_names: Optional[Sequence[str]],
     ) -> Optional[Tuple[str, ...]]:
+        if self._allow_alternating_turns():
+            return tuple(allowed_action_names) if allowed_action_names else None
         locked_side = self._get_active_avoidance_side_lock()
         if locked_side not in ("LEFT", "RIGHT"):
             return tuple(allowed_action_names) if allowed_action_names else None
@@ -525,10 +549,9 @@ class NavigationAgentController(BaseNavigationController):
 
     def _build_action_force_forward_after_turns_notice(self) -> str:
         limit = max(1, int(getattr(self, "ACTION_CONSECUTIVE_TURN_LIMIT", 3) or 3))
-        turn_deg = int(round(float(getattr(self, "turn_angle", 30.0) or 30.0)))
         return (
             f"The last {limit} action decisions were consecutive turns. "
-            f"Do not output `TURN_LEFT {turn_deg}deg` or `TURN_RIGHT {turn_deg}deg` on this call. "
+            "Do not output any `TURN_LEFT*` or `TURN_RIGHT*` action on this call. "
             "If arrival is already satisfied, output `STOP`; otherwise output one `MOVE_FORWARD` action only when FRONT is passable."
         )
 

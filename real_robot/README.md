@@ -75,8 +75,10 @@ sudo -E bash real_robot/scripts/run_real_robot_manual.sh \
 
 Manual mode still starts the automatic cmd_vel executor for the initial
 8-view lookaround scan and refresh turns. Only action-stage commands marked
-`manual_required=true` are handed to the manual executor. It prints prompts
-such as:
+`manual_required=true` are handed to the manual executor. Action-stage turns may
+be any VLM-selected angle from 1deg to 180deg, and the action-stage controller
+does not lock turns to one side; left/right can alternate while the total
+consecutive-turn limit remains 3. It prints prompts such as:
 
 - `请手动左转 45.0 deg`
 - `请手动向前走 0.50 m`
@@ -122,10 +124,13 @@ Real map fusion uses only synchronized RGB-D observations at low-level step
 endpoints. The extra `between_steps` RGB samples are for video export only and
 are not fed into the mapper, so they cannot shift the accumulated map.
 
-The configured 45-degree turn is only the command target and display label. The
-mapper receives `sensor_pose=[dx, dy, dtheta]` computed from the actual
-odometry/pose before and after each settled low-level action, so a real turn of
-43deg or 47deg is fused with that measured angle.
+The configured 45-degree value is the stopped lookaround target and fallback
+display label, not the map angle. Action-stage turns can use any concrete
+VLM-selected angle from 1deg to 180deg, and can switch between left and right
+turns instead of staying locked to one direction. The mapper receives
+`sensor_pose=[dx, dy, dtheta]` computed from the actual odometry/pose before and
+after each settled low-level action, so a commanded 37deg turn that actually
+settles at 35deg is fused with the measured 35deg.
 
 Each live status step includes a compact `map_alignment` summary with the latest
 pose delta, `full_pose`, global/subtask trajectory counts, and obstacle/explored

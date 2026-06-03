@@ -1372,7 +1372,11 @@ def build_waypoint_summary(
                     absolute_angle_deg = math.degrees(math.atan2(dy, dx))
                     relative_bearing_deg = curr_orientation_deg - absolute_angle_deg
                     direction = format_relative_direction(relative_bearing_deg)
-                    spatial_info = f"{distance_m:.1f}m, {direction}"
+                    spatial_info = (
+                        f"{distance_m:.1f}m, {direction} "
+                        f"(raw_bearing={normalize_relative_bearing(relative_bearing_deg):+.1f}deg; "
+                        f"pose=({float(curr_x_m):.2f},{float(curr_y_m):.2f},{float(curr_orientation_deg):.1f}deg))"
+                    )
                     if local_index is not None:
                         reachability_note = _build_waypoint_reachability_note(
                             waypoint_index=local_index,

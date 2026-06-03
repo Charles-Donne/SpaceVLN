@@ -187,6 +187,13 @@ def _fmt_action_meters(value: float) -> str:
     return f"{text}m"
 
 
+def _continuous_turn_targets_enabled() -> bool:
+    return str(
+        os.getenv("SPACEVLN_CONTINUOUS_TURN_TARGETS", "")
+        or os.getenv("SPACEVLN_REAL_CONTINUOUS_TURN_TARGETS", "")
+    ).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _resolve_move_values(move_distance: float = 0.25) -> tuple:
     try:
         base_distance = float(move_distance)
@@ -484,13 +491,14 @@ def _normalize_allowed_action_names(allowed_action_names=None):
 def _build_allowed_action_output(allowed_action_names=None, move_distance: float = 0.25, turn_angle: float = 30) -> str:
     ordered = _normalize_allowed_action_names(allowed_action_names)
     turn_text = _fmt_degrees(turn_angle)
+    turn_target_text = "<1-180deg>" if _continuous_turn_targets_enabled() else f"{turn_text}deg"
     choices = []
     if "MOVE_FORWARD" in ordered:
         choices.extend(_move_action_choices(move_distance))
     if "TURN_LEFT" in ordered:
-        choices.extend([f"TURN_LEFT_AVOID {turn_text}deg", f"TURN_LEFT_ALIGN {turn_text}deg"])
+        choices.extend([f"TURN_LEFT_AVOID {turn_target_text}", f"TURN_LEFT_ALIGN {turn_target_text}"])
     if "TURN_RIGHT" in ordered:
-        choices.extend([f"TURN_RIGHT_AVOID {turn_text}deg", f"TURN_RIGHT_ALIGN {turn_text}deg"])
+        choices.extend([f"TURN_RIGHT_AVOID {turn_target_text}", f"TURN_RIGHT_ALIGN {turn_target_text}"])
     if "STOP" in ordered:
         choices.append("STOP")
     return " | ".join(choices)
@@ -499,6 +507,7 @@ def _build_allowed_action_output(allowed_action_names=None, move_distance: float
 def _build_allowed_action_bullets(allowed_action_names=None, move_distance: float = 0.25, turn_angle: float = 30) -> str:
     ordered = _normalize_allowed_action_names(allowed_action_names)
     turn_text = _fmt_degrees(turn_angle)
+    turn_target_text = "<1-180deg>" if _continuous_turn_targets_enabled() else f"{turn_text}deg"
     lines = []
     if "MOVE_FORWARD" in ordered:
         lines.append(
@@ -506,16 +515,20 @@ def _build_allowed_action_bullets(allowed_action_names=None, move_distance: floa
         )
     if "TURN_LEFT" in ordered:
         lines.append(
-            f"- `TURN_LEFT_AVOID {turn_text}deg` to avoid obstacle only when FRONT <{_fmt_threshold_m(OBS_BLOCKED_M)}m or the current FRONT route is unusable | "
-            f"`TURN_LEFT_ALIGN {turn_text}deg` to align destination landmark"
+            f"- `TURN_LEFT_AVOID {turn_target_text}` to avoid obstacle only when FRONT <{_fmt_threshold_m(OBS_BLOCKED_M)}m or the current FRONT route is unusable | "
+            f"`TURN_LEFT_ALIGN {turn_target_text}` to align destination landmark"
         )
     if "TURN_RIGHT" in ordered:
         lines.append(
-            f"- `TURN_RIGHT_AVOID {turn_text}deg` to avoid obstacle only when FRONT <{_fmt_threshold_m(OBS_BLOCKED_M)}m or the current FRONT route is unusable | "
-            f"`TURN_RIGHT_ALIGN {turn_text}deg` to align destination landmark"
+            f"- `TURN_RIGHT_AVOID {turn_target_text}` to avoid obstacle only when FRONT <{_fmt_threshold_m(OBS_BLOCKED_M)}m or the current FRONT route is unusable | "
+            f"`TURN_RIGHT_ALIGN {turn_target_text}` to align destination landmark"
         )
     if "STOP" in ordered:
         lines.append("- `STOP`: stop only when the current destination is reached")
+    if _continuous_turn_targets_enabled() and (
+        "TURN_LEFT" in ordered or "TURN_RIGHT" in ordered
+    ):
+        lines.append("- For turn actions, replace `<1-180deg>` with one concrete numeric degree value, for example `37deg`; never output the range text itself.")
     return "\n".join(lines)
 
 
@@ -538,7 +551,13 @@ def _build_action_space_constraint_notice(allowed_action_names=None) -> str:
     )
 
 
-def _normalize_action_prompt_text(prompt: str, *, move_distance: float = 0.25, turn_angle: float = 30) -> str:
+def _normalize_action_prompt_text(
+    prompt: str,
+    *,
+    move_distance: float = 0.25,
+    turn_angle: float = 30,
+    append_continuous_turn_note: bool = False,
+) -> str:
     normalized = str(prompt or "")
     turn_text = _fmt_degrees(turn_angle)
     literal_replacements = (
@@ -636,6 +655,15 @@ def _normalize_action_prompt_text(prompt: str, *, move_distance: float = 0.25, t
                 f"{action_prefix} {turn_text}deg",
             )
 
+    if append_continuous_turn_note and _continuous_turn_targets_enabled():
+        normalized += (
+            "\n\n**Real-robot continuous turn note**: turn actions may use any "
+            "degree value from 1deg to 180deg. Choose the smallest useful angle "
+            "from current visual/obstacle evidence; do not assume every turn must "
+            f"be exactly {turn_text}deg. Consecutive turn actions are still limited "
+            "by the controller, so after repeated turns prefer forward progress or valid STOP."
+        )
+
     normalized = re.sub(
         r"(?m)^- \*\*Current-stage only\*\*:.*$",
         "- **Focus**: rely on the current `Instruction`, current `Destination`, visible landmark/route cues, obstacle layout, and `Subtask Progress`.",
@@ -694,7 +722,7 @@ def build_executor_prompt_bundle(
     system_prompt = _normalize_action_prompt_text(_render_executor_system_prompt(
         model_name=model_name,
         prompt_profile=prompt_profile,
-    ), move_distance=move_distance, turn_angle=turn_angle)
+    ), move_distance=move_distance, turn_angle=turn_angle, append_continuous_turn_note=True)
     user_template = _select_prompt_template(
         EXECUTOR_USER_PROMPT,
         FAST_EXECUTOR_USER_PROMPT,

@@ -127,11 +127,11 @@ class ContextCacheExecutor(QwenContextCacheMixin, Executor):
             return None, None, None, 0, 0.0, ""
 
         action_id = action_mapping[action_name]
-        degrees = 0
+        degrees = 0.0
         meters = 0.0
         if action_name in ["TURN_LEFT", "TURN_RIGHT"]:
-            degrees = int(value)
-            response["action"] = f"{self._format_turn_action_label(action_name, action_variant)} {degrees}deg"
+            degrees = float(value)
+            response["action"] = f"{self._format_turn_action_label(action_name, action_variant)} {degrees:g}deg"
         elif action_name == "MOVE_FORWARD":
             meters = float(value)
             response["action"] = f"{action_name} {meters:g}m"
@@ -139,7 +139,7 @@ class ContextCacheExecutor(QwenContextCacheMixin, Executor):
             response["action"] = "STOP"
 
         if action_name in ("TURN_LEFT", "TURN_RIGHT"):
-            info = f"{action_name} {degrees}°"
+            info = f"{action_name} {degrees:g}°"
         elif action_name == "MOVE_FORWARD":
             info = f"{action_name} {meters}m"
         else:

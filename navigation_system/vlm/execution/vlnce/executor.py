@@ -37,6 +37,10 @@ class Executor(BaseAPIClient):
         
         self.turn_angle = turn_angle
         self.move_distance = move_distance
+        self.continuous_turn_targets = str(
+            os.getenv("SPACEVLN_CONTINUOUS_TURN_TARGETS", "")
+            or os.getenv("SPACEVLN_REAL_CONTINUOUS_TURN_TARGETS", "")
+        ).strip().lower() in {"1", "true", "yes", "on"}
         self.VALID_TURN_VALUES = self._resolve_valid_turn_values(turn_angle)
         self.VALID_MOVE_VALUES = self._resolve_valid_move_values(move_distance)
         
@@ -94,6 +98,17 @@ class Executor(BaseAPIClient):
             return (angle,)
         return VALID_TURN_DEGREES
 
+    def _normalize_turn_value(self, value):
+        if self.continuous_turn_targets:
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError):
+                return None
+            if not (1.0 <= numeric <= 180.0):
+                return None
+            return float(numeric)
+        return self._normalize_allowed_value(value, self.VALID_TURN_VALUES)
+
     @staticmethod
     def _extract_action_variant(action_raw: Any) -> str:
         command = str(action_raw or "").strip().upper().replace("DEGREES", "DEG")
@@ -125,14 +140,14 @@ class Executor(BaseAPIClient):
 
         if command.startswith('TURN_LEFT_AVOID'):
             suffix = command[len('TURN_LEFT_AVOID'):].strip().replace('DEG', '').strip()
-            normalized = self._normalize_allowed_value(suffix, self.VALID_TURN_VALUES)
+            normalized = self._normalize_turn_value(suffix)
             if normalized is None:
                 return None
             return 'TURN_LEFT', float(normalized)
 
         if command.startswith('TURN_LEFT_ALIGN'):
             suffix = command[len('TURN_LEFT_ALIGN'):].strip().replace('DEG', '').strip()
-            normalized = self._normalize_allowed_value(suffix, self.VALID_TURN_VALUES)
+            normalized = self._normalize_turn_value(suffix)
             if normalized is None:
                 return None
             return 'TURN_LEFT', float(normalized)
@@ -140,23 +155,23 @@ class Executor(BaseAPIClient):
         if command.startswith('TURN_LEFT'):
             suffix = command[len('TURN_LEFT'):].strip().replace('DEG', '').strip()
             if not suffix and 'value' in response:
-                normalized = self._normalize_allowed_value(response.get('value'), self.VALID_TURN_VALUES)
+                normalized = self._normalize_turn_value(response.get('value'))
             else:
-                normalized = self._normalize_allowed_value(suffix, self.VALID_TURN_VALUES)
+                normalized = self._normalize_turn_value(suffix)
             if normalized is None:
                 return None
             return 'TURN_LEFT', float(normalized)
 
         if command.startswith('TURN_RIGHT_AVOID'):
             suffix = command[len('TURN_RIGHT_AVOID'):].strip().replace('DEG', '').strip()
-            normalized = self._normalize_allowed_value(suffix, self.VALID_TURN_VALUES)
+            normalized = self._normalize_turn_value(suffix)
             if normalized is None:
                 return None
             return 'TURN_RIGHT', float(normalized)
 
         if command.startswith('TURN_RIGHT_ALIGN'):
             suffix = command[len('TURN_RIGHT_ALIGN'):].strip().replace('DEG', '').strip()
-            normalized = self._normalize_allowed_value(suffix, self.VALID_TURN_VALUES)
+            normalized = self._normalize_turn_value(suffix)
             if normalized is None:
                 return None
             return 'TURN_RIGHT', float(normalized)
@@ -164,9 +179,9 @@ class Executor(BaseAPIClient):
         if command.startswith('TURN_RIGHT'):
             suffix = command[len('TURN_RIGHT'):].strip().replace('DEG', '').strip()
             if not suffix and 'value' in response:
-                normalized = self._normalize_allowed_value(response.get('value'), self.VALID_TURN_VALUES)
+                normalized = self._normalize_turn_value(response.get('value'))
             else:
-                normalized = self._normalize_allowed_value(suffix, self.VALID_TURN_VALUES)
+                normalized = self._normalize_turn_value(suffix)
             if normalized is None:
                 return None
             return 'TURN_RIGHT', float(normalized)
@@ -421,11 +436,11 @@ class Executor(BaseAPIClient):
 
         action_id = action_mapping[action_name]
 
-        degrees = 0
-        meters = 0
+        degrees = 0.0
+        meters = 0.0
         if action_name in ['TURN_LEFT', 'TURN_RIGHT']:
-            degrees = int(value)
-            response['action'] = f"{self._format_turn_action_label(action_name, action_variant)} {degrees}deg"
+            degrees = float(value)
+            response['action'] = f"{self._format_turn_action_label(action_name, action_variant)} {degrees:g}deg"
         elif action_name == 'MOVE_FORWARD':
             meters = float(value)
             response['action'] = f"{action_name} {meters:g}m"
@@ -434,7 +449,7 @@ class Executor(BaseAPIClient):
         
         # 简洁输出：动作 + 执行结果
         if action_name in ('TURN_LEFT', 'TURN_RIGHT'):
-            info = f"{action_name} {degrees}°"
+            info = f"{action_name} {degrees:g}°"
         elif action_name == 'MOVE_FORWARD':
             info = f"{action_name} {meters}m"
         else:

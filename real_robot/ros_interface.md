@@ -137,7 +137,7 @@ To keep ROS2 integration lightweight, the runtime uses:
 The low-level controller should execute each command as a closed-loop motion:
 
 - `MOVE_FORWARD`: drive toward the requested distance, typically 0.5m to 1.5m from the VLM action output
-- `TURN_LEFT` / `TURN_RIGHT`: rotate toward the requested angle, 45 degrees in the current real action space
+- `TURN_LEFT` / `TURN_RIGHT`: rotate toward the requested angle; action-stage SpaceVLN commands may request any concrete angle from 1deg to 180deg and may alternate left/right across steps
 - `LOOK_AROUND_360`: supported for manual low-level tests; SpaceVLN real lookaround uses eight stopped `TURN_LEFT` commands at 45 degrees each and samples after each turn settles
 - `STOP`: stop immediately and publish a terminal status
 

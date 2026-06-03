@@ -42,7 +42,6 @@ ACTION_NAME_ALIASES = {
 }
 
 REAL_MOVE_TARGETS_M = (0.5, 0.75, 1.0, 1.25, 1.5)
-REAL_TURN_TARGET_DEG = 45.0
 REAL_FORWARD_MIN_CLEARANCE_M = 0.5
 
 
@@ -211,7 +210,7 @@ class RealRobotVectorEnv:
         if action_name == "MOVE_FORWARD":
             target_meters = self._quantize_move_target_meters(target_meters)
         elif action_name in {"TURN_LEFT", "TURN_RIGHT"} and target_degrees is None:
-            target_degrees = REAL_TURN_TARGET_DEG
+            target_degrees = float(self.config.turn_angle_deg)
         return target_meters, target_degrees
 
     def _capture_if_needed(self, reason: str) -> None:
