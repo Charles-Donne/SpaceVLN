@@ -38,6 +38,16 @@ from navigation_system.space.geometry.connectivity import (
     query_world_distance_from_field_m,
 )
 from navigation_system.space.geometry.map_projection import RotatedMapProjector
+from navigation_system.space.geometric import (
+    GeometricCandidate,
+    GeometricPlan,
+    GeometricPlannerConfig,
+    GeometricWaypointPlanner,
+)
+from navigation_system.space.geometric.waypoint_planner import (
+    render_candidate_map,
+    serialize_candidates,
+)
 from navigation_system.space.landmarks.vocabulary import normalize_landmark_text
 from navigation_system.controller.action_compat import resolve_habitat_action
 from navigation_system.controller.base_controller import BaseNavigationController
@@ -147,6 +157,7 @@ class NavigationAgentController(BaseNavigationController):
             f"TURN_LEFT ({self.turn_angle}°), TURN_RIGHT ({self.turn_angle}°), STOP"
         )
         self.latest_action_local_map_debug_lines = []
+        self.geometric_waypoint_planner = self._build_geometric_waypoint_planner()
 
         self.model_stack_builder = model_stack_builder
         if self.model_stack_builder is None:
@@ -172,6 +183,31 @@ class NavigationAgentController(BaseNavigationController):
         self.nav_visualizer = None
         self._reset_vlm_episode_state()
 
+    def _build_geometric_waypoint_planner(self) -> GeometricWaypointPlanner:
+        options = getattr(self, "runtime_options", None)
+        cfg = GeometricPlannerConfig(
+            enabled=bool(getattr(options, "geometric_waypoint_enabled", False)),
+            max_candidates=int(getattr(options, "geometric_waypoint_max_candidates", 5) or 5),
+            min_candidate_distance_m=float(getattr(options, "geometric_waypoint_min_distance_m", 0.8) or 0.8),
+            max_candidate_distance_m=float(getattr(options, "geometric_waypoint_max_distance_m", 4.0) or 4.0),
+            candidate_stride_m=float(getattr(options, "geometric_waypoint_stride_m", 0.75) or 0.75),
+            obstacle_inflation_radius_m=float(
+                getattr(options, "geometric_waypoint_obstacle_inflation_radius_m", 0.30) or 0.30
+            ),
+            unknown_as_obstacle=bool(getattr(options, "geometric_waypoint_unknown_as_obstacle", True)),
+            min_clearance_m=float(getattr(options, "geometric_waypoint_min_clearance_m", 0.20) or 0.20),
+            path_step_m=float(getattr(options, "geometric_waypoint_path_step_m", 0.35) or 0.35),
+            waypoint_arrival_radius_m=float(
+                getattr(options, "geometric_waypoint_arrival_radius_m", 0.35) or 0.35
+            ),
+            max_path_execute_steps=int(
+                getattr(options, "geometric_waypoint_max_path_execute_steps", 12) or 12
+            ),
+            max_turn_per_action_deg=float(self.turn_angle),
+            stop_on_blocked_front=bool(getattr(options, "geometric_waypoint_stop_on_blocked_front", True)),
+        )
+        return GeometricWaypointPlanner(cfg, resolution_cm=float(self.resolution))
+
     def _reset_vlm_episode_state(self) -> None:
         self.current_subtask = None
         self.subtask_count = 0
@@ -196,6 +232,9 @@ class NavigationAgentController(BaseNavigationController):
         self.action_consecutive_turn_count = 0
         self.action_force_forward_after_turns_pending = False
         self.action_force_forward_after_turns_notice_text = ""
+        self.geometric_failed_waypoints = []
+        self.geometric_last_plan = None
+        self.geometric_last_candidates = []
         self.verify_replan_prompt_notice = ""
         self.pending_verify_view_restriction = None
         self.previous_subtask_landmark_final_info = None
@@ -3953,6 +3992,538 @@ class NavigationAgentController(BaseNavigationController):
             "action_landmark_map_info": action_landmark_map_info,
         }
 
+    def _geometric_waypoint_enabled(self) -> bool:
+        return bool(
+            getattr(getattr(self, "runtime_options", None), "geometric_waypoint_enabled", False)
+            and self.geometric_waypoint_planner is not None
+            and getattr(getattr(self, "geometric_waypoint_planner", None), "config", None) is not None
+            and bool(getattr(self.geometric_waypoint_planner.config, "enabled", False))
+        )
+
+    @staticmethod
+    def _pose_yaw_rad(pose: Optional[Sequence[float]]) -> float:
+        if pose is None or len(pose) < 3:
+            return 0.0
+        yaw = float(pose[2])
+        if abs(yaw) > (2.0 * math.pi + 1e-6):
+            yaw = math.radians(yaw)
+        return yaw
+
+    @staticmethod
+    def _pose_heading_deg(pose: Optional[Sequence[float]]) -> float:
+        if pose is None or len(pose) < 3:
+            return 0.0
+        heading = float(pose[2])
+        if abs(heading) <= (2.0 * math.pi + 1e-6):
+            heading = math.degrees(heading)
+        return heading
+
+    @staticmethod
+    def _normalize_angle_rad(angle: float) -> float:
+        while angle > math.pi:
+            angle -= 2.0 * math.pi
+        while angle < -math.pi:
+            angle += 2.0 * math.pi
+        return float(angle)
+
+    def _is_failed_geometric_candidate(self, candidate: GeometricCandidate) -> bool:
+        for item in list(getattr(self, "geometric_failed_waypoints", []) or []):
+            try:
+                dx = float(candidate.world_x_m) - float(item.get("world_x_m", 0.0))
+                dy = float(candidate.world_y_m) - float(item.get("world_y_m", 0.0))
+                if math.hypot(dx, dy) <= 0.6:
+                    return True
+            except (TypeError, ValueError):
+                continue
+        return False
+
+    def _remember_failed_geometric_candidate(self, candidate: Optional[GeometricCandidate], reason: str) -> None:
+        if candidate is None:
+            return
+        entries = list(getattr(self, "geometric_failed_waypoints", []) or [])
+        entries.append({
+            "world_x_m": float(candidate.world_x_m),
+            "world_y_m": float(candidate.world_y_m),
+            "candidate_id": int(candidate.candidate_id),
+            "step": int(getattr(self, "current_step", 0) or 0),
+            "reason": str(reason or "unknown"),
+        })
+        self.geometric_failed_waypoints = entries[-24:]
+
+    def _build_geometric_waypoint_candidates(
+        self,
+    ) -> Tuple[List[GeometricCandidate], Dict[int, List[Tuple[int, int]]], Dict[str, Any]]:
+        mapper = getattr(self, "mapper", None)
+        if mapper is None or getattr(mapper, "full_map", None) is None:
+            return [], {}, {"reason": "missing_mapper_map"}
+        map_state = mapper.get_map_state()
+        candidates, candidate_paths = self.geometric_waypoint_planner.build_candidates(
+            full_map=map_state.get("full_map"),
+            pose_xytheta=map_state.get("full_pose"),
+            crop_offset=map_state.get("crop_offset"),
+            trajectory_points=map_state.get("global_trajectory_points"),
+        )
+        candidates = [
+            candidate
+            for candidate in candidates
+            if not self._is_failed_geometric_candidate(candidate)
+        ]
+        candidate_paths = {
+            int(candidate.candidate_id): candidate_paths.get(int(candidate.candidate_id), [])
+            for candidate in candidates
+        }
+        debug = dict(self.geometric_waypoint_planner.last_debug or {})
+        debug["failed_waypoints"] = list(getattr(self, "geometric_failed_waypoints", []) or [])
+        debug["returned_candidate_count"] = int(len(candidates))
+        self.geometric_waypoint_planner._last_debug = debug
+        return candidates, candidate_paths, map_state
+
+    def _write_geometric_artifacts(
+        self,
+        *,
+        save_dir: Optional[str],
+        map_state: Dict[str, Any],
+        candidates: Sequence[GeometricCandidate],
+        candidate_paths: Dict[int, List[Tuple[int, int]]],
+        selected_action: Optional[str] = None,
+        plan: Optional[GeometricPlan] = None,
+        status: str = "candidate",
+        reason: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        runtime_options = getattr(self, "runtime_options", None)
+        if runtime_options is not None and not bool(getattr(runtime_options, "save_api_request_artifacts", True)):
+            return None
+        target_dir = str(save_dir or "").strip()
+        if not target_dir:
+            return None
+        os.makedirs(target_dir, exist_ok=True)
+
+        candidate_map = render_candidate_map(
+            full_map=map_state.get("full_map"),
+            candidates=candidates,
+            plan=plan,
+            output_size_px=512,
+        )
+        candidate_map_input = None
+        if candidate_map is not None:
+            image_path = os.path.join(target_dir, "geometric_waypoints.jpg")
+            cv2.imwrite(image_path, candidate_map)
+            candidate_map_input = {
+                "path": image_path,
+                "artifact_name": "geometric_waypoints.jpg",
+                "name": "geometric_waypoints",
+            }
+
+        payload = {
+            "status": str(status or ""),
+            "reason": str(reason or ""),
+            "step": int(getattr(self, "current_step", 0) or 0),
+            "selected_action": selected_action,
+            "planner_debug": dict(getattr(self.geometric_waypoint_planner, "last_debug", {}) or {}),
+            "candidates": serialize_candidates(candidates),
+            "candidate_paths": {
+                str(key): [[int(row), int(col)] for row, col in list(path or [])]
+                for key, path in dict(candidate_paths or {}).items()
+            },
+            "plan": plan.to_dict() if plan is not None else None,
+            "failed_waypoints": list(getattr(self, "geometric_failed_waypoints", []) or []),
+        }
+        self._write_json_artifact(os.path.join(target_dir, "geometric_waypoints.json"), payload)
+        return candidate_map_input
+
+    def _fallback_geometric_turn_action(
+        self,
+        selected_action: str,
+    ) -> Tuple[Optional[int], Optional[str], int, Dict[str, Any]]:
+        action = str(selected_action or "").strip().upper()
+        if action == "L":
+            return resolve_habitat_action("TURN_LEFT"), "TURN_LEFT", int(round(float(self.turn_angle))), {
+                "reasoning": "The waypoint selector requested a left reorientation.",
+                "action": "L",
+                "geometric_turn": True,
+            }
+        if action == "R":
+            return resolve_habitat_action("TURN_RIGHT"), "TURN_RIGHT", int(round(float(self.turn_angle))), {
+                "reasoning": "The waypoint selector requested a right reorientation.",
+                "action": "R",
+                "geometric_turn": True,
+            }
+        if action == "B":
+            return resolve_habitat_action("TURN_LEFT"), "TURN_LEFT", 180, {
+                "reasoning": "The waypoint selector requested a back turn.",
+                "action": "B",
+                "geometric_turn": True,
+            }
+        return None, None, 0, {}
+
+    def _target_action_from_plan(
+        self,
+        action_points: Sequence[Tuple[float, float]],
+        target_index: int,
+    ) -> Tuple[Optional[int], Optional[str], float, float, int]:
+        current_pose = self._get_agent_pose()
+        if current_pose is None or len(current_pose) < 2:
+            return None, None, 0.0, 0.0, target_index
+        curr_x, curr_y = float(current_pose[0]), float(current_pose[1])
+        yaw = self._pose_yaw_rad(current_pose)
+        arrival_radius = float(self.geometric_waypoint_planner.config.waypoint_arrival_radius_m)
+        points = list(action_points or [])
+        while target_index < len(points):
+            target_x, target_y = points[target_index]
+            if math.hypot(float(target_x) - curr_x, float(target_y) - curr_y) > arrival_radius:
+                break
+            target_index += 1
+        if target_index >= len(points):
+            return None, None, 0.0, 0.0, target_index
+
+        target_x, target_y = points[target_index]
+        dx = float(target_x) - curr_x
+        dy = float(target_y) - curr_y
+        distance_m = math.hypot(dx, dy)
+        desired_yaw = math.atan2(dy, dx)
+        angle_diff = self._normalize_angle_rad(desired_yaw - yaw)
+        max_turn_deg = max(1.0, float(self.geometric_waypoint_planner.config.max_turn_per_action_deg))
+        if abs(math.degrees(angle_diff)) > 5.0:
+            if angle_diff > 0:
+                return resolve_habitat_action("TURN_LEFT"), "TURN_LEFT", min(abs(math.degrees(angle_diff)), max_turn_deg), 0.0, target_index
+            return resolve_habitat_action("TURN_RIGHT"), "TURN_RIGHT", min(abs(math.degrees(angle_diff)), max_turn_deg), 0.0, target_index
+
+        move_m = min(
+            max(float(self.move_distance), distance_m),
+            max(float(self.move_distance), float(self.geometric_waypoint_planner.config.path_step_m)),
+        )
+        move_m = min(move_m, distance_m)
+        return resolve_habitat_action("MOVE_FORWARD"), "MOVE_FORWARD", 0.0, float(move_m), target_index
+
+    def _execute_geometric_plan(
+        self,
+        plan: GeometricPlan,
+        vlm_response: Optional[Dict[str, Any]],
+        save_dir: Optional[str] = None,
+    ) -> str:
+        if plan is None:
+            return "thinking"
+        max_steps = int(self.geometric_waypoint_planner.config.max_path_execute_steps)
+        target_index = 1
+        executed_points: List[Dict[str, Any]] = []
+        stagnation_threshold_m = self._get_low_level_stagnation_threshold_m()
+        action_phase = self._current_action_phase()
+
+        for _idx in range(max_steps):
+            if self._episode_done_cached():
+                return self._finish_geometric_plan_execution(plan, vlm_response, executed_points, "complete", save_dir)
+            if self._should_hold_last_episode_step_for_stop("MOVE_FORWARD"):
+                return self._finish_geometric_plan_execution(plan, vlm_response, executed_points, "thinking", save_dir)
+
+            action_id, action_name, degrees, meters, target_index = self._target_action_from_plan(
+                plan.action_points,
+                target_index,
+            )
+            if action_id is None or action_name is None:
+                self.progress_summary = self.action_executor._generate_progress_update(
+                    current_progress=self.progress_summary,
+                    action_name="MOVE_FORWARD",
+                    meters=0.0,
+                    actual_meters=0.0,
+                )
+                return self._finish_geometric_plan_execution(plan, vlm_response, executed_points, "waypoint_reached", save_dir)
+
+            if (
+                action_name == "MOVE_FORWARD"
+                and bool(self.geometric_waypoint_planner.config.stop_on_blocked_front)
+                and self._is_obstacle_distance_blocked(
+                    (getattr(self, "latest_obstacle_distances", {}) or {}).get("front")
+                )
+            ):
+                self._remember_failed_geometric_candidate(plan.candidate, "front_blocked_before_step")
+                self._append_progress_note("geometric path blocked by front obstacle before forward execution")
+                return self._finish_geometric_plan_execution(plan, vlm_response, executed_points, "blocked", save_dir)
+
+            pose_before_low_level = self._get_agent_pose()
+            self.last_planned_degrees = degrees
+            self.last_planned_meters = meters
+            self.last_action_name = action_name
+            env_action = self._build_env_action_payload(action_id, action_name)
+            result = self.step_with_vlm(
+                action_id,
+                action_name=action_name,
+                save_vis=True,
+                enable_landmark_detection=False,
+                env_action=env_action,
+            )
+            pose_after_low_level = self._get_agent_pose()
+            actual_meters = float(np.hypot(
+                float(pose_after_low_level[0]) - float(pose_before_low_level[0]),
+                float(pose_after_low_level[1]) - float(pose_before_low_level[1]),
+            ))
+            executed_points.append({
+                "step": int(getattr(self, "current_step", 0) or 0),
+                "action": action_name,
+                "planned_meters": float(meters),
+                "planned_degrees": float(degrees),
+                "actual_meters": float(actual_meters),
+                "target_index": int(target_index),
+            })
+            self.last_action_progress_hint = self._build_last_action_progress_hint(
+                action_name=action_name,
+                planned_meters=meters,
+                actual_meters=actual_meters,
+                actual_degrees=degrees,
+            )
+            self.last_action_effective_name = action_name
+
+            if self.latest_info:
+                dtg = self.latest_info.get("distance_to_goal", -1)
+                if not hasattr(self, "dtg_history"):
+                    self.dtg_history = []
+                self.dtg_history.append(dtg)
+            if self._attempt_goal_distance_autostop():
+                return self._finish_geometric_plan_execution(plan, vlm_response, executed_points, "complete", save_dir)
+            if result.get("done", False):
+                return self._finish_geometric_plan_execution(plan, vlm_response, executed_points, "complete", save_dir)
+            auto_completed_subtask = self._check_post_action_landmark_autocomplete(action_phase)
+            if auto_completed_subtask is not None:
+                self._append_progress_note(
+                    f"geometric path reached {auto_completed_subtask['name']}, so ended the current subtask"
+                )
+                return self._finish_geometric_plan_execution(plan, vlm_response, executed_points, "subtask_done", save_dir)
+
+            if action_name == "MOVE_FORWARD" and actual_meters <= stagnation_threshold_m:
+                self._remember_failed_geometric_candidate(plan.candidate, "low_level_stagnation")
+                self._append_progress_note(
+                    f"geometric path failed: planned forward {float(meters):.2f}m but moved {actual_meters:.2f}m"
+                )
+                return self._finish_geometric_plan_execution(plan, vlm_response, executed_points, "blocked", save_dir)
+
+            if self._distance_to_geometric_candidate(plan.candidate) <= float(
+                self.geometric_waypoint_planner.config.waypoint_arrival_radius_m
+            ):
+                self.progress_summary = self.action_executor._generate_progress_update(
+                    current_progress=self.progress_summary,
+                    action_name="MOVE_FORWARD",
+                    meters=plan.candidate.path_length_m,
+                    actual_meters=plan.candidate.path_length_m,
+                )
+                return self._finish_geometric_plan_execution(plan, vlm_response, executed_points, "waypoint_reached", save_dir)
+
+        return self._finish_geometric_plan_execution(
+            plan,
+            vlm_response,
+            executed_points,
+            "path_budget_exhausted",
+            save_dir,
+        )
+
+    def _finish_geometric_plan_execution(
+        self,
+        plan: GeometricPlan,
+        vlm_response: Optional[Dict[str, Any]],
+        executed_points: Sequence[Dict[str, Any]],
+        status: str,
+        save_dir: Optional[str],
+    ) -> str:
+        payload = {
+            "plan": plan.to_dict(),
+            "vlm_response": dict(vlm_response or {}),
+            "executed_points": list(executed_points or []),
+            "status": str(status or ""),
+        }
+        self.geometric_last_plan = payload
+        runtime_options = getattr(self, "runtime_options", None)
+        if (
+            runtime_options is None
+            or bool(getattr(runtime_options, "save_api_request_artifacts", True))
+        ):
+            target_dir = str(save_dir or "").strip()
+            if target_dir:
+                os.makedirs(target_dir, exist_ok=True)
+                self._write_json_artifact(
+                    os.path.join(target_dir, "geometric_execution.json"),
+                    payload,
+                )
+        return str(status or "thinking")
+
+    def _distance_to_geometric_candidate(self, candidate: GeometricCandidate) -> float:
+        pose = self._get_agent_pose()
+        if pose is None or len(pose) < 2:
+            return float("inf")
+        return float(math.hypot(float(candidate.world_x_m) - float(pose[0]), float(candidate.world_y_m) - float(pose[1])))
+
+    def _run_geometric_waypoint_controller(self, max_subtask_steps: int = 8) -> str:
+        if not self.action_executor or not self.current_subtask:
+            return "thinking"
+        subtask_waypoints = 0
+
+        while subtask_waypoints < max(1, int(max_subtask_steps)):
+            if self._episode_done_cached():
+                return "complete"
+
+            action_context = self._build_action_decision_context()
+            if action_context is None:
+                return "thinking"
+
+            candidates, candidate_paths, map_state = self._build_geometric_waypoint_candidates()
+            self.geometric_last_candidates = [candidate.to_dict() for candidate in candidates]
+            if not candidates:
+                self._write_geometric_artifacts(
+                    save_dir=action_context.get("action_save_dir"),
+                    map_state=map_state,
+                    candidates=[],
+                    candidate_paths={},
+                    status="no_candidates",
+                    reason=str(map_state.get("reason", "")) if isinstance(map_state, dict) else "",
+                )
+                self._append_progress_note("no valid geometric waypoint candidates, so returned to thinking")
+                return "thinking"
+
+            candidate_map_input = self._write_geometric_artifacts(
+                save_dir=action_context.get("action_save_dir"),
+                map_state=map_state,
+                candidates=candidates,
+                candidate_paths=candidate_paths,
+                status="candidate",
+            )
+            candidates_text = "\n".join(candidate.to_prompt_line() for candidate in candidates)
+            action_subtask_instruction = self._sanitize_subtask_instruction_text(
+                self.current_subtask.get("subtask_instruction", ""),
+                self._get_next_waypoint_field(self.current_subtask),
+                self.current_subtask.get("next_waypoint_direction", ""),
+                keep_view_prefix=False,
+            )
+            action_api_start_time = time.perf_counter()
+            selected_action, response, _prompt = self.action_executor.decide_waypoint(
+                next_waypoint=self._get_next_waypoint_field(self.current_subtask),
+                subtask_instruction=action_subtask_instruction,
+                subtask_landmark=self._get_subtask_landmark_field(self.current_subtask),
+                progress_summary=self._get_action_progress_summary_for_prompt(),
+                candidates_text=candidates_text,
+                first_person_image=action_context.get("detection_image"),
+                candidate_map_image=candidate_map_input,
+                obstacle_distances=action_context.get("obstacle_distances"),
+                save_dir=action_context.get("action_save_dir"),
+            )
+            duration_s = float(getattr(self.action_executor, "last_request_latency_s", 0.0) or 0.0)
+            if duration_s <= 0.0:
+                duration_s = time.perf_counter() - action_api_start_time
+            self.timing_tracker.record_action_call(
+                step=int(getattr(self, "current_step", 0) or 0),
+                subtask_count=int(getattr(self, "subtask_count", 0) or 0),
+                subtask_attempt=int(getattr(self, "subtask_attempt", 0) or 0),
+                duration_s=duration_s,
+                success=bool(selected_action is not None),
+                action_name=f"GEOMETRIC_{selected_action or 'INVALID'}",
+                vlm_info=dict(getattr(self.action_executor, "last_vlm_info_payload", {}) or {}),
+            )
+
+            if selected_action is None:
+                self._append_progress_note("geometric waypoint selector failed, so returned to thinking")
+                return "thinking"
+            if selected_action == "STOP":
+                response_payload = dict(response or {})
+                response_payload.setdefault("action", "STOP")
+                if self._is_task_finished(response_payload):
+                    return "complete"
+                return "thinking"
+            if selected_action in {"L", "R", "B"}:
+                turn_status = self._execute_geometric_turn(
+                    selected_action=selected_action,
+                    action_context=action_context,
+                    response=response,
+                )
+                if turn_status == "complete":
+                    return "complete"
+                subtask_waypoints += 1
+                continue
+
+            try:
+                selected_id = int(selected_action)
+            except (TypeError, ValueError):
+                return "thinking"
+            candidate_by_id = {int(candidate.candidate_id): candidate for candidate in candidates}
+            selected_candidate = candidate_by_id.get(selected_id)
+            if selected_candidate is None:
+                self._append_progress_note(f"geometric waypoint selector chose invalid candidate {selected_id}")
+                return "thinking"
+            plan = self.geometric_waypoint_planner.build_plan(
+                candidate=selected_candidate,
+                candidate_paths=candidate_paths,
+                full_map=map_state.get("full_map"),
+                pose_xytheta=map_state.get("full_pose"),
+                crop_offset=map_state.get("crop_offset"),
+            )
+            self._write_geometric_artifacts(
+                save_dir=action_context.get("action_save_dir"),
+                map_state=map_state,
+                candidates=candidates,
+                candidate_paths=candidate_paths,
+                selected_action=selected_action,
+                plan=plan,
+                status="selected",
+            )
+            if plan is None:
+                self._remember_failed_geometric_candidate(selected_candidate, "plan_build_failed")
+                self._append_progress_note("geometric selected waypoint could not be planned")
+                return "thinking"
+            subtask_waypoints += 1
+            plan_status = self._execute_geometric_plan(
+                plan,
+                response,
+                save_dir=action_context.get("action_save_dir"),
+            )
+            if plan_status == "complete":
+                return "complete"
+            if plan_status in {"subtask_done", "blocked", "path_budget_exhausted"}:
+                return "thinking"
+            # waypoint_reached: keep the action controller active and ask for the next
+            # geometric waypoint under the same high-level subtask.
+
+        print(f"\n[Replan] Geometric controller reached {max_subtask_steps} waypoint decisions")
+        return "thinking"
+
+    def _execute_geometric_turn(
+        self,
+        *,
+        selected_action: str,
+        action_context: Dict[str, Any],
+        response: Optional[Dict[str, Any]],
+    ) -> str:
+        action_id, action_name, degrees, controller_response = self._fallback_geometric_turn_action(selected_action)
+        if action_id is None:
+            return "thinking"
+        self.last_planned_degrees = degrees
+        self.last_planned_meters = 0.0
+        self.last_action_name = action_name
+        repeat_count = max(1, int(round(float(degrees) / max(float(self.turn_angle), 1e-6))))
+        if self._env_supports_continuous_action_targets():
+            repeat_count = 1
+        for idx in range(repeat_count):
+            if self._episode_done_cached():
+                return "complete"
+            self.last_planned_degrees = min(float(self.turn_angle), float(degrees)) if repeat_count > 1 else float(degrees)
+            self.last_planned_meters = 0.0
+            result = self.step_with_vlm(
+                action_id,
+                action_name=action_name,
+                save_vis=True,
+                enable_landmark_detection=False,
+                env_action=self._build_env_action_payload(action_id, action_name),
+            )
+            print(f"  [GeometricTurn] {action_name} ({idx + 1}/{repeat_count})")
+            if result.get("done", False):
+                return "complete"
+        self.last_action_progress_hint = self._build_last_action_progress_hint(
+            action_name=action_name,
+            actual_degrees=float(degrees),
+        )
+        self.last_action_effective_name = str(action_name or "").upper()
+        self._persist_response_artifacts(
+            save_dir=action_context.get("action_save_dir"),
+            raw_payload=dict(response or {}),
+            controller_payload=controller_response,
+            controller_filename="geometric_turn.controller.json",
+        )
+        return "thinking"
+
     def _request_vlm_action(
         self,
         action_context: Dict[str, Any],
@@ -4444,6 +5015,9 @@ class NavigationAgentController(BaseNavigationController):
     
     def _run_action_controller(self, max_subtask_steps: int = 8) -> str:
         """Run action decisions until control should return to thinking or the episode ends."""
+        if self._geometric_waypoint_enabled():
+            return self._run_geometric_waypoint_controller(max_subtask_steps=max_subtask_steps)
+
         subtask_steps = 0
 
         while True:

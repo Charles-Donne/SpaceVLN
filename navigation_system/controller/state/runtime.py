@@ -1,6 +1,7 @@
 """Shared runtime state helpers for navigation controllers."""
 
 from dataclasses import dataclass, field
+import os
 import time
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -30,6 +31,18 @@ class VLMControllerOptions:
     final_destination_match_autostop_radius_m: float
     low_level_stagnation_ratio: float
     low_level_stagnation_cap_m: float
+    geometric_waypoint_enabled: bool
+    geometric_waypoint_max_candidates: int
+    geometric_waypoint_min_distance_m: float
+    geometric_waypoint_max_distance_m: float
+    geometric_waypoint_stride_m: float
+    geometric_waypoint_obstacle_inflation_radius_m: float
+    geometric_waypoint_unknown_as_obstacle: bool
+    geometric_waypoint_min_clearance_m: float
+    geometric_waypoint_path_step_m: float
+    geometric_waypoint_arrival_radius_m: float
+    geometric_waypoint_max_path_execute_steps: int
+    geometric_waypoint_stop_on_blocked_front: bool
 
     @classmethod
     def from_config(
@@ -50,6 +63,15 @@ class VLMControllerOptions:
         recovery_cfg = getattr(control_cfg, "RECOVERY", None)
         stagnation_cfg = getattr(control_cfg, "STAGNATION", None)
         stopping_cfg = getattr(control_cfg, "STOPPING", None)
+        geometric_cfg = getattr(control_cfg, "GEOMETRIC_WAYPOINT", None)
+        env_enable_geometric = str(
+            os.getenv("SPACEVLN_GEOMETRIC_WAYPOINT", "") or ""
+        ).strip().lower()
+        geometric_enabled = bool(getattr(geometric_cfg, "ENABLE", False))
+        if env_enable_geometric in {"1", "true", "yes", "on"}:
+            geometric_enabled = True
+        elif env_enable_geometric in {"0", "false", "no", "off"}:
+            geometric_enabled = False
         return cls(
             enable_auto_retreat=bool(getattr(recovery_cfg, "ENABLE_AUTO_RETREAT", False)),
             save_api_request_artifacts=bool(getattr(request_cfg, "SAVE_VLM_ARTIFACTS", False)),
@@ -111,6 +133,49 @@ class VLMControllerOptions:
                     )
                     or default_low_level_stagnation_cap_m
                 ),
+            ),
+            geometric_waypoint_enabled=bool(geometric_enabled),
+            geometric_waypoint_max_candidates=max(
+                1,
+                int(getattr(geometric_cfg, "MAX_CANDIDATES", 5) or 5),
+            ),
+            geometric_waypoint_min_distance_m=max(
+                0.0,
+                float(getattr(geometric_cfg, "MIN_DISTANCE_M", 0.8) or 0.8),
+            ),
+            geometric_waypoint_max_distance_m=max(
+                0.1,
+                float(getattr(geometric_cfg, "MAX_DISTANCE_M", 4.0) or 4.0),
+            ),
+            geometric_waypoint_stride_m=max(
+                0.1,
+                float(getattr(geometric_cfg, "STRIDE_M", 0.75) or 0.75),
+            ),
+            geometric_waypoint_obstacle_inflation_radius_m=max(
+                0.0,
+                float(getattr(geometric_cfg, "OBSTACLE_INFLATION_RADIUS_M", 0.30) or 0.30),
+            ),
+            geometric_waypoint_unknown_as_obstacle=bool(
+                getattr(geometric_cfg, "UNKNOWN_AS_OBSTACLE", True)
+            ),
+            geometric_waypoint_min_clearance_m=max(
+                0.0,
+                float(getattr(geometric_cfg, "MIN_CLEARANCE_M", 0.20) or 0.20),
+            ),
+            geometric_waypoint_path_step_m=max(
+                0.1,
+                float(getattr(geometric_cfg, "PATH_STEP_M", 0.35) or 0.35),
+            ),
+            geometric_waypoint_arrival_radius_m=max(
+                0.05,
+                float(getattr(geometric_cfg, "ARRIVAL_RADIUS_M", 0.35) or 0.35),
+            ),
+            geometric_waypoint_max_path_execute_steps=max(
+                1,
+                int(getattr(geometric_cfg, "MAX_PATH_EXECUTE_STEPS", 12) or 12),
+            ),
+            geometric_waypoint_stop_on_blocked_front=bool(
+                getattr(geometric_cfg, "STOP_ON_BLOCKED_FRONT", True)
             ),
         )
 

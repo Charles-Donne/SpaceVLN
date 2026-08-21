@@ -4,6 +4,7 @@ VLM动作执行模块
 低层动作决策：基于视觉和地图输出具体动作
 """
 import os
+import re
 from typing import Any, Dict, Tuple, Optional, Sequence
 from navigation_system.config.core.params.actions import VALID_MOVE_METERS, VALID_TURN_DEGREES
 from navigation_system.config.core.params.api import (
@@ -11,6 +12,7 @@ from navigation_system.config.core.params.api import (
     ACTION_IMAGE_COMPRESSION_QUALITY,
 )
 from navigation_system.vlm.api.api_client import APIConfig, BaseAPIClient
+from navigation_system.vlm.prompts.common import PromptBundle, compose_full_prompt
 from navigation_system.vlm.prompts.vlnce.builders import build_executor_prompt_bundle
 
 
@@ -65,6 +67,108 @@ class Executor(BaseAPIClient):
 
         parsed = self._parse_action_command(response)
         return parsed is not None
+
+    @staticmethod
+    def _normalize_waypoint_action(value: Any) -> Optional[str]:
+        text = str(value or "").strip().upper()
+        if not text:
+            return None
+        if text in {"L", "LEFT", "TURN_LEFT"}:
+            return "L"
+        if text in {"R", "RIGHT", "TURN_RIGHT"}:
+            return "R"
+        if text in {"B", "BACK", "TURN_BACK"}:
+            return "B"
+        if text in {"STOP", "-1"}:
+            return "STOP"
+        match = re.search(r"-?\d+", text)
+        if match:
+            return str(int(match.group(0)))
+        return None
+
+    def decide_waypoint(
+        self,
+        *,
+        next_waypoint: str,
+        subtask_instruction: str,
+        subtask_landmark: str = "",
+        progress_summary: str = "",
+        candidates_text: str,
+        first_person_image: Any = None,
+        candidate_map_image: Any = None,
+        obstacle_distances: Dict[str, str] = None,
+        save_dir: str = None,
+    ) -> Tuple[Optional[str], Optional[Dict[str, Any]], str]:
+        """Ask the VLM to select one numbered geometric waypoint or a turn/stop command."""
+        if not obstacle_distances:
+            obstacle_distances = {
+                "front": "Unknown",
+                "left_30": "Unknown",
+                "right_30": "Unknown",
+            }
+        if not progress_summary:
+            progress_summary = "Just started"
+
+        obstacle_summary = (
+            f"FRONT={obstacle_distances.get('front', 'Unknown')}; "
+            f"Left 30deg={obstacle_distances.get('left_30', 'Unknown')}; "
+            f"Right 30deg={obstacle_distances.get('right_30', 'Unknown')}"
+        )
+        system_prompt = (
+            "You are the waypoint selector for Vision-Language Navigation. "
+            "Choose one safe local geometric waypoint from the numbered candidates, "
+            "or choose L/R/B to rotate for a better view, or STOP only when the current "
+            "subtask destination is already reached. The geometry layer will plan and "
+            "execute the path; do not output movement distances or coordinates. "
+            "Return exactly one JSON object with keys reasoning and action."
+        )
+        user_prompt = (
+            "# Current Subtask\n"
+            f"Destination: {next_waypoint or 'unknown'}\n"
+            f"Tracked Landmark: {subtask_landmark or 'none'}\n"
+            f"Instruction: {subtask_instruction or 'none'}\n"
+            f"Subtask Progress: {progress_summary}\n\n"
+            "# Local Geometry\n"
+            "The top-down candidate map is centered on the robot. The red arrow is the current pose and points forward. "
+            "Green is explored free floor, black is obstacle, white is unexplored. "
+            "Numbered markers are reachable local waypoint candidates from the current map.\n\n"
+            f"Obstacle: {obstacle_summary}\n\n"
+            "# Candidate Waypoints\n"
+            f"{candidates_text or 'No valid candidates'}\n\n"
+            "# Decision Rules\n"
+            "- Prefer a numbered candidate that advances the current subtask and is not a backtrack.\n"
+            "- Prefer forward or mildly side-front candidates when they match the destination.\n"
+            "- Use L/R/B only when no listed waypoint supports the destination or the view needs reorientation.\n"
+            "- Use STOP only when the current subtask destination is truly reached.\n"
+            "- The action must be one listed number, L, R, B, or STOP.\n\n"
+            "Return JSON only, for example: {\"reasoning\":\"candidate 2 follows the corridor toward the target\", \"action\":\"2\"}"
+        )
+        prompt = PromptBundle(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            full_prompt=compose_full_prompt(system_prompt, user_prompt),
+        )
+        images = []
+        if first_person_image is not None:
+            images.append(first_person_image)
+        if candidate_map_image is not None:
+            images.append(candidate_map_image)
+
+        response = self.call_api(prompt, images, save_dir=save_dir)
+        if not response:
+            print("✗ No waypoint response from VLM")
+            return None, None, prompt.full_prompt
+        if not self.validate_fields(response, ("reasoning", "action")):
+            return None, response, prompt.full_prompt
+
+        action = self._normalize_waypoint_action(response.get("action"))
+        if action is None:
+            response["_invalid_waypoint_action"] = response.get("action")
+            print(f"✗ Invalid waypoint action: {response.get('action')}")
+            return None, response, prompt.full_prompt
+        response["action"] = action
+        print(f"  Waypoint action: {action} | {response.get('reasoning', '')[:60]}")
+        return action, response, prompt.full_prompt
 
     @staticmethod
     def _normalize_allowed_value(value, allowed_values, tol: float = 1e-6):
