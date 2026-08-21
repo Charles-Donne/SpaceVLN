@@ -63,10 +63,23 @@ class LLMPlanner(BaseAPIClient):
         # 默认动作空间与interactive_navigation一致
         self.action_space = action_space or "MOVE_FORWARD (0.25m), TURN_LEFT (30°), TURN_RIGHT (30°), STOP"
         
+        # Allow provider-specific launchers to reduce only the planner images.
+        # The default remains identical to the original SpaceVLN configuration.
+        planner_image_max_size = THINKING_IMAGE_COMPRESSION_MAX_SIZE
+        configured_max_size = os.environ.get("SPACEVLN_PLANNER_IMAGE_MAX_SIZE", "").strip()
+        if configured_max_size:
+            try:
+                planner_image_max_size = max(256, int(configured_max_size))
+            except ValueError:
+                print(
+                    "  Invalid SPACEVLN_PLANNER_IMAGE_MAX_SIZE="
+                    f"{configured_max_size!r}; using {planner_image_max_size}"
+                )
+
         # 方向观察图压缩，global_map 保持全分辨率。
         self.set_compression_config(
             enabled=True,
-            max_size=THINKING_IMAGE_COMPRESSION_MAX_SIZE,
+            max_size=planner_image_max_size,
             quality=75,
         )
         self.last_call_timing_info = {

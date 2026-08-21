@@ -191,7 +191,15 @@ trajectory, region labels, and boundaries. The launcher prints:
 
 ```text
 [RealRobot] save_action_maps=1
+[RealRobot] print_map_update=1
+...
+[REAL-MAP] step=17 action=MANUAL_PROMPT_ONLY obstacle_cells=... explored_cells=... floor_cells=... depth_update_disabled=False
 ```
+
+If `obstacle_cells` and `explored_cells` stay flat after movement, the issue is
+depth fusion/input rather than visualization. If they change but the saved map
+does not, check that `save_action_maps=1` is printed and inspect the current
+episode's step map artifacts.
 
 The configured 45-degree value is the stopped lookaround target and fallback
 display label, not the map angle. Action-stage turns can use any concrete

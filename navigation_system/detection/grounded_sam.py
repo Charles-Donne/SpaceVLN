@@ -275,6 +275,29 @@ class GroundedSAM(Segment):
             
         return detections
 
+    @staticmethod
+    def _normalize_class_name(text: Any) -> str:
+        return " ".join(str(text or "").strip().lower().split())
+
+    def _filter_detections_by_indices(self, detections: Any, keep_indices: List[int]) -> Any:
+        if detections is None or getattr(detections, "xyxy", None) is None:
+            return detections
+        detection_count = len(detections.xyxy)
+        keep = np.asarray(
+            [int(idx) for idx in keep_indices if 0 <= int(idx) < detection_count],
+            dtype=np.int32,
+        )
+        detections.xyxy = detections.xyxy[keep]
+        if getattr(detections, "confidence", None) is not None:
+            detections.confidence = detections.confidence[keep]
+        if getattr(detections, "class_id", None) is not None:
+            detections.class_id = detections.class_id[keep]
+        if getattr(detections, "tracker_id", None) is not None:
+            detections.tracker_id = detections.tracker_id[keep]
+        if getattr(detections, "mask", None) is not None:
+            detections.mask = detections.mask[keep]
+        return detections
+
     def _empty_segment_result(
         self,
         image: VisualObservation,
@@ -309,6 +332,12 @@ class GroundedSAM(Segment):
             return self._empty_segment_result(image, reason)
 
         classes = kwargs.get("classes", [])
+        mask_classes = kwargs.get("mask_classes", None)
+        mask_class_set = {
+            self._normalize_class_name(item)
+            for item in list(mask_classes or [])
+            if self._normalize_class_name(item)
+        }
         box_threshold = float(kwargs.get("box_threshold", self.box_threshold))
         text_threshold = float(kwargs.get("text_threshold", self.text_threshold))
         box_annotator = sv.BoxAnnotator() if sv is not None else None
@@ -341,6 +370,8 @@ class GroundedSAM(Segment):
             return self._empty_segment_result(image)
         
         # 兼容不同版本的 supervision：使用属性而不是迭代
+        valid_indices = []
+        mask_keep_indices = []
         for i in range(len(detections.xyxy)):
             confidence = detections.confidence[i] if detections.confidence is not None else 0.0
             try:
@@ -360,20 +391,52 @@ class GroundedSAM(Segment):
 
             if class_name is None and len(classes) == 1:
                 class_name = str(classes[0])
+            if class_name is None:
+                continue
+            filtered_idx = len(valid_indices)
+            valid_indices.append(i)
             labels.append(f"{class_name or 'unknown'} {confidence:0.2f}")
+            if not mask_class_set or self._normalize_class_name(class_name) in mask_class_set:
+                mask_keep_indices.append(filtered_idx)
+        if len(valid_indices) != len(detections.xyxy):
+            detections = self._filter_detections_by_indices(detections, valid_indices)
+        if len(detections.xyxy) == 0:
+            return self._empty_segment_result(image)
         # t3 = time.time()
+        height, width = image.shape[:2]
         if self.sam_predictor is not None:
-            detections.mask = self._segment(
-                sam_predictor=self.sam_predictor,
-                image=cv2.cvtColor(image, cv2.COLOR_BGR2RGB),
-                xyxy=detections.xyxy
-            )
+            image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            if mask_class_set:
+                all_masks = np.zeros((len(detections.xyxy), height, width), dtype=np.float32)
+                if mask_keep_indices:
+                    mask_indices = np.asarray(mask_keep_indices, dtype=np.int32)
+                    target_masks = self._segment(
+                        sam_predictor=self.sam_predictor,
+                        image=image_rgb,
+                        xyxy=detections.xyxy[mask_indices],
+                    )
+                    all_masks[mask_indices] = target_masks.astype(np.float32)
+                detections.mask = all_masks
+            else:
+                detections.mask = self._segment(
+                    sam_predictor=self.sam_predictor,
+                    image=image_rgb,
+                    xyxy=detections.xyxy,
+                )
         else:
             if not bool(getattr(self, "_sam_disabled_warned", False)):
                 reason = str(getattr(self, "_sam_disabled_reason", "") or "SAM disabled")
                 print(f"[WARN] {reason}")
                 self._sam_disabled_warned = True
-            detections.mask = self._box_masks(image, detections.xyxy)
+            if mask_class_set:
+                all_masks = np.zeros((len(detections.xyxy), height, width), dtype=np.float32)
+                if mask_keep_indices:
+                    mask_indices = np.asarray(mask_keep_indices, dtype=np.int32)
+                    target_masks = self._box_masks(image, detections.xyxy[mask_indices])
+                    all_masks[mask_indices] = target_masks.astype(np.float32)
+                detections.mask = all_masks
+            else:
+                detections.mask = self._box_masks(image, detections.xyxy)
         # t4 = time.time()
         # print("grounding dino: ", t2 - t1)
         # print("process detections: ", t3 - t2)

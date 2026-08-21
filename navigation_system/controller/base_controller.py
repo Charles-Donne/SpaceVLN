@@ -21,7 +21,11 @@ except ImportError:
     from typing import Any as Observations
 
 from navigation_system.space import SemanticMapper, SemanticProcessor
-from navigation_system.space.landmarks import LandmarkMemory
+from navigation_system.space.landmarks import (
+    LandmarkMemory,
+    common_landmark_detection_classes,
+    normalize_landmark_text,
+)
 from navigation_system.space.map.semantic_mapping import Semantic_Mapping
 from navigation_system.render import MapVisualizer
 from navigation_system.space.map.obstacle_analysis import (
@@ -63,6 +67,8 @@ class _NoOpSegmentModule:
 
 class BaseNavigationController:
     """封装底层环境交互与感知建图能力的基础导航控制器。"""
+
+    SAME_OBJECT_DETECTION_IOU_THRESHOLD = 0.65
 
     def _record_local_timing(self, section: str, duration_s: float) -> None:
         tracker = getattr(self, "timing_tracker", None)
@@ -204,12 +210,16 @@ class BaseNavigationController:
         if not getattr(self, 'landmark_classes', None):
             return set()
 
-        canonical = {name.strip().lower(): name for name in self.landmark_classes}
+        canonical = {}
+        for name in self.landmark_classes:
+            normalized_name = normalize_landmark_text(name)
+            if normalized_name:
+                canonical[normalized_name] = normalized_name
         detected = set()
         for label in getattr(self, 'latest_labels_full', []) or []:
             parts = label.split()
             label_name = ' '.join(parts[:-1]) if len(parts) > 1 else parts[0]
-            matched_name = canonical.get(label_name.strip().lower())
+            matched_name = canonical.get(normalize_landmark_text(label_name))
             if matched_name:
                 detected.add(matched_name)
         return detected
@@ -285,6 +295,124 @@ class BaseNavigationController:
             except (TypeError, ValueError):
                 coerced.append(fill_value)
         return np.asarray(coerced, dtype=dtype)
+
+    @staticmethod
+    def _parse_detection_label(label: Any) -> Tuple[str, float]:
+        parts = str(label or "").split()
+        if not parts:
+            return "unknown", 0.0
+        if len(parts) == 1:
+            return parts[0], 0.0
+        try:
+            return " ".join(parts[:-1]).strip() or parts[0], float(parts[-1])
+        except ValueError:
+            return " ".join(parts).strip(), 0.0
+
+    @staticmethod
+    def _bbox_iou(box_a: np.ndarray, box_b: np.ndarray) -> float:
+        ax1, ay1, ax2, ay2 = [float(v) for v in box_a]
+        bx1, by1, bx2, by2 = [float(v) for v in box_b]
+        inter_x1 = max(ax1, bx1)
+        inter_y1 = max(ay1, by1)
+        inter_x2 = min(ax2, bx2)
+        inter_y2 = min(ay2, by2)
+        inter_w = max(0.0, inter_x2 - inter_x1)
+        inter_h = max(0.0, inter_y2 - inter_y1)
+        inter_area = inter_w * inter_h
+        if inter_area <= 0.0:
+            return 0.0
+        area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+        area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+        union = area_a + area_b - inter_area
+        if union <= 0.0:
+            return 0.0
+        return float(inter_area / union)
+
+    def _filter_detection_payload_by_indices(self, detections, labels: List[str], keep_indices: List[int]):
+        if detections is None or getattr(detections, "xyxy", None) is None:
+            return detections, list(labels or []), None
+
+        all_xyxy = np.asarray(detections.xyxy, dtype=np.float32)
+        detection_count = len(all_xyxy)
+        valid_keep = [
+            int(idx)
+            for idx in keep_indices
+            if 0 <= int(idx) < detection_count
+        ]
+        keep = np.asarray(valid_keep, dtype=np.int32)
+        all_mask = getattr(detections, "mask", None)
+        masks = (
+            np.asarray(all_mask, dtype=np.float32)[keep]
+            if all_mask is not None and len(keep) > 0 else
+            np.zeros((0, self.height, self.width), dtype=np.float32)
+        )
+
+        filtered = SimpleNamespace(
+            xyxy=all_xyxy[keep] if len(keep) > 0 else np.zeros((0, 4), dtype=np.float32),
+            confidence=self._coerce_detection_vector(
+                getattr(detections, "confidence", None),
+                detection_count,
+                np.float32,
+                0.0,
+            )[keep] if len(keep) > 0 else np.zeros((0,), dtype=np.float32),
+            class_id=self._coerce_detection_vector(
+                getattr(detections, "class_id", None),
+                detection_count,
+                np.int32,
+                -1,
+            )[keep] if len(keep) > 0 else np.zeros((0,), dtype=np.int32),
+            tracker_id=(
+                self._coerce_detection_vector(
+                    getattr(detections, "tracker_id", None),
+                    detection_count,
+                    np.int32,
+                    -1,
+                )[keep]
+                if getattr(detections, "tracker_id", None) is not None and len(keep) > 0 else None
+            ),
+            mask=masks if masks.size > 0 else None,
+        )
+        filtered_labels = [
+            labels[idx]
+            for idx in valid_keep
+            if 0 <= idx < len(labels or [])
+        ]
+        return filtered, filtered_labels, masks
+
+    def _dedupe_detection_payload_by_best_class(self, detections, labels: List[str]):
+        """For overlapping detections of the same object, keep the highest-score class."""
+        if detections is None or getattr(detections, "xyxy", None) is None:
+            return detections, list(labels or []), None
+        xyxy = np.asarray(detections.xyxy, dtype=np.float32)
+        if len(xyxy) <= 1:
+            masks = getattr(detections, "mask", None)
+            return detections, list(labels or []), masks
+
+        confidences = self._coerce_detection_vector(
+            getattr(detections, "confidence", None),
+            len(xyxy),
+            np.float32,
+            0.0,
+        )
+        order = sorted(
+            range(len(xyxy)),
+            key=lambda idx: (
+                -float(confidences[idx]),
+                -max(0.0, float(xyxy[idx][2] - xyxy[idx][0])) * max(0.0, float(xyxy[idx][3] - xyxy[idx][1])),
+                idx,
+            ),
+        )
+
+        keep: List[int] = []
+        for idx in order:
+            if any(
+                self._bbox_iou(xyxy[idx], xyxy[kept_idx]) >= self.SAME_OBJECT_DETECTION_IOU_THRESHOLD
+                for kept_idx in keep
+            ):
+                continue
+            keep.append(int(idx))
+        keep.sort()
+        return self._filter_detection_payload_by_indices(detections, labels, keep)
 
     def _merge_detection_batches(self, rgb: np.ndarray, detection_batches) -> tuple:
         """合并多次检测结果，保留重叠框的多个 query 输出。"""
@@ -396,6 +524,21 @@ class BaseNavigationController:
     ) -> Optional[Tuple[Optional[float], Optional[float]]]:
         return None
 
+    def _get_landmark_detection_queries(self, landmark_queries: Optional[List[str]] = None) -> List[str]:
+        queries: List[str] = []
+        seen = set()
+        for raw_query in list(common_landmark_detection_classes()):
+            query = normalize_landmark_text(raw_query)
+            if query and query not in seen:
+                queries.append(query)
+                seen.add(query)
+        for raw_query in list(landmark_queries or getattr(self, "landmark_classes", []) or []):
+            query = normalize_landmark_text(raw_query)
+            if query and query not in seen:
+                queries.append(query)
+                seen.add(query)
+        return queries
+
     def _segment_landmark_query(self, rgb: np.ndarray, landmark_query: str):
         segment_kwargs: Dict[str, Any] = {"classes": [landmark_query]}
         thresholds = self._get_landmark_detection_thresholds(landmark_query)
@@ -407,22 +550,50 @@ class BaseNavigationController:
                 segment_kwargs["text_threshold"] = float(text_threshold)
         return self.segment_module.segment(rgb, **segment_kwargs)
 
+    def _segment_landmark_queries(self, rgb: np.ndarray, landmark_queries: List[str]):
+        queries = self._get_landmark_detection_queries(landmark_queries)
+        if not queries:
+            return None, [], None, None
+
+        segment_kwargs: Dict[str, Any] = {"classes": queries}
+        mask_classes: List[str] = []
+        mask_class_seen = set()
+        for raw_query in list(landmark_queries or []):
+            query = normalize_landmark_text(raw_query)
+            if query and query not in mask_class_seen:
+                mask_classes.append(query)
+                mask_class_seen.add(query)
+        if mask_classes:
+            segment_kwargs["mask_classes"] = mask_classes
+        threshold_values = [
+            thresholds
+            for query in queries
+            for thresholds in [self._get_landmark_detection_thresholds(query)]
+            if thresholds is not None
+        ]
+        if threshold_values:
+            box_values = [float(item[0]) for item in threshold_values if item[0] is not None]
+            text_values = [float(item[1]) for item in threshold_values if item[1] is not None]
+            if box_values:
+                segment_kwargs["box_threshold"] = min(box_values)
+            if text_values:
+                segment_kwargs["text_threshold"] = min(text_values)
+
+        masks, labels, annotated_image, detections = self.segment_module.segment(rgb, **segment_kwargs)
+        detections, labels, masks = self._dedupe_detection_payload_by_best_class(detections, labels)
+        annotated_image = self._draw_detection_overlay(rgb.copy(), detections, labels, color=(0, 255, 255))
+        return masks, labels, annotated_image, detections
+
     def _detect_landmarks_for_visualization(self,
                                             rgb: np.ndarray,
                                             landmark_queries: Optional[List[str]] = None):
-        """仅为可视化做自定义 landmark 检测，不写入地图。"""
+        """Detect common landmarks for visualization; map code filters task targets."""
         queries = landmark_queries if landmark_queries is not None else list(getattr(self, 'landmark_classes', []) or [])
         if not queries:
             return None, [], None
 
-        detection_batches = []
-        for lm_idx, landmark_query in enumerate(queries):
-            landmark_result = self._segment_landmark_query(rgb, landmark_query)
-            detection_batches.append((*landmark_result, lm_idx))
-
-        merged_masks, merged_labels, annotated_image, merged_detections = \
-            self._merge_detection_batches(rgb, detection_batches)
-        return merged_detections, merged_labels, merged_masks
+        masks, labels, _annotated_image, detections = self._segment_landmark_queries(rgb, queries)
+        return detections, labels, masks
     
     @property
     def detected_classes(self):
@@ -1563,16 +1734,14 @@ class BaseNavigationController:
         检测逻辑：
         - 默认不检测固定 mapping_classes，减少扫描建图开销
         - obstacle / explored 来自深度建图，不依赖语义检测
-        - 仅在 save_object_detection=True 时检测当前自定义 landmark
-        - 自定义 landmark 检测结果 → 投影到额外 landmark 通道，用于可视化与地图距离/方向
+        - save_object_detection=True 时检测常用 canonical 物品类别 + 当前自定义 landmark
+        - 只有当前自定义 landmark 的检测结果会投影到额外 landmark 通道
         
         Returns:
             semantic_masks: [H, W, 15] 固定15个通道的语义地图
         """
-        # 为了压缩扫描/建图开销，默认不再跑固定 mapping 类别检测：
-        # - obstacle / explored 由深度建图提供
-        # - floor 由 explored 与 obstacle 推导
-        # - 仅在需要时独立检测当前自定义 landmark，并把结果投影进额外 landmark 通道
+        # 为了压缩扫描/建图开销，默认不跑 GroundingDINO。
+        # 需要 landmark 感知时，检测常用物品类别，但只把当前任务目标写入 map。
         landmark_classes_list = (
             self.landmark_classes
             if (save_object_detection and hasattr(self, 'landmark_classes'))
@@ -1587,13 +1756,22 @@ class BaseNavigationController:
             self.latest_rgb_original = rgb.copy()
             return np.zeros((self.height, self.width, len(self.mapping_classes)), dtype=np.float32)
 
-        detection_batches = []
-        for lm_idx, landmark_query in enumerate(landmark_classes_list):
-            landmark_result = self._segment_landmark_query(rgb, landmark_query)
-            detection_batches.append((*landmark_result, lm_idx))
-
-        masks_all, labels_all, annotated_images, current_detections = \
-            self._merge_detection_batches(rgb, detection_batches)
+        masks_all, labels_all, annotated_images, current_detections = self._segment_landmark_queries(
+            rgb,
+            list(landmark_classes_list),
+        )
+        if masks_all is None:
+            masks_all = np.zeros((0, self.height, self.width), dtype=np.float32)
+        if current_detections is None:
+            current_detections = SimpleNamespace(
+                xyxy=np.zeros((0, 4), dtype=np.float32),
+                confidence=np.zeros((0,), dtype=np.float32),
+                class_id=np.zeros((0,), dtype=np.int32),
+                tracker_id=None,
+                mask=None,
+            )
+        if annotated_images is None:
+            annotated_images = rgb.copy()
         self.mapper.mapping_module.rgb_vis = annotated_images
         
         self.latest_detections_full = current_detections
@@ -1604,52 +1782,35 @@ class BaseNavigationController:
         # 预定义的基础类别（固定15个）
         predefined_classes = self.mapping_classes
         
-        # 分类处理检测结果
-        valid_masks = []        # 用于建图的mapping类别
-        valid_labels = []
-        valid_confidences = []
         # Landmark masks (投影到地图的额外通道，channel 3+N_mapping 开始)
-        # 仅在 save_object_detection=True 时启用landmark检测（action LLM 当前朝向快照）
+        # 常用检测类别只作为候选；只有当前任务目标进入地图。
         landmark_masks = np.zeros((len(landmark_classes_list), self.height, self.width), dtype=np.float32)
-        lm_name_to_idx = {lm.strip().lower(): idx for idx, lm in enumerate(landmark_classes_list)}
+        canonical_landmark_classes = [
+            normalize_landmark_text(lm) or str(lm)
+            for lm in landmark_classes_list
+        ]
+        lm_name_to_idx = {
+            canonical_name: idx
+            for idx, canonical_name in enumerate(canonical_landmark_classes)
+            if canonical_name
+        }
 
         for i, label in enumerate(labels_all):
             parts = label.split()
             label_name = ' '.join(parts[:-1]) if len(parts) > 1 else parts[0]
-            label_name_norm = label_name.strip().lower()
-            confidence = float(parts[-1]) if len(parts) > 1 else 0.5
-            
-            # 只有mapping_classes的检测进入语义地图
-            if label_name in predefined_classes:
-                valid_masks.append(masks_all[i])
-                valid_labels.append(label_name)
-                valid_confidences.append(confidence)
-            
+            label_name_norm = normalize_landmark_text(label_name)
+
             # Landmark classes：收集mask投影到地图额外通道（仅精确短语匹配，避免与通用类混淆）
             if label_name_norm in lm_name_to_idx:
                 lm_idx = lm_name_to_idx[label_name_norm]
                 landmark_masks[lm_idx] = np.maximum(
                     landmark_masks[lm_idx], masks_all[i].astype(np.float32))
             
-            # 所有检测到的类别都记录（包括landmark）
-            self.detected_classes.add(label_name)
-            # 规范化精确匹配到landmark时，记录canonical短语名
+            # 只有当前任务需要的 landmark 进入地图类别 registry，避免常用类膨胀动态通道。
             if label_name_norm in lm_name_to_idx:
-                self.detected_classes.add(landmark_classes_list[lm_name_to_idx[label_name_norm]])
+                self.detected_classes.add(canonical_landmark_classes[lm_name_to_idx[label_name_norm]])
 
         global_masks = np.zeros((len(predefined_classes), self.height, self.width), dtype=np.float32)
-
-        if len(valid_masks) > 0:
-            # Winner-Takes-All处理（只处理mapping类别）
-            valid_masks = np.array(valid_masks)
-            masks_processed = self._process_masks_with_labels(valid_masks, valid_labels, valid_confidences)
-
-            # 按照预定义类别顺序组织mask（固定15通道）
-            for i, cls_name in enumerate(valid_labels):
-                if cls_name in predefined_classes:
-                    global_idx = predefined_classes.index(cls_name)
-                    if i < masks_processed.shape[0]:
-                        global_masks[global_idx] = masks_processed[i]
         
         # 合并mapping通道 + landmark通道：[15+N, H, W] → [H, W, 15+N]
         combined = np.concatenate([global_masks, landmark_masks], axis=0)

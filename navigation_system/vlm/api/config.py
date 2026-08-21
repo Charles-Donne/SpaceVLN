@@ -2,7 +2,8 @@
 
 import os
 import re
-from typing import Any, Dict
+from pathlib import Path
+from typing import Any, Dict, List
 
 import yaml
 
@@ -50,6 +51,8 @@ class APIConfig:
         provider_config = raw[provider]
         role_name = self._role
         self._api_key = self._resolve_config_string(provider_config.get("api_key", ""))
+        self._api_keys = self._load_api_keys(self._api_key)
+        self._api_key_index = 0
         self._base_url = self._resolve_config_string(provider_config.get("base_url", "")).rstrip("/")
         self._model = self._resolve_config_string(
             provider_config.get(f"{role_name}_model") or provider_config.get("model", "")
@@ -107,9 +110,44 @@ class APIConfig:
             return "responses"
         return text
 
+    @staticmethod
+    def _load_api_keys(primary_key: str) -> List[str]:
+        keys = [primary_key] if primary_key else []
+        keys_file = str(os.getenv("OPENAI_API_KEYS_FILE", "") or "").strip()
+        if not keys_file:
+            return keys
+        path = Path(keys_file).expanduser()
+        if not path.is_file():
+            return keys
+        for raw_line in path.read_text(encoding="utf-8").splitlines():
+            key = raw_line.strip()
+            if not key or key.startswith("#"):
+                continue
+            if "=" in key:
+                key = key.split("=", 1)[1].strip().strip("\"'")
+            if key and key not in keys:
+                keys.append(key)
+        return keys
+
     @property
     def api_key(self) -> str:
+        if self._api_keys:
+            return self._api_keys[self._api_key_index]
         return self._api_key
+
+    @property
+    def api_key_count(self) -> int:
+        return len(self._api_keys)
+
+    @property
+    def api_key_slot(self) -> int:
+        return self._api_key_index + 1
+
+    def rotate_api_key(self) -> bool:
+        if len(self._api_keys) <= 1:
+            return False
+        self._api_key_index = (self._api_key_index + 1) % len(self._api_keys)
+        return True
 
     @property
     def base_url(self) -> str:
@@ -134,6 +172,10 @@ class APIConfig:
     @property
     def provider(self) -> str:
         return self._provider_name
+
+    @property
+    def role(self) -> str:
+        return self._role
 
     @property
     def wire_api(self) -> str:

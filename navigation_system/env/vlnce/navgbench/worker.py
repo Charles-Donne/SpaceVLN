@@ -282,8 +282,15 @@ class WorkerState:
     def step(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self._observation_response(self.env.step(payload.get("action")))
 
-    def get_observations_at(self) -> Dict[str, Any]:
-        return self._observation_response(self.env.sim.get_observations_at())
+    def get_observations_at(self, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        payload = payload or {}
+        return self._observation_response(
+            self.env.sim.get_observations_at(
+                position=payload.get("position"),
+                rotation=payload.get("rotation"),
+                keep_agent_at_new_pose=False,
+            )
+        )
 
     def get_metrics(self) -> Dict[str, Any]:
         return {
@@ -338,7 +345,7 @@ def _handle_command(state: WorkerState, payload: Dict[str, Any]) -> Dict[str, An
     if cmd == "step":
         return state.step(payload)
     if cmd == "get_observations_at":
-        return state.get_observations_at()
+        return state.get_observations_at(payload)
     if cmd == "get_metrics":
         return state.get_metrics()
     if cmd == "get_visualizations":

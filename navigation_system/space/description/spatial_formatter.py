@@ -1,4 +1,5 @@
 import math
+import builtins
 import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -1458,13 +1459,21 @@ def _line_is_clear(
     end_row: float,
     end_col: float,
 ) -> bool:
+    try:
+        if any(isinstance(value, type) for value in (start_row, start_col, end_row, end_col)):
+            return False
+        start_row = builtins.float(start_row)
+        start_col = builtins.float(start_col)
+        end_row = builtins.float(end_row)
+        end_col = builtins.float(end_col)
+    except (TypeError, ValueError):
+        return False
     steps = max(int(math.ceil(max(abs(end_row - start_row), abs(end_col - start_col)))), 1)
-    rows = np.linspace(start_row, end_row, steps + 1)
-    cols = np.linspace(start_col, end_col, steps + 1)
     height, width = obstacle_mask.shape
     for idx in range(1, steps):
-        row = int(round(rows[idx]))
-        col = int(round(cols[idx]))
+        fraction = idx / steps
+        row = int(round(start_row + (end_row - start_row) * fraction))
+        col = int(round(start_col + (end_col - start_col) * fraction))
         if not (0 <= row < height and 0 <= col < width):
             return False
         if bool(obstacle_mask[row, col]):

@@ -3,6 +3,8 @@
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from navigation_system.space.landmarks.vocabulary import normalize_landmark_text
+
 
 DetectedLandmark = Tuple[str, Any]
 
@@ -11,7 +13,7 @@ def _normalize_landmark_queries(landmark_queries: Optional[Sequence[Any]]) -> Tu
     normalized: List[str] = []
     seen = set()
     for query in list(landmark_queries or []):
-        text = " ".join(str(query or "").strip().lower().split())
+        text = normalize_landmark_text(query)
         if not text or text in seen:
             continue
         normalized.append(text)
@@ -22,7 +24,11 @@ def _normalize_landmark_queries(landmark_queries: Optional[Sequence[Any]]) -> Tu
 def _clone_entry(entry: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if not isinstance(entry, dict):
         return {}
-    return dict(entry)
+    cloned = dict(entry)
+    normalized_name = normalize_landmark_text(cloned.get("name"))
+    if normalized_name:
+        cloned["name"] = normalized_name
+    return cloned
 
 
 def _clone_entries(entries: Optional[Sequence[Dict[str, Any]]]) -> List[Dict[str, Any]]:
@@ -33,7 +39,7 @@ def _clone_detected_landmarks(items: Optional[Sequence[Any]]) -> List[DetectedLa
     cloned: List[DetectedLandmark] = []
     for item in list(items or []):
         if isinstance(item, (tuple, list)) and len(item) >= 2:
-            cloned.append((str(item[0]), item[1]))
+            cloned.append((normalize_landmark_text(item[0]) or str(item[0]), item[1]))
     return cloned
 
 
@@ -43,7 +49,7 @@ def _clone_dist_map(
     cloned: Dict[str, Tuple[Any, Any]] = {}
     for key, value in dict(dist_map or {}).items():
         if isinstance(value, (tuple, list)) and len(value) >= 2:
-            cloned[str(key)] = (value[0], value[1])
+            cloned[normalize_landmark_text(key) or str(key)] = (value[0], value[1])
     return cloned
 
 
@@ -56,7 +62,7 @@ def _clone_dist_map_multi(
         for value in list(values or []):
             if isinstance(value, (tuple, list)) and len(value) >= 2:
                 rows.append((value[0], value[1]))
-        cloned[str(key)] = rows
+        cloned[normalize_landmark_text(key) or str(key)] = rows
     return cloned
 
 

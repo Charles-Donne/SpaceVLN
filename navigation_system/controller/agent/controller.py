@@ -38,6 +38,7 @@ from navigation_system.space.geometry.connectivity import (
     query_world_distance_from_field_m,
 )
 from navigation_system.space.geometry.map_projection import RotatedMapProjector
+from navigation_system.space.landmarks.vocabulary import normalize_landmark_text
 from navigation_system.controller.action_compat import resolve_habitat_action
 from navigation_system.controller.base_controller import BaseNavigationController
 from navigation_system.controller.state import (
@@ -2471,18 +2472,8 @@ class NavigationAgentController(BaseNavigationController):
 
     @classmethod
     def _normalize_landmark_text(cls, text: Optional[str]) -> Optional[str]:
-        """Normalize landmark text without forcing a short phrase length."""
-        if not text:
-            return None
-
-        cleaned = str(text).strip().lower()
-        for token in ["|", "/", "\\", "->", "=>", ":", ";", ",", ".", "!", "?", "(", ")", "[", "]", "{", "}", "\"", "'"]:
-            cleaned = cleaned.replace(token, " ")
-        cleaned = " ".join(cleaned.split())
-        if not cleaned:
-            return None
-
-        return cleaned
+        """Normalize landmark text and collapse common object aliases."""
+        return normalize_landmark_text(text)
 
     @classmethod
     def _normalize_waypoint_endpoint_label(cls, text: Optional[str]) -> Optional[str]:
@@ -5137,6 +5128,17 @@ class NavigationAgentController(BaseNavigationController):
         result['sr'] = result['success']
         result['osr'] = result['oracle_success']
         result['ne'] = result['distance_to_goal']
+        map_state = self.mapper.get_map_state() if self.mapper is not None else {}
+        trajectory_points = [
+            [int(point[0]), int(point[1])]
+            for point in (map_state.get('global_trajectory_points', []) or [])
+        ]
+        self.save_manager.save_trajectory({
+            'episode_id': self.current_episode_id,
+            'coordinate_system': 'semantic_map_pixels',
+            'resolution_cm_per_pixel': float(map_state.get('resolution', 0.0) or 0.0),
+            'trajectory_points': trajectory_points,
+        })
         result_metadata = getattr(self, 'result_metadata', None)
         if isinstance(result_metadata, dict):
             for key, value in result_metadata.items():

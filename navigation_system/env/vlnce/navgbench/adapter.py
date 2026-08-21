@@ -165,8 +165,14 @@ class _SubprocessSimFacade:
     def get_agent_state(self, *_args: Any) -> Any:
         return self.client.agent_state
 
-    def get_observations_at(self) -> Any:
-        return self.client.get_observations_at()
+    def get_observations_at(
+        self,
+        position: Optional[Sequence[float]] = None,
+        rotation: Optional[Sequence[float]] = None,
+        keep_agent_at_new_pose: bool = False,
+    ) -> Any:
+        del keep_agent_at_new_pose
+        return self.client.get_observations_at(position=position, rotation=rotation)
 
 
 class NavGBenchSubprocessEnvClient:
@@ -343,9 +349,19 @@ class NavGBenchSubprocessEnvClient:
             self._request({"cmd": "step", "action": action})
         )
 
-    def get_observations_at(self) -> Any:
+    def get_observations_at(
+        self,
+        position: Optional[Sequence[float]] = None,
+        rotation: Optional[Sequence[float]] = None,
+    ) -> Any:
         return self._apply_observation_response(
-            self._request({"cmd": "get_observations_at"})
+            self._request(
+                {
+                    "cmd": "get_observations_at",
+                    "position": list(position) if position is not None else None,
+                    "rotation": list(rotation) if rotation is not None else None,
+                }
+            )
         )
 
     def get_metrics(self) -> Dict[str, Any]:
@@ -517,6 +533,39 @@ class SingleNavGBenchVectorEnvAdapter:
     def reset(self) -> List[Any]:
         obs = self.env.reset()
         return [self._augment_observation(obs, reset=True)]
+
+    def get_panorama_observations(self, views: int = 12) -> List[Dict[str, Any]]:
+        """Capture fixed-angle RGB-D views without moving the GN agent.
+
+        The convention matches VLN-CE/OpenNav/CA-Nav: twelve views at 30
+        degree increments.  GN-Bench's simulator restores the original pose
+        after each query, so this is observation-only and does not add motion.
+        """
+        views = int(views)
+        if views <= 0 or 360 % views:
+            raise ValueError("views must be a positive divisor of 360")
+        state = self._agent_state()
+        base = np.asarray(getattr(state, "rotation", [0, 0, 0, 1]), dtype=np.float64)
+        if base.size < 4:
+            base = np.asarray([0, 0, 0, 1], dtype=np.float64)
+        try:
+            from scipy.spatial.transform import Rotation as R
+            base_rot = R.from_quat(base[:4])
+            rotations = [
+                (base_rot * R.from_euler("z", 360.0 * i / views, degrees=True)).as_quat().tolist()
+                for i in range(views)
+            ]
+        except Exception:
+            rotations = [
+                [0.0, 0.0, math.sin(math.pi * i / views), math.cos(math.pi * i / views)]
+                for i in range(views)
+            ]
+        position = np.asarray(getattr(state, "position", [0, 0, 1.3]), dtype=np.float32).tolist()
+        result: List[Dict[str, Any]] = []
+        for rotation in rotations:
+            obs = self.env.get_observations_at(position=position, rotation=rotation)
+            result.append(self._augment_observation(obs, reset=False))
+        return result
 
     def step(self, actions: Iterable[Any]) -> List[Any]:
         action_list = list(actions)

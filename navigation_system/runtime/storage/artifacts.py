@@ -120,6 +120,7 @@ class SaveManager:
         "failed_api_total_duration_s",
         "failed_retry_wait_duration_s",
         "failed_wasted_duration_s",
+        "local_timing_summary",
         "success",
         "spl",
         "distance_to_goal",
@@ -146,6 +147,7 @@ class SaveManager:
         "failed_api_total_duration_s",
         "failed_retry_wait_duration_s",
         "failed_wasted_duration_s",
+        "local_timing_summary",
         "success",
         "spl",
         "distance_to_goal",
@@ -156,6 +158,7 @@ class SaveManager:
         "oracle_spl",
         "thinking_api_summary",
         "action_api_summary",
+        "vlm_usage_summary",
         "global_map_path",
         "local_map_path",
         "timestamp",
@@ -216,6 +219,7 @@ class SaveManager:
         ("failed_api_total_duration_s", 0.0),
         ("failed_retry_wait_duration_s", 0.0),
         ("failed_wasted_duration_s", 0.0),
+        ("local_timing_summary", {}),
         ("ne", -1),
         ("sr", 0),
         ("spl", 0.0),
@@ -663,4 +667,13 @@ class SaveManager:
             status = "updated" if should_update_best else "kept"
 
         return log_path
+
+    def save_trajectory(self, payload: Dict) -> str:
+        """Persist the compact final trajectory without step-level artifacts."""
+        path = os.path.join(self.records_dir, "trajectory.json")
+        temporary = path + ".tmp"
+        with open(temporary, "w", encoding="utf-8") as stream:
+            json.dump(payload, stream, indent=2, ensure_ascii=False)
+        os.replace(temporary, path)
+        return path
     

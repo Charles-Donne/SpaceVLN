@@ -79,6 +79,42 @@ class BaseAPIClient(ABC):
             return True
         return status_code in {400, 401, 402, 403, 404, 422}
 
+    @staticmethod
+    def _response_requires_key_relay(response: requests.Response) -> bool:
+        if response.status_code in {401, 402, 403, 429}:
+            return True
+        if response.status_code != 400:
+            return False
+        error_text = str(response.text or "").lower()
+        markers = (
+            "arrearage",
+            "insufficient_quota",
+            "insufficient balance",
+            "quota exceeded",
+            "billing",
+            "invalid api key",
+            "invalid_api_key",
+        )
+        return any(marker in error_text for marker in markers)
+
+    def _relay_failed_key(self, endpoint_suffix, payload, response):
+        key_count = int(getattr(self.config, "api_key_count", 0) or 0)
+        for _ in range(max(0, key_count - 1)):
+            if response.status_code == 200 or not self._response_requires_key_relay(response):
+                break
+            if not self.config.rotate_api_key():
+                break
+            print(
+                f"[API relay] switched to key slot "
+                f"{self.config.api_key_slot}/{self.config.api_key_count}"
+            )
+            response = self._post_json_with_base_url_fallback(
+                endpoint_suffix=endpoint_suffix,
+                headers=self.config.get_headers(),
+                payload=payload,
+            )
+        return response
+
     def _set_last_call_timing(
         self,
         *,
@@ -137,14 +173,15 @@ class BaseAPIClient(ABC):
         """Whether the current provider likely supports OpenAI-compatible JSON mode."""
         base_url = str(getattr(self.config, 'base_url', '') or '').lower()
         provider = str(getattr(self.config, 'provider', '') or '').lower()
-        # NOTE:
-        # OpenRouter's Qwen/Alibaba route is reachable in this environment, but
-        # `response_format={"type":"json_object"}` causes the connection to be
-        # reset before a valid HTTP response is returned. We therefore keep
-        # OpenRouter on plain-text JSON prompting and parse locally instead of
-        # requesting provider-side JSON mode.
+        # OpenRouter's Qwen/Alibaba route rejects JSON mode in this environment.
+        # GPT-5.1 supports it, so allow the dedicated launcher to opt in without
+        # changing the existing Qwen benchmark behavior.
         if 'openrouter' in base_url or provider == 'openrouter':
-            return False
+            return (
+                str(self.config.model).lower().startswith("openai/gpt-5.1")
+                and os.environ.get("OPENROUTER_JSON_MODE", "").strip().lower()
+                in {"1", "true", "yes", "on"}
+            )
         return (
             'dashscope' in base_url
             or provider in {'dashscope', 'openai', 'mimo'}
@@ -996,6 +1033,20 @@ class BaseAPIClient(ABC):
                     "messages": messages,
                     "temperature": self.config.temperature,
                 }
+                if (
+                    is_openrouter
+                    and str(self.config.model).lower().startswith("openai/gpt-5.1")
+                    and os.environ.get("OPENROUTER_CONCISE_JSON", "").strip().lower()
+                    in {"1", "true", "yes", "on"}
+                ):
+                    messages[-1]["content"].append({
+                        "type": "text",
+                        "text": (
+                            "\nReturn only the required JSON. Keep the reasoning field "
+                            "concise (at most 120 words); do not repeat observations or "
+                            "the output schema."
+                        ),
+                    })
                 if self._uses_max_completion_tokens():
                     payload["max_completion_tokens"] = self.config.max_tokens
                 else:
@@ -1010,13 +1061,24 @@ class BaseAPIClient(ABC):
             # 构建headers（支持OpenRouter优化）
             headers = self.config.get_headers()
             if is_openrouter:
-                # OpenRouter: 固定优先走阿里云 Tongyi 后端（Qwen 系列在此最快，~90-100 TPS）
-                # 若阿里云不可用则 fallback 到其他 provider
                 headers["X-Title"] = "SpaceVLN"
-                payload["provider"] = {
-                    "order": ["Alibaba"],         # 固定优先走阿里云（最高吞吐）
-                    "allow_fallbacks": True       # 阿里云不可用时允许回退
-                }
+                role_name = str(getattr(self.config, "role", "") or "").upper()
+                role_provider_order = os.environ.get(
+                    f"OPENROUTER_{role_name}_PROVIDER_ORDER", ""
+                )
+                provider_order = [
+                    item.strip()
+                    for item in (
+                        role_provider_order
+                        or os.environ.get("OPENROUTER_PROVIDER_ORDER", "")
+                    ).split(",")
+                    if item.strip()
+                ]
+                if provider_order:
+                    payload["provider"] = {
+                        "order": provider_order,
+                        "allow_fallbacks": True,
+                    }
 
             request_start = time.time()
             response = self._post_json_with_base_url_fallback(
@@ -1044,6 +1106,9 @@ class BaseAPIClient(ABC):
                     payload=payload,
                 )
                 self._set_last_http_status(response.status_code)
+
+            response = self._relay_failed_key(endpoint_suffix, payload, response)
+            self._set_last_http_status(response.status_code)
             
             t_response = time.time()
             latency = t_response - float(request_start or t_start)

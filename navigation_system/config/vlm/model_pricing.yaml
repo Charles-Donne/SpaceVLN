@@ -196,3 +196,22 @@ models:
           cached_input: 0
           cache_write_input: 0
           output: 0
+  openrouter:
+    qwen/qwen3.5-flash-02-23:
+      currency: USD
+      aliases:
+        - qwen/qwen3.5-flash-02-23
+      tiers:
+        - max_input_tokens: 262144
+          input: 0.065
+          cached_input: 0.065
+          output: 0.26
+    openai/gpt-5.1:
+      currency: USD
+      aliases:
+        - openai/gpt-5.1
+      tiers:
+        - max_input_tokens: 400000
+          input: 1.25
+          cached_input: 0.125
+          output: 10.0

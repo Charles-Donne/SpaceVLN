@@ -42,6 +42,7 @@ from navigation_system.space.landmarks.landmark_selection import (
     _build_outer_ring_sampling_mask,
     _sample_random_mask_coords,
 )
+from navigation_system.space.landmarks.vocabulary import normalize_landmark_text
 from navigation_system.space.description.direction_format import snap_relative_bearing
 from navigation_system.space.description.spatial_formatter import (
     resolve_display_current_area,
@@ -998,6 +999,32 @@ class ThinkingViewRenderer:
             keep_indices.append(int(idx))
         return cls._filter_detection_payload(detections, labels or [], keep_indices)
 
+    @classmethod
+    def _filter_detection_payload_to_landmark_classes(
+        cls,
+        detections,
+        labels: List[str],
+        landmark_classes: Optional[List[str]],
+    ):
+        if detections is None or getattr(detections, "xyxy", None) is None:
+            return detections, labels or []
+
+        allowed = {
+            normalized
+            for raw_name in list(landmark_classes or [])
+            for normalized in [normalize_landmark_text(raw_name)]
+            if normalized
+        }
+        if not allowed:
+            return cls._filter_detection_payload(detections, labels or [], [])
+
+        keep_indices: List[int] = []
+        for idx, label_text in enumerate(labels or []):
+            name, _confidence = cls._parse_detection_label(label_text)
+            if normalize_landmark_text(name) in allowed:
+                keep_indices.append(int(idx))
+        return cls._filter_detection_payload(detections, labels or [], keep_indices)
+
     @staticmethod
     def _parse_detection_label(label: str) -> Tuple[str, float]:
         parts = str(label or "").split()
@@ -1375,6 +1402,11 @@ class ThinkingViewRenderer:
                 dets_view, labels_view = self._remove_transition_like_detections(
                     dets_view,
                     labels_view,
+                )
+                dets_view, labels_view = self._filter_detection_payload_to_landmark_classes(
+                    dets_view,
+                    labels_view,
+                    landmark_classes,
                 )
             view_payloads.append((dets_view, labels_view, image, depth_meters, angle, direction_name))
 

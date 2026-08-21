@@ -1048,6 +1048,21 @@ class RealNavigationAgentController(NavigationAgentController):
         )
         if map_alignment:
             extra["map_alignment"] = map_alignment
+            if str(os.getenv("SPACEVLN_REAL_PRINT_MAP_UPDATE", "1") or "1").strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }:
+                print(
+                    "[REAL-MAP] "
+                    f"step={action_step} action={action_name} "
+                    f"obstacle_cells={map_alignment.get('obstacle_cells')} "
+                    f"explored_cells={map_alignment.get('explored_cells')} "
+                    f"floor_cells={map_alignment.get('floor_cells')} "
+                    f"depth_update_disabled={map_alignment.get('depth_map_update_disabled')}",
+                    flush=True,
+                )
         self._write_real_live_status(
             event="action_step_processed",
             phase=str(self._current_action_phase()),

@@ -539,7 +539,7 @@ class MapVisualizer:
 
         policy = {
             "save_rgb": False,
-            "render_global_map": debug_mode or is_thinking,
+            "render_global_map": debug_mode or is_thinking or self.save_step_map_artifacts,
             "save_global_map": self.save_step_map_artifacts,
             "render_local_map": debug_mode or self.save_step_map_artifacts,
             "save_local_map": self.save_step_map_artifacts,

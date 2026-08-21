@@ -5,6 +5,7 @@ import atexit
 import contextlib
 import copy
 import concurrent.futures
+import fcntl
 import hashlib
 import json
 import multiprocessing
@@ -292,11 +293,12 @@ def create_navigation_controller(
     from navigation_system.env.vlnce.r2r.adapter import build_vlnce_vector_env
 
     unified_config = resolve_api_config_path(args.vlm_api_config)
-    envs = build_vlnce_vector_env(
-        episode_config,
-        auto_reset_done=False,
-        episodes_allowed=episode_config.TASK_CONFIG.DATASET.EPISODES_ALLOWED,
-    )
+    with _habitat_simulator_init_lock():
+        envs = build_vlnce_vector_env(
+            episode_config,
+            auto_reset_done=False,
+            episodes_allowed=episode_config.TASK_CONFIG.DATASET.EPISODES_ALLOWED,
+        )
     controller = NavigationAgentController(
         episode_config,
         config_path=unified_config,
@@ -304,6 +306,22 @@ def create_navigation_controller(
         envs=envs,
     )
     return controller, unified_config
+
+
+@contextlib.contextmanager
+def _habitat_simulator_init_lock():
+    """Serialize Habitat's asynchronous Magnum/EGL context startup."""
+    lock_path = os.getenv(
+        "SPACEVLN_HABITAT_INIT_LOCK",
+        "/tmp/spacevln_habitat_sim_init.lock",
+    )
+    os.makedirs(os.path.dirname(os.path.abspath(lock_path)), exist_ok=True)
+    with open(lock_path, "a+") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def _workspace_episode_cache_dir() -> str:

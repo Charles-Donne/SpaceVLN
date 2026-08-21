@@ -17,6 +17,7 @@ LANDMARK_DUPLICATE_ANGLE_DIFF_DEG = 12.0
 
 LANDMARK_EDGE_DEPTH_KEYWORDS = (
     "door",
+    "doors",
     "doorway",
     "hallway",
     "corridor",

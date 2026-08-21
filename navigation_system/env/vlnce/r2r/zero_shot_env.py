@@ -38,6 +38,14 @@ class VLNCEZeroShotEnv(habitat.RLEnv):
         """R2R-CE uses discrete turn actions for 360-degree lookaround scans."""
         return False
 
+    def get_lookaround_sample_count(self) -> int:
+        """Return the source R2R-CE 360-degree scan size (12 x 30 degrees)."""
+        return 12
+
+    def get_lookaround_angle_step_deg(self) -> float:
+        """Return the discrete Habitat turn angle used by the R2R-CE scan."""
+        return 30.0
+
     def set_final_navigation_success(self, success: bool) -> None:
         """Accept the shared controller's final-success signal for adapter parity."""
         self.final_navigation_success = bool(success)

@@ -1,5 +1,6 @@
 """Habitat vector environment construction helpers."""
 
+import os
 import random
 from typing import List, Optional, Type, Union
 
@@ -17,6 +18,28 @@ except ImportError:  # Habitat 0.2.x path/layout differs; only needed when const
     make_env_fn = None
 
 random.seed(0)
+_NUMBA_SEED_PREWARMED = False
+
+
+def _prewarm_numba_seed(seed: int) -> None:
+    """Compile Habitat's Numba seed helper before worker threads start."""
+    global _NUMBA_SEED_PREWARMED
+    if _NUMBA_SEED_PREWARMED:
+        return
+    seed_helper = getattr(Env, "_seed_numba", None)
+    if callable(seed_helper):
+        seed_helper(int(seed))
+    _NUMBA_SEED_PREWARMED = True
+
+
+def _make_env_fn_with_registrations(config: Config, env_class):
+    """Initialize VLN-CE registry entries inside a process worker."""
+    import habitat_extensions.habitat_simulator  # noqa: F401
+    import habitat_extensions.measures  # noqa: F401
+    import habitat_extensions.sensors  # noqa: F401
+    import habitat_extensions.task  # noqa: F401
+
+    return make_env_fn(config, env_class)
 
 
 def construct_envs(
@@ -41,6 +64,8 @@ def construct_envs(
             "Habitat baseline env_utils.make_env_fn is unavailable in this environment. "
             "Pass a pre-built env adapter instead of calling construct_envs()."
         )
+
+    _prewarm_numba_seed(int(config.TASK_CONFIG.SEED))
 
     runtime_config = config.RUNTIME
     num_envs_per_gpu = int(runtime_config.NUM_ENVIRONMENTS)
@@ -106,8 +131,19 @@ def construct_envs(
             proc_config.freeze()
             configs.append(proc_config) 
 
-    envs = habitat.ThreadedVectorEnv(
-        make_env_fn=make_env_fn,
+    vector_env_class = (
+        habitat.VectorEnv
+        if os.environ.get("SPACEVLN_VECTOR_ENV_MODE", "").strip().lower()
+        in {"process", "multiprocess", "vector"}
+        else habitat.ThreadedVectorEnv
+    )
+    worker_env_fn = (
+        _make_env_fn_with_registrations
+        if vector_env_class is habitat.VectorEnv
+        else make_env_fn
+    )
+    envs = vector_env_class(
+        make_env_fn=worker_env_fn,
         env_fn_args=tuple(zip(configs, env_classes)), 
         auto_reset_done=auto_reset_done,
         workers_ignore_signals=workers_ignore_signals,

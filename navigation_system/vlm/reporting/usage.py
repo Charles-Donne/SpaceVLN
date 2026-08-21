@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
@@ -32,8 +34,9 @@ def _normalize_text(value: Any) -> str:
     return str(value or "").strip().lower()
 
 
-def load_price_table(path: Optional[str] = None) -> Dict[str, Any]:
-    candidate = Path(path).expanduser().resolve() if path else DEFAULT_PRICE_TABLE_PATH
+@lru_cache(maxsize=8)
+def _load_price_table_cached(candidate_text: str) -> Dict[str, Any]:
+    candidate = Path(candidate_text)
     if not candidate.exists():
         return {}
     with candidate.open("r", encoding="utf-8") as f:
@@ -41,6 +44,11 @@ def load_price_table(path: Optional[str] = None) -> Dict[str, Any]:
     if not isinstance(payload, dict):
         return {}
     return payload
+
+
+def load_price_table(path: Optional[str] = None) -> Dict[str, Any]:
+    candidate = Path(path).expanduser().resolve() if path else DEFAULT_PRICE_TABLE_PATH
+    return deepcopy(_load_price_table_cached(str(candidate)))
 
 
 def _match_model_pricing(

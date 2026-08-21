@@ -15,6 +15,7 @@ from navigation_system.config.core.constants import (
     landmark_instance_topk,
     local_map_landmark_topk,
 )
+from navigation_system.space.landmarks.vocabulary import normalize_landmark_text
 from navigation_system.config.core.params.actions import (
     ACTION_SUBTASK_AUTOCOMPLETE_OPEN_DISTANCE_M,
     ACTION_SUBTASK_AUTOCOMPLETE_SOLID_DISTANCE_M,
@@ -564,7 +565,11 @@ def _project_landmark_instances_from_detections(owner,
             depth_meters is None or current_pose is None):
         return []
 
-    canonical = {name.strip().lower(): name for name in landmark_classes}
+    canonical = {}
+    for name in landmark_classes:
+        normalized_name = normalize_landmark_text(name)
+        if normalized_name:
+            canonical[normalized_name] = normalized_name
 
     per_class: Dict[str, List[Dict[str, Any]]] = {}
     for i in range(len(detections.xyxy)):
@@ -572,7 +577,7 @@ def _project_landmark_instances_from_detections(owner,
         parts = label.split()
         label_name = ' '.join(parts[:-1]) if len(parts) > 1 else (parts[0] if parts else "unknown")
         confidence = float(parts[-1]) if len(parts) > 1 else 0.0
-        matched_landmark = canonical.get(label_name.strip().lower())
+        matched_landmark = canonical.get(normalize_landmark_text(label_name))
         if matched_landmark is None:
             continue
 

@@ -10,6 +10,7 @@ from navigation_system.config.core.params.actions import (
 )
 from navigation_system.runtime.storage.naming import build_step_artifact_filename
 from navigation_system.space.description.direction_format import format_relative_direction
+from navigation_system.space.landmarks.vocabulary import normalize_landmark_text
 from navigation_system.space.map.obstacle_analysis import classify_obstacle_distance_text
 from navigation_system.render.map.landmark_overlay import (
     LandmarkDrawItem,
@@ -412,8 +413,12 @@ def render_detection_bbox(owner,
         # 只标注在landmark_classes中的类别（规范化后精确短语匹配）
         matched_landmark = None
         if landmark_classes:
-            lm_name_map = {lm.strip().lower(): lm for lm in landmark_classes}
-            label_name_norm = label_name.strip().lower()
+            lm_name_map = {}
+            for lm in landmark_classes:
+                normalized_lm = normalize_landmark_text(lm)
+                if normalized_lm:
+                    lm_name_map[normalized_lm] = normalized_lm
+            label_name_norm = normalize_landmark_text(label_name)
             if label_name_norm in lm_name_map:
                 matched_landmark = lm_name_map[label_name_norm]
         if matched_landmark is None:
